@@ -244,7 +244,7 @@ export default function Page() {
               <div className="section-kicker">Services</div>
               <h2 className="section-title">流媒体会员服务</h2>
             </div>
-            <div className="section-note">Since 2020，持续为用户提供优质低价服务</div>
+            <div className="section-note">Hot🔥</div>
           </div>
 
           <div className="products-grid">
