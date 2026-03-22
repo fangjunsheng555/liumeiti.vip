@@ -352,11 +352,11 @@ export default function Page() {
                     <span>{SITE_CONTENT.supportItems[0]}</span>
                     <Copy size={16} />
                   </button>
-                  <a href="#" className="support-item">
+                  <button className="support-item" onClick={() => copyText("+1 4315093334")}>
                     <span>{SITE_CONTENT.supportItems[1]}</span>
-                    <ExternalLink size={16} />
-                  </a>
-                  <button className="support-item" onClick={() => copyText("telegram")}>
+                    <Copy size={16} />
+                  </button>
+                  <button className="support-item" onClick={() => copyText("+44 7707489977")}>
                     <span>{SITE_CONTENT.supportItems[2]}</span>
                     <Copy size={16} />
                   </button>
