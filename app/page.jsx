@@ -149,7 +149,7 @@ const PRODUCTS = [
     detailTitle: "大厂机房多线路，不限设备，不限流量，年仅98",
     detailBody: "优选大厂vps，多线路港日台韩新美英德法等，不限制设备，不限制流量，最高速率可达5GBS，高峰不拥堵不卡顿，解锁所有主流流媒体/ai软件/社交软件，全加密协议无日志隐私保障，实时维护24x7线路不中断，请在付款备注用户名，4-10位数字/字母组合（区分大小写），节点订阅链接为，小火箭shadowrocket：https://hk.joinvip.vip:2056/sub/(你所备注的4-10位数字字母组合)，clashmeta订阅链接为：https://hk.joinvip.vip:2056/sub/(你所备注的4-10位数字字母组合)?format=clash，如您备注jenny2(订阅链接为：https://hk.joinvip.vip:2056/sub/jenny2，订阅链接将在付款后30分钟内可用，如有任何问题请在付款后联系我们在线客服",
     orderTitle: "网络节点-请支付宝扫码支付98",
-    orderBody: "请在付款备注用户名，4-10位数字/字母组合（区分大小写），节点订阅链接为，小火箭shadowrocket：https://hk.joinvip.vip:2056/sub/(你所备注的4-10位数字字母组合)，clashmeta订阅链接为：https://hk.joinvip.vip:2056/sub/(你所备注的4-10位数字字母组合)?format=clash，如您备注jenny2(订阅链接为：https://hk.joinvip.vip:2056/sub/jenny2，订阅链接将在付款后30分钟内可用，如有任何问题请联系在线客服",
+    orderBody: "请在付款备注用户名，4-10位数字/字母组合（区分大小写），节点订阅链接为，小火箭shadowrocket：https://hk.joinvip.vip:2056/sub/(你所备注的4-10位数字字母组合)，clashmeta订阅链接为：https://hk.joinvip.vip:2056/sub/(你所备注的4-10位数字字母组合)?format=clash，如您备注jenny2，订阅链接为：https://hk.joinvip.vip:2056/sub/jenny2，clash：https://hk.joinvip.vip:2056/sub/jenny2?format=clash，订阅链接将在付款后30分钟内可用，如有任何问题请联系在线客服",
     qrHint: "这里放 节点 支付二维码区域",
     qrImage: "/payment/alipay.jpg",
   },
