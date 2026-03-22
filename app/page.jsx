@@ -73,7 +73,7 @@ const SITE_CONTENT = {
     "Telegram:+44 7707489977",
     "在线时间:北京时间早九点至晚十一点",
   ],
-  footerRecord: "M.Y.",
+  footerRecord: "地址：台灣新北市板橋區遠東路1號3號218",
   footerNote: "Copyright © 2026 Maoyang Taiwan Inc. All rights reserved",
 };
 
