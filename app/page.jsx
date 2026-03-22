@@ -244,7 +244,7 @@ export default function Page() {
               <div className="section-kicker">Services</div>
               <h2 className="section-title">流媒体会员服务</h2>
             </div>
-            <div className="section-note">Hot🔥</div>
+            <div className="section-note">MaoYang Inc</div>
           </div>
 
           <div className="products-grid">
