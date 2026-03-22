@@ -427,7 +427,7 @@ export default function Page() {
 
             <div className="modal-grid">
               <div className="modal-left-box">
-                <div className="minor-label">左侧信息区</div>
+                <div className="minor-label"></div>
                 <div className="modal-price">{selectedProduct.price}</div>
                 <div className="modal-intro-box">{selectedProduct.shortIntro}</div>
                 <div className="bullet-list">
