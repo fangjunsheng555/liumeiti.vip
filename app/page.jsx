@@ -470,7 +470,7 @@ export default function Page() {
           <div className="modal-card modal-medium">
             <div className="modal-head">
               <div>
-                <div className="section-kicker">Order Popup</div>
+                <div className="section-kicker">Place Order</div>
                 <div className="modal-title">打开支付宝扫码付款</div>
               </div>
               <button className="close-btn" onClick={() => setOrderPreviewOpen(false)}>
