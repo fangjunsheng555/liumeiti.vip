@@ -33,7 +33,7 @@ const SITE_CONTENT = {
     { num: "500,000+", label: "累计用户", icon: Users },
     { num: "1,000,000+", label: "服务案例", icon: TrendingUp },
     { num: "Top 3", label: "行业排名", icon: Award },
-    { num: "Since 2020", label: "专注服务", icon: Clock },
+    { num: "2020至今", label: "专注服务", icon: Clock },
   ],
   topCards: [
     ["服务类别", "Spotify，Netflix，Disney+，Hbomax，网络服务等"],
