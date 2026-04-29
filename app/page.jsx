@@ -5,11 +5,13 @@ import {
   ArrowRight,
   BadgeCheck,
   ChevronDown,
+  CheckCircle2,
   Copy,
   Globe,
   Headphones,
   Image as ImageIcon,
   LayoutPanelTop,
+  LoaderCircle,
   MessageCircleMore,
   QrCode,
   Sparkles,
@@ -44,7 +46,7 @@ const SITE_CONTENT = {
   layoutCards: [
     ["选择所需服务", "Spotify / Netflix / Disney+ / Hbomax / 机场节点"],
     ["查看详情介绍", "请认真查阅我们的服务介绍，确保服务满足您的需求"],
-    ["付款下单", "请在支付备注您的联系方式，工作人员将在30分钟内联系您"],
+    ["付款下单", "填写联系方式后扫码付款，付款完成提交订单，工作人员将在30分钟内处理"],
     ["售后服务", "成交只是开始，专业团队全程售后保障用户使用体验"],
   ],
   faq: [
@@ -81,6 +83,8 @@ const PRODUCTS = [
     image: "/products/spotify.jpg",
     title: "Spotify",
     subtitle: "欧美日高价区家庭计划",
+    amount: 128,
+    cycle: "1年",
     price: "仅需¥128/年",
     shortIntro: "无损音质，播客，AIDJ，完整曲库，有声读物，合辑歌单等",
     highlights: ["功能齐全", "稳定使用", "售后保障"],
@@ -89,7 +93,7 @@ const PRODUCTS = [
       "支持无损音质，收听播客，离线下载，合辑歌单，有声读物，曲库完整，如需订阅个人/双人/六人家庭请联系在线客服",
     orderTitle: "Spotify · 支付宝扫码支付 ¥128",
     orderBody:
-      "请在支付宝付款备注您的联系方式，如QQ/微信/WhatsApp等，充值人员将在30分钟内联系您",
+      "填写联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
     qrImage: "/payment/alipay.jpg",
   },
   {
@@ -97,6 +101,8 @@ const PRODUCTS = [
     image: "/products/netflix.jpg",
     title: "Netflix",
     subtitle: "4K杜比套餐，独立车位",
+    amount: 168,
+    cycle: "1年",
     price: "仅需¥168/年",
     shortIntro: "全球可用顶规套餐，4K画质，杜比音效，一人一位可上锁",
     highlights: ["4K画质", "杜比音效", "售后保障"],
@@ -105,7 +111,7 @@ const PRODUCTS = [
       "4K杜比最高级别套餐，高峰不排队不被挤，一人独享一个位置，最高4K画质，支持杜比音效，离线下载，位置可上pin，五人一车一人一位互不干扰，如需购买整号请联系在线客服",
     orderTitle: "Netflix · 支付宝扫码支付 ¥168",
     orderBody:
-      "请在支付宝付款备注您的联系方式，如QQ/微信/WhatsApp等，充值人员将在30分钟内联系您",
+      "填写联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
     qrImage: "/payment/alipay.jpg",
   },
   {
@@ -113,6 +119,8 @@ const PRODUCTS = [
     image: "/products/disney.jpg",
     title: "Disney+",
     subtitle: "独立车位全球可用4K杜比套餐",
+    amount: 108,
+    cycle: "1年",
     price: "仅需¥108/年",
     shortIntro: "4人一车绝不超售，全球可用4K杜比套餐，一人一位置互不干扰",
     highlights: ["4K杜比", "位置上锁", "不被挤不排队"],
@@ -121,7 +129,7 @@ const PRODUCTS = [
       "4K画质，杜比音效，离线下载，全球可用不限制地区，顶规4K杜比套餐，4人一车绝不超售，高峰不排队不被挤，位置可上锁，用户互不干扰，如需购买整号请联系在线客服",
     orderTitle: "Disney+ · 支付宝扫码支付 ¥108",
     orderBody:
-      "请在支付宝付款备注您的联系方式，如QQ/微信/WhatsApp等，充值人员将在30分钟内联系您",
+      "填写联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
     qrImage: "/payment/alipay.jpg",
   },
   {
@@ -129,6 +137,8 @@ const PRODUCTS = [
     image: "/products/hbomax.jpg",
     title: "HBO Max",
     subtitle: "独立车位全球可用4K杜比套餐",
+    amount: 148,
+    cycle: "1年",
     price: "仅需¥148/年",
     shortIntro: "4人车全球可用4K杜比套餐，一人独享一位置互不干扰高峰不排队",
     highlights: ["4K杜比", "全球可用", "实时售后保障"],
@@ -137,7 +147,7 @@ const PRODUCTS = [
       "4K画质，杜比音效，离线下载，全球可用不限制地区，顶规4K杜比套餐，4人一车绝不超售，高峰不排队不被挤，位置可上锁，用户互不干扰，如需购买整号请联系在线客服",
     orderTitle: "HBO Max · 支付宝扫码支付 ¥148",
     orderBody:
-      "请在支付宝付款备注您的联系方式，如QQ/微信/WhatsApp等，充值人员将在30分钟内联系您",
+      "填写联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
     qrImage: "/payment/alipay.jpg",
   },
   {
@@ -145,6 +155,9 @@ const PRODUCTS = [
     image: "/products/rocket.jpg",
     title: "机场节点",
     subtitle: "不限设备·不限流量·最高5Gbps·解锁全球平台",
+    amount: 98,
+    cycle: "1年",
+    needsUsername: true,
     price: "仅需¥98/年",
     shortIntro: "大厂机房多线路，最高5Gbps带宽，解锁所有流媒体/AI/社交软件，高峰不卡顿",
     highlights: ["不限设备/流量", "高速稳定多节点", "全加密无日志"],
@@ -153,7 +166,7 @@ const PRODUCTS = [
       "优选大厂VPS，多线路港日台韩新美英德法等，不限制设备，不限制流量，最高速率可达5Gbps，高峰不拥堵不卡顿，解锁所有主流流媒体/AI软件/社交软件，全加密协议无日志隐私保障，实时维护24×7线路不中断",
     orderTitle: "机场节点 · 支付宝扫码支付 ¥98",
     orderBody:
-      "请在付款备注用户名（4-10位数字/字母组合，区分大小写）。\n小火箭 Shadowrocket：https://hk.joinvip.vip:2056/sub/(你的用户名)\nClash Meta：https://hk.joinvip.vip:2056/sub/(你的用户名)?format=clash\n订阅链接将在付款后30分钟内可用，如有问题请联系在线客服",
+      "填写4-10位数字/字母用户名并完成支付宝付款。\n小火箭 Shadowrocket：https://hk.joinvip.vip:2056/sub/(你的用户名)\nClash Meta：https://hk.joinvip.vip:2056/sub/(你的用户名)?format=clash\n订阅链接将在付款后30分钟内可用，如有问题请联系在线客服",
     qrImage: "/payment/alipay.jpg",
   },
 ];
@@ -164,16 +177,44 @@ function copyText(text) {
   }
 }
 
+function money(amount) {
+  return "¥" + Number(amount || 0).toFixed(0);
+}
+
+function blankOrderForm() {
+  return { contact: "", username: "", remark: "" };
+}
+
+function validUsername(value) {
+  return /^[A-Za-z0-9]{4,10}$/.test(String(value || "").trim());
+}
+
+function subscriptionLinks(username) {
+  const encoded = encodeURIComponent(String(username || "").trim());
+  return {
+    shadowrocket: "https://hk.joinvip.vip:2056/sub/" + encoded,
+    clash: "https://hk.joinvip.vip:2056/sub/" + encoded + "?format=clash",
+  };
+}
+
 export default function Page() {
   const [selectedKey, setSelectedKey] = useState(null);
   const [faqOpen, setFaqOpen] = useState(0);
   const [contactOpen, setContactOpen] = useState(false);
   const [orderPreviewOpen, setOrderPreviewOpen] = useState(false);
   const [copiedKey, setCopiedKey] = useState(null);
+  const [orderStep, setOrderStep] = useState("form");
+  const [orderForm, setOrderForm] = useState(blankOrderForm);
+  const [orderStatus, setOrderStatus] = useState(null);
+  const [orderSubmitting, setOrderSubmitting] = useState(false);
 
   const selectedProduct = useMemo(
     () => PRODUCTS.find((item) => item.key === selectedKey) || null,
     [selectedKey]
+  );
+  const submittedLinks = useMemo(
+    () => selectedProduct?.needsUsername ? subscriptionLinks(orderForm.username) : null,
+    [orderForm.username, selectedProduct]
   );
 
   function handleCopy(value, key) {
@@ -185,6 +226,91 @@ export default function Page() {
   function closeProduct() {
     setSelectedKey(null);
     setOrderPreviewOpen(false);
+    setOrderStep("form");
+    setOrderForm(blankOrderForm());
+    setOrderStatus(null);
+    setOrderSubmitting(false);
+  }
+
+  function openOrder() {
+    setOrderForm(blankOrderForm());
+    setOrderStatus(null);
+    setOrderStep("form");
+    setOrderPreviewOpen(true);
+  }
+
+  function closeOrder() {
+    if (orderSubmitting) return;
+    setOrderPreviewOpen(false);
+    setOrderStep("form");
+    setOrderStatus(null);
+  }
+
+  function updateOrderField(field, value) {
+    setOrderForm((current) => ({ ...current, [field]: value }));
+    if (orderStatus?.type === "error") setOrderStatus(null);
+  }
+
+  function validateOrder() {
+    if (!orderForm.contact.trim()) {
+      return "请填写联系方式，客服会用它核对订单并联系你。";
+    }
+    if (selectedProduct?.needsUsername && !validUsername(orderForm.username)) {
+      return "请填写4-10位数字或字母用户名，区分大小写。";
+    }
+    return "";
+  }
+
+  function goPayment(event) {
+    event.preventDefault();
+    const error = validateOrder();
+    if (error) {
+      setOrderStatus({ type: "error", message: error });
+      return;
+    }
+    setOrderStatus(null);
+    setOrderStep("pay");
+  }
+
+  async function submitOrder() {
+    if (!selectedProduct || orderSubmitting) return;
+    const error = validateOrder();
+    if (error) {
+      setOrderStatus({ type: "error", message: error });
+      setOrderStep("form");
+      return;
+    }
+
+    setOrderSubmitting(true);
+    setOrderStatus({ type: "info", message: "正在提交订单..." });
+
+    try {
+      const response = await fetch("/api/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          service: selectedProduct.key,
+          contact: orderForm.contact.trim(),
+          account: selectedProduct.needsUsername ? orderForm.username.trim() : "",
+          remark: orderForm.remark.trim(),
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || "submit_failed");
+      setOrderStep("done");
+      setOrderStatus({
+        type: "success",
+        message: "订单已提交成功，请耐心等待客服处理。",
+        orderId: result.orderId,
+      });
+    } catch (error) {
+      setOrderStatus({
+        type: "error",
+        message: "订单提交失败，请联系在线客服处理。",
+      });
+    } finally {
+      setOrderSubmitting(false);
+    }
   }
 
   return (
@@ -486,7 +612,7 @@ export default function Page() {
                 <div className="detail-title">{selectedProduct.detailTitle}</div>
                 <div className="detail-body">{selectedProduct.detailBody}</div>
                 <div className="modal-actions">
-                  <button className="primary-btn" onClick={() => setOrderPreviewOpen(true)}>
+                  <button className="primary-btn" onClick={openOrder}>
                     点击下单
                     <ArrowRight size={15} />
                   </button>
@@ -508,44 +634,196 @@ export default function Page() {
 
       {/* ── Order / Payment Modal ── */}
       {selectedProduct && orderPreviewOpen && (
-        <div className="modal-mask second-mask" onClick={() => setOrderPreviewOpen(false)}>
+        <div className="modal-mask second-mask" onClick={closeOrder}>
           <div className="modal-card modal-medium" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <div>
                 <div className="section-kicker">Place Order</div>
-                <div className="modal-title">打开支付宝扫码付款</div>
+                <div className="modal-title">
+                  {orderStep === "form" && "填写订单信息"}
+                  {orderStep === "pay" && "支付宝扫码付款"}
+                  {orderStep === "done" && "订单已提交"}
+                </div>
               </div>
-              <button className="close-btn" onClick={() => setOrderPreviewOpen(false)}>
+              <button className="close-btn" onClick={closeOrder} disabled={orderSubmitting}>
                 <X size={17} />
               </button>
             </div>
 
-            <div className="modal-grid second-grid">
-              <div className="qr-box-wrap">
-                <div className="qr-label">Alipay · 支付宝扫一扫</div>
-                <div className="qr-box">
-                  {selectedProduct.qrImage ? (
-                    <img
-                      src={selectedProduct.qrImage}
-                      alt="支付二维码"
-                      className="qr-image"
-                    />
-                  ) : (
-                    <div className="qr-placeholder">
-                      <QrCode size={52} />
-                      <div>二维码加载中</div>
+            <div className="order-modal-body">
+              <div className="order-flow">
+                {["填写信息", "扫码付款", "提交订单"].map((label, index) => {
+                  const stepIndex = orderStep === "form" ? 0 : orderStep === "pay" ? 1 : 2;
+                  return (
+                    <div
+                      key={label}
+                      className={`order-flow-step${index < stepIndex ? " done" : ""}${index === stepIndex ? " active" : ""}`}
+                    >
+                      <b>{index + 1}</b>
+                      <span>{label}</span>
                     </div>
-                  )}
-                </div>
+                  );
+                })}
               </div>
 
-              <div>
-                <div className="detail-title">{selectedProduct.orderTitle}</div>
-                <div className="detail-body">{selectedProduct.orderBody}</div>
-                <div className="notice-box">
-                  请在支付宝付款时准确备注联系方式，付款后工作人员将尽快联系您，如有问题可主动联系我们。
+              {orderStatus && (
+                <div className={`order-status ${orderStatus.type}`}>
+                  {orderStatus.message}
+                  {orderStatus.orderId && <strong>订单号：{orderStatus.orderId}</strong>}
                 </div>
-              </div>
+              )}
+
+              {orderStep === "form" && (
+                <form className="order-form" onSubmit={goPayment}>
+                  <div className="order-summary-card">
+                    <div>
+                      <span>服务</span>
+                      <b>{selectedProduct.title}</b>
+                    </div>
+                    <div>
+                      <span>周期</span>
+                      <b>{selectedProduct.cycle}</b>
+                    </div>
+                    <div>
+                      <span>应付</span>
+                      <b>{money(selectedProduct.amount)}</b>
+                    </div>
+                    <div>
+                      <span>支付方式</span>
+                      <b>支付宝</b>
+                    </div>
+                  </div>
+
+                  {selectedProduct.needsUsername && (
+                    <label className="order-field">
+                      <span>设置你的用户名</span>
+                      <input
+                        value={orderForm.username}
+                        onChange={(event) => updateOrderField("username", event.target.value)}
+                        placeholder="4-10位数字或字母，区分大小写"
+                        autoComplete="username"
+                        required
+                      />
+                    </label>
+                  )}
+
+                  <label className="order-field">
+                    <span>联系方式</span>
+                    <input
+                      value={orderForm.contact}
+                      onChange={(event) => updateOrderField("contact", event.target.value)}
+                      placeholder="QQ / 微信 / WhatsApp / Telegram"
+                      autoComplete="tel"
+                      required
+                    />
+                  </label>
+
+                  <label className="order-field">
+                    <span>备注（非必填）</span>
+                    <textarea
+                      value={orderForm.remark}
+                      onChange={(event) => updateOrderField("remark", event.target.value)}
+                      placeholder="地区、特殊需求或付款备注"
+                      rows={3}
+                    />
+                  </label>
+
+                  <div className="order-actions">
+                    <button type="button" className="secondary-btn" onClick={() => setOrderPreviewOpen(false)}>
+                      返回详情
+                    </button>
+                    <button type="submit" className="primary-btn">
+                      前往支付
+                      <ArrowRight size={15} />
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {orderStep === "pay" && (
+                <div className="modal-grid second-grid payment-grid">
+                  <div className="qr-box-wrap">
+                    <div className="qr-label">Alipay · 支付宝扫一扫</div>
+                    <div className="qr-box">
+                      {selectedProduct.qrImage ? (
+                        <img
+                          src={selectedProduct.qrImage}
+                          alt="支付二维码"
+                          className="qr-image"
+                        />
+                      ) : (
+                        <div className="qr-placeholder">
+                          <QrCode size={52} />
+                          <div>二维码加载中</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="payment-side">
+                    <div className="detail-title">{selectedProduct.orderTitle}</div>
+                    <div className="detail-body">{selectedProduct.orderBody}</div>
+                    <div className="pay-amount-card">
+                      <span>应付金额</span>
+                      <b>{money(selectedProduct.amount)}</b>
+                    </div>
+                    <div className="notice-box">
+                      请按页面金额完成支付宝付款，付款后点击下方按钮提交订单。
+                    </div>
+                    <div className="order-actions">
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        onClick={() => setOrderStep("form")}
+                        disabled={orderSubmitting}
+                      >
+                        返回修改
+                      </button>
+                      <button
+                        type="button"
+                        className="primary-btn"
+                        onClick={submitOrder}
+                        disabled={orderSubmitting}
+                      >
+                        {orderSubmitting ? (
+                          <>
+                            <LoaderCircle size={15} className="spin-icon" />
+                            正在提交
+                          </>
+                        ) : (
+                          <>
+                            付款完成，提交订单
+                            <ArrowRight size={15} />
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {orderStep === "done" && (
+                <div className="order-done">
+                  <CheckCircle2 size={48} />
+                  <h3>提交成功</h3>
+                  <p>订单已实时推送给客服，请等待处理。</p>
+                  {selectedProduct.needsUsername && submittedLinks && (
+                    <div className="subscription-links">
+                      <a href={submittedLinks.shadowrocket} target="_blank" rel="noopener noreferrer">
+                        Shadowrocket订阅：{submittedLinks.shadowrocket}
+                      </a>
+                      <a href={submittedLinks.clash} target="_blank" rel="noopener noreferrer">
+                        Clash订阅：{submittedLinks.clash}
+                      </a>
+                    </div>
+                  )}
+                  <div className="order-actions center-actions">
+                    <button type="button" className="primary-btn" onClick={closeProduct}>
+                      完成
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
