@@ -166,14 +166,29 @@ const PRODUCTS = [
       "优选大厂VPS，多线路港日台韩新美英德法等，不限制设备，不限制流量，最高速率可达5Gbps，高峰不拥堵不卡顿，解锁所有主流流媒体/AI软件/社交软件，全加密协议无日志隐私保障，实时维护24×7线路不中断",
     orderTitle: "机场节点 · 支付宝扫码支付 ¥98",
     orderBody:
-      "填写4-10位数字/字母用户名并完成支付宝付款。\n小火箭 Shadowrocket：https://hk.joinvip.vip:2056/sub/(你的用户名)\nClash Meta：https://hk.joinvip.vip:2056/sub/(你的用户名)?format=clash\n订阅链接将在付款后30分钟内可用，如有问题请联系在线客服",
+      "请在支付完成后点击付款完成提交订单，系统自动将为你生成订阅链接。",
     qrImage: "/payment/alipay.jpg",
   },
 ];
 
 function copyText(text) {
-  if (typeof window !== "undefined") {
-    navigator.clipboard.writeText(text).catch(() => {});
+  if (typeof window === "undefined") return;
+  const fallbackCopy = () => {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    textarea.style.top = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    textarea.remove();
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).catch(fallbackCopy);
+  } else {
+    fallbackCopy();
   }
 }
 
@@ -768,7 +783,9 @@ export default function Page() {
                       <b>{money(selectedProduct.amount)}</b>
                     </div>
                     <div className="notice-box">
-                      请按页面金额完成支付宝付款，付款后点击下方按钮提交订单。
+                      {selectedProduct.needsUsername
+                        ? "请在支付完成后点击付款完成提交订单，系统自动将为你生成订阅链接。"
+                        : "请按页面金额完成支付宝付款，付款后点击下方按钮提交订单。"}
                     </div>
                     <div className="order-actions">
                       <button
@@ -808,13 +825,40 @@ export default function Page() {
                   <h3>提交成功</h3>
                   <p>订单已实时推送给客服，请等待处理。</p>
                   {selectedProduct.needsUsername && submittedLinks && (
-                    <div className="subscription-links">
-                      <a href={submittedLinks.shadowrocket} target="_blank" rel="noopener noreferrer">
-                        Shadowrocket订阅：{submittedLinks.shadowrocket}
-                      </a>
-                      <a href={submittedLinks.clash} target="_blank" rel="noopener noreferrer">
-                        Clash订阅：{submittedLinks.clash}
-                      </a>
+                    <div className="subscription-wrap">
+                      <div className="subscription-note">
+                        请复制并妥善保存好你的订阅链接
+                      </div>
+                      <div className="subscription-links">
+                        <div className="subscription-link-row">
+                          <a href={submittedLinks.shadowrocket} target="_blank" rel="noopener noreferrer">
+                            <strong>shadowrocket小火箭订阅：</strong>
+                            <span>{submittedLinks.shadowrocket}</span>
+                          </a>
+                          <button
+                            type="button"
+                            className="subscription-copy-btn"
+                            onClick={() => handleCopy(submittedLinks.shadowrocket, "shadowrocket-sub")}
+                          >
+                            <Copy size={14} />
+                            {copiedKey === "shadowrocket-sub" ? "已复制" : "复制"}
+                          </button>
+                        </div>
+                        <div className="subscription-link-row">
+                          <a href={submittedLinks.clash} target="_blank" rel="noopener noreferrer">
+                            <strong>Clash订阅：</strong>
+                            <span>{submittedLinks.clash}</span>
+                          </a>
+                          <button
+                            type="button"
+                            className="subscription-copy-btn"
+                            onClick={() => handleCopy(submittedLinks.clash, "clash-sub")}
+                          >
+                            <Copy size={14} />
+                            {copiedKey === "clash-sub" ? "已复制" : "复制"}
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   )}
                   <div className="order-actions center-actions">

@@ -749,6 +749,10 @@ button { cursor: pointer; border: none; background: transparent; }
 .second-mask { z-index: 70; }
 .modal-card {
   width: 100%;
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-radius: 32px;
   box-shadow: var(--shadow-strong);
   background: rgba(255, 255, 255, 0.97);
@@ -763,6 +767,7 @@ button { cursor: pointer; border: none; background: transparent; }
   gap: 16px;
   padding: 22px 26px;
   border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  flex-shrink: 0;
 }
 .modal-head-left {
   display: flex;
@@ -803,6 +808,10 @@ button { cursor: pointer; border: none; background: transparent; }
   grid-template-columns: 0.9fr 1.1fr;
   gap: 24px;
   padding: 24px 26px;
+}
+.modal-card > .modal-grid {
+  min-height: 0;
+  overflow-y: auto;
 }
 .second-grid { grid-template-columns: 1fr 1fr; }
 .modal-actions {
@@ -908,6 +917,8 @@ button { cursor: pointer; border: none; background: transparent; }
 .order-modal-body {
   display: grid;
   gap: 18px;
+  min-height: 0;
+  overflow-y: auto;
   padding: 22px 26px 26px;
 }
 .order-flow {
@@ -1078,23 +1089,67 @@ button { cursor: pointer; border: none; background: transparent; }
   font-size: 14px;
   line-height: 1.7;
 }
-.subscription-links {
+.subscription-wrap {
   display: grid;
   gap: 10px;
   width: 100%;
   margin: 8px 0;
 }
-.subscription-links a {
+.subscription-note {
+  border: 1px solid rgba(15, 118, 110, .16);
+  border-radius: 14px;
+  background: #ecfdf5;
+  color: #047857;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.5;
+  padding: 11px 14px;
+  text-align: left;
+}
+.subscription-links {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+.subscription-link-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
   border: 1px solid rgba(15, 118, 110, .18);
   border-radius: 14px;
   background: #f8fafc;
+  padding: 10px;
+}
+.subscription-links a {
   color: #0f766e;
   font-size: 13px;
   font-weight: 800;
   line-height: 1.5;
-  padding: 12px 14px;
   overflow-wrap: anywhere;
   text-align: left;
+}
+.subscription-links a strong,
+.subscription-links a span {
+  display: inline;
+}
+.subscription-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 82px;
+  min-height: 38px;
+  border-radius: 999px;
+  background: #0f172a;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 900;
+  padding: 9px 13px;
+  white-space: nowrap;
+}
+.subscription-copy-btn:hover {
+  background: #1e293b;
 }
 .center-actions {
   justify-content: center;
@@ -1137,4 +1192,89 @@ button { cursor: pointer; border: none; background: transparent; }
   .order-actions { justify-content: stretch; }
   .order-actions .primary-btn,
   .order-actions .secondary-btn { width: 100%; }
+}
+
+@media (max-width: 560px) {
+  .modal-mask {
+    align-items: flex-start;
+    justify-content: center;
+    padding: 8px;
+    overflow: hidden;
+  }
+  .modal-card {
+    max-height: calc(100dvh - 16px);
+    border-radius: 22px;
+  }
+  .modal-head {
+    padding: 16px 18px;
+  }
+  .modal-title {
+    font-size: 20px;
+    letter-spacing: -.02em;
+  }
+  .close-btn {
+    width: 34px;
+    height: 34px;
+  }
+  .order-modal-body {
+    gap: 14px;
+    padding: 14px 14px calc(16px + env(safe-area-inset-bottom));
+  }
+  .order-flow {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .order-flow-step {
+    min-height: 50px;
+    border-radius: 14px;
+    font-size: 10px;
+    padding: 7px 4px;
+  }
+  .order-flow-step b {
+    width: 22px;
+    height: 22px;
+    font-size: 11px;
+  }
+  .qr-box-wrap {
+    padding: 14px;
+    border-radius: 18px;
+  }
+  .qr-box {
+    min-height: 0;
+    padding: 10px;
+  }
+  .qr-image {
+    max-width: min(280px, calc(100vw - 76px));
+  }
+  .detail-body,
+  .notice-box {
+    font-size: 12px;
+    line-height: 1.75;
+    padding: 13px 14px;
+  }
+  .pay-amount-card {
+    margin-top: 12px;
+    padding: 12px 14px;
+  }
+  .pay-amount-card b {
+    font-size: 26px;
+  }
+  .order-modal-body .order-actions {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin: 0 -2px;
+    padding-top: 10px;
+    background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.98) 28%, rgba(255,255,255,.98));
+  }
+  .order-done {
+    padding: 12px 0 4px;
+  }
+  .subscription-link-row {
+    grid-template-columns: 1fr;
+    gap: 9px;
+  }
+  .subscription-copy-btn {
+    width: 100%;
+  }
 }
