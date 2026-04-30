@@ -453,7 +453,7 @@ export default function Page() {
 
               <div className="hero-actions">
                 <a href="#products" className="primary-btn">
-                  立即购买
+                  购买服务
                   <ArrowRight size={15} />
                 </a>
                 <a href="#order-query" className="secondary-btn">查询订单</a>
@@ -516,7 +516,7 @@ export default function Page() {
                 </div>
 
                 <button className="primary-btn left-btn" onClick={() => setSelectedKey(item.key)}>
-                  查看详情
+                  立即购买
                   <ArrowRight size={15} />
                 </button>
               </article>
