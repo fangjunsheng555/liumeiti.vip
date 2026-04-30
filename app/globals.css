@@ -954,7 +954,7 @@ button { cursor: pointer; border: none; background: transparent; }
 .second-mask { z-index: 70; }
 .modal-card {
   width: 100%;
-  max-height: calc(100dvh - 32px);
+  max-height: min(860px, calc(var(--visual-viewport-height, 100dvh) - 32px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1124,6 +1124,8 @@ button { cursor: pointer; border: none; background: transparent; }
   gap: 18px;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 22px 26px 26px;
 }
 .order-flow {
@@ -1190,6 +1192,13 @@ button { cursor: pointer; border: none; background: transparent; }
 .order-form {
   display: grid;
   gap: 16px;
+}
+.order-modal-form {
+  max-height: min(760px, calc(var(--visual-viewport-height, 100dvh) - 20px));
+}
+.order-form-body {
+  align-content: start;
+  scroll-padding-bottom: 120px;
 }
 .order-field-grid {
   display: grid;
@@ -1511,6 +1520,45 @@ button { cursor: pointer; border: none; background: transparent; }
   .order-actions { justify-content: stretch; }
   .order-actions .primary-btn,
   .order-actions .secondary-btn { width: 100%; }
+  .modal-card.order-modal-form {
+    max-height: calc(var(--visual-viewport-height, 100dvh) - 16px);
+  }
+  .order-modal-form .modal-head {
+    padding: 14px 16px;
+  }
+  .order-form-body {
+    gap: 12px;
+    padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
+  }
+  .order-form-body .order-flow-step {
+    min-height: 44px;
+    border-radius: 14px;
+    font-size: 10px;
+  }
+  .order-form {
+    gap: 11px;
+  }
+  .order-form .order-summary-card {
+    gap: 8px;
+    padding: 10px;
+    border-radius: 14px;
+  }
+  .order-field {
+    gap: 6px;
+  }
+  .order-field input,
+  .order-field textarea {
+    min-height: 42px;
+    border-radius: 12px;
+    padding: 10px 12px;
+  }
+  .order-field textarea {
+    min-height: 64px;
+  }
+  .contact-note {
+    font-size: 11px;
+    line-height: 1.35;
+  }
   .order-modal-pay .modal-head { padding: 12px 14px; }
   .order-modal-pay .modal-title { font-size: 19px; }
   .order-pay-body {
@@ -1839,7 +1887,7 @@ button { cursor: pointer; border: none; background: transparent; }
     overflow: hidden;
   }
   .modal-card {
-    max-height: calc(100dvh - 16px);
+    max-height: calc(var(--visual-viewport-height, 100dvh) - 16px);
     border-radius: 22px;
   }
   .modal-head {
@@ -1856,6 +1904,86 @@ button { cursor: pointer; border: none; background: transparent; }
   .order-modal-body {
     gap: 14px;
     padding: 14px 14px calc(16px + env(safe-area-inset-bottom));
+  }
+  .modal-card.order-modal-form {
+    max-height: calc(var(--visual-viewport-height, 100dvh) - 10px);
+    border-radius: 18px;
+  }
+  .order-modal-form .modal-head {
+    padding: 10px 12px;
+  }
+  .order-modal-form .section-kicker {
+    font-size: 9px;
+    letter-spacing: .24em;
+  }
+  .order-modal-form .modal-title {
+    margin-top: 2px;
+    font-size: 17px;
+  }
+  .order-modal-body.order-form-body {
+    gap: 9px;
+    padding: 9px 10px calc(10px + env(safe-area-inset-bottom));
+  }
+  .order-form-body .order-flow {
+    gap: 4px;
+  }
+  .order-form-body .order-flow-step {
+    min-height: 34px;
+    border-radius: 10px;
+    font-size: 9px;
+    padding: 4px 3px;
+  }
+  .order-form-body .order-flow-step b {
+    width: 18px;
+    height: 18px;
+    font-size: 10px;
+  }
+  .order-form {
+    gap: 8px;
+  }
+  .order-form .order-summary-card {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 5px;
+    padding: 8px;
+    border-radius: 12px;
+  }
+  .order-form .order-summary-card div {
+    gap: 2px;
+  }
+  .order-form .order-summary-card span {
+    font-size: 9px;
+  }
+  .order-form .order-summary-card b {
+    font-size: 11px;
+    line-height: 1.25;
+  }
+  .order-field {
+    gap: 5px;
+  }
+  .order-field span {
+    font-size: 12px;
+  }
+  .order-field input,
+  .order-field textarea {
+    min-height: 38px;
+    border-radius: 11px;
+    padding: 9px 10px;
+    font-size: 13px;
+  }
+  .password-input-wrap input {
+    padding-right: 42px;
+  }
+  .password-eye-btn {
+    right: 7px;
+    width: 28px;
+    height: 28px;
+  }
+  .order-field textarea {
+    min-height: 54px;
+  }
+  .contact-note {
+    font-size: 10px;
+    line-height: 1.25;
   }
   .order-flow {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1904,6 +2032,32 @@ button { cursor: pointer; border: none; background: transparent; }
     padding-top: 10px;
     background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.98) 28%, rgba(255,255,255,.98));
   }
+  .order-modal-form:focus-within .modal-head {
+    padding: 8px 10px;
+  }
+  .order-form-body:focus-within {
+    gap: 7px;
+    scroll-padding-bottom: 150px;
+  }
+  .order-form-body:focus-within .order-flow-step {
+    min-height: 30px;
+    gap: 2px;
+  }
+  .order-form-body:focus-within .order-flow-step b {
+    width: 16px;
+    height: 16px;
+    font-size: 9px;
+  }
+  .order-form-body:focus-within .order-summary-card {
+    padding: 6px;
+  }
+  .order-form-body:focus-within .order-field textarea {
+    min-height: 46px;
+  }
+  .order-form-body:focus-within .contact-note {
+    font-size: 9.5px;
+    line-height: 1.18;
+  }
   .order-pay-body .order-actions {
     position: static;
     z-index: auto;
@@ -1944,6 +2098,24 @@ button { cursor: pointer; border: none; background: transparent; }
   .order-modal-body.order-pay-body {
     gap: 7px;
     padding: 8px;
+  }
+  .order-modal-body.order-form-body {
+    gap: 7px;
+    padding: 8px;
+  }
+  .order-form .order-summary-card {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .order-form .order-summary-card span {
+    font-size: 9px;
+  }
+  .order-form .order-summary-card b {
+    font-size: 11px;
+  }
+  .order-field input,
+  .order-field textarea {
+    font-size: 12px;
+    padding: 8px 9px;
   }
   .order-pay-body .payment-grid {
     grid-template-columns: minmax(118px, .72fr) minmax(0, 1fr);

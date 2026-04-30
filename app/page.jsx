@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   BadgeCheck,
@@ -254,6 +254,21 @@ export default function Page() {
     () => selectedProduct?.needsUsername ? subscriptionLinks(orderForm.username) : null,
     [orderForm.username, selectedProduct]
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.visualViewport) return;
+    const viewport = window.visualViewport;
+    const updateHeight = () => {
+      document.documentElement.style.setProperty("--visual-viewport-height", viewport.height + "px");
+    };
+    updateHeight();
+    viewport.addEventListener("resize", updateHeight);
+    viewport.addEventListener("scroll", updateHeight);
+    return () => {
+      viewport.removeEventListener("resize", updateHeight);
+      viewport.removeEventListener("scroll", updateHeight);
+    };
+  }, []);
 
   function handleCopy(value, key) {
     copyText(value);
@@ -847,7 +862,7 @@ export default function Page() {
       {selectedProduct && orderPreviewOpen && (
         <div className="modal-mask second-mask" onClick={closeOrder}>
           <div
-            className={`modal-card modal-medium${orderStep === "pay" ? " order-modal-pay" : ""}`}
+            className={`modal-card modal-medium${orderStep === "form" ? " order-modal-form" : ""}${orderStep === "pay" ? " order-modal-pay" : ""}`}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="modal-head">
@@ -864,7 +879,7 @@ export default function Page() {
               </button>
             </div>
 
-            <div className={`order-modal-body${orderStep === "pay" ? " order-pay-body" : ""}`}>
+            <div className={`order-modal-body${orderStep === "form" ? " order-form-body" : ""}${orderStep === "pay" ? " order-pay-body" : ""}`}>
               <div className="order-flow">
                 {["填写信息", "扫码付款", "提交订单"].map((label, index) => {
                   const stepIndex = orderStep === "form" ? 0 : orderStep === "pay" ? 1 : 2;
