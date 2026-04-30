@@ -1460,36 +1460,11 @@ button { cursor: pointer; border: none; background: transparent; }
 
 @media (max-width: 820px) {
   .container { width: min(100% - 24px, 680px); }
-  .header-inner   { flex-wrap: wrap; gap: 10px 12px; }
-  .brand-wrap     { min-width: 0; flex: 1 1 auto; }
-  .pill-link      { flex: 0 0 auto; }
-  .desktop-nav {
-    order: 3;
-    display: flex;
-    flex: 1 0 100%;
-    gap: 8px;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    padding: 2px 0 4px;
-    margin: 0;
-    scrollbar-width: none;
-  }
-  .desktop-nav::-webkit-scrollbar { display: none; }
-  .desktop-nav a {
-    flex: 0 0 auto;
-    padding: 8px 12px;
-    border: 1px solid rgba(148, 163, 184, 0.22);
-    border-radius: var(--radius-pill);
-    background: rgba(255, 255, 255, 0.92);
-    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
-    color: #334155;
-    font-size: 12px;
-    font-weight: 800;
-    line-height: 1;
-    white-space: nowrap;
-  }
-  .desktop-nav a::after { display: none; }
-  .hero-section   { padding: 42px 0 30px; }
+  .site-header    { background: rgba(255, 255, 255, 0.86); }
+  .header-inner   { justify-content: flex-start; gap: 10px; padding: 11px 0; }
+  .brand-wrap     { min-width: 0; }
+  .desktop-nav    { display: none; }
+  .hero-section   { padding: 34px 0 28px; }
   .section        { padding: 26px 0 34px; }
   .hero-cards-grid,
   .products-grid,
@@ -1604,12 +1579,11 @@ button { cursor: pointer; border: none; background: transparent; }
 @media (max-width: 560px) {
   .container { width: calc(100% - 20px); }
   .bg-orb { display: none; }
-  .header-inner { padding: 10px 0; }
+  .header-inner { padding: 9px 0; }
   .brand-logo { width: 40px; height: 40px; border-radius: 14px; }
   .brand-en { font-size: 10px; letter-spacing: .2em; }
   .brand-cn { font-size: 15px; }
-  .pill-link { padding: 8px 12px; font-size: 12px; }
-  .hero-section { padding: 30px 0 22px; }
+  .hero-section { padding: 24px 0 22px; }
   .hero-badge { width: 100%; justify-content: center; letter-spacing: .12em; font-size: 10px; }
   .hero-title { font-size: 34px; line-height: 1.08; }
   .hero-desc { margin-top: 16px; font-size: 14px; }
@@ -1954,8 +1928,6 @@ button { cursor: pointer; border: none; background: transparent; }
   .brand-wrap { gap: 9px; }
   .brand-en { letter-spacing: .14em; }
   .brand-cn { font-size: 14px; }
-  .pill-link { padding: 8px 10px; }
-  .desktop-nav a { padding: 8px 10px; }
   .hero-actions { grid-template-columns: 1fr; }
   .hero-actions .primary-btn { grid-column: auto; }
   .hero-title { font-size: 31px; }
