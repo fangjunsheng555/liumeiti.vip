@@ -958,8 +958,13 @@ export default function Page() {
                     </div>
                   )}
 
-                  <label className="order-field">
-                    <span>联系方式</span>
+                  <label className="order-field contact-field">
+                    <div className="order-field-label-row">
+                      <span>联系方式</span>
+                      <small className="contact-note">
+                        *请准确填写，可用于订单核实与日后查询。
+                      </small>
+                    </div>
                     <input
                       value={orderForm.contact}
                       onChange={(event) => updateOrderField("contact", event.target.value)}
@@ -967,9 +972,6 @@ export default function Page() {
                       autoComplete="tel"
                       required
                     />
-                    <small className="contact-note">
-                      *请准确填写，客服将用作订单核实凭证，也可用于日后订单查询。
-                    </small>
                   </label>
 
                   <label className="order-field">
