@@ -7,6 +7,8 @@ import {
   ChevronDown,
   CheckCircle2,
   Copy,
+  Eye,
+  EyeOff,
   Globe,
   Headphones,
   Image as ImageIcon,
@@ -237,6 +239,7 @@ export default function Page() {
   const [orderForm, setOrderForm] = useState(blankOrderForm);
   const [orderStatus, setOrderStatus] = useState(null);
   const [orderSubmitting, setOrderSubmitting] = useState(false);
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [queryInput, setQueryInput] = useState("");
   const [queryStatus, setQueryStatus] = useState(null);
   const [queryLoading, setQueryLoading] = useState(false);
@@ -265,12 +268,14 @@ export default function Page() {
     setOrderForm(blankOrderForm());
     setOrderStatus(null);
     setOrderSubmitting(false);
+    setPasswordVisible(false);
   }
 
   function openOrder() {
     setOrderForm(blankOrderForm());
     setOrderStatus(null);
     setOrderStep("form");
+    setPasswordVisible(false);
     setOrderPreviewOpen(true);
   }
 
@@ -381,9 +386,14 @@ export default function Page() {
       }
       const orders = data.orders || [];
       setQueryResults(orders);
+      setExpandedOrderId("");
       setQueryStatus({
         type: orders.length ? "success" : "error",
-        message: orders.length ? "已找到 " + orders.length + " 条订单，点击摘要查看详情。" : "未查询到订单，请核对订单号或联系方式。",
+        message: orders.length
+          ? orders.some((order) => order.matchType === "orderId")
+            ? "已通过订单号查询到订单，详情已展开。"
+            : "已找到 " + orders.length + " 条订单，点击摘要查看详情。"
+          : "未查询到订单，请核对订单号或联系方式。",
       });
     } catch (error) {
       setQueryResults([]);
@@ -583,13 +593,16 @@ export default function Page() {
             {queryResults.length > 0 && (
               <div className="query-results">
                 {queryResults.map((order) => {
-                  const expanded = expandedOrderId === order.orderId;
+                  const forceExpanded = order.matchType === "orderId";
+                  const expanded = forceExpanded || expandedOrderId === order.orderId;
                   return (
                     <article key={order.orderId} className={`query-result${expanded ? " open" : ""}`}>
                       <button
                         type="button"
                         className="query-result-head"
-                        onClick={() => setExpandedOrderId(expanded ? "" : order.orderId)}
+                        onClick={() => {
+                          if (!forceExpanded) setExpandedOrderId(expanded ? "" : order.orderId);
+                        }}
                       >
                         <span>
                           <small>{order.serviceLabel || order.service || "订单"}</small>
@@ -599,7 +612,7 @@ export default function Page() {
                           <small>{orderTime(order)}</small>
                           <b>{money(order.finalAmount)} · {paymentLabel(order)}</b>
                         </span>
-                        <em>{expanded ? "收起详情" : "查看详情"}</em>
+                        <em>{forceExpanded ? "完整详情" : expanded ? "收起详情" : "查看详情"}</em>
                       </button>
 
                       {expanded && (
@@ -624,15 +637,21 @@ export default function Page() {
                                   type="button"
                                   onClick={() => handleCopy(order.subscriptionLinks.shadowrocket, "query-shadowrocket-" + order.orderId)}
                                 >
-                                  <strong>shadowrocket小火箭订阅</strong>
-                                  <small>{copiedKey === "query-shadowrocket-" + order.orderId ? "已复制" : "复制链接"}</small>
+                                  <span>
+                                    <strong>shadowrocket小火箭订阅</strong>
+                                    <small>{order.subscriptionLinks.shadowrocket}</small>
+                                  </span>
+                                  <em>{copiedKey === "query-shadowrocket-" + order.orderId ? "已复制" : "复制链接"}</em>
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => handleCopy(order.subscriptionLinks.clash, "query-clash-" + order.orderId)}
                                 >
-                                  <strong>Clash订阅</strong>
-                                  <small>{copiedKey === "query-clash-" + order.orderId ? "已复制" : "复制链接"}</small>
+                                  <span>
+                                    <strong>Clash订阅</strong>
+                                    <small>{order.subscriptionLinks.clash}</small>
+                                  </span>
+                                  <em>{copiedKey === "query-clash-" + order.orderId ? "已复制" : "复制链接"}</em>
                                 </button>
                               </div>
                             </div>
@@ -909,14 +928,25 @@ export default function Page() {
                       </label>
                       <label className="order-field">
                         <span>Spotify密码</span>
-                        <input
-                          type="password"
-                          value={orderForm.password}
-                          onChange={(event) => updateOrderField("password", event.target.value)}
-                          placeholder="账号密码"
-                          autoComplete="current-password"
-                          required
-                        />
+                        <div className="password-input-wrap">
+                          <input
+                            type={passwordVisible ? "text" : "password"}
+                            value={orderForm.password}
+                            onChange={(event) => updateOrderField("password", event.target.value)}
+                            placeholder="账号密码"
+                            autoComplete="current-password"
+                            required
+                          />
+                          <button
+                            type="button"
+                            className="password-eye-btn"
+                            onClick={() => setPasswordVisible((visible) => !visible)}
+                            aria-label={passwordVisible ? "隐藏密码" : "显示密码"}
+                            title={passwordVisible ? "隐藏密码" : "显示密码"}
+                          >
+                            {passwordVisible ? <EyeOff size={18} /> : <Eye size={18} />}
+                          </button>
+                        </div>
                       </label>
                     </div>
                   )}

@@ -776,18 +776,32 @@ button { cursor: pointer; border: none; background: transparent; }
   padding: 11px 13px;
   text-align: left;
 }
+.query-subscriptions button span {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
 .query-subscriptions strong {
   font-size: 13px;
   overflow-wrap: anywhere;
 }
 .query-subscriptions small {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.query-subscriptions em {
   flex-shrink: 0;
   border-radius: 999px;
   background: #0f172a;
   color: #fff;
   font-size: 12px;
+  font-style: normal;
   font-weight: 900;
   padding: 7px 10px;
+  white-space: nowrap;
 }
 
 /* ─────────────── Footer ─────────────── */
@@ -1205,6 +1219,34 @@ button { cursor: pointer; border: none; background: transparent; }
   outline: none;
   transition: border-color .15s, box-shadow .15s;
 }
+.password-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.password-input-wrap input {
+  padding-right: 48px;
+}
+.password-eye-btn {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  color: #0f766e;
+}
+.password-eye-btn:hover {
+  background: var(--accent-soft);
+}
+.password-eye-btn:focus {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(15, 118, 110, .10);
+}
 .order-field textarea {
   resize: vertical;
   min-height: 92px;
@@ -1435,8 +1477,8 @@ button { cursor: pointer; border: none; background: transparent; }
   .order-query-panel { padding: 14px; border-radius: 20px; }
   .query-result-head { padding: 13px; }
   .query-detail { padding: 13px; }
-  .query-subscriptions button { display: grid; justify-items: start; }
-  .query-subscriptions small { margin-top: 2px; }
+  .query-subscriptions button { display: grid; justify-items: stretch; }
+  .query-subscriptions em { justify-self: start; margin-top: 2px; }
   .modal-mask {
     align-items: flex-start;
     justify-content: center;
