@@ -431,7 +431,6 @@ export default function Page() {
             <a href="#contact">联系我们</a>
           </nav>
 
-          <a href="#contact" className="pill-link">联系客服</a>
         </div>
       </header>
 
@@ -594,6 +593,8 @@ export default function Page() {
                 {queryResults.map((order) => {
                   const forceExpanded = order.matchType === "orderId";
                   const expanded = forceExpanded || expandedOrderId === order.orderId;
+                  const serviceText = order.serviceLabel || order.service || "订单";
+                  const actionText = forceExpanded ? "完整详情" : expanded ? "收起详情" : "查看详情";
                   return (
                     <article key={order.orderId} className={`query-result${expanded ? " open" : ""}`}>
                       <button
@@ -603,15 +604,19 @@ export default function Page() {
                           if (!forceExpanded) setExpandedOrderId(expanded ? "" : order.orderId);
                         }}
                       >
-                        <span>
-                          <small>{order.serviceLabel || order.service || "订单"}</small>
+                        <span className="query-service-summary">
+                          <small>购买服务</small>
+                          <b>{serviceText}</b>
+                        </span>
+                        <span className="query-muted-summary">
+                          <small>订单号</small>
                           <b>{order.orderId}</b>
                         </span>
-                        <span>
+                        <span className="query-muted-summary">
                           <small>{orderTime(order)}</small>
                           <b>{money(order.finalAmount)} · {paymentLabel(order)}</b>
                         </span>
-                        <em>{forceExpanded ? "完整详情" : expanded ? "收起详情" : "查看详情"}</em>
+                        <em>{actionText}</em>
                       </button>
 
                       {expanded && (
@@ -841,7 +846,10 @@ export default function Page() {
       {/* ── Order / Payment Modal ── */}
       {selectedProduct && orderPreviewOpen && (
         <div className="modal-mask second-mask" onClick={closeOrder}>
-          <div className="modal-card modal-medium" onClick={(e) => e.stopPropagation()}>
+          <div
+            className={`modal-card modal-medium${orderStep === "pay" ? " order-modal-pay" : ""}`}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="modal-head">
               <div>
                 <div className="section-kicker">Place Order</div>
@@ -856,7 +864,7 @@ export default function Page() {
               </button>
             </div>
 
-            <div className="order-modal-body">
+            <div className={`order-modal-body${orderStep === "pay" ? " order-pay-body" : ""}`}>
               <div className="order-flow">
                 {["填写信息", "扫码付款", "提交订单"].map((label, index) => {
                   const stepIndex = orderStep === "form" ? 0 : orderStep === "pay" ? 1 : 2;

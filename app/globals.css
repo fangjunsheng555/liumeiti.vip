@@ -695,7 +695,7 @@ button { cursor: pointer; border: none; background: transparent; }
 .query-result-head {
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr) auto;
+  grid-template-columns: minmax(150px, 1.15fr) minmax(120px, .78fr) minmax(120px, .82fr) auto;
   gap: 12px;
   align-items: center;
   padding: 14px 16px;
@@ -731,6 +731,30 @@ button { cursor: pointer; border: none; background: transparent; }
   font-weight: 950;
   padding: 8px 12px;
   white-space: nowrap;
+}
+.query-service-summary {
+  padding-left: 12px;
+  border-left: 4px solid #0f766e;
+}
+.query-service-summary small {
+  color: #0f766e;
+  font-size: 11px;
+  letter-spacing: .12em;
+}
+.query-service-summary b {
+  color: #0f766e;
+  font-size: 18px;
+  line-height: 1.2;
+}
+.query-muted-summary small {
+  color: #94a3b8;
+  font-size: 11px;
+}
+.query-muted-summary b {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
 }
 .query-detail {
   display: grid;
@@ -1271,11 +1295,53 @@ button { cursor: pointer; border: none; background: transparent; }
 }
 .payment-grid {
   padding: 0;
+  grid-template-columns: minmax(230px, .78fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
 }
 .payment-side {
   display: flex;
   min-width: 0;
   flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+}
+.order-modal-pay {
+  max-height: calc(100dvh - 20px);
+}
+.order-modal-pay .modal-head {
+  padding: 16px 20px;
+}
+.order-pay-body {
+  gap: 12px;
+  overflow: hidden;
+  padding: 16px 20px 20px;
+}
+.order-pay-body .order-flow-step {
+  min-height: 48px;
+}
+.order-pay-body .payment-grid {
+  min-height: 0;
+}
+.order-pay-body .qr-box-wrap,
+.order-pay-body .payment-side {
+  min-width: 0;
+}
+.order-pay-body .detail-title {
+  font-size: 17px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.order-pay-body .detail-body {
+  margin-top: 0;
+  padding: 12px 14px;
+  line-height: 1.62;
+}
+.order-pay-body .notice-box {
+  margin-top: 0;
+}
+.order-pay-body .pay-amount-card {
+  margin-top: 0;
 }
 .pay-amount-card {
   margin-top: 14px;
@@ -1386,6 +1452,7 @@ button { cursor: pointer; border: none; background: transparent; }
   .hero-grid      { grid-template-columns: 1fr; }
   .modal-grid,
   .second-grid    { grid-template-columns: 1fr; }
+  .payment-grid   { grid-template-columns: minmax(210px, .78fr) minmax(0, 1fr); }
   .footer-inner   { grid-template-columns: 1fr; }
   .contact-bottom { grid-template-columns: 1fr; }
   .hours-card     { min-width: unset; }
@@ -1450,8 +1517,13 @@ button { cursor: pointer; border: none; background: transparent; }
   .order-query-panel { padding: 18px; border-radius: 22px; }
   .order-query-form { grid-template-columns: 1fr; }
   .order-query-form .primary-btn { width: 100%; }
-  .query-result-head { grid-template-columns: 1fr; }
-  .query-result-head em { justify-self: start; }
+  .query-result-head { grid-template-columns: minmax(0, 1fr) auto; }
+  .query-service-summary { grid-column: 1 / -1; }
+  .query-muted-summary b { font-size: 12px; }
+  .query-result-head em {
+    justify-self: end;
+    align-self: end;
+  }
   .query-detail { grid-template-columns: 1fr; }
   .floating-wrap  { right: 16px; bottom: 16px; }
   .hero-stats     { gap: 0; }
@@ -1464,6 +1536,69 @@ button { cursor: pointer; border: none; background: transparent; }
   .order-actions { justify-content: stretch; }
   .order-actions .primary-btn,
   .order-actions .secondary-btn { width: 100%; }
+  .order-modal-pay .modal-head { padding: 12px 14px; }
+  .order-modal-pay .modal-title { font-size: 19px; }
+  .order-pay-body {
+    gap: 10px;
+    overflow: hidden;
+    padding: 12px 14px 14px;
+  }
+  .order-pay-body .order-flow-step {
+    min-height: 42px;
+    font-size: 10px;
+  }
+  .order-pay-body .payment-grid {
+    grid-template-columns: minmax(165px, .82fr) minmax(0, 1fr);
+    gap: 10px;
+  }
+  .order-pay-body .qr-box-wrap {
+    padding: 12px;
+    border-radius: 16px;
+  }
+  .order-pay-body .qr-label {
+    margin-bottom: 8px;
+    font-size: 12px;
+  }
+  .order-pay-body .qr-box {
+    min-height: 0;
+    padding: 10px;
+    border-radius: 15px;
+  }
+  .order-pay-body .qr-image {
+    width: 100%;
+    max-width: 100%;
+    max-height: 230px;
+    object-fit: contain;
+  }
+  .order-pay-body .payment-side { gap: 8px; }
+  .order-pay-body .detail-title {
+    font-size: 14px;
+    line-height: 1.35;
+  }
+  .order-pay-body .detail-body,
+  .order-pay-body .notice-box {
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .order-pay-body .pay-amount-card {
+    padding: 10px 12px;
+  }
+  .order-pay-body .pay-amount-card b {
+    font-size: 23px;
+  }
+  .order-pay-body .order-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 7px;
+    margin-top: 0;
+  }
+  .order-pay-body .order-actions .primary-btn,
+  .order-pay-body .order-actions .secondary-btn {
+    min-height: 38px;
+    padding: 9px 10px;
+    font-size: 12px;
+  }
 }
 
 @media (max-width: 560px) {
@@ -1596,9 +1731,20 @@ button { cursor: pointer; border: none; background: transparent; }
   .floating-button { width: 54px; height: 54px; }
   .order-query-panel { padding: 14px; border-radius: 20px; }
   .order-query-field input { min-height: 46px; }
-  .query-result-head { gap: 9px; padding: 13px; }
+  .query-result-head {
+    grid-template-columns: 1fr;
+    gap: 9px;
+    padding: 13px;
+  }
+  .query-service-summary { grid-column: auto; }
+  .query-service-summary b { font-size: 17px; }
+  .query-muted-summary {
+    padding-left: 12px;
+    border-left: 1px solid rgba(148, 163, 184, .22);
+  }
   .query-result-head em {
     width: 100%;
+    justify-self: stretch;
     text-align: center;
   }
   .query-detail { padding: 13px; }
@@ -1627,6 +1773,90 @@ button { cursor: pointer; border: none; background: transparent; }
     margin-top: 0;
     padding: 9px 12px;
     white-space: nowrap;
+  }
+  .modal-card.order-modal-pay {
+    max-height: calc(100dvh - 12px);
+    border-radius: 18px;
+  }
+  .order-modal-pay .modal-head {
+    padding: 10px 12px;
+  }
+  .order-modal-pay .section-kicker {
+    font-size: 9px;
+    letter-spacing: .24em;
+  }
+  .order-modal-pay .modal-title {
+    margin-top: 2px;
+    font-size: 17px;
+  }
+  .order-modal-body.order-pay-body {
+    gap: 8px;
+    padding: 9px 10px calc(10px + env(safe-area-inset-bottom));
+  }
+  .order-pay-body .order-flow {
+    gap: 4px;
+  }
+  .order-pay-body .order-flow-step {
+    min-height: 34px;
+    border-radius: 10px;
+    font-size: 9px;
+    padding: 4px 3px;
+  }
+  .order-pay-body .order-flow-step b {
+    width: 18px;
+    height: 18px;
+    font-size: 10px;
+  }
+  .order-pay-body .payment-grid {
+    grid-template-columns: minmax(130px, .78fr) minmax(0, 1fr);
+    gap: 8px;
+  }
+  .order-pay-body .qr-box-wrap {
+    padding: 8px;
+    border-radius: 14px;
+  }
+  .order-pay-body .qr-label {
+    margin-bottom: 6px;
+    font-size: 10px;
+    line-height: 1.3;
+  }
+  .order-pay-body .qr-box {
+    padding: 6px;
+    border-radius: 12px;
+  }
+  .order-pay-body .qr-image {
+    max-height: min(30dvh, 170px);
+  }
+  .order-pay-body .payment-side {
+    gap: 6px;
+  }
+  .order-pay-body .detail-title {
+    font-size: 12px;
+    line-height: 1.3;
+  }
+  .order-pay-body .detail-body,
+  .order-pay-body .notice-box {
+    padding: 8px;
+    font-size: 10.5px;
+    line-height: 1.38;
+    border-radius: 12px;
+  }
+  .order-pay-body .pay-amount-card {
+    padding: 8px 9px;
+    border-radius: 12px;
+  }
+  .order-pay-body .pay-amount-card span {
+    font-size: 10px;
+  }
+  .order-pay-body .pay-amount-card b {
+    font-size: 20px;
+  }
+  .order-pay-body .order-actions .primary-btn,
+  .order-pay-body .order-actions .secondary-btn {
+    min-height: 34px;
+    padding: 7px 8px;
+    font-size: 11px;
+    line-height: 1.25;
   }
   .modal-mask {
     align-items: flex-start;
@@ -1700,6 +1930,13 @@ button { cursor: pointer; border: none; background: transparent; }
     padding-top: 10px;
     background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.98) 28%, rgba(255,255,255,.98));
   }
+  .order-pay-body .order-actions {
+    position: static;
+    z-index: auto;
+    margin: 0;
+    padding-top: 0;
+    background: transparent;
+  }
   .order-done {
     padding: 12px 0 4px;
   }
@@ -1731,5 +1968,27 @@ button { cursor: pointer; border: none; background: transparent; }
     grid-row: auto;
     justify-content: center;
     width: 100%;
+  }
+  .order-modal-body.order-pay-body {
+    gap: 7px;
+    padding: 8px;
+  }
+  .order-pay-body .payment-grid {
+    grid-template-columns: minmax(118px, .72fr) minmax(0, 1fr);
+    gap: 6px;
+  }
+  .order-pay-body .qr-box-wrap { padding: 6px; }
+  .order-pay-body .qr-label { font-size: 9.5px; }
+  .order-pay-body .detail-title { font-size: 11.5px; }
+  .order-pay-body .detail-body,
+  .order-pay-body .notice-box {
+    padding: 7px;
+    font-size: 10px;
+    line-height: 1.32;
+  }
+  .order-pay-body .order-actions .primary-btn,
+  .order-pay-body .order-actions .secondary-btn {
+    min-height: 32px;
+    font-size: 10.5px;
   }
 }
