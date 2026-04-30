@@ -1,7 +1,7 @@
 const ORDERS_KEY = "liumeiti:orders";
 
 const PRODUCTS = {
-  spotify: { label: "Spotify", amount: 128, cycle: "1年" },
+  spotify: { label: "Spotify", amount: 128, cycle: "1年", needsAccountPassword: true },
   netflix: { label: "Netflix", amount: 168, cycle: "1年" },
   disney: { label: "Disney+", amount: 108, cycle: "1年" },
   max: { label: "HBO Max", amount: 148, cycle: "1年" },
@@ -90,6 +90,9 @@ function orderText(order) {
     lines.push("用户名: " + order.account);
     lines.push("Shadowrocket订阅: " + links.shadowrocket);
     lines.push("Clash订阅: " + links.clash);
+  } else if (order.service === "spotify") {
+    lines.push("账号: " + order.account);
+    lines.push("密码: " + order.password);
   }
 
   lines.push("联系方式: " + order.contact);
@@ -138,9 +141,15 @@ export async function POST(request) {
   const product = PRODUCTS[service];
   const contact = clean(body.contact, 200);
   const account = clean(body.account, 80);
+  const password = clean(body.password, 120);
   const remark = clean(body.remark, 800);
 
-  if (!product || !contact || (product.needsUsername && !validUsername(account))) {
+  if (
+    !product ||
+    !contact ||
+    (product.needsUsername && !validUsername(account)) ||
+    (product.needsAccountPassword && (!account || !password))
+  ) {
     return Response.json({ ok: false, error: "missing_required_fields" }, { status: 400 });
   }
 
@@ -156,7 +165,8 @@ export async function POST(request) {
     finalAmount: product.amount,
     currency: "CNY",
     paymentMethod: "alipay",
-    account: product.needsUsername ? account : "",
+    account: product.needsUsername || product.needsAccountPassword ? account : "",
+    password: product.needsAccountPassword ? password : "",
     contact,
     remark,
   };

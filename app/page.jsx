@@ -14,6 +14,7 @@ import {
   LoaderCircle,
   MessageCircleMore,
   QrCode,
+  Search,
   Sparkles,
   Users,
   Award,
@@ -197,11 +198,25 @@ function money(amount) {
 }
 
 function blankOrderForm() {
-  return { contact: "", username: "", remark: "" };
+  return { account: "", password: "", contact: "", username: "", remark: "" };
 }
 
 function validUsername(value) {
   return /^[A-Za-z0-9]{4,10}$/.test(String(value || "").trim());
+}
+
+function needsAccountPassword(product) {
+  return product?.key === "spotify";
+}
+
+function orderTime(order) {
+  if (order.createdAtBeijing) return order.createdAtBeijing;
+  if (!order.createdAt) return "";
+  return new Date(order.createdAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }) + " 北京时间";
+}
+
+function paymentLabel(order) {
+  return order.paymentMethod === "usdt" ? "USDT" : "支付宝";
 }
 
 function subscriptionLinks(username) {
@@ -222,6 +237,11 @@ export default function Page() {
   const [orderForm, setOrderForm] = useState(blankOrderForm);
   const [orderStatus, setOrderStatus] = useState(null);
   const [orderSubmitting, setOrderSubmitting] = useState(false);
+  const [queryInput, setQueryInput] = useState("");
+  const [queryStatus, setQueryStatus] = useState(null);
+  const [queryLoading, setQueryLoading] = useState(false);
+  const [queryResults, setQueryResults] = useState([]);
+  const [expandedOrderId, setExpandedOrderId] = useState("");
 
   const selectedProduct = useMemo(
     () => PRODUCTS.find((item) => item.key === selectedKey) || null,
@@ -273,6 +293,9 @@ export default function Page() {
     if (selectedProduct?.needsUsername && !validUsername(orderForm.username)) {
       return "请填写4-10位数字或字母用户名，区分大小写。";
     }
+    if (needsAccountPassword(selectedProduct) && (!orderForm.account.trim() || !orderForm.password.trim())) {
+      return "请填写需要开通 Spotify 的账号和密码。";
+    }
     return "";
   }
 
@@ -306,7 +329,8 @@ export default function Page() {
         body: JSON.stringify({
           service: selectedProduct.key,
           contact: orderForm.contact.trim(),
-          account: selectedProduct.needsUsername ? orderForm.username.trim() : "",
+          account: selectedProduct.needsUsername ? orderForm.username.trim() : orderForm.account.trim(),
+          password: needsAccountPassword(selectedProduct) ? orderForm.password.trim() : "",
           remark: orderForm.remark.trim(),
         }),
       });
@@ -325,6 +349,47 @@ export default function Page() {
       });
     } finally {
       setOrderSubmitting(false);
+    }
+  }
+
+  async function submitQuery(event) {
+    event.preventDefault();
+    const query = queryInput.trim();
+    if (!query) {
+      setQueryStatus({ type: "error", message: "请输入完整订单号或联系方式。" });
+      setQueryResults([]);
+      setExpandedOrderId("");
+      return;
+    }
+
+    setQueryLoading(true);
+    setQueryStatus({ type: "info", message: "正在查询订单..." });
+    setExpandedOrderId("");
+
+    try {
+      const response = await fetch("/api/order-query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "query_failed");
+      if (!data.configured) {
+        setQueryResults([]);
+        setQueryStatus({ type: "error", message: "订单存储尚未连接，请联系在线客服查询。" });
+        return;
+      }
+      const orders = data.orders || [];
+      setQueryResults(orders);
+      setQueryStatus({
+        type: orders.length ? "success" : "error",
+        message: orders.length ? "已找到 " + orders.length + " 条订单，点击摘要查看详情。" : "未查询到订单，请核对订单号或联系方式。",
+      });
+    } catch (error) {
+      setQueryResults([]);
+      setQueryStatus({ type: "error", message: "查询失败，请稍后再试或联系在线客服。" });
+    } finally {
+      setQueryLoading(false);
     }
   }
 
@@ -351,6 +416,7 @@ export default function Page() {
           <nav className="desktop-nav">
             <a href="#products">服务产品</a>
             <a href="#layout">下单流程</a>
+            <a href="#order-query">订单查询</a>
             <a href="#faq">FAQ</a>
             <a href="#contact">联系我们</a>
           </nav>
@@ -381,6 +447,7 @@ export default function Page() {
                   立即购买
                   <ArrowRight size={15} />
                 </a>
+                <a href="#order-query" className="secondary-btn">查询订单</a>
                 <a href="#layout" className="secondary-btn">查看下单流程</a>
               </div>
 
@@ -471,6 +538,112 @@ export default function Page() {
                 </div>
               );
             })}
+          </div>
+        </section>
+
+        {/* ── Order Query ── */}
+        <section id="order-query" className="section container order-query-section">
+          <div className="section-head simple-head">
+            <div>
+              <div className="section-kicker">Order Lookup</div>
+              <h2 className="section-title">订单查询</h2>
+            </div>
+          </div>
+
+          <div className="order-query-panel">
+            <form className="order-query-form" onSubmit={submitQuery}>
+              <label className="order-query-field">
+                <span>订单号 / 联系方式</span>
+                <input
+                  value={queryInput}
+                  onChange={(event) => setQueryInput(event.target.value)}
+                  placeholder="输入完整订单号或下单联系方式"
+                  autoComplete="off"
+                />
+              </label>
+              <button type="submit" className="primary-btn" disabled={queryLoading}>
+                {queryLoading ? (
+                  <>
+                    <LoaderCircle size={15} className="spin-icon" />
+                    查询中
+                  </>
+                ) : (
+                  <>
+                    <Search size={15} />
+                    查询订单
+                  </>
+                )}
+              </button>
+            </form>
+
+            {queryStatus && (
+              <div className={`query-status ${queryStatus.type}`}>{queryStatus.message}</div>
+            )}
+
+            {queryResults.length > 0 && (
+              <div className="query-results">
+                {queryResults.map((order) => {
+                  const expanded = expandedOrderId === order.orderId;
+                  return (
+                    <article key={order.orderId} className={`query-result${expanded ? " open" : ""}`}>
+                      <button
+                        type="button"
+                        className="query-result-head"
+                        onClick={() => setExpandedOrderId(expanded ? "" : order.orderId)}
+                      >
+                        <span>
+                          <small>{order.serviceLabel || order.service || "订单"}</small>
+                          <b>{order.orderId}</b>
+                        </span>
+                        <span>
+                          <small>{orderTime(order)}</small>
+                          <b>{money(order.finalAmount)} · {paymentLabel(order)}</b>
+                        </span>
+                        <em>{expanded ? "收起详情" : "查看详情"}</em>
+                      </button>
+
+                      {expanded && (
+                        <div className="query-detail">
+                          <div><span>服务</span><b>{order.serviceLabel || "--"}</b></div>
+                          <div><span>周期</span><b>{order.cycle || "--"}</b></div>
+                          <div><span>支付方式</span><b>{paymentLabel(order)}</b></div>
+                          <div><span>应付金额</span><b>{money(order.finalAmount)}</b></div>
+                          {order.account && (
+                            <div><span>{order.service === "rocket" ? "用户名" : "账号"}</span><b>{order.account}</b></div>
+                          )}
+                          {order.password && (
+                            <div><span>密码</span><b>{order.password}</b></div>
+                          )}
+                          <div><span>联系方式</span><b>{order.contact || "--"}</b></div>
+                          <div className="query-detail-wide"><span>备注</span><b>{order.remark || "无"}</b></div>
+                          {order.subscriptionLinks && (
+                            <div className="query-detail-wide">
+                              <span>订阅链接</span>
+                              <div className="query-subscriptions">
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopy(order.subscriptionLinks.shadowrocket, "query-shadowrocket-" + order.orderId)}
+                                >
+                                  <strong>shadowrocket小火箭订阅</strong>
+                                  <small>{copiedKey === "query-shadowrocket-" + order.orderId ? "已复制" : "复制链接"}</small>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopy(order.subscriptionLinks.clash, "query-clash-" + order.orderId)}
+                                >
+                                  <strong>Clash订阅</strong>
+                                  <small>{copiedKey === "query-clash-" + order.orderId ? "已复制" : "复制链接"}</small>
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </section>
 
@@ -722,6 +895,32 @@ export default function Page() {
                     </label>
                   )}
 
+                  {needsAccountPassword(selectedProduct) && (
+                    <div className="order-field-grid">
+                      <label className="order-field">
+                        <span>Spotify账号</span>
+                        <input
+                          value={orderForm.account}
+                          onChange={(event) => updateOrderField("account", event.target.value)}
+                          placeholder="需要开通的 Spotify 账号"
+                          autoComplete="username"
+                          required
+                        />
+                      </label>
+                      <label className="order-field">
+                        <span>Spotify密码</span>
+                        <input
+                          type="password"
+                          value={orderForm.password}
+                          onChange={(event) => updateOrderField("password", event.target.value)}
+                          placeholder="账号密码"
+                          autoComplete="current-password"
+                          required
+                        />
+                      </label>
+                    </div>
+                  )}
+
                   <label className="order-field">
                     <span>联系方式</span>
                     <input
@@ -731,6 +930,9 @@ export default function Page() {
                       autoComplete="tel"
                       required
                     />
+                    <small className="contact-note">
+                      *请准确填写，客服将用作订单核实凭证，也可用于日后订单查询。
+                    </small>
                   </label>
 
                   <label className="order-field">
