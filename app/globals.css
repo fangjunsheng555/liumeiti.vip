@@ -19,6 +19,7 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { scroll-behavior: smooth; }
+html { -webkit-text-size-adjust: 100%; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto,
     "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
@@ -954,7 +955,7 @@ button { cursor: pointer; border: none; background: transparent; }
 .second-mask { z-index: 70; }
 .modal-card {
   width: 100%;
-  max-height: min(860px, calc(var(--visual-viewport-height, 100dvh) - 32px));
+  max-height: calc(100dvh - 32px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1194,7 +1195,7 @@ button { cursor: pointer; border: none; background: transparent; }
   gap: 16px;
 }
 .order-modal-form {
-  max-height: min(760px, calc(var(--visual-viewport-height, 100dvh) - 20px));
+  max-height: calc(100dvh - 20px);
 }
 .order-form-body {
   align-content: start;
@@ -1249,6 +1250,11 @@ button { cursor: pointer; border: none; background: transparent; }
   background: #fff;
   color: #0f172a;
   padding: 12px 14px;
+  font-size: 16px;
+  line-height: 1.35;
+  scroll-margin-top: 96px;
+  scroll-margin-bottom: 160px;
+  touch-action: manipulation;
   outline: none;
   transition: border-color .15s, box-shadow .15s;
 }
@@ -1521,7 +1527,7 @@ button { cursor: pointer; border: none; background: transparent; }
   .order-actions .primary-btn,
   .order-actions .secondary-btn { width: 100%; }
   .modal-card.order-modal-form {
-    max-height: calc(var(--visual-viewport-height, 100dvh) - 16px);
+    max-height: calc(100dvh - 16px);
   }
   .order-modal-form .modal-head {
     padding: 14px 16px;
@@ -1548,9 +1554,11 @@ button { cursor: pointer; border: none; background: transparent; }
   }
   .order-field input,
   .order-field textarea {
-    min-height: 42px;
+    min-height: 48px;
     border-radius: 12px;
-    padding: 10px 12px;
+    padding: 12px 13px;
+    font-size: 16px;
+    line-height: 1.35;
   }
   .order-field textarea {
     min-height: 64px;
@@ -1887,7 +1895,7 @@ button { cursor: pointer; border: none; background: transparent; }
     overflow: hidden;
   }
   .modal-card {
-    max-height: calc(var(--visual-viewport-height, 100dvh) - 16px);
+    max-height: calc(100dvh - 16px);
     border-radius: 22px;
   }
   .modal-head {
@@ -1906,7 +1914,7 @@ button { cursor: pointer; border: none; background: transparent; }
     padding: 14px 14px calc(16px + env(safe-area-inset-bottom));
   }
   .modal-card.order-modal-form {
-    max-height: calc(var(--visual-viewport-height, 100dvh) - 10px);
+    max-height: calc(100dvh - 8px);
     border-radius: 18px;
   }
   .order-modal-form .modal-head {
@@ -1965,10 +1973,11 @@ button { cursor: pointer; border: none; background: transparent; }
   }
   .order-field input,
   .order-field textarea {
-    min-height: 38px;
+    min-height: 48px;
     border-radius: 11px;
-    padding: 9px 10px;
-    font-size: 13px;
+    padding: 12px 11px;
+    font-size: 16px;
+    line-height: 1.35;
   }
   .password-input-wrap input {
     padding-right: 42px;
@@ -2032,32 +2041,6 @@ button { cursor: pointer; border: none; background: transparent; }
     padding-top: 10px;
     background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.98) 28%, rgba(255,255,255,.98));
   }
-  .order-modal-form:focus-within .modal-head {
-    padding: 8px 10px;
-  }
-  .order-form-body:focus-within {
-    gap: 7px;
-    scroll-padding-bottom: 150px;
-  }
-  .order-form-body:focus-within .order-flow-step {
-    min-height: 30px;
-    gap: 2px;
-  }
-  .order-form-body:focus-within .order-flow-step b {
-    width: 16px;
-    height: 16px;
-    font-size: 9px;
-  }
-  .order-form-body:focus-within .order-summary-card {
-    padding: 6px;
-  }
-  .order-form-body:focus-within .order-field textarea {
-    min-height: 46px;
-  }
-  .order-form-body:focus-within .contact-note {
-    font-size: 9.5px;
-    line-height: 1.18;
-  }
   .order-pay-body .order-actions {
     position: static;
     z-index: auto;
@@ -2114,8 +2097,9 @@ button { cursor: pointer; border: none; background: transparent; }
   }
   .order-field input,
   .order-field textarea {
-    font-size: 12px;
-    padding: 8px 9px;
+    min-height: 48px;
+    font-size: 16px;
+    padding: 12px 10px;
   }
   .order-pay-body .payment-grid {
     grid-template-columns: minmax(118px, .72fr) minmax(0, 1fr);

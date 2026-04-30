@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ArrowRight,
   BadgeCheck,
@@ -254,21 +254,6 @@ export default function Page() {
     () => selectedProduct?.needsUsername ? subscriptionLinks(orderForm.username) : null,
     [orderForm.username, selectedProduct]
   );
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.visualViewport) return;
-    const viewport = window.visualViewport;
-    const updateHeight = () => {
-      document.documentElement.style.setProperty("--visual-viewport-height", viewport.height + "px");
-    };
-    updateHeight();
-    viewport.addEventListener("resize", updateHeight);
-    viewport.addEventListener("scroll", updateHeight);
-    return () => {
-      viewport.removeEventListener("resize", updateHeight);
-      viewport.removeEventListener("scroll", updateHeight);
-    };
-  }, []);
 
   function handleCopy(value, key) {
     copyText(value);
