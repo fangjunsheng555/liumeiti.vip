@@ -2295,6 +2295,170 @@ button { cursor: pointer; border: none; background: transparent; }
    ═══════════════════════════════════════════════════════ */
 
 /* ─────────────────────────────────────────────
+   V6 — single order ID, items array UI
+   ───────────────────────────────────────────── */
+
+/* Query modal items list */
+.query-modal-items {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 10px 12px;
+}
+.query-modal-items-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.query-modal-item {
+  padding: 10px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 7px;
+}
+.query-modal-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.query-modal-item-head strong {
+  font-size: 13.5px;
+  font-weight: 800;
+  color: var(--primary);
+}
+.query-modal-item-head span {
+  font-size: 12px;
+  font-weight: 700;
+  color: #134e4a;
+  white-space: nowrap;
+}
+.query-modal-item-creds {
+  display: grid;
+  gap: 5px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: #f8fafc;
+  border: 1px dashed rgba(148, 163, 184, 0.35);
+}
+.query-modal-item-creds > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+.query-modal-item-creds span {
+  color: var(--muted);
+  font-weight: 600;
+}
+.query-modal-item-creds code {
+  font-family: ui-monospace, Menlo, monospace;
+  color: var(--primary);
+  font-weight: 700;
+  font-size: 12px;
+  word-break: break-all;
+  text-align: right;
+}
+.query-modal-item-subs { display: grid; gap: 6px; }
+
+/* Checkout done — single order result */
+.order-result-single {
+  width: 100%;
+  display: grid;
+  gap: 12px;
+  margin: 14px 0 0;
+  padding: 14px;
+  border-radius: 14px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+}
+.order-result-single .order-result-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.order-result-single .order-result-head span {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.order-result-single .order-result-head code {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--primary);
+}
+.order-result-items {
+  display: grid;
+  gap: 10px;
+}
+.order-result-items .order-result-item {
+  background: #fff;
+  border-radius: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+}
+.order-result-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.order-result-item-head strong {
+  font-size: 13.5px;
+  font-weight: 800;
+  color: var(--primary);
+}
+.order-result-item-head span {
+  font-size: 13px;
+  font-weight: 700;
+  color: #134e4a;
+}
+.order-result-paid {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+.order-result-paid span {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.order-result-paid b {
+  font-size: 22px;
+  font-weight: 900;
+  color: #134e4a;
+  letter-spacing: -.02em;
+}
+
+@media (max-width: 560px) {
+  .query-modal-item { padding: 9px; gap: 6px; }
+  .query-modal-item-head strong { font-size: 12.5px; }
+  .query-modal-item-head span { font-size: 11.5px; }
+  .query-modal-item-creds { padding: 7px 9px; }
+  .query-modal-item-creds > div { font-size: 11.5px; }
+  .order-result-single { padding: 12px; gap: 10px; }
+  .order-result-paid b { font-size: 19px; }
+}
+
+/* ─────────────────────────────────────────────
    V5 — single-column hero, 3+2 product grid,
    simplified product cards, query modal
    ───────────────────────────────────────────── */

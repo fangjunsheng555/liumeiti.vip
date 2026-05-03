@@ -67,23 +67,65 @@ function matchType(order, query) {
 }
 
 function publicOrder(order, type) {
+  // Normalize items array (new schema). Backward-compat: synthesize from flat fields.
+  let items;
+  if (Array.isArray(order.items) && order.items.length > 0) {
+    items = order.items.map((it) => {
+      const out = {
+        service: it.service || "",
+        label: it.label || "",
+        cycle: it.cycle || "",
+        amount: Number(it.amount || 0),
+        account: it.account || "",
+        password: it.password || "",
+      };
+      if (it.subscriptionLinks) {
+        out.subscriptionLinks = it.subscriptionLinks;
+      } else if (it.service === "rocket" && it.account) {
+        out.subscriptionLinks = subscriptionLinks(it.account);
+      }
+      return out;
+    });
+  } else {
+    // legacy single-item order
+    const it = {
+      service: order.service || "",
+      label: order.serviceLabel || "",
+      cycle: order.cycle || "",
+      amount: Number(order.finalAmount || 0),
+      account: order.account || "",
+      password: order.password || "",
+    };
+    if (it.service === "rocket" && it.account) {
+      it.subscriptionLinks = subscriptionLinks(it.account);
+    }
+    items = [it];
+  }
+
   const output = {
     matchType: type || "",
     orderId: order.orderId || "",
     createdAt: order.createdAt || "",
     createdAtBeijing: order.createdAtBeijing || "",
-    service: order.service || "",
-    serviceLabel: order.serviceLabel || "",
-    cycle: order.cycle || "",
+    items,
+    itemCount: items.length,
+    serviceLabel: order.serviceLabel || items.map((i) => i.label).join(" + "),
     paymentMethod: order.paymentMethod || "alipay",
-    originalAmount: Number(order.originalAmount || 0),
+    subtotal: Number(order.subtotal || order.originalAmount || items.reduce((s, i) => s + i.amount, 0)),
+    discountRate: Number(order.discountRate || 0),
+    discountLabel: order.discountLabel || "",
     finalAmount: Number(order.finalAmount || 0),
-    currency: order.currency || "CNY",
-    account: order.account || "",
-    password: order.password || "",
+    finalUsdt: Number(order.finalUsdt || 0),
+    paidAmount: Number(order.paidAmount || (order.paymentMethod === "usdt" ? order.finalUsdt : order.finalAmount) || 0),
+    paidCurrency: order.paidCurrency || (order.paymentMethod === "usdt" ? "USDT" : "CNY"),
     email: order.email || "",
     contact: order.contact || "",
     remark: order.remark || "",
+    // Legacy flat fields (kept for compat)
+    service: items[0]?.service || "",
+    cycle: items[0]?.cycle || "",
+    account: items[0]?.account || "",
+    password: items[0]?.password || "",
   };
   if (output.service === "rocket" && output.account) {
     output.subscriptionLinks = subscriptionLinks(output.account);

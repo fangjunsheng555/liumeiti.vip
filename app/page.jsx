@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   PRODUCTS,
   USDT_DISCOUNT,
@@ -156,6 +156,41 @@ export default function Page() {
   const [queryDetailOrder, setQueryDetailOrder] = useState(null);
 
   const { cart, toggleCart: toggleCartStore, removeFromCart } = useCart();
+
+  // Auto-query if ?order=LMxxxxx in URL (from email link)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const orderId = params.get("order");
+    if (orderId && orderId.length > 4) {
+      setQueryInput(orderId);
+      // Trigger query
+      (async () => {
+        setQueryLoading(true);
+        setQueryStatus({ type: "info", message: "正在查询订单..." });
+        try {
+          const response = await fetch("/api/order-query", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query: orderId }),
+          });
+          const data = await response.json();
+          if (data.ok && data.orders && data.orders.length > 0) {
+            const match = data.orders.find((o) => o.matchType === "orderId") || data.orders[0];
+            setQueryResults(data.orders);
+            setQueryDetailOrder(match);
+            setQueryStatus({ type: "success", message: "已找到订单。" });
+          } else {
+            setQueryStatus({ type: "error", message: "未查询到该订单,请联系客服。" });
+          }
+        } catch (e) {
+          setQueryStatus({ type: "error", message: "查询失败,请稍后再试。" });
+        } finally {
+          setQueryLoading(false);
+        }
+      })();
+    }
+  }, []);
 
   const selectedProduct = useMemo(
     () => PRODUCTS.find((item) => item.key === selectedKey) || null,
@@ -828,84 +863,119 @@ export default function Page() {
       )}
 
       {/* ── Order Query Detail Modal ── */}
-      {queryDetailOrder && (
-        <div className="modal-mask" onClick={() => setQueryDetailOrder(null)}>
-          <div className="query-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="query-modal-head">
-              <div>
-                <div className="section-kicker">Order Detail</div>
-                <div className="query-modal-title">{queryDetailOrder.serviceLabel || queryDetailOrder.service || "订单"}</div>
-                <code className="query-modal-id">{queryDetailOrder.orderId}</code>
-              </div>
-              <button
-                type="button"
-                className="close-btn"
-                onClick={() => setQueryDetailOrder(null)}
-                aria-label="关闭"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className="query-modal-body">
-              <div className="query-modal-amount">
-                <span>实付金额</span>
-                <b>{money(queryDetailOrder.finalAmount)}</b>
-                <em>{paymentLabel(queryDetailOrder)}</em>
-              </div>
-
-              <div className="query-modal-rows">
-                <div><span>订单时间</span><b>{orderTime(queryDetailOrder)}</b></div>
-                <div><span>服务周期</span><b>{queryDetailOrder.cycle || "--"}</b></div>
-                {queryDetailOrder.account && (
-                  <div>
-                    <span>{queryDetailOrder.service === "rocket" ? "用户名" : "账号"}</span>
-                    <b className="mono">{queryDetailOrder.account}</b>
+      {queryDetailOrder && (() => {
+        const items = queryDetailOrder.items && queryDetailOrder.items.length > 0
+          ? queryDetailOrder.items
+          : [{
+              service: queryDetailOrder.service,
+              label: queryDetailOrder.serviceLabel,
+              cycle: queryDetailOrder.cycle,
+              amount: queryDetailOrder.finalAmount,
+              account: queryDetailOrder.account,
+              password: queryDetailOrder.password,
+              subscriptionLinks: queryDetailOrder.subscriptionLinks,
+            }];
+        const isUsdt = queryDetailOrder.paymentMethod === "usdt";
+        const paidDisplay = isUsdt && queryDetailOrder.paidAmount
+          ? `${queryDetailOrder.paidAmount} USDT`
+          : `¥${queryDetailOrder.paidAmount || queryDetailOrder.finalAmount}`;
+        return (
+          <div className="modal-mask" onClick={() => setQueryDetailOrder(null)}>
+            <div className="query-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="query-modal-head">
+                <div>
+                  <div className="section-kicker">Order Detail</div>
+                  <div className="query-modal-title">
+                    {items.length > 1 ? `组合订单 · ${items.length} 件` : (items[0]?.label || "订单")}
                   </div>
-                )}
-                {queryDetailOrder.password && (
-                  <div><span>密码</span><b className="mono">{queryDetailOrder.password}</b></div>
-                )}
-                {queryDetailOrder.email && (
-                  <div><span>邮箱</span><b>{queryDetailOrder.email}</b></div>
-                )}
-                <div><span>联系方式</span><b>{queryDetailOrder.contact || "--"}</b></div>
-                {queryDetailOrder.remark && (
-                  <div className="query-modal-row-wide"><span>备注</span><b className="query-modal-remark">{queryDetailOrder.remark}</b></div>
-                )}
+                  <code className="query-modal-id">{queryDetailOrder.orderId}</code>
+                </div>
+                <button
+                  type="button"
+                  className="close-btn"
+                  onClick={() => setQueryDetailOrder(null)}
+                  aria-label="关闭"
+                >
+                  <X size={16} />
+                </button>
               </div>
 
-              {queryDetailOrder.subscriptionLinks && (
-                <div className="query-modal-subs">
-                  <div className="query-modal-subs-label">订阅链接</div>
-                  <button
-                    type="button"
-                    className="query-modal-sub-row"
-                    onClick={() => handleCopy(queryDetailOrder.subscriptionLinks.shadowrocket, "qm-sr")}
-                  >
-                    <div>
-                      <strong>Shadowrocket 订阅</strong>
-                      <small>{queryDetailOrder.subscriptionLinks.shadowrocket}</small>
-                    </div>
-                    <em>{copiedKey === "qm-sr" ? "已复制" : "复制"}</em>
-                  </button>
-                  <button
-                    type="button"
-                    className="query-modal-sub-row"
-                    onClick={() => handleCopy(queryDetailOrder.subscriptionLinks.clash, "qm-cl")}
-                  >
-                    <div>
-                      <strong>Clash 订阅</strong>
-                      <small>{queryDetailOrder.subscriptionLinks.clash}</small>
-                    </div>
-                    <em>{copiedKey === "qm-cl" ? "已复制" : "复制"}</em>
-                  </button>
+              <div className="query-modal-body">
+                <div className="query-modal-amount">
+                  <span>实付金额</span>
+                  <b>{paidDisplay}</b>
+                  <em>{paymentLabel(queryDetailOrder)}</em>
                 </div>
-              )}
+
+                <div className="query-modal-items">
+                  <div className="query-modal-items-label">商品明细 · {items.length} 件</div>
+                  {items.map((it, idx) => (
+                    <div key={idx} className="query-modal-item">
+                      <div className="query-modal-item-head">
+                        <strong>{it.label}</strong>
+                        <span>{it.cycle} · ¥{it.amount}</span>
+                      </div>
+                      {(it.account || it.password) && (
+                        <div className="query-modal-item-creds">
+                          {it.account && (
+                            <div>
+                              <span>{it.service === "rocket" ? "用户名" : "账号"}</span>
+                              <code>{it.account}</code>
+                            </div>
+                          )}
+                          {it.password && (
+                            <div>
+                              <span>密码</span>
+                              <code>{it.password}</code>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {it.subscriptionLinks && (
+                        <div className="query-modal-item-subs">
+                          <button
+                            type="button"
+                            className="query-modal-sub-row"
+                            onClick={() => handleCopy(it.subscriptionLinks.shadowrocket, `qm-sr-${idx}`)}
+                          >
+                            <div>
+                              <strong>Shadowrocket 订阅</strong>
+                              <small>{it.subscriptionLinks.shadowrocket}</small>
+                            </div>
+                            <em>{copiedKey === `qm-sr-${idx}` ? "已复制" : "复制"}</em>
+                          </button>
+                          <button
+                            type="button"
+                            className="query-modal-sub-row"
+                            onClick={() => handleCopy(it.subscriptionLinks.clash, `qm-cl-${idx}`)}
+                          >
+                            <div>
+                              <strong>Clash 订阅</strong>
+                              <small>{it.subscriptionLinks.clash}</small>
+                            </div>
+                            <em>{copiedKey === `qm-cl-${idx}` ? "已复制" : "复制"}</em>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="query-modal-rows">
+                  <div><span>订单时间</span><b>{orderTime(queryDetailOrder)}</b></div>
+                  {queryDetailOrder.email && (
+                    <div><span>邮箱</span><b>{queryDetailOrder.email}</b></div>
+                  )}
+                  <div><span>联系方式</span><b>{queryDetailOrder.contact || "--"}</b></div>
+                  {queryDetailOrder.remark && (
+                    <div className="query-modal-row-wide"><span>备注</span><b className="query-modal-remark">{queryDetailOrder.remark}</b></div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
     </div>
   );

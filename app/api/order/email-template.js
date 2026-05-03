@@ -11,62 +11,77 @@ function formatMoney(value) {
   return "¥" + Number(value || 0).toFixed(0);
 }
 
-export function buildOrderEmailHtml({ order, cartContext, brandName, siteDomain, supportContact }) {
+export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, supportContact, usdtRate }) {
   const isUsdt = order.paymentMethod === "usdt";
-  const isCart = cartContext && cartContext.count > 1;
-  const items = cartContext?.items || [{
-    title: order.serviceLabel,
-    cycle: order.cycle,
-    amount: order.finalAmount,
-  }];
-  const accountSection = order.account
-    ? `
-        <tr>
-          <td style="padding:8px 0;color:#64748b;font-size:13px;">${order.service === "rocket" ? "用户名" : "账号"}</td>
-          <td style="padding:8px 0;color:#0f172a;font-size:13px;font-weight:600;text-align:right;">${escapeHtml(order.account)}</td>
-        </tr>`
-    : "";
-  const passwordSection = order.password
-    ? `
-        <tr>
-          <td style="padding:8px 0;color:#64748b;font-size:13px;">密码</td>
-          <td style="padding:8px 0;color:#0f172a;font-size:13px;font-weight:600;text-align:right;font-family:monospace;">${escapeHtml(order.password)}</td>
-        </tr>`
-    : "";
-  const itemsRows = items
-    .map(
-      (it) => `
-        <tr>
-          <td style="padding:10px 0;border-bottom:1px solid #f1f5f9;color:#0f172a;font-size:14px;font-weight:600;">
-            ${escapeHtml(it.title)}
-            <span style="display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;background:#f0fdfa;color:#0f766e;font-size:11px;font-weight:700;">${escapeHtml(it.cycle || "1年")}</span>
-          </td>
-          <td style="padding:10px 0;border-bottom:1px solid #f1f5f9;color:#0f172a;font-size:14px;font-weight:700;text-align:right;">${formatMoney(it.amount)}</td>
-        </tr>`
-    )
-    .join("");
+  const items = Array.isArray(order.items) && order.items.length > 0
+    ? order.items
+    : [{
+        label: order.serviceLabel || "订单",
+        cycle: order.cycle || "1年",
+        amount: order.finalAmount || 0,
+        account: order.account,
+        password: order.password,
+        service: order.service,
+      }];
+  const itemCount = items.length;
+  const isCart = itemCount > 1;
 
-  const subtotalRow = isCart
-    ? `
+  const orderQueryUrl = `${siteUrl || "https://" + (siteDomain || "")}/?order=${encodeURIComponent(order.orderId)}`;
+
+  // Render items rows
+  const itemsRows = items.map((it, idx) => {
+    const accountRow = it.account
+      ? `<div style="margin-top:6px;font-size:12px;color:#475569;line-height:1.65;">
+          <span style="color:#94a3b8;">${it.service === "rocket" ? "用户名" : "账号"}:</span>
+          <span style="font-family:ui-monospace,Menlo,Consolas,monospace;color:#0f172a;font-weight:600;">${escapeHtml(it.account)}</span>
+        </div>`
+      : "";
+    const passwordRow = it.password
+      ? `<div style="font-size:12px;color:#475569;line-height:1.65;">
+          <span style="color:#94a3b8;">密码:</span>
+          <span style="font-family:ui-monospace,Menlo,Consolas,monospace;color:#0f172a;font-weight:600;">${escapeHtml(it.password)}</span>
+        </div>`
+      : "";
+    const subRows = it.subscriptionLinks
+      ? `<div style="margin-top:8px;padding:10px 12px;background:#f0fdfa;border-radius:10px;border:1px solid #a7f3d0;">
+          <div style="font-size:10px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#0f766e;margin-bottom:6px;">订阅链接</div>
+          <div style="margin-bottom:6px;">
+            <div style="font-size:11px;color:#0f766e;font-weight:700;">Shadowrocket 订阅</div>
+            <a href="${escapeHtml(it.subscriptionLinks.shadowrocket)}" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#134e4a;word-break:break-all;text-decoration:underline;">${escapeHtml(it.subscriptionLinks.shadowrocket)}</a>
+          </div>
+          <div>
+            <div style="font-size:11px;color:#0f766e;font-weight:700;">Clash 订阅</div>
+            <a href="${escapeHtml(it.subscriptionLinks.clash)}" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#134e4a;word-break:break-all;text-decoration:underline;">${escapeHtml(it.subscriptionLinks.clash)}</a>
+          </div>
+        </div>`
+      : "";
+    return `
       <tr>
-        <td style="padding:10px 0 4px;color:#64748b;font-size:13px;">商品总价</td>
-        <td style="padding:10px 0 4px;color:#0f172a;font-size:13px;font-weight:600;text-align:right;">${formatMoney(cartContext.subtotal)}</td>
-      </tr>`
-    : "";
-  const discountRow = isCart && cartContext.discountRate > 0
-    ? `
-      <tr>
-        <td style="padding:4px 0;color:#d97706;font-size:13px;">组合优惠 · ${escapeHtml(cartContext.discountLabel || "")}</td>
-        <td style="padding:4px 0;color:#d97706;font-size:13px;font-weight:600;text-align:right;">−${formatMoney(cartContext.subtotal - cartContext.finalCny)}</td>
-      </tr>`
-    : "";
+        <td style="padding:14px 0;border-bottom:${idx === items.length - 1 ? "0" : "1px solid #f1f5f9"};">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="vertical-align:top;">
+                <div style="color:#0f172a;font-size:14.5px;font-weight:800;letter-spacing:-0.01em;">
+                  ${escapeHtml(it.label)}
+                  <span style="display:inline-block;margin-left:6px;padding:2px 8px;border-radius:999px;background:#f0fdfa;color:#0f766e;font-size:10.5px;font-weight:700;">${escapeHtml(it.cycle || "1年")}</span>
+                </div>
+                ${accountRow}
+                ${passwordRow}
+                ${subRows}
+              </td>
+              <td style="vertical-align:top;text-align:right;color:#0f172a;font-size:14px;font-weight:700;white-space:nowrap;">
+                ${formatMoney(it.amount)}
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>`;
+  }).join("");
 
-  const finalCny = isCart ? cartContext.finalCny : order.finalAmount;
-  const finalUsdt = isCart ? cartContext.finalUsdt : null;
-  const paidValue = isUsdt && finalUsdt
-    ? `${finalUsdt} <span style="font-size:18px;color:#0f766e;">USDT</span>`
-    : formatMoney(finalCny);
-
+  // Paid value display
+  const paidValue = isUsdt
+    ? `${order.paidAmount || order.finalUsdt} <span style="font-size:18px;color:#0f766e;font-weight:800;">USDT</span>`
+    : formatMoney(order.paidAmount || order.finalAmount);
   const paidNote = isUsdt
     ? `已通过 USDT-TRC20 网络支付(已享 9 折)`
     : `已通过支付宝担保支付`;
@@ -79,7 +94,7 @@ export function buildOrderEmailHtml({ order, cartContext, brandName, siteDomain,
 <title>订单确认 - ${escapeHtml(brandName)}</title>
 </head>
 <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;color:#0f172a;-webkit-font-smoothing:antialiased;">
-  <div style="display:none;max-height:0;overflow:hidden;">${escapeHtml(brandName)} 订单 ${escapeHtml(order.orderId)} · 实付 ${escapeHtml(typeof paidValue === "string" ? paidValue : finalCny)} · 客服将在 30 分钟内为您开通</div>
+  <div style="display:none;max-height:0;overflow:hidden;">${escapeHtml(brandName)} 订单 ${escapeHtml(order.orderId)} · 实付 ${isUsdt ? (order.paidAmount + " USDT") : ("¥" + order.finalAmount)} · 客服将在 30 分钟内为您开通</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f6fb;padding:32px 16px;">
     <tr>
       <td align="center">
@@ -99,8 +114,8 @@ export function buildOrderEmailHtml({ order, cartContext, brandName, siteDomain,
           <!-- Success badge -->
           <tr>
             <td style="padding:32px 32px 12px;text-align:center;">
-              <div style="display:inline-grid;place-items:center;width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,#d1fae5,#a7f3d0);margin-bottom:14px;">
-                <span style="font-size:32px;line-height:1;color:#047857;">✓</span>
+              <div style="display:inline-block;width:64px;height:64px;line-height:64px;border-radius:50%;background:linear-gradient(135deg,#d1fae5,#a7f3d0);margin-bottom:14px;">
+                <span style="font-size:32px;color:#047857;">✓</span>
               </div>
               <h1 style="margin:0 0 6px;font-size:22px;font-weight:900;letter-spacing:-0.03em;color:#0f172a;">订单已收到</h1>
               <p style="margin:0;color:#64748b;font-size:13.5px;line-height:1.6;">客服将在 <strong style="color:#0f172a;">30 分钟内</strong> 处理您的订单<br>请保持邮箱及联系方式畅通。</p>
@@ -113,12 +128,12 @@ export function buildOrderEmailHtml({ order, cartContext, brandName, siteDomain,
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-radius:14px;background:#f8fafc;border:1px solid #e2e8f0;">
                 <tr>
                   <td style="padding:14px 16px;">
-                    <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;">订单号</div>
-                    <div style="font-family:ui-monospace,Menlo,monospace;font-size:14px;font-weight:700;color:#0f172a;margin-top:2px;letter-spacing:-0.01em;">${escapeHtml(order.orderId)}</div>
+                    <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;">订单号(点击查询)</div>
+                    <a href="${escapeHtml(orderQueryUrl)}" style="display:inline-block;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;font-weight:700;color:#0f766e;margin-top:2px;letter-spacing:-0.01em;text-decoration:underline;">${escapeHtml(order.orderId)}</a>
                   </td>
                   <td style="padding:14px 16px;text-align:right;border-left:1px solid #e2e8f0;">
                     <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;">实付金额</div>
-                    <div style="font-size:18px;font-weight:900;color:#134e4a;margin-top:2px;letter-spacing:-0.02em;">${paidValue}</div>
+                    <div style="font-size:20px;font-weight:900;color:#134e4a;margin-top:2px;letter-spacing:-0.02em;">${paidValue}</div>
                   </td>
                 </tr>
               </table>
@@ -129,34 +144,43 @@ export function buildOrderEmailHtml({ order, cartContext, brandName, siteDomain,
           <!-- Items -->
           <tr>
             <td style="padding:24px 32px 0;">
-              <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:6px;">${isCart ? `订单明细 · ${cartContext.count} 件` : "订单明细"}</div>
+              <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:6px;">${isCart ? `订单明细 · ${itemCount} 件` : "订单明细"}</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                 ${itemsRows}
-                ${subtotalRow}
-                ${discountRow}
-                <tr>
-                  <td style="padding:12px 0 0;color:#0f172a;font-size:14px;font-weight:800;">${isUsdt ? "实付(USDT)" : "实付总额"}</td>
-                  <td style="padding:12px 0 0;color:#134e4a;font-size:20px;font-weight:900;text-align:right;letter-spacing:-0.02em;">${paidValue}</td>
-                </tr>
               </table>
             </td>
           </tr>
 
-          ${(order.account || order.password) ? `
-          <!-- Account info -->
+          <!-- Price summary -->
           <tr>
-            <td style="padding:24px 32px 0;">
-              <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:6px;">${order.service === "rocket" ? "订阅信息" : "账号信息"}</div>
+            <td style="padding:18px 32px 0;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0;">
-                <tr><td style="padding:6px 16px;">
-                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                    ${accountSection}
-                    ${passwordSection}
-                  </table>
-                </td></tr>
+                ${isCart ? `
+                <tr>
+                  <td style="padding:10px 16px 4px;color:#64748b;font-size:13px;">商品总价</td>
+                  <td style="padding:10px 16px 4px;color:#0f172a;font-size:13px;font-weight:600;text-align:right;">${formatMoney(order.subtotal)}</td>
+                </tr>` : ""}
+                ${isCart && order.discountRate > 0 ? `
+                <tr>
+                  <td style="padding:4px 16px;color:#d97706;font-size:13px;">组合优惠 · ${escapeHtml(order.discountLabel || "")}</td>
+                  <td style="padding:4px 16px;color:#d97706;font-size:13px;font-weight:600;text-align:right;">−${formatMoney(order.subtotal - order.finalAmount)}</td>
+                </tr>` : ""}
+                ${isUsdt ? `
+                <tr>
+                  <td style="padding:4px 16px;color:#64748b;font-size:13px;">折后人民币</td>
+                  <td style="padding:4px 16px;color:#0f172a;font-size:13px;font-weight:600;text-align:right;">${formatMoney(order.finalAmount)}</td>
+                </tr>
+                <tr>
+                  <td style="padding:4px 16px;color:#64748b;font-size:13px;">USDT 9 折 ÷ ${usdtRate || 6.85}</td>
+                  <td style="padding:4px 16px;color:#0f172a;font-size:13px;font-weight:600;text-align:right;">→ ${order.paidAmount} USDT</td>
+                </tr>` : ""}
+                <tr>
+                  <td style="padding:10px 16px 12px;border-top:1px dashed #cbd5e1;color:#0f172a;font-size:14px;font-weight:800;">${isUsdt ? "实付(USDT)" : "实付总额"}</td>
+                  <td style="padding:10px 16px 12px;border-top:1px dashed #cbd5e1;color:#134e4a;font-size:18px;font-weight:900;text-align:right;letter-spacing:-0.02em;">${paidValue}</td>
+                </tr>
               </table>
             </td>
-          </tr>` : ""}
+          </tr>
 
           <!-- Contact info recap -->
           <tr>
@@ -164,12 +188,12 @@ export function buildOrderEmailHtml({ order, cartContext, brandName, siteDomain,
               <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:6px;">您填写的联系方式</div>
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                 <tr>
-                  <td style="padding:8px 0;color:#64748b;font-size:13px;">邮箱</td>
-                  <td style="padding:8px 0;color:#0f172a;font-size:13px;font-weight:600;text-align:right;">${escapeHtml(order.email || "")}</td>
+                  <td style="padding:6px 0;color:#64748b;font-size:13px;width:80px;">邮箱</td>
+                  <td style="padding:6px 0;color:#0f172a;font-size:13px;font-weight:600;">${escapeHtml(order.email || "")}</td>
                 </tr>
                 <tr>
-                  <td style="padding:8px 0;color:#64748b;font-size:13px;">联系方式</td>
-                  <td style="padding:8px 0;color:#0f172a;font-size:13px;font-weight:600;text-align:right;">${escapeHtml(order.contact || "")}</td>
+                  <td style="padding:6px 0;color:#64748b;font-size:13px;">联系方式</td>
+                  <td style="padding:6px 0;color:#0f172a;font-size:13px;font-weight:600;">${escapeHtml(order.contact || "")}</td>
                 </tr>
               </table>
             </td>
@@ -184,7 +208,7 @@ export function buildOrderEmailHtml({ order, cartContext, brandName, siteDomain,
                   <ol style="margin:0;padding-left:18px;color:#134e4a;font-size:13px;line-height:1.85;">
                     <li>客服将在 30 分钟内核对您的订单</li>
                     <li>核对成功后通过您填写的联系方式开通服务</li>
-                    <li>开通后可凭此邮箱随时在 ${escapeHtml(siteDomain)} 查询订单</li>
+                    <li>开通后可点击订单号或访问 <a href="${escapeHtml(siteUrl || "https://" + siteDomain)}" style="color:#0f766e;font-weight:700;">${escapeHtml(siteDomain)}</a> 查询订单</li>
                   </ol>
                 </td></tr>
               </table>
@@ -222,31 +246,43 @@ export function buildOrderEmailHtml({ order, cartContext, brandName, siteDomain,
 </html>`;
 }
 
-export function buildOrderEmailText({ order, cartContext, brandName, siteDomain }) {
-  const isCart = cartContext && cartContext.count > 1;
+export function buildOrderEmailText({ order, brandName, siteDomain, siteUrl, usdtRate }) {
   const isUsdt = order.paymentMethod === "usdt";
-  const items = cartContext?.items || [{ title: order.serviceLabel, cycle: order.cycle, amount: order.finalAmount }];
+  const items = Array.isArray(order.items) && order.items.length > 0
+    ? order.items
+    : [{ label: order.serviceLabel || "订单", cycle: order.cycle || "1年", amount: order.finalAmount || 0, account: order.account, password: order.password, service: order.service }];
+  const isCart = items.length > 1;
+  const queryUrl = `${siteUrl || "https://" + (siteDomain || "")}/?order=${encodeURIComponent(order.orderId)}`;
   const lines = [
     `${brandName} - 订单确认`,
     `===========================`,
     `订单号: ${order.orderId}`,
+    `查询: ${queryUrl}`,
     `时间: ${order.createdAtBeijing || ""}`,
     ``,
     `订单明细 (${items.length} 件):`,
   ];
   items.forEach((it) => {
-    lines.push(`  · ${it.title} (${it.cycle || "1年"}) ¥${it.amount}`);
+    lines.push(`  · ${it.label} (${it.cycle || "1年"}) ¥${it.amount}`);
+    if (it.account) lines.push(`      ${it.service === "rocket" ? "用户名" : "账号"}: ${it.account}`);
+    if (it.password) lines.push(`      密码: ${it.password}`);
+    if (it.subscriptionLinks) {
+      lines.push(`      Shadowrocket: ${it.subscriptionLinks.shadowrocket}`);
+      lines.push(`      Clash: ${it.subscriptionLinks.clash}`);
+    }
   });
-  if (isCart && cartContext.discountRate > 0) {
-    lines.push(`  组合优惠 ${cartContext.discountLabel}: −¥${cartContext.subtotal - cartContext.finalCny}`);
+  if (isCart) {
+    lines.push(``, `商品总价: ¥${order.subtotal}`);
+    if (order.discountRate > 0) {
+      lines.push(`组合优惠 ${order.discountLabel}: −¥${order.subtotal - order.finalAmount}`);
+    }
   }
-  if (isUsdt && cartContext?.finalUsdt) {
-    lines.push(`实付: ${cartContext.finalUsdt} USDT (TRC20, 已9折)`);
+  if (isUsdt) {
+    lines.push(`折后人民币: ¥${order.finalAmount}`);
+    lines.push(`实付: ${order.paidAmount} USDT (× 0.9 ÷ ${usdtRate || 6.85})`);
   } else {
-    lines.push(`实付: ¥${cartContext ? cartContext.finalCny : order.finalAmount}`);
+    lines.push(`实付: ¥${order.finalAmount}`);
   }
-  if (order.account) lines.push(`${order.service === "rocket" ? "用户名" : "账号"}: ${order.account}`);
-  if (order.password) lines.push(`密码: ${order.password}`);
-  lines.push(``, `客服将在 30 分钟内处理您的订单。`, `如需查询订单请访问 ${siteDomain}`);
+  lines.push(``, `客服将在 30 分钟内处理您的订单。`, `查询订单请访问: ${queryUrl}`);
   return lines.join("\n");
 }

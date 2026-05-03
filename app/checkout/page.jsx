@@ -123,61 +123,38 @@ export default function CheckoutPage() {
     setSubmitting(true);
     setStatus({ type: "info", message: "正在提交订单..." });
 
-    const userRemark = form.remark.trim();
-    const cartLabel = cartItems.map((p) => `${p.title} ¥${p.amount}`).join(" + ");
-    const discountTag = discountRate > 0
-      ? `${cartCount}件优惠 ${(1 - discountRate) * 10}折`
-      : "无组合折扣";
-    const paymentTag = paymentMethod === "usdt"
-      ? `USDT-TRC20 应付 ${finalUsdt} USDT (折后 ¥${finalCny} × 0.9 ÷ ${USDT_RATE})`
-      : `支付宝 应付 ¥${finalCny}`;
-    const cartContext = `[组合订单 ${cartCount}件 | ${cartLabel} | 商品总价 ¥${subtotal} | ${discountTag} | 折后总额 ¥${finalCny} | ${paymentTag}]`;
+    const items = cartItems.map((p) => {
+      const f = form.fields[p.key] || {};
+      return {
+        service: p.key,
+        account: p.needsUsername ? (f.username || "").trim() : (f.account || "").trim(),
+        password: productNeedsAccountPassword(p) ? (f.password || "").trim() : "",
+      };
+    });
 
     try {
-      const responses = await Promise.all(cartItems.map((p, i) => {
-        const f = form.fields[p.key] || {};
-        const account = p.needsUsername
-          ? (f.username || "").trim()
-          : (f.account || "").trim();
-        const password = productNeedsAccountPassword(p) ? (f.password || "").trim() : "";
-        const itemTag = `[此为第 ${i + 1}/${cartCount} 件 ${p.title}]`;
-        const finalRemark = userRemark
-          ? `${cartContext} ${itemTag} 用户备注: ${userRemark}`
-          : `${cartContext} ${itemTag}`;
-        return fetch("/api/order", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            service: p.key,
-            email: form.email.trim(),
-            contact: form.contact.trim(),
-            account,
-            password,
-            remark: finalRemark,
-            paymentMethod,
-            cartContext: i === 0 ? {
-              count: cartCount,
-              items: cartItems.map((it) => ({ key: it.key, title: it.title, amount: it.amount, cycle: it.cycle })),
-              subtotal,
-              discountRate,
-              discountLabel: bundleDiscountLabel(cartCount),
-              finalCny,
-              finalUsdt,
-              paymentMethod,
-            } : null,
-          }),
-        }).then(async (r) => {
-          const data = await r.json();
-          return { ...data, productKey: p.key, productTitle: p.title };
-        });
-      }));
+      const response = await fetch("/api/order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: form.email.trim(),
+          contact: form.contact.trim(),
+          remark: form.remark.trim(),
+          paymentMethod,
+          items,
+        }),
+      });
+      const data = await response.json();
+      if (!data.ok) throw new Error(data.error || "submit_failed");
 
-      const allOk = responses.every((r) => r.ok);
-      if (!allOk) throw new Error("partial_failure");
-
-      setOrderResults(responses);
+      setOrderResults([{
+        orderId: data.orderId,
+        items: data.items || [],
+        paidAmount: data.paidAmount,
+        paidCurrency: data.paidCurrency,
+      }]);
       setStep("done");
-      setStatus({ type: "success", message: `已成功提交 ${cartCount} 个订单` });
+      setStatus({ type: "success", message: "订单已成功提交" });
       clearCart();
       if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error) {
@@ -595,55 +572,65 @@ export default function CheckoutPage() {
               <CheckCircle2 size={56} />
             </div>
             <h2>订单已提交</h2>
-            <p>已成功提交 {orderResults.length} 个订单,客服将在 30 分钟内联系您。请保持联系方式畅通。</p>
+            <p>客服将在 30 分钟内联系您。订单确认邮件已发送至您的邮箱,请保持邮箱及联系方式畅通。</p>
 
-            <div className="order-result-list">
-              {orderResults.map((r) => {
-                const product = PRODUCTS.find((p) => p.key === r.productKey);
-                const f = form.fields[r.productKey] || {};
-                const subLinks = product?.needsUsername ? subscriptionLinks(f.username) : null;
-                return (
-                  <div key={r.orderId} className="order-result-item">
-                    <div className="order-result-head">
-                      <strong>{r.productTitle}</strong>
-                      <code>{r.orderId}</code>
-                    </div>
-                    {subLinks && (
-                      <div className="subscription-links">
-                        <div className="subscription-link-row">
-                          <a href={subLinks.shadowrocket} target="_blank" rel="noopener noreferrer">
-                            <strong>Shadowrocket 订阅:</strong>
-                            <span>{subLinks.shadowrocket}</span>
-                          </a>
-                          <button
-                            type="button"
-                            className="subscription-copy-btn"
-                            onClick={() => handleCopy(subLinks.shadowrocket, `sr-${r.orderId}`)}
-                          >
-                            <Copy size={14} />
-                            {copiedKey === `sr-${r.orderId}` ? "已复制" : "复制"}
-                          </button>
+            {orderResults[0] && (
+              <div className="order-result-single">
+                <div className="order-result-head">
+                  <span>订单号</span>
+                  <code>{orderResults[0].orderId}</code>
+                </div>
+                <div className="order-result-items">
+                  {orderResults[0].items.map((it) => {
+                    const orderId = orderResults[0].orderId;
+                    return (
+                      <div key={it.service} className="order-result-item">
+                        <div className="order-result-item-head">
+                          <strong>{it.label}</strong>
+                          <span>¥{it.amount}</span>
                         </div>
-                        <div className="subscription-link-row">
-                          <a href={subLinks.clash} target="_blank" rel="noopener noreferrer">
-                            <strong>Clash 订阅:</strong>
-                            <span>{subLinks.clash}</span>
-                          </a>
-                          <button
-                            type="button"
-                            className="subscription-copy-btn"
-                            onClick={() => handleCopy(subLinks.clash, `cl-${r.orderId}`)}
-                          >
-                            <Copy size={14} />
-                            {copiedKey === `cl-${r.orderId}` ? "已复制" : "复制"}
-                          </button>
-                        </div>
+                        {it.subscriptionLinks && (
+                          <div className="subscription-links">
+                            <div className="subscription-link-row">
+                              <a href={it.subscriptionLinks.shadowrocket} target="_blank" rel="noopener noreferrer">
+                                <strong>Shadowrocket 订阅:</strong>
+                                <span>{it.subscriptionLinks.shadowrocket}</span>
+                              </a>
+                              <button
+                                type="button"
+                                className="subscription-copy-btn"
+                                onClick={() => handleCopy(it.subscriptionLinks.shadowrocket, `sr-${orderId}-${it.service}`)}
+                              >
+                                <Copy size={14} />
+                                {copiedKey === `sr-${orderId}-${it.service}` ? "已复制" : "复制"}
+                              </button>
+                            </div>
+                            <div className="subscription-link-row">
+                              <a href={it.subscriptionLinks.clash} target="_blank" rel="noopener noreferrer">
+                                <strong>Clash 订阅:</strong>
+                                <span>{it.subscriptionLinks.clash}</span>
+                              </a>
+                              <button
+                                type="button"
+                                className="subscription-copy-btn"
+                                onClick={() => handleCopy(it.subscriptionLinks.clash, `cl-${orderId}-${it.service}`)}
+                              >
+                                <Copy size={14} />
+                                {copiedKey === `cl-${orderId}-${it.service}` ? "已复制" : "复制"}
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                    );
+                  })}
+                </div>
+                <div className="order-result-paid">
+                  <span>实付</span>
+                  <b>{orderResults[0].paidCurrency === "USDT" ? `${orderResults[0].paidAmount} USDT` : `¥${orderResults[0].paidAmount}`}</b>
+                </div>
+              </div>
+            )}
 
             <div className="checkout-done-actions">
               <Link href="/" className="primary-btn primary-btn-lg">
