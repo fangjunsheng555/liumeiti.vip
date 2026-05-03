@@ -118,7 +118,7 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
                 <span style="font-size:32px;color:#047857;">✓</span>
               </div>
               <h1 style="margin:0 0 6px;font-size:22px;font-weight:900;letter-spacing:-0.03em;color:#0f172a;">订单已收到</h1>
-              <p style="margin:0;color:#64748b;font-size:13.5px;line-height:1.6;">客服将在 <strong style="color:#0f172a;">30 分钟内</strong> 处理您的订单<br>请保持邮箱及联系方式畅通。</p>
+              <p style="margin:0;color:#64748b;font-size:13.5px;line-height:1.6;">工作人员将在 <strong style="color:#0f172a;">30 分钟内</strong> 处理您的订单<br>请保持邮箱及联系方式畅通。</p>
             </td>
           </tr>
 
@@ -206,8 +206,8 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
                 <tr><td style="padding:16px 18px;">
                   <div style="font-size:13px;font-weight:800;color:#0f766e;margin-bottom:8px;">接下来:</div>
                   <ol style="margin:0;padding-left:18px;color:#134e4a;font-size:13px;line-height:1.85;">
-                    <li>客服将在 30 分钟内核对您的订单</li>
-                    <li>核对成功后通过您填写的联系方式开通服务</li>
+                    <li>工作人员将在 30 分钟内核对您的订单</li>
+                    <li>核对成功后通过您填写的信息为您开通服务</li>
                     <li>开通后可点击订单号或访问 <a href="${escapeHtml(siteUrl || "https://" + siteDomain)}" style="color:#0f766e;font-weight:700;">${escapeHtml(siteDomain)}</a> 查询订单</li>
                   </ol>
                 </td></tr>
