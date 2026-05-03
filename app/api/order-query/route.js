@@ -19,6 +19,10 @@ function normalizeContact(value) {
   return clean(value, 160).toLowerCase().replace(/[\s\-_:：()（）]/g, "");
 }
 
+function normalizeEmail(value) {
+  return clean(value, 200).toLowerCase().trim();
+}
+
 function subscriptionLinks(username) {
   const encoded = encodeURIComponent(clean(username, 80));
   return {
@@ -45,12 +49,19 @@ function contactMatches(order, rawQuery) {
   return !!queryContact && normalizeContact(order.contact) === queryContact;
 }
 
+function emailMatches(order, rawQuery) {
+  const queryEmail = normalizeEmail(rawQuery);
+  if (!queryEmail || !queryEmail.includes("@")) return false;
+  return normalizeEmail(order.email) === queryEmail;
+}
+
 function orderMatches(order, query) {
-  return idMatches(order, query) || contactMatches(order, query);
+  return idMatches(order, query) || emailMatches(order, query) || contactMatches(order, query);
 }
 
 function matchType(order, query) {
   if (idMatches(order, query)) return "orderId";
+  if (emailMatches(order, query)) return "email";
   if (contactMatches(order, query)) return "contact";
   return "";
 }
@@ -70,6 +81,7 @@ function publicOrder(order, type) {
     currency: order.currency || "CNY",
     account: order.account || "",
     password: order.password || "",
+    email: order.email || "",
     contact: order.contact || "",
     remark: order.remark || "",
   };
