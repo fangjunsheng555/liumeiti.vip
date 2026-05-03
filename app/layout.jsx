@@ -5,6 +5,12 @@ export const metadata = {
   description: 'Maoyang Taiwan Inc-Since 2020',
 };
 
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+};
+
 export default function RootLayout({ children }) {
   return (
     <html lang="zh-CN">

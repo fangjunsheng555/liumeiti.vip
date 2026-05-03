@@ -4956,11 +4956,11 @@ button { cursor: pointer; border: none; background: transparent; }
   .info-title { font-size: 12.5px; line-height: 1.2; }
   .info-desc { font-size: 10.5px; line-height: 1.45; grid-column: 2; }
 
-  /* Order Query */
+  /* Order Query — 16px input to prevent iOS focus zoom */
   .order-query-panel { padding: 14px; border-radius: 16px; }
   .order-query-form { gap: 8px; }
   .order-query-field span { font-size: 11px; }
-  .order-query-field input { padding: 11px 12px; font-size: 14px; min-height: 44px; }
+  .order-query-field input { padding: 11px 12px; font-size: 16px; min-height: 44px; line-height: 1.3; }
   .order-query-form .primary-btn { min-height: 44px; padding: 10px 14px; font-size: 13px; }
 
   /* Testimonials - super tight, equal-height 2-col */
@@ -5094,10 +5094,10 @@ button { cursor: pointer; border: none; background: transparent; }
   .cart-item-price { font-size: 13px; }
   .cart-item-remove { width: 28px; height: 28px; border-radius: 8px; }
 
-  /* Form fields in checkout */
+  /* Form fields in checkout — 16px to prevent iOS focus zoom */
   .order-field { gap: 5px; }
   .order-field span { font-size: 11.5px; }
-  .order-field input, .order-field textarea { min-height: 42px; padding: 10px 12px; font-size: 14.5px; border-radius: 10px; }
+  .order-field input, .order-field textarea { min-height: 44px; padding: 11px 12px; font-size: 16px; border-radius: 10px; line-height: 1.3; }
 
   /* Summary block */
   .cart-summary { padding: 10px 12px; gap: 4px; border-radius: 10px; }
