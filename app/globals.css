@@ -85,6 +85,13 @@ button { cursor: pointer; border: none; background: transparent; }
   transition: opacity 0.2s;
 }
 .brand-wrap:hover { opacity: 0.8; }
+.brand-img {
+  display: block;
+  height: 44px;
+  width: auto;
+  max-width: 220px;
+  object-fit: contain;
+}
 .brand-logo {
   width: 46px;
   height: 46px;
@@ -1648,6 +1655,7 @@ button { cursor: pointer; border: none; background: transparent; }
   .bg-orb { display: none; }
   .header-inner { padding: 9px 0; }
   .brand-logo { width: 40px; height: 40px; border-radius: 14px; }
+  .brand-img { height: 36px; max-width: 180px; }
   .brand-en { font-size: 10px; letter-spacing: .2em; }
   .brand-cn { font-size: 15px; }
   .hero-section { padding: 24px 0 22px; }

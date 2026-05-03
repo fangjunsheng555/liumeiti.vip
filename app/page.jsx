@@ -412,15 +412,8 @@ export default function Page() {
       {/* ── Header ── */}
       <header className="site-header">
         <div className="container header-inner">
-          <a href="#top" className="brand-wrap">
-            <div className="brand-logo">
-              <span className="brand-logo-mini">MY</span>
-              <span className="brand-logo-cn">冒央</span>
-            </div>
-            <div>
-              <div className="brand-en">{SITE_CONTENT.brandEn}</div>
-              <div className="brand-cn">{SITE_CONTENT.brandCn}</div>
-            </div>
+          <a href="#top" className="brand-wrap" aria-label={`${SITE_CONTENT.brandCn} ${SITE_CONTENT.brandEn}`}>
+            <img src="/logo.png" alt={`${SITE_CONTENT.brandCn} ${SITE_CONTENT.brandEn}`} className="brand-img" />
           </a>
 
           <nav className="desktop-nav">
