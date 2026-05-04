@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   ShoppingCart,
   Trash2,
+  X,
   Zap,
 } from "lucide-react";
 import {
@@ -253,23 +254,21 @@ export default function CheckoutPage() {
                   <h3>已选商品 <em>{cartCount}</em></h3>
                   <Link href="/#products" className="text-link">+ 继续选购</Link>
                 </div>
-                <div className="cart-items">
+                <div className="cart-items-grid">
                   {cartItems.map((item) => (
-                    <div key={item.key} className="cart-item">
-                      <img src={item.image} alt={item.title} />
-                      <div className="cart-item-info">
-                        <strong>{item.title}</strong>
-                        <small>{item.subtitle}</small>
-                      </div>
-                      <div className="cart-item-price">¥{item.amount}</div>
+                    <div key={item.key} className="cart-tile">
                       <button
                         type="button"
-                        className="cart-item-remove"
+                        className="cart-tile-remove"
                         onClick={() => removeFromCart(item.key)}
                         aria-label={`移除 ${item.title}`}
+                        title={`移除 ${item.title}`}
                       >
-                        <Trash2 size={14} />
+                        <X size={11} strokeWidth={3} />
                       </button>
+                      <img src={item.image} alt={item.title} className="cart-tile-img" />
+                      <div className="cart-tile-name">{item.title}</div>
+                      <div className="cart-tile-price">¥{item.amount}</div>
                     </div>
                   ))}
                 </div>

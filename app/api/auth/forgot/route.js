@@ -50,11 +50,17 @@ export async function POST(request) {
 </table>
 </body></html>`;
     const text = `${BRAND_NAME} 密码重置\n\n验证码: ${code}\n有效期 10 分钟\n\n如非本人操作,请忽略此邮件。`;
-    sendSimpleEmail({
+    // Important: await the send so Vercel serverless doesn't kill the
+    // function before the SMTP transaction finishes. Fire-and-forget
+    // was causing emails to never reach iCloud's queue.
+    const result = await sendSimpleEmail({
       to: email,
       subject: `${BRAND_NAME} · 密码重置验证码 ${code}`,
       text, html,
-    }).catch(() => {});
+    });
+    if (!result.ok) {
+      console.error("[forgot] email failed:", result);
+    }
   }
 
   return Response.json({ ok: true, sent: true });

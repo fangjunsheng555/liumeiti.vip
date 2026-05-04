@@ -16,6 +16,7 @@ import {
   subscriptionLinks,
 } from "./lib/store";
 import {
+  AlertTriangle,
   ArrowRight,
   BadgeCheck,
   ChevronDown,
@@ -1154,8 +1155,16 @@ export default function Page() {
                   </div>
                   <code className="query-modal-id">{queryDetailOrder.orderId}</code>
                   <div className={`query-modal-status status-${queryDetailOrder.status || "received"}`}>
-                    {queryDetailOrder.status === "completed" ? <CheckCircle2 size={11} /> : <Clock size={11} />}
-                    {queryDetailOrder.status === "completed" ? "订单已完成" : "订单已收到"}
+                    {queryDetailOrder.status === "completed"
+                      ? <CheckCircle2 size={11} />
+                      : queryDetailOrder.status === "invalid"
+                      ? <AlertTriangle size={11} />
+                      : <Clock size={11} />}
+                    {queryDetailOrder.status === "completed"
+                      ? "订单已完成"
+                      : queryDetailOrder.status === "invalid"
+                      ? "订单无效·未收到付款"
+                      : "订单已收到"}
                   </div>
                 </div>
                 <button

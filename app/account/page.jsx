@@ -185,7 +185,7 @@ export default function AccountPage() {
               <div>
                 <div className="account-modal-id">{activeOrder.orderId}</div>
                 <div className={`account-modal-status status-${activeOrder.status}`}>
-                  {activeOrder.status === "completed" ? <CheckCircle2 size={12} /> : <Clock size={12} />}
+                  {activeOrder.status === "completed" ? <CheckCircle2 size={12} /> : activeOrder.status === "invalid" ? <AlertTriangle size={12} /> : <Clock size={12} />}
                   {STATUS_LABEL[activeOrder.status]}
                 </div>
               </div>

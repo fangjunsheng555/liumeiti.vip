@@ -46,6 +46,13 @@ export default function AdminPage() {
   const [saveResult, setSaveResult] = useState(null);
   const [showPwds, setShowPwds] = useState({});
 
+  // Batch selection state
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchResult, setBatchResult] = useState(null);
+  const [batchConfirm, setBatchConfirm] = useState(null); // null | "delete" | "invalid"
+
   // User/balance management
   const [tab, setTab] = useState("orders"); // "orders" | "users"
   const [userQuery, setUserQuery] = useState("");
@@ -201,6 +208,69 @@ export default function AdminPage() {
     });
     setSaveResult(null);
     setConfirmDelete(false);
+  }
+
+  function toggleBatchMode() {
+    setBatchMode((v) => {
+      const next = !v;
+      if (!next) setSelectedIds(new Set());
+      setBatchConfirm(null);
+      setBatchResult(null);
+      return next;
+    });
+  }
+
+  function toggleSelect(orderId) {
+    setSelectedIds((cur) => {
+      const next = new Set(cur);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  }
+
+  function selectAllVisible() {
+    setSelectedIds(new Set(orders.map((o) => o.orderId)));
+  }
+
+  function clearSelection() { setSelectedIds(new Set()); }
+
+  async function executeBatch(action) {
+    if (batchBusy) return;
+    if (selectedIds.size === 0) {
+      setBatchResult({ type: "error", message: "请先勾选订单" });
+      return;
+    }
+    setBatchBusy(true);
+    setBatchResult(null);
+    try {
+      const res = await fetch("/api/admin/orders/batch", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderIds: Array.from(selectedIds),
+          action,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        const verb = action === "delete" ? "删除" : "标记为无效";
+        setBatchResult({
+          type: "success",
+          message: `已${verb} ${data.successCount} 个订单${data.failedCount ? ` · ${data.failedCount} 个失败` : ""}`,
+        });
+        setSelectedIds(new Set());
+        setBatchConfirm(null);
+        loadOrders(appliedSearch, filterStatus);
+      } else {
+        setBatchResult({ type: "error", message: data.error || "批量操作失败" });
+      }
+    } catch (e) {
+      setBatchResult({ type: "error", message: "网络错误" });
+    } finally {
+      setBatchBusy(false);
+    }
   }
 
   async function deleteOrder() {
@@ -436,39 +506,108 @@ export default function AdminPage() {
           </div>
         </div>
 
+        {/* Batch operations toolbar */}
+        <div className="admin-batch-bar">
+          <button
+            type="button"
+            className={`admin-batch-toggle${batchMode ? " active" : ""}`}
+            onClick={toggleBatchMode}
+          >
+            {batchMode ? "退出批量" : "批量操作"}
+          </button>
+          {batchMode && (
+            <>
+              <span className="admin-batch-count">已选 {selectedIds.size} 个</span>
+              <button type="button" className="admin-batch-link" onClick={selectAllVisible}>全选</button>
+              <button type="button" className="admin-batch-link" onClick={clearSelection}>清除</button>
+              <button
+                type="button"
+                className="admin-batch-action invalid"
+                disabled={batchBusy || selectedIds.size === 0}
+                onClick={() => setBatchConfirm("invalid")}
+              >
+                <AlertTriangle size={12} />标记无效
+              </button>
+              <button
+                type="button"
+                className="admin-batch-action delete"
+                disabled={batchBusy || selectedIds.size === 0}
+                onClick={() => setBatchConfirm("delete")}
+              >
+                <Trash2 size={12} />删除
+              </button>
+            </>
+          )}
+        </div>
+        {batchResult && (
+          <div className={`admin-alert ${batchResult.type}`} style={{ marginBottom: 10 }}>{batchResult.message}</div>
+        )}
+        {batchConfirm && (
+          <div className="admin-batch-confirm">
+            <div className="admin-batch-confirm-text">
+              <AlertTriangle size={14} />
+              确认对选中的 <b>{selectedIds.size}</b> 个订单执行
+              <b>{batchConfirm === "delete" ? "删除" : "标记无效"}</b> 操作?
+              {batchConfirm === "delete" && " 删除不可恢复。"}
+            </div>
+            <div className="admin-batch-confirm-actions">
+              <button type="button" onClick={() => setBatchConfirm(null)} disabled={batchBusy}>取消</button>
+              <button
+                type="button"
+                className={batchConfirm === "delete" ? "danger" : "warn"}
+                disabled={batchBusy}
+                onClick={() => executeBatch(batchConfirm)}
+              >
+                {batchBusy ? <><LoaderCircle size={12} className="spin-icon" />处理中</> : `确认${batchConfirm === "delete" ? "删除" : "标记"}`}
+              </button>
+            </div>
+          </div>
+        )}
+
         {loading ? (
           <div className="admin-loading-inline"><LoaderCircle size={20} className="spin-icon" />加载中</div>
         ) : orders.length === 0 ? (
           <div className="admin-empty"><Inbox size={36} /><p>暂无订单</p></div>
         ) : (
           <div className="admin-orders">
-            {orders.map((o) => (
-              <button
-                key={o.orderId}
-                type="button"
-                className={`admin-order-card status-${o.status}`}
-                onClick={() => openOrder(o)}
-              >
-                <div className="admin-order-top">
-                  <span className="admin-order-id">{o.orderId}</span>
-                  <span className={`admin-order-status status-${o.status}`}>
-                    {o.status === "completed" ? <CheckCircle2 size={11} /> : o.status === "invalid" ? <AlertTriangle size={11} /> : <Clock size={11} />}
-                    {STATUS_LABEL[o.status]}
-                  </span>
+            {orders.map((o) => {
+              const isSelected = selectedIds.has(o.orderId);
+              return (
+                <div
+                  key={o.orderId}
+                  className={`admin-order-card status-${o.status}${batchMode ? " batch-mode" : ""}${isSelected ? " selected" : ""}`}
+                  onClick={() => batchMode ? toggleSelect(o.orderId) : openOrder(o)}
+                  role="button"
+                  tabIndex={0}
+                >
+                  {batchMode && (
+                    <span className={`admin-order-checkbox${isSelected ? " checked" : ""}`} aria-hidden="true">
+                      {isSelected && <CheckCircle2 size={13} />}
+                    </span>
+                  )}
+                  <div className="admin-order-content">
+                    <div className="admin-order-top">
+                      <span className="admin-order-id">{o.orderId}</span>
+                      <span className={`admin-order-status status-${o.status}`}>
+                        {o.status === "completed" ? <CheckCircle2 size={11} /> : o.status === "invalid" ? <AlertTriangle size={11} /> : <Clock size={11} />}
+                        {STATUS_LABEL[o.status]}
+                      </span>
+                    </div>
+                    <div className="admin-order-mid">
+                      <span className="admin-order-service">{o.serviceLabel}</span>
+                      {o.itemCount > 1 && <span className="admin-order-count">{o.itemCount} 件</span>}
+                    </div>
+                    <div className="admin-order-bot">
+                      <span className="admin-order-paid">
+                        {o.paidCurrency === "USDT" ? `${o.paidAmount} USDT` : `¥${o.paidAmount}`}
+                      </span>
+                      <span className="admin-order-time">{o.createdAtBeijing?.split(" ")[1] || ""}</span>
+                    </div>
+                    <div className="admin-order-email">{o.email}</div>
+                  </div>
                 </div>
-                <div className="admin-order-mid">
-                  <span className="admin-order-service">{o.serviceLabel}</span>
-                  {o.itemCount > 1 && <span className="admin-order-count">{o.itemCount} 件</span>}
-                </div>
-                <div className="admin-order-bot">
-                  <span className="admin-order-paid">
-                    {o.paidCurrency === "USDT" ? `${o.paidAmount} USDT` : `¥${o.paidAmount}`}
-                  </span>
-                  <span className="admin-order-time">{o.createdAtBeijing?.split(" ")[1] || ""}</span>
-                </div>
-                <div className="admin-order-email">{o.email}</div>
-              </button>
-            ))}
+              );
+            })}
           </div>
         )}
         </>
