@@ -509,7 +509,7 @@ export default function Page() {
                     </div>
                     <div className="price-meta">
                       {saved > 0 && <span className="price-save">立省 ¥{saved}</span>}
-                      <span className="price-usdt-hint">USDT 再 9 折</span>
+                      <span className="price-usdt-hint">USDT支付 9 折</span>
                     </div>
                   </div>
 
