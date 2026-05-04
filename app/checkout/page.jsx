@@ -274,7 +274,7 @@ export default function CheckoutPage() {
                       if (p.needsUsername) {
                         return (
                           <label key={p.key} className="order-field">
-                            <span>{p.title} · 设置用户名</span>
+                            <span>{p.title} · 设置你的用户名</span>
                             <input
                               value={f.username || ""}
                               onChange={(e) => updateProductField(p.key, "username", e.target.value)}
