@@ -71,18 +71,21 @@ function publicOrder(order, type) {
   let items;
   if (Array.isArray(order.items) && order.items.length > 0) {
     items = order.items.map((it) => {
+      // After staff completes order, prefer staff-filled credentials
+      const account = it.staffAccount || it.account || "";
+      const password = it.staffPassword || it.password || "";
       const out = {
         service: it.service || "",
         label: it.label || "",
         cycle: it.cycle || "",
         amount: Number(it.amount || 0),
-        account: it.account || "",
-        password: it.password || "",
+        account,
+        password,
       };
       if (it.subscriptionLinks) {
         out.subscriptionLinks = it.subscriptionLinks;
-      } else if (it.service === "rocket" && it.account) {
-        out.subscriptionLinks = subscriptionLinks(it.account);
+      } else if (it.service === "rocket" && account) {
+        out.subscriptionLinks = subscriptionLinks(account);
       }
       return out;
     });
@@ -105,8 +108,11 @@ function publicOrder(order, type) {
   const output = {
     matchType: type || "",
     orderId: order.orderId || "",
+    status: order.status || "received",
     createdAt: order.createdAt || "",
     createdAtBeijing: order.createdAtBeijing || "",
+    completedAtBeijing: order.completedAtBeijing || "",
+    staffNotes: order.staffNotes || "",
     items,
     itemCount: items.length,
     serviceLabel: order.serviceLabel || items.map((i) => i.label).join(" + "),

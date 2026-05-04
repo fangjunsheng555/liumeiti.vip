@@ -433,6 +433,22 @@ export default function CheckoutPage() {
                       </div>
                       <div className="payment-method-badge">9 折</div>
                     </label>
+                    <label className="payment-method-option disabled">
+                      <input type="radio" name="paymentMethod" disabled />
+                      <div className="payment-method-icon wechat">微信</div>
+                      <div className="payment-method-detail">
+                        <strong>微信支付</strong>
+                        <small>支付通道维护中,暂不可用</small>
+                      </div>
+                    </label>
+                    <label className="payment-method-option disabled">
+                      <input type="radio" name="paymentMethod" disabled />
+                      <div className="payment-method-icon card">CARD</div>
+                      <div className="payment-method-detail">
+                        <strong>Mastercard / Visa</strong>
+                        <small>支付通道维护中,暂不可用</small>
+                      </div>
+                    </label>
                   </div>
                 </div>
 

@@ -99,7 +99,7 @@ const SITE_CONTENT = {
   supportChannels: [
     { label: "QQ", value: "2802632995", copyValue: "2802632995" },
     { label: "WhatsApp", value: "+1 431 509 3334", copyValue: "+1 4315093334" },
-    { label: "Telegram", value: "+44 770 748 9977", copyValue: "+44 7707489977" },
+    { label: "Telegram", value: "@MaoyangSupport", copyValue: "@MaoyangSupport" },
   ],
   supportHours: "在线时间：北京时间 09:00 – 23:00",
   footerRecord: "地址：台灣新北市板橋區遠東路1號3號218",
@@ -148,6 +148,12 @@ export default function Page() {
   const [copiedKey, setCopiedKey] = useState(null);
   const [cartToast, setCartToast] = useState(null);
   const [cartExpanded, setCartExpanded] = useState(false);
+  const [authUser, setAuthUser] = useState(null); // null = unknown, false = guest, {email} = logged in
+  const [authModal, setAuthModal] = useState(null); // null | "login" | "register"
+  const [authForm, setAuthForm] = useState({ email: "", password: "", captchaAnswer: "" });
+  const [authCaptcha, setAuthCaptcha] = useState({ a: 0, b: 0 });
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState("");
   const [queryInput, setQueryInput] = useState("");
   const [queryStatus, setQueryStatus] = useState(null);
   const [queryLoading, setQueryLoading] = useState(false);
@@ -156,6 +162,75 @@ export default function Page() {
   const [queryDetailOrder, setQueryDetailOrder] = useState(null);
 
   const { cart, toggleCart: toggleCartStore, removeFromCart } = useCart();
+
+  // Check auth status on mount
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    fetch("/api/auth/me", { credentials: "same-origin" })
+      .then((r) => r.json())
+      .then((d) => setAuthUser(d.ok ? { email: d.email } : false))
+      .catch(() => setAuthUser(false));
+  }, []);
+
+  // Refresh captcha when auth modal opens
+  useEffect(() => {
+    if (authModal) {
+      setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
+      setAuthError("");
+      setAuthForm({ email: "", password: "", captchaAnswer: "" });
+    }
+  }, [authModal]);
+
+  // Auto-open login modal if URL has ?auth=login
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("auth") === "login") setAuthModal("login");
+  }, []);
+
+  async function doAuth(e) {
+    e.preventDefault();
+    if (authBusy) return;
+    setAuthBusy(true);
+    setAuthError("");
+    try {
+      const res = await fetch(`/api/auth/${authModal}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: authForm.email.trim(),
+          password: authForm.password,
+          captchaA: authCaptcha.a,
+          captchaB: authCaptcha.b,
+          captchaAnswer: Number(authForm.captchaAnswer),
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setAuthUser({ email: data.email });
+        setAuthModal(null);
+      } else {
+        const msg = {
+          captcha_failed: "人机验证失败,请重新计算",
+          email_taken: "该邮箱已注册",
+          invalid_email: "邮箱格式错误",
+          password_length: "密码 6-64 位",
+          invalid_credentials: "邮箱或密码错误",
+        }[data.error] || data.error || "操作失败";
+        setAuthError(msg);
+        setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
+      }
+    } catch (e) {
+      setAuthError("网络错误");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function doLogout() {
+    await fetch("/api/auth/login", { method: "DELETE" });
+    setAuthUser(false);
+  }
 
   // Auto-query if ?order=LMxxxxx in URL (from email link)
   useEffect(() => {
@@ -309,6 +384,19 @@ export default function Page() {
             <a href="#faq">FAQ</a>
             <a href="#contact">联系我们</a>
           </nav>
+
+          <div className="header-auth">
+            {authUser && authUser.email ? (
+              <a href="/account" className="header-auth-btn header-auth-user" title={authUser.email}>
+                <span className="header-auth-avatar">{authUser.email[0].toUpperCase()}</span>
+                <span className="header-auth-label">我的</span>
+              </a>
+            ) : (
+              <button type="button" className="header-auth-btn" onClick={() => setAuthModal("login")}>
+                登录 / 注册
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
@@ -788,6 +876,93 @@ export default function Page() {
         </div>
       )}
 
+      {/* ── Auth Modal (login/register) ── */}
+      {authModal && (
+        <div className="auth-modal-mask" onClick={() => !authBusy && setAuthModal(null)}>
+          <div className="auth-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="auth-modal-head">
+              <div className="auth-modal-tabs">
+                <button
+                  type="button"
+                  className={`auth-tab${authModal === "login" ? " active" : ""}`}
+                  onClick={() => setAuthModal("login")}
+                >登录</button>
+                <button
+                  type="button"
+                  className={`auth-tab${authModal === "register" ? " active" : ""}`}
+                  onClick={() => setAuthModal("register")}
+                >注册</button>
+              </div>
+              <button type="button" className="auth-close" onClick={() => !authBusy && setAuthModal(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <form className="auth-form" onSubmit={doAuth}>
+              <label className="auth-field">
+                <span>邮箱</span>
+                <input
+                  type="email"
+                  inputMode="email"
+                  value={authForm.email}
+                  onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                  placeholder="example@email.com"
+                  autoComplete="email"
+                  required
+                />
+              </label>
+              <label className="auth-field">
+                <span>密码{authModal === "register" && " (6-64 位)"}</span>
+                <input
+                  type="password"
+                  value={authForm.password}
+                  onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                  placeholder={authModal === "register" ? "设置一个密码" : "登录密码"}
+                  autoComplete={authModal === "register" ? "new-password" : "current-password"}
+                  minLength={6}
+                  maxLength={64}
+                  required
+                />
+              </label>
+              <label className="auth-field auth-captcha">
+                <span>人机验证</span>
+                <div className="auth-captcha-row">
+                  <em>{authCaptcha.a} + {authCaptcha.b} =</em>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    value={authForm.captchaAnswer}
+                    onChange={(e) => setAuthForm({ ...authForm, captchaAnswer: e.target.value })}
+                    placeholder="答案"
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="auth-captcha-refresh"
+                    onClick={() => setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) })}
+                    title="换一题"
+                    aria-label="换一题"
+                  >换</button>
+                </div>
+              </label>
+              {authError && <div className="auth-error">{authError}</div>}
+              <button type="submit" className="auth-submit" disabled={authBusy}>
+                {authBusy ? <><LoaderCircle size={14} className="spin-icon" />处理中</> : (authModal === "login" ? "登录" : "注册并登录")}
+              </button>
+              <p className="auth-hint">
+                {authModal === "login" ? "还没账号?" : "已有账号?"}
+                <button
+                  type="button"
+                  className="auth-switch"
+                  onClick={() => setAuthModal(authModal === "login" ? "register" : "login")}
+                >
+                  {authModal === "login" ? "立即注册" : "去登录"}
+                </button>
+              </p>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* ── Product Detail Modal ── */}
       {selectedProduct && (
         <div className="modal-mask" onClick={closeProduct}>
@@ -889,6 +1064,10 @@ export default function Page() {
                     {items.length > 1 ? `组合订单 · ${items.length} 件` : (items[0]?.label || "订单")}
                   </div>
                   <code className="query-modal-id">{queryDetailOrder.orderId}</code>
+                  <div className={`query-modal-status status-${queryDetailOrder.status || "received"}`}>
+                    {queryDetailOrder.status === "completed" ? <CheckCircle2 size={11} /> : <Clock size={11} />}
+                    {queryDetailOrder.status === "completed" ? "订单已完成" : "订单已收到"}
+                  </div>
                 </div>
                 <button
                   type="button"
@@ -961,8 +1140,18 @@ export default function Page() {
                   ))}
                 </div>
 
+                {queryDetailOrder.staffNotes && (
+                  <div className="query-modal-staff-notes">
+                    <div className="query-modal-staff-notes-label">客服备注</div>
+                    <div>{queryDetailOrder.staffNotes}</div>
+                  </div>
+                )}
+
                 <div className="query-modal-rows">
                   <div><span>订单时间</span><b>{orderTime(queryDetailOrder)}</b></div>
+                  {queryDetailOrder.completedAtBeijing && (
+                    <div><span>完成时间</span><b>{queryDetailOrder.completedAtBeijing}</b></div>
+                  )}
                   {queryDetailOrder.email && (
                     <div><span>邮箱</span><b>{queryDetailOrder.email}</b></div>
                   )}
