@@ -54,7 +54,7 @@ const SITE_CONTENT = {
   heroBadge: "来自中国台湾 · 专注流媒体会员6年",
   heroTitleLine1: "冒央会社",
   heroTitleHighlight: " · Maoyang Taiwan Inc",
-  heroDesc: "正版流媒体会员，全网最低价 · 30 分钟内极速到账。",
+  heroDesc: "正版流媒体会员，全网最低价 · 30 分钟内极速到账",
   heroStats: [
     { num: "500k+", label: "累计用户", icon: Users },
     { num: "1M+", label: "服务案例", icon: TrendingUp },
