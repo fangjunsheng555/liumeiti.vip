@@ -427,7 +427,7 @@ export default function Page() {
             {authUser && authUser.email ? (
               <a href="/account" className="header-auth-btn header-auth-user" title={authUser.email}>
                 <span className="header-auth-avatar">{authUser.email[0].toUpperCase()}</span>
-                <span className="header-auth-label">我的</span>
+                <span className="header-auth-label">个人中心</span>
               </a>
             ) : (
               <button type="button" className="header-auth-btn" onClick={() => setAuthModal("login")}>

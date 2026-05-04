@@ -6245,12 +6245,18 @@ button { cursor: pointer; border: none; background: transparent; }
 }
 
 @media (max-width: 820px) {
-  .header-auth-btn { padding: 6px 10px; font-size: 11.5px; }
-  .header-auth-label { display: none; }
+  .header-auth-btn { padding: 5px 10px 5px 5px; font-size: 12px; gap: 5px; }
+  .header-auth-user { padding: 4px 10px 4px 4px; }
+  /* Show "个人中心" on mobile (only the button-only state has no label) */
+  .header-auth-user .header-auth-label { display: inline; }
   .header-auth-user .header-auth-avatar { width: 24px; height: 24px; font-size: 11px; }
   /* Right-align header on mobile (was being centered/squashed) */
   .header-inner { justify-content: space-between !important; }
   .header-auth { margin-left: auto; }
+}
+@media (max-width: 380px) {
+  .header-auth-btn { font-size: 11px; padding: 4px 8px 4px 3px; gap: 4px; }
+  .header-auth-user .header-auth-avatar { width: 22px; height: 22px; font-size: 10.5px; }
 }
 @media (max-width: 380px) {
   .header-auth { margin-left: 4px; }
