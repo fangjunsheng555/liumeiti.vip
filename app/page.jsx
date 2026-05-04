@@ -105,10 +105,10 @@ const SITE_CONTENT = {
   footerRecord: "地址：台灣新北市板橋區遠東路1號3號218",
   footerNote: "Copyright © 2026 Maoyang Taiwan Inc. All rights reserved",
   trustStrip: [
-    { icon: Zap, title: "30 分钟开通", desc: "支付后客服极速处理" },
+    { icon: Zap, title: "30 分钟内开通", desc: "支付后客服极速处理" },
     { icon: ShieldCheck, title: "7 天内退款", desc: "账号原因全额退" },
     { icon: Headphones, title: "14x7 在线客服", desc: "随时响应你的问题" },
-    { icon: Lock, title: "多通道担保支付", desc: "全程加密更安全" },
+    { icon: Lock, title: "多通道 担保支付", desc: "全程加密更安全" },
   ],
   testimonials: [
     { name: "陈**", initial: "陈", region: "首尔", service: "Spotify 家庭版", rating: 5, date: "5分钟前", text: "用了快两年了，从没出过问题，老板人也好有问题秒回。比某宝便宜一大截，强推！" },
