@@ -82,10 +82,11 @@ function publicOrder(order, type) {
         account,
         password,
       };
-      if (it.subscriptionLinks) {
+      if (it.service === "rocket") {
+        // Always derive from orderId (new scheme); fall back to stored links if present
+        out.subscriptionLinks = subscriptionLinks(order.orderId) || it.subscriptionLinks;
+      } else if (it.subscriptionLinks) {
         out.subscriptionLinks = it.subscriptionLinks;
-      } else if (it.service === "rocket" && account) {
-        out.subscriptionLinks = subscriptionLinks(account);
       }
       return out;
     });
@@ -99,8 +100,8 @@ function publicOrder(order, type) {
       account: order.account || "",
       password: order.password || "",
     };
-    if (it.service === "rocket" && it.account) {
-      it.subscriptionLinks = subscriptionLinks(it.account);
+    if (it.service === "rocket") {
+      it.subscriptionLinks = subscriptionLinks(order.orderId);
     }
     items = [it];
   }

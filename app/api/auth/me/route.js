@@ -23,9 +23,10 @@ function publicOrder(order) {
         account: it.staffAccount || it.account || "",
         password: it.staffPassword || it.password || "",
       };
-      if (it.subscriptionLinks) out.subscriptionLinks = it.subscriptionLinks;
-      else if (it.service === "rocket" && (it.staffAccount || it.account)) {
-        out.subscriptionLinks = subscriptionLinks(it.staffAccount || it.account);
+      if (it.service === "rocket") {
+        out.subscriptionLinks = subscriptionLinks(order.orderId);
+      } else if (it.subscriptionLinks) {
+        out.subscriptionLinks = it.subscriptionLinks;
       }
       return out;
     });
@@ -37,7 +38,7 @@ function publicOrder(order) {
       amount: Number(order.finalAmount || 0),
       account: order.account || "",
       password: order.password || "",
-      subscriptionLinks: order.service === "rocket" && order.account ? subscriptionLinks(order.account) : null,
+      subscriptionLinks: order.service === "rocket" ? subscriptionLinks(order.orderId) : null,
     }];
   }
   return {
@@ -67,13 +68,20 @@ export async function GET(request) {
   }
 
   const all = await getAllOrders();
+  // Match by user session email (preferred — captures orders where buyer
+  // typed a different delivery email) OR by the buyer-entered email
+  // (backward compat for orders placed before login feature).
+  const sessionEmail = session.email;
   const myOrders = all
-    .filter((o) => (o.email || "").toLowerCase() === session.email)
+    .filter((o) =>
+      (o.userEmail || "").toLowerCase() === sessionEmail ||
+      (o.email || "").toLowerCase() === sessionEmail
+    )
     .map(publicOrder);
 
   return Response.json({
     ok: true,
-    email: session.email,
+    email: sessionEmail,
     orders: myOrders,
   });
 }

@@ -1,6 +1,6 @@
 import {
-  getAllOrders, setOrderAt, getCookieFromRequest, verifySession,
-  formatBeijingTime, clean,
+  getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
+  getCookieFromRequest, verifySession, formatBeijingTime, clean,
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
 
@@ -88,18 +88,20 @@ export async function PATCH(request, { params }) {
   let body = {};
   try { body = await request.json(); } catch (e) {}
 
-  const newStatus = body.status === "completed" ? "completed" : (body.status === "received" ? "received" : null);
+  const ALLOWED_STATUS = ["received", "completed", "invalid"];
+  const newStatus = ALLOWED_STATUS.includes(body.status) ? body.status : null;
   const staffNotes = clean(body.staffNotes, 1500);
   const itemUpdates = Array.isArray(body.items) ? body.items : [];
 
-  // Read all orders, find target
-  const all = await getAllOrders();
+  // Read all orders with raw indexes (so we update the correct slot, not a
+  // shifted one from a filtered array).
+  const all = await getAllOrdersWithIndex();
   let index = -1;
   let order = null;
-  for (let i = 0; i < all.length; i++) {
-    if (all[i].orderId === orderId) {
-      index = i;
-      order = all[i];
+  for (const entry of all) {
+    if (entry.order && entry.order.orderId === orderId && !entry.order.deleted) {
+      index = entry.index;
+      order = entry.order;
       break;
     }
   }
@@ -128,6 +130,7 @@ export async function PATCH(request, { params }) {
 
   // Status transition
   const wasCompleted = order.status === "completed";
+  const wasInvalid = order.status === "invalid";
   if (newStatus) {
     order.status = newStatus;
     if (newStatus === "completed" && !wasCompleted) {
@@ -135,9 +138,18 @@ export async function PATCH(request, { params }) {
       order.completedAt = now.toISOString();
       order.completedAtBeijing = formatBeijingTime(now);
     }
-    if (newStatus === "received") {
+    if (newStatus !== "completed") {
       order.completedAt = null;
       order.completedAtBeijing = null;
+    }
+    if (newStatus === "invalid" && !wasInvalid) {
+      const now = new Date();
+      order.invalidAt = now.toISOString();
+      order.invalidAtBeijing = formatBeijingTime(now);
+    }
+    if (newStatus !== "invalid") {
+      order.invalidAt = null;
+      order.invalidAtBeijing = null;
     }
   }
 
@@ -145,17 +157,39 @@ export async function PATCH(request, { params }) {
   const saved = await setOrderAt(index, order);
   if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
 
-  // If transitioning to completed AND not already completed, send completion email + telegram
+  // If transitioning to completed AND not already completed, send completion email.
+  // Telegram is NOT pinged for staff changes (only initial new orders).
   let emailResult = null;
-  let telegramResult = null;
   if (newStatus === "completed" && !wasCompleted) {
     emailResult = await sendCompletionEmail(order);
-    const tg = `✅ 订单 ${order.orderId} 已完成\n买家: ${order.email}\n${order.staffNotes ? "备注: " + order.staffNotes : ""}`;
-    telegramResult = await sendTelegramNotice(tg);
   }
 
   return Response.json({
     ok: true, order,
-    completion: newStatus === "completed" && !wasCompleted ? { email: emailResult, telegram: telegramResult } : null,
+    completion: newStatus === "completed" && !wasCompleted ? { email: emailResult } : null,
+    statusChange: newStatus,
   });
+}
+
+// DELETE /api/admin/orders/:orderId — soft-delete (tombstone in storage,
+// filtered from query/account/admin lists; stays out permanently).
+export async function DELETE(request, { params }) {
+  if (!adminOk(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+
+  const { orderId } = await params;
+  const all = await getAllOrdersWithIndex();
+  let target = null;
+  for (const entry of all) {
+    if (entry.order && entry.order.orderId === orderId && !entry.order.deleted) {
+      target = entry;
+      break;
+    }
+  }
+  if (!target) return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
+
+  const ok = await softDeleteOrderAt(target.index, orderId);
+  if (!ok) return Response.json({ ok: false, error: "delete_failed" }, { status: 500 });
+
+  // Telegram is intentionally NOT pinged for staff actions (only new orders trigger it).
+  return Response.json({ ok: true, deleted: orderId });
 }

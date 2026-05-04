@@ -5,9 +5,10 @@ import Link from "next/link";
 import {
   ArrowLeft, ArrowRight, CheckCircle2, Clock, Copy,
   LoaderCircle, LogOut, Mail, ShoppingBag, X,
+  AlertTriangle, Wallet, TrendingDown, TrendingUp,
 } from "lucide-react";
 
-const STATUS_LABEL = { received: "订单已收到", completed: "订单已完成" };
+const STATUS_LABEL = { received: "订单已收到", completed: "订单已完成", invalid: "订单无效" };
 
 function copy(text) {
   if (typeof window === "undefined") return;
@@ -15,24 +16,35 @@ function copy(text) {
 }
 
 export default function AccountPage() {
-  const [state, setState] = useState({ loading: true, email: null, orders: [] });
+  const [state, setState] = useState({ loading: true, email: null, orders: [], balance: 0, txs: [] });
   const [activeOrder, setActiveOrder] = useState(null);
+  const [showTxs, setShowTxs] = useState(false);
   const [copiedKey, setCopiedKey] = useState("");
 
   async function load() {
     setState((s) => ({ ...s, loading: true }));
     try {
-      const res = await fetch("/api/auth/me", { credentials: "same-origin" });
-      if (res.status === 401) {
+      const [meRes, balRes] = await Promise.all([
+        fetch("/api/auth/me", { credentials: "same-origin" }),
+        fetch("/api/auth/balance", { credentials: "same-origin" }),
+      ]);
+      if (meRes.status === 401) {
         window.location.href = "/?auth=login";
         return;
       }
-      const data = await res.json();
-      if (data.ok) {
-        setState({ loading: false, email: data.email, orders: data.orders });
+      const me = await meRes.json();
+      const bal = balRes.ok ? await balRes.json() : { balance: 0, transactions: [] };
+      if (me.ok) {
+        setState({
+          loading: false,
+          email: me.email,
+          orders: me.orders,
+          balance: Number(bal.balance || 0),
+          txs: bal.transactions || [],
+        });
       }
     } catch (e) {
-      setState({ loading: false, email: null, orders: [] });
+      setState({ loading: false, email: null, orders: [], balance: 0, txs: [] });
     }
   }
 
@@ -77,6 +89,49 @@ export default function AccountPage() {
           </div>
         </section>
 
+        <section className="account-balance-card">
+          <div className="account-balance-row">
+            <div className="account-balance-label">
+              <Wallet size={14} />
+              账户余额
+            </div>
+            <div className="account-balance-value">¥{state.balance.toFixed(2)}</div>
+          </div>
+          <button
+            type="button"
+            className="account-balance-toggle"
+            onClick={() => setShowTxs((v) => !v)}
+          >
+            {showTxs ? "收起" : "查看"}余额明细 · {state.txs.length} 笔
+          </button>
+          {showTxs && (
+            <div className="account-tx-list">
+              {state.txs.length === 0 ? (
+                <div className="account-tx-empty">暂无余额变动记录</div>
+              ) : (
+                state.txs.map((tx) => (
+                  <div key={tx.id} className={`account-tx-item${tx.amount > 0 ? " positive" : " negative"}`}>
+                    <div className="account-tx-icon">
+                      {tx.amount > 0 ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
+                    </div>
+                    <div className="account-tx-info">
+                      <strong>{tx.reason}</strong>
+                      <small>{tx.createdAtBeijing}</small>
+                    </div>
+                    <div className="account-tx-amount">
+                      {tx.amount > 0 ? "+" : ""}¥{Math.abs(tx.amount).toFixed(2)}
+                    </div>
+                  </div>
+                ))
+              )}
+              <div className="account-tx-note">
+                <AlertTriangle size={11} />
+                余额仅支持工作人员后台调整,如需充值请联系客服
+              </div>
+            </div>
+          )}
+        </section>
+
         <section className="account-orders">
           <div className="account-orders-head">
             <div>
@@ -104,7 +159,7 @@ export default function AccountPage() {
                   <div className="account-order-top">
                     <span className="account-order-id">{o.orderId}</span>
                     <span className={`account-order-status status-${o.status}`}>
-                      {o.status === "completed" ? <CheckCircle2 size={11} /> : <Clock size={11} />}
+                      {o.status === "completed" ? <CheckCircle2 size={11} /> : o.status === "invalid" ? <AlertTriangle size={11} /> : <Clock size={11} />}
                       {STATUS_LABEL[o.status]}
                     </span>
                   </div>

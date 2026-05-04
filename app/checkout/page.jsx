@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -48,6 +48,19 @@ export default function CheckoutPage() {
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [copiedKey, setCopiedKey] = useState(null);
   const [orderResults, setOrderResults] = useState([]);
+  const [authedUser, setAuthedUser] = useState(null); // {email, balance} | null
+  // Pre-fill email + load balance for logged-in user
+  useEffect(() => {
+    fetch("/api/auth/balance", { credentials: "same-origin" })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (d && d.ok) {
+          setAuthedUser({ email: d.email, balance: Number(d.balance || 0) });
+          setForm((cur) => cur.email ? cur : { ...cur, email: d.email });
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const cartItems = cart.map((key) => PRODUCTS.find((p) => p.key === key)).filter(Boolean);
   const cartCount = cartItems.length;
@@ -79,19 +92,19 @@ export default function CheckoutPage() {
     if (status?.type === "error") setStatus(null);
   }
 
+  // Contact field is required only when cart includes products with needsContact (Spotify)
+  const contactRequired = cartItems.some((p) => p.key === "spotify");
+
   function validateForm() {
     if (cartCount === 0) return "购物车为空,请先选购商品。";
     if (!validEmail(form.email)) {
       return "请填写有效的邮箱地址,客服将通过邮箱发送订单与开通信息。";
     }
-    if (!form.contact.trim()) {
-      return "请填写联系方式,必要时工作人员会通过此方式联系您。";
+    if (contactRequired && !form.contact.trim()) {
+      return "Spotify 订单需要填写联系方式,工作人员会通过此方式联系您。";
     }
     for (const p of cartItems) {
       const f = form.fields[p.key] || {};
-      if (p.needsUsername && !validUsername(f.username)) {
-        return `请为「${p.title}」填写 4-10 位数字或字母的用户名。`;
-      }
       if (productNeedsAccountPassword(p) && (!f.account?.trim() || !f.password?.trim())) {
         return `请为「${p.title}」填写需要开通的账号和密码。`;
       }
@@ -127,7 +140,7 @@ export default function CheckoutPage() {
       const f = form.fields[p.key] || {};
       return {
         service: p.key,
-        account: p.needsUsername ? (f.username || "").trim() : (f.account || "").trim(),
+        account: (f.account || "").trim(),
         password: productNeedsAccountPassword(p) ? (f.password || "").trim() : "",
       };
     });
@@ -263,7 +276,7 @@ export default function CheckoutPage() {
               </section>
 
               {/* Per-product extra fields */}
-              {cartItems.some((p) => p.needsUsername || productNeedsAccountPassword(p)) && (
+              {cartItems.some((p) => productNeedsAccountPassword(p)) && (
                 <section className="checkout-card">
                   <div className="checkout-card-head">
                     <h3>商品配置</h3>
@@ -271,20 +284,6 @@ export default function CheckoutPage() {
                   <div className="checkout-product-fields">
                     {cartItems.map((p) => {
                       const f = form.fields[p.key] || {};
-                      if (p.needsUsername) {
-                        return (
-                          <label key={p.key} className="order-field">
-                            <span>{p.title} · 设置你的用户名</span>
-                            <input
-                              value={f.username || ""}
-                              onChange={(e) => updateProductField(p.key, "username", e.target.value)}
-                              placeholder="4-10 位数字或字母,区分大小写"
-                              autoComplete="username"
-                              required
-                            />
-                          </label>
-                        );
-                      }
                       if (productNeedsAccountPassword(p)) {
                         return (
                           <div key={p.key} className="order-field-grid">
@@ -346,13 +345,18 @@ export default function CheckoutPage() {
                   />
                 </label>
                 <label className="order-field">
-                  <span>QQ / 微信 / WhatsApp / Telegram <em className="field-required">*</em></span>
+                  <span>
+                    QQ / 微信 / WhatsApp / Telegram
+                    {contactRequired ? <em className="field-required">*</em> : <em className="field-optional">(选填)</em>}
+                  </span>
                   <input
                     value={form.contact}
                     onChange={(e) => updateField("contact", e.target.value)}
-                    placeholder="必要时充值人员将通过此方式联系您"
+                    placeholder={contactRequired
+                      ? "Spotify 订单需要,工作人员通过此联系您"
+                      : "可选 — 通常通过邮箱沟通"}
                     autoComplete="tel"
-                    required
+                    required={contactRequired}
                   />
                 </label>
                 <label className="order-field">
@@ -433,6 +437,23 @@ export default function CheckoutPage() {
                       </div>
                       <div className="payment-method-badge">9 折</div>
                     </label>
+                    {authedUser && (
+                      <label className={`payment-method-option${paymentMethod === "balance" ? " selected" : ""}${authedUser.balance < finalCny ? " low-balance" : ""}`}>
+                        <input
+                          type="radio"
+                          name="paymentMethod"
+                          value="balance"
+                          checked={paymentMethod === "balance"}
+                          onChange={() => authedUser.balance >= finalCny && setPaymentMethod("balance")}
+                          disabled={authedUser.balance < finalCny}
+                        />
+                        <div className="payment-method-icon balance">余额</div>
+                        <div className="payment-method-detail">
+                          <strong>账户余额支付</strong>
+                          <small>余额 ¥{authedUser.balance.toFixed(2)}{authedUser.balance < finalCny ? " · 余额不足" : " · 一键扣款"}</small>
+                        </div>
+                      </label>
+                    )}
                     <label className="payment-method-option disabled">
                       <input type="radio" name="paymentMethod" disabled />
                       <div className="payment-method-icon wechat">微信</div>
@@ -479,7 +500,7 @@ export default function CheckoutPage() {
               {/* 支付方式头 */}
               <div className="pay-method-head">
                 <span className="pay-method-tag">
-                  {paymentMethod === "usdt" ? "USDT · TRC20" : "支付宝"}
+                  {paymentMethod === "usdt" ? "USDT · TRC20" : paymentMethod === "balance" ? "账户余额" : "支付宝"}
                 </span>
                 <button
                   type="button"
@@ -493,7 +514,7 @@ export default function CheckoutPage() {
 
               {/* 应付金额 - 大字 */}
               <div className="pay-amount-prominent">
-                <span>应付金额</span>
+                <span>{paymentMethod === "balance" ? "余额扣款" : "应付金额"}</span>
                 {paymentMethod === "usdt" ? (
                   <>
                     <b>{finalUsdt} <em>USDT</em></b>
@@ -504,23 +525,27 @@ export default function CheckoutPage() {
                 )}
               </div>
 
-              {/* 重要提示 - 在 QR 上方 */}
+              {/* 重要提示 */}
               <div className="pay-tip">
                 {paymentMethod === "usdt"
                   ? `请使用 TRON (TRC20) 网络转账精确金额 ${finalUsdt} USDT 到下方地址,付款完成后请记得返回本页面点击「付款完成」按钮提交订单。`
+                  : paymentMethod === "balance"
+                  ? `点击下方「确认扣款并提交订单」后,系统将自动从您的账户余额(¥${authedUser?.balance.toFixed(2) || "0.00"})扣除 ¥${finalCny},随后提交订单。`
                   : "请按上方金额完成支付宝付款。付款完成后请记得返回本页面点击「付款完成」按钮,充值人员 30 分钟内处理。"}
               </div>
 
-              {/* QR 二维码 */}
-              <div className="qr-display compact">
-                <img
-                  src={paymentMethod === "usdt" ? "/payment/usdt.png" : (cartItems[0]?.qrImage || "/payment/alipay.jpg")}
-                  alt={paymentMethod === "usdt" ? "USDT 收款码" : "支付宝收款码"}
-                />
-                <div className="qr-display-label">
-                  {paymentMethod === "usdt" ? "TRC20 钱包扫一扫或复制下面地址转账" : "支付宝扫一扫"}
+              {/* QR 二维码 — 只对支付宝/USDT 显示,余额支付不需要 */}
+              {paymentMethod !== "balance" && (
+                <div className="qr-display compact">
+                  <img
+                    src={paymentMethod === "usdt" ? "/payment/usdt.png" : (cartItems[0]?.qrImage || "/payment/alipay.jpg")}
+                    alt={paymentMethod === "usdt" ? "USDT 收款码" : "支付宝收款码"}
+                  />
+                  <div className="qr-display-label">
+                    {paymentMethod === "usdt" ? "TRC20 钱包扫一扫或复制下面地址转账" : "支付宝扫一扫"}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* USDT 地址 */}
               {paymentMethod === "usdt" && (
@@ -570,6 +595,11 @@ export default function CheckoutPage() {
                   <>
                     <LoaderCircle size={15} className="spin-icon" />
                     正在提交
+                  </>
+                ) : paymentMethod === "balance" ? (
+                  <>
+                    确认扣款并提交订单
+                    <ArrowRight size={15} />
                   </>
                 ) : (
                   <>

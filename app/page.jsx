@@ -105,10 +105,10 @@ const SITE_CONTENT = {
   footerRecord: "地址：台灣新北市板橋區遠東路1號3號218",
   footerNote: "Copyright © 2026 Maoyang Taiwan Inc. All rights reserved",
   trustStrip: [
-    { icon: Zap, title: "30 分钟内开通", desc: "支付后客服极速处理" },
-    { icon: ShieldCheck, title: "7 天内退款", desc: "账号原因全额退" },
-    { icon: Headphones, title: "14x7 在线客服", desc: "随时响应你的问题" },
-    { icon: Lock, title: "多通道 担保支付", desc: "全程加密更安全" },
+    { icon: Zap, title: "极速开通", desc: "支付后客服极速处理" },
+    { icon: ShieldCheck, title: "7 天退款", desc: "账号原因全额退" },
+    { icon: Headphones, title: "在线客服", desc: "随时响应你的问题" },
+    { icon: Lock, title: "担保支付", desc: "全程加密更安全" },
   ],
   testimonials: [
     { name: "陈**", initial: "陈", region: "首尔", service: "Spotify 家庭版", rating: 5, date: "5分钟前", text: "用了快两年了，从没出过问题，老板人也好有问题秒回。比某宝便宜一大截，强推！" },
@@ -149,11 +149,12 @@ export default function Page() {
   const [cartToast, setCartToast] = useState(null);
   const [cartExpanded, setCartExpanded] = useState(false);
   const [authUser, setAuthUser] = useState(null); // null = unknown, false = guest, {email} = logged in
-  const [authModal, setAuthModal] = useState(null); // null | "login" | "register"
-  const [authForm, setAuthForm] = useState({ email: "", password: "", captchaAnswer: "" });
+  const [authModal, setAuthModal] = useState(null); // null | "login" | "register" | "forgot" | "reset"
+  const [authForm, setAuthForm] = useState({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
   const [authCaptcha, setAuthCaptcha] = useState({ a: 0, b: 0 });
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [authNotice, setAuthNotice] = useState("");
   const [queryInput, setQueryInput] = useState("");
   const [queryStatus, setQueryStatus] = useState(null);
   const [queryLoading, setQueryLoading] = useState(false);
@@ -172,12 +173,17 @@ export default function Page() {
       .catch(() => setAuthUser(false));
   }, []);
 
-  // Refresh captcha when auth modal opens
+  // Refresh captcha when auth modal opens (only for login/register)
   useEffect(() => {
-    if (authModal) {
+    if (authModal === "login" || authModal === "register") {
       setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
+    }
+    if (authModal) {
       setAuthError("");
-      setAuthForm({ email: "", password: "", captchaAnswer: "" });
+      setAuthNotice("");
+    }
+    if (authModal === null) {
+      setAuthForm({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
     }
   }, [authModal]);
 
@@ -193,22 +199,48 @@ export default function Page() {
     if (authBusy) return;
     setAuthBusy(true);
     setAuthError("");
+    setAuthNotice("");
     try {
-      const res = await fetch(`/api/auth/${authModal}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      let endpoint = authModal;
+      let payload;
+      if (authModal === "login" || authModal === "register") {
+        payload = {
           email: authForm.email.trim(),
           password: authForm.password,
           captchaA: authCaptcha.a,
           captchaB: authCaptcha.b,
           captchaAnswer: Number(authForm.captchaAnswer),
-        }),
+        };
+      } else if (authModal === "forgot") {
+        payload = { email: authForm.email.trim() };
+      } else if (authModal === "reset") {
+        payload = {
+          email: authForm.email.trim(),
+          code: authForm.code.trim(),
+          newPassword: authForm.newPassword,
+        };
+      }
+
+      const res = await fetch(`/api/auth/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
+
+      if (authModal === "forgot") {
+        // Always show success (don't leak whether email registered)
+        setAuthNotice("如果邮箱已注册,验证码已发送至邮箱。请查看收件箱(或垃圾邮件)。");
+        setAuthModal("reset");
+        setAuthForm((f) => ({ ...f, code: "", newPassword: "" }));
+        return;
+      }
+
       if (data.ok) {
-        setAuthUser({ email: data.email });
-        setAuthModal(null);
+        if (authModal === "login" || authModal === "register" || authModal === "reset") {
+          setAuthUser({ email: data.email });
+          setAuthModal(null);
+        }
       } else {
         const msg = {
           captcha_failed: "人机验证失败,请重新计算",
@@ -216,9 +248,14 @@ export default function Page() {
           invalid_email: "邮箱格式错误",
           password_length: "密码 6-64 位",
           invalid_credentials: "邮箱或密码错误",
+          invalid_code: "验证码格式错误(6 位数字)",
+          code_invalid_or_expired: "验证码错误或已过期",
+          user_not_found: "该邮箱未注册",
         }[data.error] || data.error || "操作失败";
         setAuthError(msg);
-        setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
+        if (authModal === "login" || authModal === "register") {
+          setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
+        }
       }
     } catch (e) {
       setAuthError("网络错误");
@@ -404,11 +441,6 @@ export default function Page() {
 
         {/* ── Hero ── */}
         <section className="hero-section container">
-          <div className="hero-badge">
-            <Sparkles size={14} />
-            {SITE_CONTENT.heroBadge}
-          </div>
-
           <div className="hero-single">
             <h1 className="hero-title">
               {SITE_CONTENT.heroTitleLine1}
@@ -455,11 +487,10 @@ export default function Page() {
           <div className="trust-strip">
             {SITE_CONTENT.trustStrip.map(({ icon: Icon, title, desc }) => (
               <div key={title} className="trust-strip-item">
-                <div className="trust-strip-icon"><Icon size={20} /></div>
-                <div>
-                  <div className="trust-strip-title">{title}</div>
-                  <div className="trust-strip-desc">{desc}</div>
-                </div>
+                <div className="trust-strip-icon"><Icon size={16} /></div>
+                <div className="trust-strip-title">{title}</div>
+                {/* description hidden on mobile by CSS */}
+                <div className="trust-strip-desc">{desc}</div>
               </div>
             ))}
           </div>
@@ -769,16 +800,21 @@ export default function Page() {
               <div className="floating-title">在线客服</div>
             </div>
             <div className="floating-list">
-              {SITE_CONTENT.supportChannels.map((ch) => (
-                <button
-                  key={ch.label}
-                  className="floating-item"
-                  onClick={() => handleCopy(ch.copyValue, "float-" + ch.label)}
-                >
-                  <span><strong>{ch.label}</strong>：{ch.value}</span>
-                  <Copy size={14} />
-                </button>
-              ))}
+              {SITE_CONTENT.supportChannels.map((ch) => {
+                const isCopied = copiedKey === "float-" + ch.label;
+                return (
+                  <button
+                    key={ch.label}
+                    className={`floating-item${isCopied ? " is-copied" : ""}`}
+                    onClick={() => handleCopy(ch.copyValue, "float-" + ch.label)}
+                  >
+                    <span><strong>{ch.label}</strong>：{ch.value}</span>
+                    {isCopied
+                      ? <em className="floating-item-copied"><CheckCircle2 size={13} />已复制</em>
+                      : <Copy size={14} />}
+                  </button>
+                );
+              })}
               <div className="floating-hours">{SITE_CONTENT.supportHours}</div>
             </div>
           </div>
@@ -876,23 +912,21 @@ export default function Page() {
         </div>
       )}
 
-      {/* ── Auth Modal (login/register) ── */}
+      {/* ── Auth Modal (login / register / forgot / reset) ── */}
       {authModal && (
         <div className="auth-modal-mask" onClick={() => !authBusy && setAuthModal(null)}>
           <div className="auth-modal" onClick={(e) => e.stopPropagation()}>
             <div className="auth-modal-head">
-              <div className="auth-modal-tabs">
-                <button
-                  type="button"
-                  className={`auth-tab${authModal === "login" ? " active" : ""}`}
-                  onClick={() => setAuthModal("login")}
-                >登录</button>
-                <button
-                  type="button"
-                  className={`auth-tab${authModal === "register" ? " active" : ""}`}
-                  onClick={() => setAuthModal("register")}
-                >注册</button>
-              </div>
+              {authModal === "login" || authModal === "register" ? (
+                <div className="auth-modal-tabs">
+                  <button type="button" className={`auth-tab${authModal === "login" ? " active" : ""}`} onClick={() => setAuthModal("login")}>登录</button>
+                  <button type="button" className={`auth-tab${authModal === "register" ? " active" : ""}`} onClick={() => setAuthModal("register")}>注册</button>
+                </div>
+              ) : (
+                <div className="auth-modal-title">
+                  {authModal === "forgot" ? "找回密码" : "重置密码"}
+                </div>
+              )}
               <button type="button" className="auth-close" onClick={() => !authBusy && setAuthModal(null)}>
                 <X size={16} />
               </button>
@@ -907,57 +941,112 @@ export default function Page() {
                   onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
                   placeholder="example@email.com"
                   autoComplete="email"
+                  readOnly={authModal === "reset"}
                   required
                 />
               </label>
-              <label className="auth-field">
-                <span>密码{authModal === "register" && " (6-64 位)"}</span>
-                <input
-                  type="password"
-                  value={authForm.password}
-                  onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
-                  placeholder={authModal === "register" ? "设置一个密码" : "登录密码"}
-                  autoComplete={authModal === "register" ? "new-password" : "current-password"}
-                  minLength={6}
-                  maxLength={64}
-                  required
-                />
-              </label>
-              <label className="auth-field auth-captcha">
-                <span>人机验证</span>
-                <div className="auth-captcha-row">
-                  <em>{authCaptcha.a} + {authCaptcha.b} =</em>
+
+              {(authModal === "login" || authModal === "register") && (
+                <label className="auth-field">
+                  <span>密码{authModal === "register" && " (6-64 位)"}</span>
                   <input
-                    type="number"
-                    inputMode="numeric"
-                    value={authForm.captchaAnswer}
-                    onChange={(e) => setAuthForm({ ...authForm, captchaAnswer: e.target.value })}
-                    placeholder="答案"
+                    type="password"
+                    value={authForm.password}
+                    onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                    placeholder={authModal === "register" ? "设置一个密码" : "登录密码"}
+                    autoComplete={authModal === "register" ? "new-password" : "current-password"}
+                    minLength={6}
+                    maxLength={64}
                     required
                   />
-                  <button
-                    type="button"
-                    className="auth-captcha-refresh"
-                    onClick={() => setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) })}
-                    title="换一题"
-                    aria-label="换一题"
-                  >换</button>
-                </div>
-              </label>
+                </label>
+              )}
+
+              {authModal === "reset" && (
+                <>
+                  <label className="auth-field">
+                    <span>邮箱验证码 (6 位)</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="\d{6}"
+                      maxLength={6}
+                      value={authForm.code}
+                      onChange={(e) => setAuthForm({ ...authForm, code: e.target.value.replace(/\D/g, "") })}
+                      placeholder="收件箱中的 6 位验证码"
+                      autoComplete="one-time-code"
+                      required
+                    />
+                  </label>
+                  <label className="auth-field">
+                    <span>新密码 (6-64 位)</span>
+                    <input
+                      type="password"
+                      value={authForm.newPassword}
+                      onChange={(e) => setAuthForm({ ...authForm, newPassword: e.target.value })}
+                      placeholder="设置新的登录密码"
+                      autoComplete="new-password"
+                      minLength={6}
+                      maxLength={64}
+                      required
+                    />
+                  </label>
+                </>
+              )}
+
+              {(authModal === "login" || authModal === "register") && (
+                <label className="auth-field auth-captcha">
+                  <span>人机验证</span>
+                  <div className="auth-captcha-row">
+                    <em>{authCaptcha.a} + {authCaptcha.b} =</em>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      value={authForm.captchaAnswer}
+                      onChange={(e) => setAuthForm({ ...authForm, captchaAnswer: e.target.value })}
+                      placeholder="?"
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="auth-captcha-refresh"
+                      onClick={() => setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) })}
+                      title="换一题"
+                      aria-label="换一题"
+                    ><RefreshCw size={14} /></button>
+                  </div>
+                </label>
+              )}
+
+              {authNotice && <div className="auth-notice">{authNotice}</div>}
               {authError && <div className="auth-error">{authError}</div>}
+
               <button type="submit" className="auth-submit" disabled={authBusy}>
-                {authBusy ? <><LoaderCircle size={14} className="spin-icon" />处理中</> : (authModal === "login" ? "登录" : "注册并登录")}
+                {authBusy ? (
+                  <><LoaderCircle size={14} className="spin-icon" />处理中</>
+                ) : authModal === "login" ? "登录"
+                  : authModal === "register" ? "注册并登录"
+                  : authModal === "forgot" ? "发送邮箱验证码"
+                  : "重置密码并登录"}
               </button>
-              <p className="auth-hint">
-                {authModal === "login" ? "还没账号?" : "已有账号?"}
-                <button
-                  type="button"
-                  className="auth-switch"
-                  onClick={() => setAuthModal(authModal === "login" ? "register" : "login")}
-                >
-                  {authModal === "login" ? "立即注册" : "去登录"}
-                </button>
-              </p>
+
+              <div className="auth-hints">
+                {authModal === "login" && (
+                  <>
+                    <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>忘记密码?</button>
+                    <span className="auth-hint">还没账号? <button type="button" className="auth-switch" onClick={() => setAuthModal("register")}>立即注册</button></span>
+                  </>
+                )}
+                {authModal === "register" && (
+                  <span className="auth-hint">已有账号? <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>去登录</button></span>
+                )}
+                {authModal === "forgot" && (
+                  <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>返回登录</button>
+                )}
+                {authModal === "reset" && (
+                  <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>重新发送验证码</button>
+                )}
+              </div>
             </form>
           </div>
         </div>

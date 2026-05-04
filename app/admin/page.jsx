@@ -5,12 +5,19 @@ import Link from "next/link";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
-  CheckCircle2, Clock, Inbox, X,
+  CheckCircle2, Clock, Inbox, X, AlertTriangle, Trash2,
 } from "lucide-react";
 
 const STATUS_LABEL = {
   received: "订单已收到",
   completed: "订单已完成",
+  invalid: "无效·未收到付款",
+};
+
+const STATUS_ICON_KEY = {
+  received: "clock",
+  completed: "check",
+  invalid: "x",
 };
 
 function copyText(text) {
@@ -34,8 +41,88 @@ export default function AdminPage() {
   const [activeOrder, setActiveOrder] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [saveResult, setSaveResult] = useState(null);
   const [showPwds, setShowPwds] = useState({});
+
+  // User/balance management
+  const [tab, setTab] = useState("orders"); // "orders" | "users"
+  const [userQuery, setUserQuery] = useState("");
+  const [userInfo, setUserInfo] = useState(null); // {user, transactions}
+  const [userLoading, setUserLoading] = useState(false);
+  const [userError, setUserError] = useState("");
+  const [balForm, setBalForm] = useState({ amount: "", reason: "" });
+  const [balBusy, setBalBusy] = useState(false);
+  const [balResult, setBalResult] = useState(null);
+
+  async function loadUser(email) {
+    if (!email) return;
+    setUserLoading(true);
+    setUserError("");
+    setBalResult(null);
+    try {
+      const res = await fetch(`/api/admin/users?email=${encodeURIComponent(email.trim())}`, {
+        credentials: "same-origin",
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setUserInfo(data);
+      } else {
+        setUserInfo(null);
+        setUserError(data.error === "user_not_found" ? "未找到该邮箱的注册用户" : (data.error || "查询失败"));
+      }
+    } catch (e) {
+      setUserError("网络错误");
+    } finally {
+      setUserLoading(false);
+    }
+  }
+
+  async function adjustBalance(sign) {
+    if (!userInfo || balBusy) return;
+    const num = Number(balForm.amount);
+    if (!Number.isFinite(num) || num <= 0) {
+      setBalResult({ type: "error", message: "请输入正数金额" });
+      return;
+    }
+    if (!balForm.reason.trim()) {
+      setBalResult({ type: "error", message: "请填写原因(将记入余额明细)" });
+      return;
+    }
+    setBalBusy(true);
+    setBalResult(null);
+    try {
+      const res = await fetch("/api/admin/users", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: userInfo.user.email,
+          amount: sign * num,
+          reason: balForm.reason.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setBalResult({ type: "success", message: `已${sign > 0 ? "增加" : "扣除"} ¥${num.toFixed(2)} · 当前余额 ¥${data.balance.toFixed(2)}` });
+        setBalForm({ amount: "", reason: "" });
+        loadUser(userInfo.user.email);
+      } else {
+        const msg = {
+          insufficient_balance: "余额不足,无法扣除",
+          user_not_found: "用户不存在",
+          invalid_amount: "金额无效",
+          reason_required: "请填写原因",
+        }[data.error] || data.error || "操作失败";
+        setBalResult({ type: "error", message: msg });
+      }
+    } catch (e) {
+      setBalResult({ type: "error", message: "网络错误" });
+    } finally {
+      setBalBusy(false);
+    }
+  }
 
   // Try fetching orders to detect if authed
   const loadOrders = useCallback(async (q, status) => {
@@ -113,6 +200,32 @@ export default function AdminPage() {
       })),
     });
     setSaveResult(null);
+    setConfirmDelete(false);
+  }
+
+  async function deleteOrder() {
+    if (!activeOrder || deleting) return;
+    setDeleting(true);
+    setSaveResult(null);
+    try {
+      const res = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setActiveOrder(null);
+        setEditForm(null);
+        setConfirmDelete(false);
+        loadOrders(appliedSearch, filterStatus);
+      } else {
+        setSaveResult({ type: "error", message: data.error || "删除失败" });
+      }
+    } catch (e) {
+      setSaveResult({ type: "error", message: "网络错误" });
+    } finally {
+      setDeleting(false);
+    }
   }
 
   function updateItem(idx, field, value) {
@@ -205,6 +318,94 @@ export default function AdminPage() {
       </header>
 
       <main className="admin-main">
+        <div className="admin-tabs">
+          <button type="button" className={`admin-tab-btn${tab === "orders" ? " active" : ""}`} onClick={() => setTab("orders")}>订单管理</button>
+          <button type="button" className={`admin-tab-btn${tab === "users" ? " active" : ""}`} onClick={() => setTab("users")}>用户余额</button>
+        </div>
+
+        {tab === "users" ? (
+          <div className="admin-users-pane">
+            <form
+              className="admin-search"
+              onSubmit={(e) => { e.preventDefault(); loadUser(userQuery); }}
+            >
+              <Search size={14} />
+              <input
+                type="email"
+                inputMode="email"
+                value={userQuery}
+                onChange={(e) => setUserQuery(e.target.value)}
+                placeholder="按注册邮箱查询用户"
+              />
+              <button type="submit" disabled={userLoading}>
+                {userLoading ? <LoaderCircle size={12} className="spin-icon" /> : "查询"}
+              </button>
+            </form>
+
+            {userError && <div className="admin-alert error" style={{ marginTop: 8 }}>{userError}</div>}
+
+            {userInfo && (
+              <>
+                <div className="admin-user-card" style={{ marginTop: 10 }}>
+                  <div className="admin-user-head">
+                    <span className="admin-user-email">{userInfo.user.email}</span>
+                    <span className="admin-user-balance">¥{userInfo.user.balance.toFixed(2)}</span>
+                  </div>
+                  <div className="admin-user-meta">注册于 {userInfo.user.createdAtBeijing || "—"}</div>
+                </div>
+
+                <div className="admin-balance-form">
+                  <div className="admin-balance-row">
+                    <span>金额(正数)</span>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      step="0.01"
+                      min="0.01"
+                      value={balForm.amount}
+                      onChange={(e) => setBalForm({ ...balForm, amount: e.target.value })}
+                      placeholder="例如 100"
+                    />
+                  </div>
+                  <div className="admin-balance-row">
+                    <span>原因(将记入余额明细)</span>
+                    <textarea
+                      value={balForm.reason}
+                      onChange={(e) => setBalForm({ ...balForm, reason: e.target.value })}
+                      placeholder="例如:充值 100;退款补偿;客服赠送"
+                      rows={2}
+                    />
+                  </div>
+                  {balResult && <div className={`admin-alert ${balResult.type}`}>{balResult.message}</div>}
+                  <div className="admin-balance-actions">
+                    <button type="button" className="admin-balance-add" disabled={balBusy} onClick={() => adjustBalance(+1)}>
+                      <CheckCircle2 size={13} />增加余额
+                    </button>
+                    <button type="button" className="admin-balance-deduct" disabled={balBusy} onClick={() => adjustBalance(-1)}>
+                      <AlertTriangle size={13} />扣除余额
+                    </button>
+                  </div>
+                </div>
+
+                <div className="admin-tx-list">
+                  <div className="admin-tx-list-label">余额明细 · {userInfo.transactions.length} 笔</div>
+                  {userInfo.transactions.length === 0 ? (
+                    <div className="admin-tx-item"><div className="admin-tx-item-info"><small>暂无变动记录</small></div></div>
+                  ) : userInfo.transactions.map((tx) => (
+                    <div key={tx.id} className={`admin-tx-item${tx.amount > 0 ? " positive" : " negative"}`}>
+                      <div className="admin-tx-item-info">
+                        <strong>{tx.reason}</strong>
+                        <small>{tx.createdAtBeijing} · {tx.source === "admin" ? "工作人员调整" : tx.source === "order" ? `订单 ${tx.orderId || ""}` : ""}</small>
+                      </div>
+                      <div className="admin-tx-item-amount">{tx.amount > 0 ? "+" : ""}¥{Math.abs(tx.amount).toFixed(2)}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
+        <>
         <div className="admin-toolbar">
           <form
             className="admin-search"
@@ -223,6 +424,7 @@ export default function AdminPage() {
               { v: "all", label: "全部" },
               { v: "received", label: "未完成" },
               { v: "completed", label: "已完成" },
+              { v: "invalid", label: "无效" },
             ].map((f) => (
               <button
                 key={f.v}
@@ -250,7 +452,7 @@ export default function AdminPage() {
                 <div className="admin-order-top">
                   <span className="admin-order-id">{o.orderId}</span>
                   <span className={`admin-order-status status-${o.status}`}>
-                    {o.status === "completed" ? <CheckCircle2 size={11} /> : <Clock size={11} />}
+                    {o.status === "completed" ? <CheckCircle2 size={11} /> : o.status === "invalid" ? <AlertTriangle size={11} /> : <Clock size={11} />}
                     {STATUS_LABEL[o.status]}
                   </span>
                 </div>
@@ -269,6 +471,8 @@ export default function AdminPage() {
             ))}
           </div>
         )}
+        </>
+        )}
       </main>
 
       {/* Edit modal */}
@@ -279,7 +483,7 @@ export default function AdminPage() {
               <div>
                 <div className="admin-modal-id">{activeOrder.orderId}</div>
                 <div className={`admin-modal-status status-${activeOrder.status}`}>
-                  {activeOrder.status === "completed" ? <CheckCircle2 size={12} /> : <Clock size={12} />}
+                  {activeOrder.status === "completed" ? <CheckCircle2 size={12} /> : activeOrder.status === "invalid" ? <AlertTriangle size={12} /> : <Clock size={12} />}
                   {STATUS_LABEL[activeOrder.status]}
                 </div>
               </div>
@@ -403,19 +607,47 @@ export default function AdminPage() {
                   className="admin-status-select"
                   value={editForm.status}
                   onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
-                  disabled={saving}
+                  disabled={saving || deleting}
                 >
                   <option value="received">订单已收到</option>
                   <option value="completed">订单已完成(发开通邮件)</option>
+                  <option value="invalid">无效·未收到付款</option>
                 </select>
                 <button
                   type="button"
                   className="admin-save-btn"
                   onClick={saveOrder}
-                  disabled={saving}
+                  disabled={saving || deleting}
                 >
                   {saving ? <><LoaderCircle size={14} className="spin-icon" />保存中</> : "保存修改"}
                 </button>
+              </div>
+
+              {/* Danger zone - delete order */}
+              <div className="admin-danger-zone">
+                {!confirmDelete ? (
+                  <button
+                    type="button"
+                    className="admin-danger-btn"
+                    onClick={() => setConfirmDelete(true)}
+                    disabled={saving || deleting}
+                  >
+                    <Trash2 size={13} />删除订单
+                  </button>
+                ) : (
+                  <div className="admin-danger-confirm">
+                    <div className="admin-danger-text">
+                      <AlertTriangle size={14} />
+                      确认删除该订单?此操作不可恢复。
+                    </div>
+                    <div className="admin-danger-actions">
+                      <button type="button" className="admin-danger-cancel" onClick={() => setConfirmDelete(false)} disabled={deleting}>取消</button>
+                      <button type="button" className="admin-danger-confirm-btn" onClick={deleteOrder} disabled={deleting}>
+                        {deleting ? <><LoaderCircle size={13} className="spin-icon" />删除中</> : "确认删除"}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

@@ -81,7 +81,7 @@ export async function GET(request) {
 
   const all = await getAllOrders();
   let filtered = all.map(normalizeOrder);
-  if (status === "received" || status === "completed") {
+  if (status === "received" || status === "completed" || status === "invalid") {
     filtered = filtered.filter((o) => o.status === status);
   }
   if (q) {
