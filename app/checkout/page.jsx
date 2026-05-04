@@ -352,7 +352,7 @@ export default function CheckoutPage() {
                     value={form.contact}
                     onChange={(e) => updateField("contact", e.target.value)}
                     placeholder={contactRequired
-                      ? "Spotify 订单需要,工作人员通过此联系您"
+                      ? "Spotify 订单需要,必要时通过此联系您"
                       : "可选 — 通常通过邮箱沟通"}
                     autoComplete="tel"
                     required={contactRequired}
