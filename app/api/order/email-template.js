@@ -208,7 +208,7 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
                   <ol style="margin:0;padding-left:18px;color:#134e4a;font-size:13px;line-height:1.85;">
                     <li>工作人员将在 30 分钟内处理订单</li>
                     <li>必要时将通过邮箱/联系方式联系您</li>
-                    <li>服务开通成功后您将再次收到邮件，也可点击订单号或访问 <a href="${escapeHtml(siteUrl || "https://" + siteDomain)}" style="color:#0f766e;font-weight:700;">${escapeHtml(siteDomain)}</a> 查询订单</li>
+                    <li>服务开通完成后您将再次收到邮件，也可点击订单号或访问 <a href="${escapeHtml(siteUrl || "https://" + siteDomain)}" style="color:#0f766e;font-weight:700;">${escapeHtml(siteDomain)}</a> 查询订单</li>
                   </ol>
                 </td></tr>
               </table>
