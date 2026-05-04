@@ -49,7 +49,7 @@ import {
 
 const SITE_CONTENT = {
   brandCn: "冒央会社",
-  brandEn: "MAOYANG",
+  brandEn: "MAOYANG TAIWAN INC",
   domain: "liumeiti.vip",
   heroBadge: "来自中国台湾 · 专注流媒体会员6年",
   heroTitleLine1: "冒央会社",
