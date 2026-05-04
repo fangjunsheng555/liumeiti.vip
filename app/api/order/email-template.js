@@ -94,7 +94,7 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
 <title>订单确认 - ${escapeHtml(brandName)}</title>
 </head>
 <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;color:#0f172a;-webkit-font-smoothing:antialiased;">
-  <div style="display:none;max-height:0;overflow:hidden;">${escapeHtml(brandName)} 订单 ${escapeHtml(order.orderId)} · 实付 ${isUsdt ? (order.paidAmount + " USDT") : ("¥" + order.finalAmount)} · 请点击查阅邮件内容</div>
+  <div style="display:none;max-height:0;overflow:hidden;">请点击查阅邮件内容 · ${escapeHtml(brandName)} · 实付 ${isUsdt ? (order.paidAmount + " USDT") : ("¥" + order.finalAmount)}</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f6fb;padding:32px 16px;">
     <tr>
       <td align="center">
