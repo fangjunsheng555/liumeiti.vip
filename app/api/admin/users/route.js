@@ -1,6 +1,7 @@
 import {
   getCookieFromRequest, verifySession, getUser, setUser,
-  addBalanceTx, getBalanceTxs, validEmail, formatBeijingTime, clean,
+  addBalanceTx, getBalanceTxs, pushAdminBalanceLog,
+  validEmail, formatBeijingTime, clean,
 } from "../../_utils.js";
 
 function adminOk(request) {
@@ -84,6 +85,13 @@ export async function POST(request) {
     createdAtBeijing: formatBeijingTime(now),
   };
   await addBalanceTx(email, tx);
+  // Also append to the global admin ledger so the admin dashboard
+  // can display every adjustment across all users in one place.
+  await pushAdminBalanceLog({
+    ...tx,
+    email,
+    balanceBefore: prev,
+  });
 
   return Response.json({
     ok: true,

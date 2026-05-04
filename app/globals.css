@@ -6623,6 +6623,68 @@ button { cursor: pointer; border: none; background: transparent; }
 .admin-tx-item.positive .admin-tx-item-amount { color: #15803d; }
 .admin-tx-item.negative .admin-tx-item-amount { color: #b91c1c; }
 
+/* ── Admin: global balance adjustment log ── */
+.admin-global-log {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--line);
+}
+.admin-global-log-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.admin-global-log-head h3 {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--primary);
+  letter-spacing: -.01em;
+}
+.admin-global-log-stats {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.admin-global-log-stats .stat-add { color: #15803d; }
+.admin-global-log-stats .stat-deduct { color: #b91c1c; }
+.admin-global-log-stats b { font-weight: 800; }
+
+.admin-global-log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.admin-search-mini {
+  flex: 1;
+  min-width: 180px;
+  padding: 5px 9px;
+  gap: 5px;
+}
+.admin-search-mini input { font-size: 14px; }
+.admin-search-mini button { padding: 4px 11px; font-size: 11px; }
+.admin-global-log-filters { display: flex; gap: 4px; }
+.admin-global-log-filters .admin-filter-btn { padding: 5px 9px; font-size: 11px; }
+
+.admin-global-log-item .admin-tx-item-info strong {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11.5px;
+  word-break: break-all;
+}
+.admin-global-log-amounts {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.admin-global-log-amounts small { font-size: 10px; color: var(--muted); }
+
 /* ═══════════════════════════════════════════════════════
    Cart tile grid (5/row max) + checkout tighter cards
    ═══════════════════════════════════════════════════════ */

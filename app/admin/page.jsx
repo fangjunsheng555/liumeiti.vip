@@ -62,6 +62,36 @@ export default function AdminPage() {
   const [balForm, setBalForm] = useState({ amount: "", reason: "" });
   const [balBusy, setBalBusy] = useState(false);
   const [balResult, setBalResult] = useState(null);
+  const [globalLog, setGlobalLog] = useState({ entries: [], total: 0, totalAdded: 0, totalDeducted: 0 });
+  const [logFilter, setLogFilter] = useState("all"); // all | add | deduct
+  const [logQuery, setLogQuery] = useState("");
+  const [logLoading, setLogLoading] = useState(false);
+
+  const loadGlobalLog = useCallback(async (q, filter) => {
+    setLogLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (q) params.set("q", q);
+      if (filter && filter !== "all") params.set("filter", filter);
+      const res = await fetch("/api/admin/balance-log?" + params.toString(), { credentials: "same-origin" });
+      const data = await res.json();
+      if (data.ok) {
+        setGlobalLog({
+          entries: data.entries || [],
+          total: data.total || 0,
+          totalAdded: data.totalAdded || 0,
+          totalDeducted: data.totalDeducted || 0,
+        });
+      }
+    } catch (e) {} finally {
+      setLogLoading(false);
+    }
+  }, []);
+
+  // Load global log when entering the users tab and after each adjustment
+  useEffect(() => {
+    if (authed && tab === "users") loadGlobalLog(logQuery, logFilter);
+  }, [authed, tab, loadGlobalLog, logFilter]);
 
   async function loadUser(email) {
     if (!email) return;
@@ -84,6 +114,12 @@ export default function AdminPage() {
     } finally {
       setUserLoading(false);
     }
+  }
+
+  async function refreshAfterAdjust() {
+    // Re-load both the user view and global log
+    if (userInfo) await loadUser(userInfo.user.email);
+    await loadGlobalLog(logQuery, logFilter);
   }
 
   async function adjustBalance(sign) {
@@ -114,7 +150,7 @@ export default function AdminPage() {
       if (data.ok) {
         setBalResult({ type: "success", message: `已${sign > 0 ? "增加" : "扣除"} ¥${num.toFixed(2)} · 当前余额 ¥${data.balance.toFixed(2)}` });
         setBalForm({ amount: "", reason: "" });
-        loadUser(userInfo.user.email);
+        refreshAfterAdjust();
       } else {
         const msg = {
           insufficient_balance: "余额不足,无法扣除",
@@ -458,7 +494,7 @@ export default function AdminPage() {
                 </div>
 
                 <div className="admin-tx-list">
-                  <div className="admin-tx-list-label">余额明细 · {userInfo.transactions.length} 笔</div>
+                  <div className="admin-tx-list-label">该用户余额明细 · {userInfo.transactions.length} 笔</div>
                   {userInfo.transactions.length === 0 ? (
                     <div className="admin-tx-item"><div className="admin-tx-item-info"><small>暂无变动记录</small></div></div>
                   ) : userInfo.transactions.map((tx) => (
@@ -473,6 +509,63 @@ export default function AdminPage() {
                 </div>
               </>
             )}
+
+            {/* Global balance adjustment log — all users, all time */}
+            <div className="admin-global-log">
+              <div className="admin-global-log-head">
+                <h3>全部余额调整记录</h3>
+                <div className="admin-global-log-stats">
+                  <span className="stat-add">累计加 <b>+¥{globalLog.totalAdded.toFixed(2)}</b></span>
+                  <span className="stat-deduct">累计减 <b>−¥{globalLog.totalDeducted.toFixed(2)}</b></span>
+                </div>
+              </div>
+              <div className="admin-global-log-toolbar">
+                <form
+                  className="admin-search admin-search-mini"
+                  onSubmit={(e) => { e.preventDefault(); loadGlobalLog(logQuery, logFilter); }}
+                >
+                  <Search size={13} />
+                  <input
+                    value={logQuery}
+                    onChange={(e) => setLogQuery(e.target.value)}
+                    placeholder="按邮箱 / 原因 / 流水号搜索"
+                  />
+                  <button type="submit" disabled={logLoading}>
+                    {logLoading ? <LoaderCircle size={11} className="spin-icon" /> : "搜索"}
+                  </button>
+                </form>
+                <div className="admin-global-log-filters">
+                  {[
+                    { v: "all", label: "全部" },
+                    { v: "add", label: "增加" },
+                    { v: "deduct", label: "扣除" },
+                  ].map((f) => (
+                    <button
+                      key={f.v}
+                      type="button"
+                      className={`admin-filter-btn${logFilter === f.v ? " active" : ""}`}
+                      onClick={() => setLogFilter(f.v)}
+                    >{f.label}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="admin-tx-list">
+                {globalLog.entries.length === 0 ? (
+                  <div className="admin-tx-item"><div className="admin-tx-item-info"><small>暂无调整记录</small></div></div>
+                ) : globalLog.entries.map((tx) => (
+                  <div key={tx.id} className={`admin-tx-item admin-global-log-item${tx.amount > 0 ? " positive" : " negative"}`}>
+                    <div className="admin-tx-item-info">
+                      <strong>{tx.email}</strong>
+                      <small>{tx.reason} · {tx.createdAtBeijing}</small>
+                    </div>
+                    <div className="admin-global-log-amounts">
+                      <div className="admin-tx-item-amount">{tx.amount > 0 ? "+" : ""}¥{Math.abs(tx.amount).toFixed(2)}</div>
+                      <small>余额 ¥{Number(tx.balanceAfter || 0).toFixed(2)}</small>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         ) : (
         <>
