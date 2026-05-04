@@ -1,6 +1,7 @@
 import {
   validEmail, hashPassword, getUser, setUser,
   signSession, setCookieValue, formatBeijingTime,
+  generateRandomUsername, registerUserEmail,
 } from "../../_utils.js";
 
 export async function POST(request) {
@@ -30,11 +31,14 @@ export async function POST(request) {
   const now = new Date();
   const user = {
     email,
+    username: generateRandomUsername(),
     passwordHash: hashPassword(password),
+    balance: 0,
     createdAt: now.toISOString(),
     createdAtBeijing: formatBeijingTime(now),
   };
   const saved = await setUser(email, user);
+  await registerUserEmail(email);
   if (!saved) {
     return Response.json({ ok: false, error: "storage_failed" }, { status: 500 });
   }

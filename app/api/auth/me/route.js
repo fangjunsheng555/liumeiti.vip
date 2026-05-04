@@ -1,5 +1,6 @@
 import {
   getCookieFromRequest, verifySession, getAllOrders,
+  getUser, setUser, validUsername, generateRandomUsername, clean,
 } from "../../_utils.js";
 
 function subscriptionLinks(username) {
@@ -67,11 +68,20 @@ export async function GET(request) {
     return Response.json({ ok: false, error: "not_logged_in" }, { status: 401 });
   }
 
+  const sessionEmail = session.email;
+  const user = await getUser(sessionEmail);
+  // Backfill username for legacy accounts on the fly
+  let username = user?.username;
+  if (user && !username) {
+    username = generateRandomUsername();
+    user.username = username;
+    await setUser(sessionEmail, user);
+  }
+
   const all = await getAllOrders();
   // Match by user session email (preferred — captures orders where buyer
   // typed a different delivery email) OR by the buyer-entered email
   // (backward compat for orders placed before login feature).
-  const sessionEmail = session.email;
   const myOrders = all
     .filter((o) =>
       (o.userEmail || "").toLowerCase() === sessionEmail ||
@@ -82,6 +92,32 @@ export async function GET(request) {
   return Response.json({
     ok: true,
     email: sessionEmail,
+    username: username || "",
     orders: myOrders,
   });
+}
+
+// PATCH /api/auth/me  body: { username }
+export async function PATCH(request) {
+  const token = getCookieFromRequest(request, "lm_user");
+  const session = verifySession(token);
+  if (!session || !session.email) {
+    return Response.json({ ok: false, error: "not_logged_in" }, { status: 401 });
+  }
+  let body = {};
+  try { body = await request.json(); } catch (e) {}
+  const username = clean(body.username, 40).trim();
+  if (!validUsername(username)) {
+    return Response.json({
+      ok: false,
+      error: "invalid_username",
+      message: "用户名 2-20 位,支持中文/字母/数字/下划线",
+    }, { status: 400 });
+  }
+  const user = await getUser(session.email);
+  if (!user) return Response.json({ ok: false, error: "user_not_found" }, { status: 404 });
+  user.username = username;
+  const saved = await setUser(session.email, user);
+  if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
+  return Response.json({ ok: true, username });
 }

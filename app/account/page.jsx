@@ -6,6 +6,7 @@ import {
   ArrowLeft, ArrowRight, CheckCircle2, Clock, Copy,
   LoaderCircle, LogOut, Mail, ShoppingBag, X,
   AlertTriangle, Wallet, TrendingDown, TrendingUp,
+  User, Edit3, Check,
 } from "lucide-react";
 
 const STATUS_LABEL = { received: "订单已收到", completed: "订单已完成", invalid: "订单无效·未收到付款" };
@@ -16,10 +17,14 @@ function copy(text) {
 }
 
 export default function AccountPage() {
-  const [state, setState] = useState({ loading: true, email: null, orders: [], balance: 0, txs: [] });
+  const [state, setState] = useState({ loading: true, email: null, username: "", orders: [], balance: 0, txs: [] });
   const [activeOrder, setActiveOrder] = useState(null);
   const [showTxs, setShowTxs] = useState(false);
   const [copiedKey, setCopiedKey] = useState("");
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [nameSaving, setNameSaving] = useState(false);
+  const [nameError, setNameError] = useState("");
 
   async function load() {
     setState((s) => ({ ...s, loading: true }));
@@ -38,6 +43,7 @@ export default function AccountPage() {
         setState({
           loading: false,
           email: me.email,
+          username: me.username || "",
           orders: me.orders,
           balance: Number(bal.balance || 0),
           txs: bal.transactions || [],
@@ -61,6 +67,37 @@ export default function AccountPage() {
     setTimeout(() => setCopiedKey(""), 1800);
   }
 
+  function startEditName() {
+    setNameDraft(state.username || "");
+    setNameError("");
+    setEditingName(true);
+  }
+
+  async function saveName() {
+    if (nameSaving) return;
+    setNameSaving(true);
+    setNameError("");
+    try {
+      const res = await fetch("/api/auth/me", {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: nameDraft.trim() }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setState((s) => ({ ...s, username: data.username }));
+        setEditingName(false);
+      } else {
+        setNameError(data.message || "用户名格式无效");
+      }
+    } catch (e) {
+      setNameError("网络错误");
+    } finally {
+      setNameSaving(false);
+    }
+  }
+
   if (state.loading) {
     return <div className="account-loading"><LoaderCircle size={28} className="spin-icon" /></div>;
   }
@@ -79,12 +116,34 @@ export default function AccountPage() {
 
       <main className="account-main">
         <section className="account-info-card">
-          <div className="account-avatar">{(state.email || "?")[0].toUpperCase()}</div>
-          <div>
-            <div className="account-info-label">已登录账号</div>
+          <div className="account-avatar">{(state.username || state.email || "?")[0].toUpperCase()}</div>
+          <div className="account-info-text">
+            {editingName ? (
+              <div className="account-name-edit">
+                <input
+                  type="text"
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  placeholder="2-20 位 中/英/数字/_"
+                  maxLength={20}
+                  autoFocus
+                />
+                <button type="button" onClick={saveName} disabled={nameSaving} className="account-name-save">
+                  {nameSaving ? <LoaderCircle size={12} className="spin-icon" /> : <Check size={12} />}
+                </button>
+                <button type="button" onClick={() => setEditingName(false)} disabled={nameSaving} className="account-name-cancel"><X size={12} /></button>
+              </div>
+            ) : (
+              <div className="account-username">
+                <User size={12} />
+                <strong>{state.username || "未设置"}</strong>
+                <button type="button" className="account-name-edit-btn" onClick={startEditName} aria-label="修改用户名"><Edit3 size={11} /></button>
+              </div>
+            )}
+            {nameError && <div className="account-name-error">{nameError}</div>}
             <div className="account-info-email">
-              <Mail size={13} />
-              {state.email}
+              <Mail size={11} />
+              <span>{state.email}</span>
             </div>
           </div>
         </section>

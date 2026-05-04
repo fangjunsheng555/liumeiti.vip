@@ -174,6 +174,15 @@ export default function Page() {
       .catch(() => setAuthUser(false));
   }, []);
 
+  // Lock body scroll while auth modal is open (prevents iOS keyboard
+  // from scrolling/jitter the page behind the modal)
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    if (authModal) document.body.style.overflow = "hidden";
+    else document.body.style.overflow = "";
+    return () => { document.body.style.overflow = ""; };
+  }, [authModal]);
+
   // Refresh captcha when auth modal opens (only for login/register)
   useEffect(() => {
     if (authModal === "login" || authModal === "register") {

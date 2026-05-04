@@ -62,17 +62,24 @@ export default function AdminPage() {
   const [balForm, setBalForm] = useState({ amount: "", reason: "" });
   const [balBusy, setBalBusy] = useState(false);
   const [balResult, setBalResult] = useState(null);
-  const [globalLog, setGlobalLog] = useState({ entries: [], total: 0, totalAdded: 0, totalDeducted: 0 });
+  const [globalLog, setGlobalLog] = useState({ entries: [], total: 0, totalAdded: 0, totalDeducted: 0, adminCount: 0, orderCount: 0 });
   const [logFilter, setLogFilter] = useState("all"); // all | add | deduct
+  const [logSource, setLogSource] = useState("all"); // all | admin | order
   const [logQuery, setLogQuery] = useState("");
   const [logLoading, setLogLoading] = useState(false);
 
-  const loadGlobalLog = useCallback(async (q, filter) => {
+  // All registered users
+  const [allUsers, setAllUsers] = useState({ users: [], total: 0 });
+  const [userListQuery, setUserListQuery] = useState("");
+  const [userListLoading, setUserListLoading] = useState(false);
+
+  const loadGlobalLog = useCallback(async (q, filter, source) => {
     setLogLoading(true);
     try {
       const params = new URLSearchParams();
       if (q) params.set("q", q);
       if (filter && filter !== "all") params.set("filter", filter);
+      if (source && source !== "all") params.set("source", source);
       const res = await fetch("/api/admin/balance-log?" + params.toString(), { credentials: "same-origin" });
       const data = await res.json();
       if (data.ok) {
@@ -81,6 +88,8 @@ export default function AdminPage() {
           total: data.total || 0,
           totalAdded: data.totalAdded || 0,
           totalDeducted: data.totalDeducted || 0,
+          adminCount: data.adminCount || 0,
+          orderCount: data.orderCount || 0,
         });
       }
     } catch (e) {} finally {
@@ -88,10 +97,28 @@ export default function AdminPage() {
     }
   }, []);
 
-  // Load global log when entering the users tab and after each adjustment
+  const loadAllUsers = useCallback(async (q) => {
+    setUserListLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (q) params.set("q", q);
+      const res = await fetch("/api/admin/users/list?" + params.toString(), { credentials: "same-origin" });
+      const data = await res.json();
+      if (data.ok) {
+        setAllUsers({ users: data.users || [], total: data.total || 0 });
+      }
+    } catch (e) {} finally {
+      setUserListLoading(false);
+    }
+  }, []);
+
+  // Load global log + user list when entering the users tab
   useEffect(() => {
-    if (authed && tab === "users") loadGlobalLog(logQuery, logFilter);
-  }, [authed, tab, loadGlobalLog, logFilter]);
+    if (authed && tab === "users") {
+      loadGlobalLog(logQuery, logFilter, logSource);
+      loadAllUsers(userListQuery);
+    }
+  }, [authed, tab, loadGlobalLog, loadAllUsers, logFilter, logSource]);
 
   async function loadUser(email) {
     if (!email) return;
@@ -117,9 +144,10 @@ export default function AdminPage() {
   }
 
   async function refreshAfterAdjust() {
-    // Re-load both the user view and global log
+    // Re-load user view, global log, and user list
     if (userInfo) await loadUser(userInfo.user.email);
-    await loadGlobalLog(logQuery, logFilter);
+    await loadGlobalLog(logQuery, logFilter, logSource);
+    await loadAllUsers(userListQuery);
   }
 
   async function adjustBalance(sign) {
@@ -431,6 +459,44 @@ export default function AdminPage() {
 
         {tab === "users" ? (
           <div className="admin-users-pane">
+            {/* All registered users */}
+            <div className="admin-userlist">
+              <div className="admin-userlist-head">
+                <h3>全部注册用户 <em>{allUsers.total}</em></h3>
+              </div>
+              <form
+                className="admin-search admin-search-mini"
+                onSubmit={(e) => { e.preventDefault(); loadAllUsers(userListQuery); }}
+              >
+                <Search size={13} />
+                <input
+                  value={userListQuery}
+                  onChange={(e) => setUserListQuery(e.target.value)}
+                  placeholder="按用户名 / 邮箱搜索"
+                />
+                <button type="submit" disabled={userListLoading}>
+                  {userListLoading ? <LoaderCircle size={11} className="spin-icon" /> : "搜索"}
+                </button>
+              </form>
+              <div className="admin-userlist-body">
+                {allUsers.users.length === 0 ? (
+                  <div className="admin-userlist-empty">{userListLoading ? "加载中..." : "暂无用户"}</div>
+                ) : allUsers.users.map((u) => (
+                  <button
+                    key={u.email}
+                    type="button"
+                    className="admin-userlist-item"
+                    onClick={() => { setUserQuery(u.email); loadUser(u.email); }}
+                  >
+                    <span className="admin-userlist-name">{u.username || "—"}</span>
+                    <span className="admin-userlist-email">{u.email}</span>
+                    <span className="admin-userlist-balance">¥{u.balance.toFixed(2)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* User detail / balance adjust */}
             <form
               className="admin-search"
               onSubmit={(e) => { e.preventDefault(); loadUser(userQuery); }}
@@ -513,7 +579,7 @@ export default function AdminPage() {
             {/* Global balance adjustment log — all users, all time */}
             <div className="admin-global-log">
               <div className="admin-global-log-head">
-                <h3>全部余额调整记录</h3>
+                <h3>全部余额变动记录</h3>
                 <div className="admin-global-log-stats">
                   <span className="stat-add">累计加 <b>+¥{globalLog.totalAdded.toFixed(2)}</b></span>
                   <span className="stat-deduct">累计减 <b>−¥{globalLog.totalDeducted.toFixed(2)}</b></span>
@@ -522,7 +588,7 @@ export default function AdminPage() {
               <div className="admin-global-log-toolbar">
                 <form
                   className="admin-search admin-search-mini"
-                  onSubmit={(e) => { e.preventDefault(); loadGlobalLog(logQuery, logFilter); }}
+                  onSubmit={(e) => { e.preventDefault(); loadGlobalLog(logQuery, logFilter, logSource); }}
                 >
                   <Search size={13} />
                   <input
@@ -548,6 +614,20 @@ export default function AdminPage() {
                     >{f.label}</button>
                   ))}
                 </div>
+                <div className="admin-global-log-filters">
+                  {[
+                    { v: "all", label: `全部来源 (${globalLog.total})` },
+                    { v: "admin", label: `工作人员 (${globalLog.adminCount})` },
+                    { v: "order", label: `用户消费 (${globalLog.orderCount})` },
+                  ].map((f) => (
+                    <button
+                      key={f.v}
+                      type="button"
+                      className={`admin-filter-btn${logSource === f.v ? " active" : ""}`}
+                      onClick={() => setLogSource(f.v)}
+                    >{f.label}</button>
+                  ))}
+                </div>
               </div>
               <div className="admin-tx-list">
                 {globalLog.entries.length === 0 ? (
@@ -555,7 +635,12 @@ export default function AdminPage() {
                 ) : globalLog.entries.map((tx) => (
                   <div key={tx.id} className={`admin-tx-item admin-global-log-item${tx.amount > 0 ? " positive" : " negative"}`}>
                     <div className="admin-tx-item-info">
-                      <strong>{tx.email}</strong>
+                      <div className="admin-global-log-row">
+                        <strong>{tx.email}</strong>
+                        <span className={`admin-source-tag source-${tx.source}`}>
+                          {tx.source === "admin" ? "工作人员" : tx.source === "order" ? "用户消费" : "其他"}
+                        </span>
+                      </div>
                       <small>{tx.reason} · {tx.createdAtBeijing}</small>
                     </div>
                     <div className="admin-global-log-amounts">
