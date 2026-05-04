@@ -116,7 +116,7 @@ export function buildCompletionEmailHtml({ order, brandName, siteDomain, siteUrl
               <ul style="margin:0;padding-left:18px;color:#134e4a;font-size:13px;line-height:1.85;">
                 <li>请妥善保存账号信息,避免泄露</li>
                 <li>使用过程中如出现异常,请及时联系客服</li>
-                <li>本订单 7 天内出现账号原因可联系客服处理</li>
+                <li>本订单全程售后保障，再次感谢您选择冒央会社！</li>
               </ul>
             </td></tr>
           </table>
