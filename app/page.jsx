@@ -55,8 +55,8 @@ const SITE_CONTENT = {
   heroTitleHighlight: " · Maoyang Taiwan Inc",
   heroDesc: "正版流媒体会员，全网最低价 · 30 分钟内极速到账。",
   heroStats: [
-    { num: "500,000+", label: "累计用户", icon: Users },
-    { num: "1,000,000+", label: "服务案例", icon: TrendingUp },
+    { num: "500k+", label: "累计用户", icon: Users },
+    { num: "1M+", label: "服务案例", icon: TrendingUp },
     { num: "Top 3", label: "行业排名", icon: Award },
     { num: "2020至今", label: "专注服务", icon: Clock },
   ],
