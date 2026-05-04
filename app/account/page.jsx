@@ -8,7 +8,7 @@ import {
   AlertTriangle, Wallet, TrendingDown, TrendingUp,
 } from "lucide-react";
 
-const STATUS_LABEL = { received: "订单已收到", completed: "订单已完成", invalid: "订单无效" };
+const STATUS_LABEL = { received: "订单已收到", completed: "订单已完成", invalid: "订单无效·未收到付款" };
 
 function copy(text) {
   if (typeof window === "undefined") return;
@@ -126,7 +126,7 @@ export default function AccountPage() {
               )}
               <div className="account-tx-note">
                 <AlertTriangle size={11} />
-                余额仅支持工作人员后台调整,如需充值请联系客服
+                余额仅用于网站会员服务下单时结算,如需充值请联系客服
               </div>
             </div>
           )}
