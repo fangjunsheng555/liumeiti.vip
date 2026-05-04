@@ -206,8 +206,8 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
                 <tr><td style="padding:16px 18px;">
                   <div style="font-size:13px;font-weight:800;color:#0f766e;margin-bottom:8px;">接下来:</div>
                   <ol style="margin:0;padding-left:18px;color:#134e4a;font-size:13px;line-height:1.85;">
-                    <li>工作人员将在 30 分钟内核对订单并进行会员订阅</li>
-                    <li>必要时工作人员将联系你，请保持邮箱及联系方式畅通</li>
+                    <li>工作人员将在 30 分钟内处理订单</li>
+                    <li>必要时将通过邮箱/联系方式联系您</li>
                     <li>服务开通成功后您将再次收到邮件，也可点击订单号或访问 <a href="${escapeHtml(siteUrl || "https://" + siteDomain)}" style="color:#0f766e;font-weight:700;">${escapeHtml(siteDomain)}</a> 查询订单</li>
                   </ol>
                 </td></tr>
