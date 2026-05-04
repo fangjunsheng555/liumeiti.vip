@@ -289,7 +289,7 @@ export default function CheckoutPage() {
                         return (
                           <div key={p.key} className="order-field-grid">
                             <label className="order-field">
-                              <span>{p.title} · 账号</span>
+                              <span>{p.title} · 账号/邮箱</span>
                               <input
                                 value={f.account || ""}
                                 onChange={(e) => updateProductField(p.key, "account", e.target.value)}
