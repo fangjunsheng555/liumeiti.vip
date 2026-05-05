@@ -24,6 +24,9 @@ export async function POST(request) {
   if (!user || !verifyPassword(password, user.passwordHash)) {
     return Response.json({ ok: false, error: "invalid_credentials" }, { status: 401 });
   }
+  if (user.banned) {
+    return Response.json({ ok: false, error: "account_banned" }, { status: 403 });
+  }
 
   // Backfill: ensure email is in the registered set + user has a username
   // (for accounts created before these fields existed).

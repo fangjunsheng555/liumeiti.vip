@@ -43,6 +43,7 @@ import {
   Award,
   TrendingUp,
   Clock,
+  Wallet,
   X,
   Zap,
 } from "lucide-react";
@@ -165,12 +166,12 @@ export default function Page() {
 
   const { cart, toggleCart: toggleCartStore, removeFromCart } = useCart();
 
-  // Check auth status on mount
+  // Check auth status on mount + load balance
   useEffect(() => {
     if (typeof window === "undefined") return;
     fetch("/api/auth/me", { credentials: "same-origin" })
       .then((r) => r.json())
-      .then((d) => setAuthUser(d.ok ? { email: d.email } : false))
+      .then((d) => setAuthUser(d.ok ? { email: d.email, username: d.username, balance: Number(d.balance || 0) } : false))
       .catch(() => setAuthUser(false));
   }, []);
 
@@ -434,15 +435,11 @@ export default function Page() {
 
           <div className="header-auth">
             {authUser && authUser.email ? (
-              <a href="/account" className="header-auth-btn header-auth-user" title={authUser.email}>
-                <span className="header-auth-avatar">{authUser.email[0].toUpperCase()}</span>
-                <span className="header-auth-label">个人中心</span>
+              <a href="/account" className="header-balance-chip" title={`${authUser.username || authUser.email} · 个人中心`}>
+                <Wallet size={13} />
+                <span>¥{Number(authUser.balance || 0).toFixed(2)}</span>
               </a>
-            ) : (
-              <button type="button" className="header-auth-btn" onClick={() => setAuthModal("login")}>
-                登录 / 注册
-              </button>
-            )}
+            ) : null}
           </div>
         </div>
       </header>
@@ -463,10 +460,17 @@ export default function Page() {
                 <Zap size={14} />
                 立即开通
               </a>
-              <a href="#order-query" className="hero-pair-btn secondary">
-                <Search size={14} />
-                查询订单
-              </a>
+              {authUser && authUser.email ? (
+                <a href="/account" className="hero-pair-btn secondary">
+                  <Users size={14} />
+                  个人中心
+                </a>
+              ) : (
+                <button type="button" className="hero-pair-btn secondary" onClick={() => setAuthModal("login")}>
+                  <Users size={14} />
+                  登录 / 注册
+                </button>
+              )}
             </div>
 
             <div className="hero-microtrust">

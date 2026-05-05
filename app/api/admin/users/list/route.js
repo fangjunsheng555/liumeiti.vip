@@ -28,6 +28,7 @@ export async function GET(request) {
       email: u.email || "",
       username: u.username || "",
       balance: Number(u.balance || 0),
+      banned: !!u.banned,
       createdAtBeijing: u.createdAtBeijing || "",
       createdAt: u.createdAt || "",
     }))

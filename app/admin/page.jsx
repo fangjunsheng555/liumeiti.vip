@@ -54,7 +54,9 @@ export default function AdminPage() {
   const [batchConfirm, setBatchConfirm] = useState(null); // null | "delete" | "invalid"
 
   // User/balance management
-  const [tab, setTab] = useState("orders"); // "orders" | "users"
+  const [tab, setTab] = useState("orders"); // "orders" | "users" | "balance"
+  const [confirmUserAction, setConfirmUserAction] = useState(null); // { email, action: "ban" | "unban" | "delete" }
+  const [userActionBusy, setUserActionBusy] = useState(false);
   const [userQuery, setUserQuery] = useState("");
   const [userInfo, setUserInfo] = useState(null); // {user, transactions}
   const [userLoading, setUserLoading] = useState(false);
@@ -112,13 +114,42 @@ export default function AdminPage() {
     }
   }, []);
 
-  // Load global log + user list when entering the users tab
+  // Load user list when entering users tab; load global log on balance tab
   useEffect(() => {
-    if (authed && tab === "users") {
-      loadGlobalLog(logQuery, logFilter, logSource);
-      loadAllUsers(userListQuery);
-    }
+    if (!authed) return;
+    if (tab === "users") loadAllUsers(userListQuery);
+    if (tab === "balance") loadGlobalLog(logQuery, logFilter, logSource);
   }, [authed, tab, loadGlobalLog, loadAllUsers, logFilter, logSource]);
+
+  async function executeUserAction() {
+    if (!confirmUserAction || userActionBusy) return;
+    setUserActionBusy(true);
+    try {
+      const { email, action } = confirmUserAction;
+      let res;
+      if (action === "delete") {
+        res = await fetch(`/api/admin/users/${encodeURIComponent(email)}`, {
+          method: "DELETE", credentials: "same-origin",
+        });
+      } else {
+        res = await fetch(`/api/admin/users/${encodeURIComponent(email)}`, {
+          method: "PATCH", credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ banned: action === "ban" }),
+        });
+      }
+      const data = await res.json();
+      if (data.ok) {
+        setConfirmUserAction(null);
+        loadAllUsers(userListQuery);
+        if (userInfo && userInfo.user.email === confirmUserAction.email && action === "delete") {
+          setUserInfo(null);
+        }
+      }
+    } catch (e) {} finally {
+      setUserActionBusy(false);
+    }
+  }
 
   async function loadUser(email) {
     if (!email) return;
@@ -454,7 +485,8 @@ export default function AdminPage() {
       <main className="admin-main">
         <div className="admin-tabs">
           <button type="button" className={`admin-tab-btn${tab === "orders" ? " active" : ""}`} onClick={() => setTab("orders")}>订单管理</button>
-          <button type="button" className={`admin-tab-btn${tab === "users" ? " active" : ""}`} onClick={() => setTab("users")}>用户余额</button>
+          <button type="button" className={`admin-tab-btn${tab === "users" ? " active" : ""}`} onClick={() => setTab("users")}>用户管理</button>
+          <button type="button" className={`admin-tab-btn${tab === "balance" ? " active" : ""}`} onClick={() => setTab("balance")}>余额变动</button>
         </div>
 
         {tab === "users" ? (
@@ -482,16 +514,34 @@ export default function AdminPage() {
                 {allUsers.users.length === 0 ? (
                   <div className="admin-userlist-empty">{userListLoading ? "加载中..." : "暂无用户"}</div>
                 ) : allUsers.users.map((u) => (
-                  <button
-                    key={u.email}
-                    type="button"
-                    className="admin-userlist-item"
-                    onClick={() => { setUserQuery(u.email); loadUser(u.email); }}
-                  >
-                    <span className="admin-userlist-name">{u.username || "—"}</span>
-                    <span className="admin-userlist-email">{u.email}</span>
-                    <span className="admin-userlist-balance">¥{u.balance.toFixed(2)}</span>
-                  </button>
+                  <div key={u.email} className={`admin-userlist-item${u.banned ? " banned" : ""}`}>
+                    <button
+                      type="button"
+                      className="admin-userlist-main"
+                      onClick={() => { setUserQuery(u.email); loadUser(u.email); }}
+                    >
+                      <span className="admin-userlist-name">
+                        {u.username || "—"}
+                        {u.banned && <em className="admin-userlist-banned">已封禁</em>}
+                      </span>
+                      <span className="admin-userlist-email">{u.email}</span>
+                      <span className="admin-userlist-balance">¥{u.balance.toFixed(2)}</span>
+                    </button>
+                    <div className="admin-userlist-actions">
+                      <button
+                        type="button"
+                        className="admin-userlist-action ban"
+                        title={u.banned ? "解除封禁" : "封禁账户"}
+                        onClick={() => setConfirmUserAction({ email: u.email, action: u.banned ? "unban" : "ban" })}
+                      >{u.banned ? "解禁" : "封禁"}</button>
+                      <button
+                        type="button"
+                        className="admin-userlist-action delete"
+                        title="删除账户"
+                        onClick={() => setConfirmUserAction({ email: u.email, action: "delete" })}
+                      ><Trash2 size={11} /></button>
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
@@ -576,7 +626,9 @@ export default function AdminPage() {
               </>
             )}
 
-            {/* Global balance adjustment log — all users, all time */}
+          </div>
+        ) : tab === "balance" ? (
+          <div className="admin-balance-pane">
             <div className="admin-global-log">
               <div className="admin-global-log-head">
                 <h3>全部余额变动记录</h3>
@@ -631,7 +683,7 @@ export default function AdminPage() {
               </div>
               <div className="admin-tx-list">
                 {globalLog.entries.length === 0 ? (
-                  <div className="admin-tx-item"><div className="admin-tx-item-info"><small>暂无调整记录</small></div></div>
+                  <div className="admin-tx-item"><div className="admin-tx-item-info"><small>暂无变动记录</small></div></div>
                 ) : globalLog.entries.map((tx) => (
                   <div key={tx.id} className={`admin-tx-item admin-global-log-item${tx.amount > 0 ? " positive" : " negative"}`}>
                     <div className="admin-tx-item-info">
@@ -966,6 +1018,39 @@ export default function AdminPage() {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ban / delete user confirmation */}
+      {confirmUserAction && (
+        <div className="admin-modal-mask" onClick={() => !userActionBusy && setConfirmUserAction(null)}>
+          <div className="admin-confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="admin-confirm-icon">
+              {confirmUserAction.action === "delete" ? <Trash2 size={22} /> : <AlertTriangle size={22} />}
+            </div>
+            <h3>
+              {confirmUserAction.action === "delete" && "删除该用户?"}
+              {confirmUserAction.action === "ban" && "封禁该用户?"}
+              {confirmUserAction.action === "unban" && "解除封禁?"}
+            </h3>
+            <p className="admin-confirm-email">{confirmUserAction.email}</p>
+            <p className="admin-confirm-text">
+              {confirmUserAction.action === "delete" && "用户记录、余额明细将被永久删除,无法恢复。订单数据保留。"}
+              {confirmUserAction.action === "ban" && "封禁后用户无法登录现有账户。可随时解除。"}
+              {confirmUserAction.action === "unban" && "解除后用户可正常登录使用账户。"}
+            </p>
+            <div className="admin-confirm-actions">
+              <button type="button" onClick={() => setConfirmUserAction(null)} disabled={userActionBusy}>取消</button>
+              <button
+                type="button"
+                className={confirmUserAction.action === "delete" ? "danger" : confirmUserAction.action === "ban" ? "warn" : "primary"}
+                onClick={executeUserAction}
+                disabled={userActionBusy}
+              >
+                {userActionBusy ? <><LoaderCircle size={13} className="spin-icon" />处理中</> : "确认"}
+              </button>
             </div>
           </div>
         </div>

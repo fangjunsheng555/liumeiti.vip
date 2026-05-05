@@ -93,6 +93,8 @@ export async function GET(request) {
     ok: true,
     email: sessionEmail,
     username: username || "",
+    balance: Number(user?.balance || 0),
+    banned: !!user?.banned,
     orders: myOrders,
   });
 }
