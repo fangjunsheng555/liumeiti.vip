@@ -11,7 +11,7 @@ export const PRODUCTS = [
     key: "spotify",
     image: "/products/spotify.jpg",
     title: "Spotify",
-    subtitle: "欧美日高家庭无损播客",
+    subtitle: "欧美日家庭无损播客",
     amount: 128,
     cycle: "1年",
     price: "仅需¥128/年",
