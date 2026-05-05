@@ -244,7 +244,7 @@ export default function CheckoutPage() {
               <div className="checkout-trust">
                 <span><Lock size={12} />信息加密</span>
                 <span><ShieldCheck size={12} />担保支付</span>
-                <span><Zap size={12} />30 分钟内开通</span>
+                <span><Zap size={12} />10 分钟内开通</span>
                 <span><RefreshCw size={12} />7 天内可退</span>
               </div>
 
