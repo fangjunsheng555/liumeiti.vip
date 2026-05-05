@@ -530,7 +530,7 @@ export default function CheckoutPage() {
                   ? `请使用 TRON (TRC20) 网络转账精确金额 ${finalUsdt} USDT 到下方地址,付款完成后请记得返回本页面点击「付款完成」按钮提交订单。`
                   : paymentMethod === "balance"
                   ? `点击下方「确认扣款并提交订单」后,系统将自动从您的账户余额(¥${authedUser?.balance.toFixed(2) || "0.00"})扣除 ¥${finalCny},随后提交订单。`
-                  : "请按上方金额完成支付宝付款。付款完成后请记得返回本页面点击「付款完成」按钮,充值人员 30 分钟内处理。"}
+                  : "请按上方金额完成支付宝付款。付款完成后请记得返回本页面点击「付款完成」按钮,充值人员 10 分钟内处理。"}
               </div>
 
               {/* QR 二维码 — 只对支付宝/USDT 显示,余额支付不需要 */}
@@ -617,7 +617,7 @@ export default function CheckoutPage() {
               <CheckCircle2 size={56} />
             </div>
             <h2>订单已提交</h2>
-            <p>客服将在 30 分钟内联系您。订单确认邮件已发送至您的邮箱,请保持邮箱及联系方式畅通。</p>
+            <p>客服将在 10 分钟内联系您。订单确认邮件已发送至您的邮箱,请保持邮箱及联系方式畅通。</p>
 
             {orderResults[0] && (
               <div className="order-result-single">
