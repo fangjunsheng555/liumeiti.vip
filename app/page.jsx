@@ -55,7 +55,7 @@ const SITE_CONTENT = {
   heroBadge: "来自中国台湾 · 专注流媒体会员6年",
   heroTitleLine1: "冒央会社",
   heroTitleHighlight: "·流媒体会员服务",
-  heroDesc: "正版流媒体会员，全网最低价 · 30 分钟内极速到账",
+  heroDesc: "正版流媒体会员，全网最低价 · 付款后极速到账",
   heroStats: [
     { num: "500k+", label: "累计用户", icon: Users },
     { num: "1M+", label: "服务案例", icon: TrendingUp },
@@ -65,13 +65,13 @@ const SITE_CONTENT = {
   layoutCards: [
     ["选择所需服务", "Spotify / Netflix / Disney+ / Hbomax / 机场节点"],
     ["查看详情介绍", "请查阅我们的服务介绍，确保服务满足您的需求"],
-    ["付款下单", "正确填写信息后扫码付款，付款完成提交订单，工作人员将在30分钟内处理"],
+    ["付款下单", "正确填写信息后扫码付款，付款完成提交订单，工作人员将在10分钟内处理"],
     ["售后服务", "成交只是开始，专业团队全程售后保障用户使用体验"],
   ],
   faq: [
     {
       q: "下单后多久能用？",
-      a: "支付完成后客服将在 30 分钟内处理（高峰期不超过 1 小时），通常 5-15 分钟即可使用。所有开通均由真人客服核对，确保稳定准确。",
+      a: "支付完成后客服将在 10 分钟内处理（高峰期不超过 1 小时），通常 5-15 分钟即可使用。所有开通均由真人客服核对，确保稳定准确。",
     },
     {
       q: "账号安全有保障吗？会被封禁吗？",
@@ -113,9 +113,9 @@ const SITE_CONTENT = {
     { icon: Lock, title: "担保支付", desc: "全程加密更安全" },
   ],
   testimonials: [
-    { name: "陈**", initial: "陈", region: "首尔", service: "Spotify 家庭版", rating: 5, date: "5分钟前", text: "用了快两年了，从没出过问题，老板人也好有问题秒回。比某宝便宜一大截，强推！" },
-    { name: "Chueng****", initial: "L", region: "台北", service: "Netflix 4K", rating: 5, date: "15分钟前", text: "4K 杜比真的清晰，独立车位不会被踢，全家一起看也够用。客服处理快得离谱，5 分钟就开好了。" },
-    { name: "Mia****", initial: "M", region: "深圳", service: "机场节点", rating: 5, date: "六小时前", text: "看流媒体4K 不缓冲，日常使用其他app也很流畅。第一次买就续了一年，¥98 真的没谁了。" },
+    { name: "陈**", initial: "陈", region: "首尔", service: "Spotify 家庭版", rating: 5, date: "8分钟前", text: "用了快两年了，从没出过问题，老板人也好有问题秒回。比某宝便宜一大截，强推！" },
+    { name: "Chueng****", initial: "L", region: "台北", service: "Netflix 4K", rating: 5, date: "30分钟前", text: "4K 杜比真的清晰，独立车位不会被踢，全家一起看也够用。客服处理快得离谱，5 分钟就开好了。" },
+    { name: "Mia****", initial: "M", region: "深圳", service: "机场节点", rating: 5, date: "9小时前", text: "看流媒体4K 不缓冲，日常使用其他app也很流畅。第一次买就续了一年，¥98 真的没谁了。" },
     { name: "張*", initial: "張", region: "香港", service: "Disney+", rating: 5, date: "一天前", text: "本来还在犹豫，下单完 10 分钟就能用了，体验很顶。已经推荐给好几个朋友。" },
     { name: "Yammy***", initial: "Y", region: "伦敦", service: "HBO Max", rating: 5, date: "三天前", text: "第一次买怕被骗，结果非常正规，客服全程指导，账号到现在用了半年都很稳。" },
     { name: "李**", initial: "李", region: "北京", service: "Spotify+Netflix 4K+机场节点", rating: 5, date: "一周前", text: "组合下单还便宜了一些，听歌刷剧科学上网一站搞定，售后也跟上了，下次还来。" },
@@ -476,7 +476,7 @@ export default function Page() {
             <div className="hero-microtrust">
               <span><Zap size={13} />即时开通</span>
               <span className="dot" />
-              <span><ShieldCheck size={13} />7 天退款</span>
+              <span><ShieldCheck size={13} />7 天内退款</span>
               <span className="dot" />
               <span><Sparkles size={13} />全网最低价</span>
             </div>
