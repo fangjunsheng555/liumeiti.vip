@@ -74,6 +74,8 @@ function normalizeOrder(order) {
     contact: order.contact || "",
     remark: order.remark || "",
     staffNotes: order.staffNotes || "",
+    staffAudit: Array.isArray(order.staffAudit) ? order.staffAudit : [],
+    lastStaffId: Array.isArray(order.staffAudit) && order.staffAudit[0]?.staffId ? Number(order.staffAudit[0].staffId) : null,
   };
 }
 

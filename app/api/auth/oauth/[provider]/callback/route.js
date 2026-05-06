@@ -1,9 +1,12 @@
-import { finishOAuth, oauthStateCookieName } from "../../_shared.js";
+import { finishOAuth, oauthStateCookieName, oauthStateCookie } from "../../_shared.js";
 
 function redirectHome(request, status, cookie = "") {
   const url = new URL("/", request.url);
   url.searchParams.set("auth", status);
-  const response = Response.redirect(url);
+  const response = new Response(null, {
+    status: 302,
+    headers: { Location: url.toString() },
+  });
   if (cookie) response.headers.append("Set-Cookie", cookie);
   return response;
 }
@@ -23,7 +26,7 @@ async function handleOAuthCallback(request, provider, values) {
 
   try {
     const result = await finishOAuth(provider, request, code);
-    const clearState = `${oauthStateCookieName()}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+    const clearState = oauthStateCookie(request, "", 0);
     const response = redirectHome(request, result.isNew ? "oauth_new" : "oauth_ok", result.cookie);
     response.headers.append("Set-Cookie", clearState);
     return response;

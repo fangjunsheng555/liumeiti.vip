@@ -948,6 +948,7 @@ export default function AdminPage() {
                     key={w.id}
                     type="button"
                     className={`admin-withdraw-item status-${w.status}`}
+                    data-staff-id={w.updatedByStaffId ? String(w.updatedByStaffId) : ""}
                     onClick={() => openWithdrawal(w.id)}
                   >
                     <span>
@@ -1072,7 +1073,10 @@ export default function AdminPage() {
               ) : codeBatches.map((batch) => (
                 <button key={batch.id} type="button" className="admin-code-batch-item" onClick={() => setActiveCodeBatch(batch)}>
                   <span>
-                    <strong>{batch.type === "service" ? "服务码批次" : "余额码批次"} · {batch.quantity || batch.codes?.length || 0} 个</strong>
+                    <strong>
+                      {batch.createdByStaffId && <span className="staff-mini-badge inline">{batch.createdByStaffId}</span>}
+                      {batch.type === "service" ? "服务码批次" : "余额码批次"} · {batch.quantity || batch.codes?.length || 0} 个
+                    </strong>
                     <small>{batch.createdAtBeijing || batch.createdAt} · 备注: {batch.remark || "无"}</small>
                   </span>
                   <span>
@@ -1148,18 +1152,6 @@ export default function AdminPage() {
                 </div>
               ))}
             </div>
-            <div className="admin-action-log">
-              <div className="admin-tx-list-label">后台操作留痕</div>
-              {staffPane.actions.length === 0 ? (
-                <div className="admin-userlist-empty">暂无操作记录</div>
-              ) : staffPane.actions.map((log) => (
-                <div key={log.id} className="admin-action-log-item">
-                  <strong>#{log.staffId} · {log.action}</strong>
-                  <span>{log.target}</span>
-                  <small>{log.createdAtBeijing}</small>
-                </div>
-              ))}
-            </div>
           </div>
         ) : tab === "balance" ? (
           <div className="admin-balance-pane">
@@ -1223,6 +1215,7 @@ export default function AdminPage() {
                     <div className="admin-tx-item-info">
                       <div className="admin-global-log-row">
                         <strong>{tx.email}</strong>
+                        {tx.staffId && <span className="staff-mini-badge">{tx.staffId}</span>}
                         <span className={`admin-source-tag source-${tx.source}`}>
                           {tx.source === "admin" ? "工作人员" : tx.source === "order" ? "用户消费" : "其他"}
                         </span>
@@ -1352,9 +1345,12 @@ export default function AdminPage() {
                   <div className="admin-order-content">
                     <div className="admin-order-top">
                       <span className="admin-order-id">{o.orderId}</span>
-                      <span className={`admin-order-status status-${o.status}`}>
-                        {o.status === "completed" ? <CheckCircle2 size={11} /> : o.status === "invalid" ? <AlertTriangle size={11} /> : <Clock size={11} />}
-                        {STATUS_LABEL[o.status]}
+                      <span className="admin-card-badges">
+                        {o.lastStaffId && <span className="staff-mini-badge">{o.lastStaffId}</span>}
+                        <span className={`admin-order-status status-${o.status}`}>
+                          {o.status === "completed" ? <CheckCircle2 size={11} /> : o.status === "invalid" ? <AlertTriangle size={11} /> : <Clock size={11} />}
+                          {STATUS_LABEL[o.status]}
+                        </span>
                       </span>
                     </div>
                     <div className="admin-order-mid">

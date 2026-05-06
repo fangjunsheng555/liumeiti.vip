@@ -8,11 +8,40 @@ export function oauthStateCookieName() { return STATE_COOKIE; }
 export function siteOrigin(request) {
   const envUrl = process.env.SITE_URL || process.env.NEXT_PUBLIC_SITE_URL;
   if (envUrl) return envUrl.replace(/\/$/, "");
+  const domain = String(process.env.SITE_DOMAIN || "").trim().replace(/^https?:\/\//, "").replace(/\/$/, "");
+  if (domain) return "https://" + domain;
   return new URL(request.url).origin;
 }
 
 export function callbackUrl(request, provider) {
   return siteOrigin(request) + "/api/auth/oauth/" + provider + "/callback";
+}
+
+function sharedCookieDomain(request) {
+  const configured = process.env.SITE_URL || process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_DOMAIN || "";
+  const rawHost = configured
+    ? String(configured).replace(/^https?:\/\//, "").replace(/\/.*$/, "")
+    : new URL(request.url).hostname;
+  const host = rawHost.replace(/^www\./, "").toLowerCase();
+  if (!host || host === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(host) || !host.includes(".")) return "";
+  const parts = host.split(".");
+  if (parts.length < 2) return "";
+  return "." + parts.slice(-2).join(".");
+}
+
+export function oauthStateCookie(request, state, maxAge = 600) {
+  const attrs = [
+    `${STATE_COOKIE}=${encodeURIComponent(state)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    `Max-Age=${maxAge}`,
+  ];
+  const configured = process.env.SITE_URL || process.env.NEXT_PUBLIC_SITE_URL || "";
+  if (request.url.startsWith("https://") || configured.startsWith("https://")) attrs.push("Secure");
+  const domain = sharedCookieDomain(request);
+  if (domain) attrs.push("Domain=" + domain);
+  return attrs.join("; ");
 }
 
 export function providerConfigured(provider) {

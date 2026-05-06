@@ -204,7 +204,7 @@ export default function Page() {
     if (authModal === "login" || authModal === "register") {
       setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
     }
-    if (authModal) {
+    if (authModal && !authError && !authNotice) {
       setAuthError("");
       setAuthNotice("");
     }
@@ -222,6 +222,19 @@ export default function Page() {
     if (params.get("auth") && params.get("auth").includes("not_configured")) {
       setAuthModal("login");
       setAuthError("第三方登录尚未配置,请先使用邮箱登录或注册。");
+    }
+    const oauthErrorMap = {
+      invalid_oauth_state: "\u0047\u006f\u006f\u0067\u006c\u0065 \u767b\u5f55\u72b6\u6001\u5df2\u5931\u6548\uff0c\u8bf7\u91cd\u65b0\u70b9\u51fb Google \u767b\u5f55\u3002",
+      invalid_client: "\u0047\u006f\u006f\u0067\u006c\u0065 Client ID \u6216 Client Secret \u4e0d\u5339\u914d\uff0c\u8bf7\u68c0\u67e5 Vercel \u73af\u5883\u53d8\u91cf\u548c Google Cloud OAuth \u5ba2\u6237\u7aef\u3002",
+      redirect_uri_mismatch: "\u0047\u006f\u006f\u0067\u006c\u0065 \u56de\u8c03\u5730\u5740\u4e0d\u5339\u914d\uff0c\u8bf7\u5728 Google Cloud \u4e2d\u6dfb\u52a0 https://liumeiti.vip/api/auth/oauth/google/callback\u3002",
+      access_denied: "\u4f60\u53d6\u6d88\u4e86 Google \u6388\u6743\u3002",
+      oauth_failed: "\u0047\u006f\u006f\u0067\u006c\u0065 \u767b\u5f55\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u6216\u68c0\u67e5 OAuth \u914d\u7f6e\u3002",
+      email_not_verified: "\u0047\u006f\u0067\u006c\u0065 \u90ae\u7bb1\u672a\u9a8c\u8bc1\uff0c\u6682\u65f6\u65e0\u6cd5\u767b\u5f55\u3002",
+    };
+    const authStatus = params.get("auth");
+    if (oauthErrorMap[authStatus]) {
+      setAuthModal("login");
+      setAuthError(oauthErrorMap[authStatus]);
     }
   }, []);
 
