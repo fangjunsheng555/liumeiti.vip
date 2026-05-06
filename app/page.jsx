@@ -688,7 +688,7 @@ export default function Page() {
             </div>
             <form className="redeem-card-form" onSubmit={submitHomeRedeem}>
               <label>
-                <span>兑换码</span>
+                <span></span>
                 <input
                   value={redeemInput}
                   onChange={(e) => {
