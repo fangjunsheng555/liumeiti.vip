@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, importPKCS8, jwtVerify, SignJWT } from "jose";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 import { clean, ensureOAuthUser, signSession, setCookieValue } from "../../_utils.js";
 
 const STATE_COOKIE = "lm_oauth_state";
@@ -17,9 +17,6 @@ export function callbackUrl(request, provider) {
 
 export function providerConfigured(provider) {
   if (provider === "google") return Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
-  if (provider === "apple") {
-    return Boolean(process.env.APPLE_CLIENT_ID && process.env.APPLE_TEAM_ID && process.env.APPLE_KEY_ID && process.env.APPLE_PRIVATE_KEY);
-  }
   return false;
 }
 
@@ -34,31 +31,7 @@ export function authUrl(provider, request, state) {
     url.searchParams.set("prompt", "select_account");
     return url;
   }
-  if (provider === "apple") {
-    const url = new URL("https://appleid.apple.com/auth/authorize");
-    url.searchParams.set("client_id", process.env.APPLE_CLIENT_ID || "");
-    url.searchParams.set("redirect_uri", callbackUrl(request, provider));
-    url.searchParams.set("response_type", "code");
-    url.searchParams.set("response_mode", "form_post");
-    url.searchParams.set("scope", "name email");
-    url.searchParams.set("state", state);
-    return url;
-  }
   return null;
-}
-
-async function appleClientSecret() {
-  const privateKey = String(process.env.APPLE_PRIVATE_KEY || "").replace(/\\n/g, "\n");
-  const key = await importPKCS8(privateKey, "ES256");
-  return new SignJWT({
-    iss: process.env.APPLE_TEAM_ID,
-    aud: "https://appleid.apple.com",
-    sub: process.env.APPLE_CLIENT_ID,
-  })
-    .setProtectedHeader({ alg: "ES256", kid: process.env.APPLE_KEY_ID })
-    .setIssuedAt()
-    .setExpirationTime("180d")
-    .sign(key);
 }
 
 async function exchangeCode(provider, request, code) {
@@ -71,10 +44,6 @@ async function exchangeCode(provider, request, code) {
     url = "https://oauth2.googleapis.com/token";
     body.set("client_id", process.env.GOOGLE_CLIENT_ID || "");
     body.set("client_secret", process.env.GOOGLE_CLIENT_SECRET || "");
-  } else if (provider === "apple") {
-    url = "https://appleid.apple.com/auth/token";
-    body.set("client_id", process.env.APPLE_CLIENT_ID || "");
-    body.set("client_secret", await appleClientSecret());
   }
   const res = await fetch(url, {
     method: "POST",
@@ -97,14 +66,6 @@ async function verifyIdToken(provider, idToken) {
     const { payload } = await jwtVerify(idToken, jwks, {
       issuer: ["https://accounts.google.com", "accounts.google.com"],
       audience: process.env.GOOGLE_CLIENT_ID,
-    });
-    return payload;
-  }
-  if (provider === "apple") {
-    const jwks = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
-    const { payload } = await jwtVerify(idToken, jwks, {
-      issuer: "https://appleid.apple.com",
-      audience: process.env.APPLE_CLIENT_ID,
     });
     return payload;
   }

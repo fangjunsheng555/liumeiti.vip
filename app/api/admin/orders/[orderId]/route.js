@@ -1,6 +1,7 @@
 import {
   getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
-  getCookieFromRequest, verifySession, formatBeijingTime, clean,
+  getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
+  pushAdminActionLog, formatBeijingTime, clean,
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
 
@@ -83,6 +84,7 @@ async function sendTelegramNotice(text) {
 // body: { status, staffNotes, items: [{index, account, password, staffAccount, staffPassword}] }
 export async function PATCH(request, { params }) {
   if (!adminOk(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const actor = adminActorFromRequest(request);
 
   const { orderId } = await params;
   let body = {};
@@ -153,9 +155,28 @@ export async function PATCH(request, { params }) {
     }
   }
 
+  order.staffAudit = Array.isArray(order.staffAudit) ? order.staffAudit : [];
+  order.staffAudit.unshift({
+    id: "OA" + Date.now().toString(36).toUpperCase(),
+    staffId: actor.staffId,
+    staffUsername: actor.staffUsername,
+    label: adminActorLabel(actor),
+    action: "update",
+    status: newStatus || order.status,
+    createdAt: new Date().toISOString(),
+    createdAtBeijing: formatBeijingTime(new Date()),
+  });
+  order.staffAudit = order.staffAudit.slice(0, 30);
+
   // Save back
   const saved = await setOrderAt(index, order);
   if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
+  await pushAdminActionLog({
+    action: "order_update",
+    actor,
+    target: "order:" + orderId,
+    detail: { status: newStatus || order.status },
+  });
 
   // If transitioning to completed AND not already completed, send completion email.
   // Telegram is NOT pinged for staff changes (only initial new orders).
@@ -175,6 +196,7 @@ export async function PATCH(request, { params }) {
 // filtered from query/account/admin lists; stays out permanently).
 export async function DELETE(request, { params }) {
   if (!adminOk(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const actor = adminActorFromRequest(request);
 
   const { orderId } = await params;
   const all = await getAllOrdersWithIndex();
@@ -187,8 +209,17 @@ export async function DELETE(request, { params }) {
   }
   if (!target) return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
 
-  const ok = await softDeleteOrderAt(target.index, orderId);
+  const ok = await softDeleteOrderAt(target.index, orderId, {
+    deletedByStaffId: actor.staffId,
+    deletedByStaffUsername: actor.staffUsername,
+  });
   if (!ok) return Response.json({ ok: false, error: "delete_failed" }, { status: 500 });
+  await pushAdminActionLog({
+    action: "order_delete",
+    actor,
+    target: "order:" + orderId,
+    detail: { email: target.order.email || "" },
+  });
 
   // Telegram is intentionally NOT pinged for staff actions (only new orders trigger it).
   return Response.json({ ok: true, deleted: orderId });

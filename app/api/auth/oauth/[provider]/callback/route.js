@@ -37,9 +37,3 @@ export async function GET(request, { params }) {
   const url = new URL(request.url);
   return handleOAuthCallback(request, provider, url.searchParams);
 }
-
-export async function POST(request, { params }) {
-  const { provider } = await params;
-  const form = await request.formData();
-  return handleOAuthCallback(request, provider, form);
-}

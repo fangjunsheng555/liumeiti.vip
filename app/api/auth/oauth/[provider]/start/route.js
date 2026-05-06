@@ -9,14 +9,20 @@ function redirectHome(request, status) {
 
 export async function GET(request, { params }) {
   const { provider } = await params;
+  const requestUrl = new URL(request.url);
+  const configuredSite = (process.env.SITE_URL || process.env.NEXT_PUBLIC_SITE_URL || "").replace(/\/$/, "");
+  if (configuredSite) {
+    const canonical = new URL(configuredSite);
+    if (requestUrl.host !== canonical.host) {
+      const target = new URL(requestUrl.pathname + requestUrl.search, canonical.origin);
+      return Response.redirect(target);
+    }
+  }
   if (!providerConfigured(provider)) return redirectHome(request, provider + "_not_configured");
   const state = provider + ":" + randomBytes(18).toString("base64url");
   const url = authUrl(provider, request, state);
   if (!url) return redirectHome(request, "unsupported_provider");
   const response = Response.redirect(url);
-  const configuredSite = process.env.SITE_URL || process.env.NEXT_PUBLIC_SITE_URL || "";
-  const isHttps = request.url.startsWith("https://") || configuredSite.startsWith("https://");
-  const sameSite = provider === "apple" && isHttps ? "SameSite=None; Secure" : "SameSite=Lax";
-  response.headers.append("Set-Cookie", `${oauthStateCookieName()}=${encodeURIComponent(state)}; Path=/; HttpOnly; ${sameSite}; Max-Age=600`);
+  response.headers.append("Set-Cookie", `${oauthStateCookieName()}=${encodeURIComponent(state)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`);
   return response;
 }

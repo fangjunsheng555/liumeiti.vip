@@ -1,23 +1,24 @@
 import {
   adminSessionFromRequest, adminActorFromSession,
-  updateRedeemCodeStatus, deleteRedeemCode, listRedeemCodes, listRedeemCodeBatches, clean,
+  updateRedeemBatchStatus, deleteRedeemBatch,
+  listRedeemCodes, listRedeemCodeBatches, clean,
 } from "../../../_utils.js";
 
 export async function PATCH(request, { params }) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  const { code } = await params;
-  const result = await updateRedeemCodeStatus(code, "void", adminActorFromSession(session));
+  const { id } = await params;
+  const result = await updateRedeemBatchStatus(id, "void", adminActorFromSession(session));
   if (!result.ok) return Response.json({ ok: false, error: clean(result.error, 80) }, { status: 400 });
   const [codes, batches] = await Promise.all([listRedeemCodes(), listRedeemCodeBatches()]);
-  return Response.json({ ok: true, code: result.code, codes, batches });
+  return Response.json({ ok: true, batch: result.batch, codes, batches });
 }
 
 export async function DELETE(request, { params }) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  const { code } = await params;
-  const result = await deleteRedeemCode(code, adminActorFromSession(session));
+  const { id } = await params;
+  const result = await deleteRedeemBatch(id, adminActorFromSession(session));
   if (!result.ok) return Response.json({ ok: false, error: clean(result.error, 80) }, { status: 400 });
   const [codes, batches] = await Promise.all([listRedeemCodes(), listRedeemCodeBatches()]);
   return Response.json({ ok: true, codes, batches });

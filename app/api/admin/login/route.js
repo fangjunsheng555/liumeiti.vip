@@ -1,19 +1,23 @@
-import { checkAdminPassword, signSession, setCookieValue } from "../../_utils.js";
+import { verifyAdminLogin, signSession, setCookieValue } from "../../_utils.js";
 
 export async function POST(request) {
   let body = {};
   try { body = await request.json(); } catch (e) {}
+  const username = String(body.username || "admin");
   const password = String(body.password || "");
 
-  if (!process.env.ADMIN_PASSWORD) {
-    return Response.json({ ok: false, error: "ADMIN_PASSWORD not configured" }, { status: 500 });
-  }
-  if (!checkAdminPassword(password)) {
-    return Response.json({ ok: false, error: "invalid_password" }, { status: 401 });
+  const login = await verifyAdminLogin(username, password);
+  if (!login.ok) {
+    return Response.json({ ok: false, error: "invalid_credentials" }, { status: 401 });
   }
 
-  const token = signSession({ role: "admin", exp: Date.now() + 12 * 60 * 60 * 1000 });
-  return Response.json({ ok: true }, {
+  const token = signSession({
+    role: "admin",
+    staffId: login.staff.id,
+    staffUsername: login.staff.username,
+    exp: Date.now() + 12 * 60 * 60 * 1000,
+  });
+  return Response.json({ ok: true, staff: login.staff }, {
     headers: { "Set-Cookie": setCookieValue("lm_admin", token, 12 * 60 * 60) },
   });
 }

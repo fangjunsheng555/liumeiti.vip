@@ -1,5 +1,5 @@
 import {
-  getCookieFromRequest, verifySession,
+  getCookieFromRequest, verifySession, adminActorFromRequest, pushAdminActionLog,
   getUser, setUser, deleteUser,
   validEmail,
 } from "../../../_utils.js";
@@ -14,6 +14,7 @@ function adminOk(request) {
 // Toggle ban status.
 export async function PATCH(request, { params }) {
   if (!adminOk(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const actor = adminActorFromRequest(request);
   const { email: rawEmail } = await params;
   const email = decodeURIComponent(rawEmail || "").toLowerCase().trim();
   if (!validEmail(email)) {
@@ -29,8 +30,16 @@ export async function PATCH(request, { params }) {
   }
   user.banned = banned;
   user.bannedAt = banned ? new Date().toISOString() : null;
+  user.bannedByStaffId = banned ? actor.staffId : null;
+  user.unbannedByStaffId = banned ? null : actor.staffId;
   const saved = await setUser(email, user);
   if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
+  await pushAdminActionLog({
+    action: banned ? "user_ban" : "user_unban",
+    actor,
+    target: "user:" + email,
+    detail: { email },
+  });
   return Response.json({ ok: true, email, banned });
 }
 
@@ -38,6 +47,7 @@ export async function PATCH(request, { params }) {
 // Permanently removes user record + transaction list + email from set.
 export async function DELETE(request, { params }) {
   if (!adminOk(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const actor = adminActorFromRequest(request);
   const { email: rawEmail } = await params;
   const email = decodeURIComponent(rawEmail || "").toLowerCase().trim();
   if (!validEmail(email)) {
@@ -47,5 +57,11 @@ export async function DELETE(request, { params }) {
   if (!user) return Response.json({ ok: false, error: "user_not_found" }, { status: 404 });
   const ok = await deleteUser(email);
   if (!ok) return Response.json({ ok: false, error: "delete_failed" }, { status: 500 });
+  await pushAdminActionLog({
+    action: "user_delete",
+    actor,
+    target: "user:" + email,
+    detail: { email, username: user.username || "" },
+  });
   return Response.json({ ok: true, deleted: email });
 }

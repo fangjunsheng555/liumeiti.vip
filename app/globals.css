@@ -7806,5 +7806,287 @@ button { cursor: pointer; border: none; background: transparent; }
 }
 .admin-order-content { display: grid; gap: 4px; min-width: 0; }
 
+/* Mobile density refinements */
+.auth-form > .oauth-login-grid:first-child { display: none; }
+.oauth-login-grid.bottom { margin-top: -2px; }
+.oauth-login-grid.bottom .oauth-login-btn { width: 100%; }
+
+.account-tool-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+.account-tool-buttons button {
+  min-height: 34px;
+  border-radius: 10px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  background: #fff;
+  color: #134e4a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 900;
+}
+.account-money-tools > .account-tool-card { display: none; }
+.account-money-modal {
+  width: min(420px, calc(100vw - 18px));
+  max-height: calc(100dvh - 18px);
+  background: #fff;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+}
+.account-money-modal-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+  padding: 12px;
+  overflow-y: auto;
+}
+.account-money-modal-body .account-tool-alert,
+.account-money-submit { grid-column: 1 / -1; }
+.account-money-submit {
+  height: 38px;
+  border-radius: 10px;
+  border: none;
+  background: linear-gradient(135deg, #0f172a 0%, #134e4a 100%);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.admin-withdraw-pane.single { grid-template-columns: 1fr; }
+.admin-order-card { padding: 9px 10px; border-radius: 10px; gap: 2px; }
+.admin-order-service { font-size: 12.5px; }
+.admin-order-paid { font-size: 13px; }
+.admin-order-email { font-size: 10.5px; }
+.admin-modal.admin-compact-modal { max-width: 520px; }
+.admin-modal.admin-code-modal { max-width: 620px; }
+.admin-modal-body { gap: 10px; padding: 11px 12px 14px; }
+.admin-modal-section h3 { margin-bottom: 6px; }
+.admin-item-card { padding: 8px 9px; gap: 6px; }
+.admin-field input { height: 36px; }
+.admin-notes { min-height: 56px; }
+
+.admin-code-inline-fields {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 7px;
+}
+.admin-code-inline-fields label { display: grid; gap: 4px; }
+.admin-code-inline-fields span { font-size: 10.5px; font-weight: 900; color: var(--muted); }
+.admin-code-batch-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  max-height: 430px;
+  overflow-y: auto;
+}
+.admin-codes-pane > .admin-code-list { display: none; }
+.admin-code-batch-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: #f8fafc;
+  text-align: left;
+}
+.admin-code-batch-item span { min-width: 0; display: grid; gap: 2px; }
+.admin-code-batch-item strong,
+.admin-code-batch-item b {
+  font-size: 12.5px;
+  font-weight: 900;
+  color: var(--primary);
+  overflow-wrap: anywhere;
+}
+.admin-code-batch-item small,
+.admin-code-batch-item em {
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.admin-code-batch-summary {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+}
+.admin-code-batch-summary span { font-size: 11px; color: var(--muted); }
+.admin-code-batch-summary b { font-size: 14px; color: #134e4a; overflow-wrap: anywhere; }
+.admin-code-batch-summary small { font-size: 10.5px; color: var(--muted); }
+.admin-code-batch-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.admin-code-batch-actions button {
+  min-height: 34px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 900;
+}
+.admin-code-batch-actions button.danger,
+.admin-code-chip button.danger { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
+.admin-code-chip-grid { display: grid; gap: 5px; }
+.admin-code-chip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px 34px;
+  gap: 5px;
+  align-items: stretch;
+  border-radius: 9px;
+}
+.admin-code-chip-main {
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: #fff;
+  text-align: left;
+}
+.admin-code-chip-main strong {
+  display: block;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  color: var(--primary);
+}
+.admin-code-chip-main small {
+  display: block;
+  margin-top: 1px;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-code-chip > button:not(.admin-code-chip-main) {
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: #ecfeff;
+  color: #0e7490;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.admin-staff-pane { display: grid; gap: 10px; }
+.admin-staff-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+.admin-staff-form .admin-card-title,
+.admin-staff-form input:nth-of-type(3),
+.admin-staff-form button { grid-column: 1 / -1; }
+.admin-staff-form input {
+  height: 38px;
+  border-radius: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  padding: 0 10px;
+  font-size: 16px;
+}
+.admin-staff-form button {
+  height: 38px;
+  border-radius: 9px;
+  border: none;
+  background: var(--primary);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 900;
+}
+.admin-staff-list,
+.admin-action-log {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+.admin-staff-item {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: #f8fafc;
+}
+.admin-staff-no {
+  display: inline-grid;
+  place-items: center;
+  height: 28px;
+  border-radius: 9px;
+  background: #0f172a;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+}
+.admin-staff-item strong { display: block; font-size: 12.5px; color: var(--primary); }
+.admin-staff-item small { display: block; font-size: 10.5px; color: var(--muted); overflow-wrap: anywhere; }
+.admin-action-log-item {
+  display: grid;
+  gap: 1px;
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: #f8fafc;
+  border: 1px solid var(--line);
+}
+.admin-action-log-item strong { font-size: 12px; color: var(--primary); }
+.admin-action-log-item span { font-size: 11px; color: #0f766e; overflow-wrap: anywhere; }
+.admin-action-log-item small { font-size: 10px; color: var(--muted); }
+
+@media (max-width: 560px) {
+  .admin-main { width: calc(100% - 14px); margin-top: 8px; }
+  .admin-tabs { margin-bottom: 8px; }
+  .admin-tab-btn { min-width: 68px; padding: 7px 8px; font-size: 11.5px; }
+  .admin-search { padding: 6px 9px; border-radius: 10px; }
+  .admin-filter-btn { padding: 7px 8px; font-size: 11.5px; }
+  .admin-modal { max-height: calc(100dvh - 10px); border-radius: 14px 14px 0 0; }
+  .admin-modal-head { padding: 10px 12px; }
+  .admin-modal-id { font-size: 13px; }
+  .admin-summary-grid,
+  .admin-withdraw-info-grid { gap: 5px; }
+  .admin-summary-grid { padding: 8px; }
+  .admin-withdraw-info-grid div { padding: 7px 8px; }
+  .admin-withdraw-status-form.compact { grid-template-columns: 1fr; }
+  .admin-code-batch-item { grid-template-columns: 1fr; }
+  .admin-code-batch-actions { grid-template-columns: 1fr 1fr 1fr; }
+  .admin-code-batch-actions button { padding: 0 4px; font-size: 10.5px; }
+  .admin-staff-form { grid-template-columns: 1fr; padding: 10px; }
+  .account-money-modal {
+    width: calc(100vw - 14px);
+    border-radius: 14px 14px 0 0;
+    align-self: end;
+  }
+  .account-money-modal-body { padding: 10px; gap: 8px; }
+}
+
 
 

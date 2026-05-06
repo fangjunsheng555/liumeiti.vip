@@ -1,5 +1,6 @@
 import {
-  getCookieFromRequest, verifySession, getUser, setUser,
+  getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
+  pushAdminActionLog, getUser, setUser,
   addBalanceTx, getBalanceTxs, pushAdminBalanceLog,
   validEmail, formatBeijingTime, clean,
 } from "../../_utils.js";
@@ -39,6 +40,7 @@ export async function GET(request) {
 // body: { email, amount (positive=add, negative=deduct), reason }
 export async function POST(request) {
   if (!adminOk(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const actor = adminActorFromRequest(request);
   let body = {};
   try { body = await request.json(); } catch (e) {}
   const email = String(body.email || "").trim().toLowerCase();
@@ -79,9 +81,11 @@ export async function POST(request) {
   const tx = {
     id: "TX" + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase(),
     amount,
-    reason,
+    reason: reason + " · " + adminActorLabel(actor),
     balanceAfter: next,
     source: "admin",
+    staffId: actor.staffId,
+    staffUsername: actor.staffUsername,
     createdAt: now.toISOString(),
     createdAtBeijing: formatBeijingTime(now),
   };
@@ -92,6 +96,12 @@ export async function POST(request) {
     ...tx,
     email,
     balanceBefore: prev,
+  });
+  await pushAdminActionLog({
+    action: "user_balance_adjust",
+    actor,
+    target: "user:" + email,
+    detail: { amount, balanceBefore: prev, balanceAfter: next },
   });
 
   return Response.json({

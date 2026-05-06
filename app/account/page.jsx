@@ -31,6 +31,7 @@ export default function AccountPage() {
     redeemCode: "",
     withdrawAmount: "", alipayAccount: "", realName: "",
   });
+  const [moneyModal, setMoneyModal] = useState(null);
   const [moneyBusy, setMoneyBusy] = useState("");
   const [moneyStatus, setMoneyStatus] = useState(null);
 
@@ -132,6 +133,7 @@ export default function AccountPage() {
         resetFields.forEach((k) => { next[k] = ""; });
         return next;
       });
+      setMoneyModal(null);
       await load();
     } catch (e) {
       setMoneyStatus({ type: "error", message: e.message || "操作失败,请稍后再试" });
@@ -247,6 +249,12 @@ export default function AccountPage() {
             </div>
           </div>
 
+          <div className="account-tool-buttons">
+            <button type="button" onClick={() => setMoneyModal("transfer")}><Send size={13} />转账</button>
+            <button type="button" onClick={() => setMoneyModal("redeem")}><Gift size={13} />兑换</button>
+            <button type="button" onClick={() => setMoneyModal("withdraw")}><CreditCard size={13} />提现</button>
+          </div>
+
           <form
             className="account-tool-card"
             onSubmit={(e) => {
@@ -359,6 +367,68 @@ export default function AccountPage() {
           )}
         </section>
       </main>
+
+      {moneyModal && (
+        <div className="account-modal-mask" onClick={() => !moneyBusy && setMoneyModal(null)}>
+          <div className="account-money-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="account-modal-head">
+              <div>
+                <div className="account-modal-id">
+                  {moneyModal === "transfer" ? "邮箱转账" : moneyModal === "redeem" ? "余额兑换码" : "余额提现"}
+                </div>
+                <div className="account-modal-status status-received">当前余额 ¥{state.balance.toFixed(2)}</div>
+              </div>
+              <button type="button" className="account-modal-close" onClick={() => setMoneyModal(null)} disabled={!!moneyBusy}>
+                <X size={16} />
+              </button>
+            </div>
+            <form
+              className="account-money-modal-body"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (moneyModal === "transfer") {
+                  submitMoneyAction("transfer", "/api/auth/transfer", {
+                    email: moneyForm.transferEmail,
+                    amount: moneyForm.transferAmount,
+                  }, ["transferEmail", "transferAmount"]);
+                } else if (moneyModal === "redeem") {
+                  submitMoneyAction("redeem", "/api/auth/redeem", {
+                    code: moneyForm.redeemCode,
+                  }, ["redeemCode"]);
+                } else {
+                  submitMoneyAction("withdraw", "/api/auth/withdraw", {
+                    amount: moneyForm.withdrawAmount,
+                    alipayAccount: moneyForm.alipayAccount,
+                    realName: moneyForm.realName,
+                  }, ["withdrawAmount", "alipayAccount", "realName"]);
+                }
+              }}
+            >
+              {moneyModal === "transfer" && (
+                <>
+                  <label className="account-tool-field full"><span>收款邮箱</span><input value={moneyForm.transferEmail} onChange={(e) => updateMoneyField("transferEmail", e.target.value)} placeholder="对方注册邮箱" inputMode="email" required /></label>
+                  <label className="account-tool-field full"><span>转账金额</span><input value={moneyForm.transferAmount} onChange={(e) => updateMoneyField("transferAmount", e.target.value)} placeholder="0.00" inputMode="decimal" required /></label>
+                </>
+              )}
+              {moneyModal === "redeem" && (
+                <label className="account-tool-field full"><span>兑换码</span><input value={moneyForm.redeemCode} onChange={(e) => updateMoneyField("redeemCode", e.target.value.toUpperCase())} placeholder="输入余额兑换码" autoComplete="off" required /></label>
+              )}
+              {moneyModal === "withdraw" && (
+                <>
+                  <label className="account-tool-field"><span>提现金额</span><input value={moneyForm.withdrawAmount} onChange={(e) => updateMoneyField("withdrawAmount", e.target.value)} placeholder="0.00" inputMode="decimal" required /></label>
+                  <label className="account-tool-field"><span>姓名</span><input value={moneyForm.realName} onChange={(e) => updateMoneyField("realName", e.target.value)} placeholder="支付宝实名" autoComplete="name" required /></label>
+                  <label className="account-tool-field full"><span>支付宝账号</span><input value={moneyForm.alipayAccount} onChange={(e) => updateMoneyField("alipayAccount", e.target.value)} placeholder="手机号 / 邮箱 / 支付宝账号" required /></label>
+                </>
+              )}
+              {moneyStatus && <div className={`account-tool-alert ${moneyStatus.type}`}>{moneyStatus.message}</div>}
+              <button type="submit" disabled={!!moneyBusy} className="account-money-submit">
+                {moneyBusy ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}
+                {moneyModal === "withdraw" ? "提交待审核" : "确认提交"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {activeOrder && (
         <div className="account-modal-mask" onClick={() => setActiveOrder(null)}>

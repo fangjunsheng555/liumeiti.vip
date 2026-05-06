@@ -1,6 +1,7 @@
 import {
   getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
-  getCookieFromRequest, verifySession, formatBeijingTime,
+  getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
+  pushAdminActionLog, formatBeijingTime,
 } from "../../../_utils.js";
 
 function adminOk(request) {
@@ -15,6 +16,7 @@ export async function POST(request) {
   if (!adminOk(request)) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
+  const actor = adminActorFromRequest(request);
 
   let body = {};
   try { body = await request.json(); } catch (e) {}
@@ -39,7 +41,10 @@ export async function POST(request) {
   const results = [];
   for (const entry of matched) {
     if (action === "delete") {
-      const ok = await softDeleteOrderAt(entry.index, entry.order.orderId);
+      const ok = await softDeleteOrderAt(entry.index, entry.order.orderId, {
+        deletedByStaffId: actor.staffId,
+        deletedByStaffUsername: actor.staffUsername,
+      });
       results.push({ orderId: entry.order.orderId, ok });
     } else if (action === "invalid") {
       const order = entry.order;
@@ -50,6 +55,18 @@ export async function POST(request) {
         order.invalidAtBeijing = formatBeijingTime(now);
         order.completedAt = null;
         order.completedAtBeijing = null;
+        order.staffAudit = Array.isArray(order.staffAudit) ? order.staffAudit : [];
+        order.staffAudit.unshift({
+          id: "OA" + Date.now().toString(36).toUpperCase(),
+          staffId: actor.staffId,
+          staffUsername: actor.staffUsername,
+          label: adminActorLabel(actor),
+          action: "batch_invalid",
+          status: "invalid",
+          createdAt: now.toISOString(),
+          createdAtBeijing: formatBeijingTime(now),
+        });
+        order.staffAudit = order.staffAudit.slice(0, 30);
         const ok = await setOrderAt(entry.index, order);
         results.push({ orderId: entry.order.orderId, ok });
       } else {
@@ -60,6 +77,12 @@ export async function POST(request) {
 
   const successCount = results.filter((r) => r.ok).length;
   const notFound = orderIds.filter((id) => !matched.some((e) => e.order.orderId === id));
+  await pushAdminActionLog({
+    action: "order_batch_" + action,
+    actor,
+    target: "orders:" + successCount,
+    detail: { orderIds, successCount, notFound },
+  });
 
   return Response.json({
     ok: true,

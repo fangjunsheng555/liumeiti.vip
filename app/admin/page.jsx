@@ -7,7 +7,7 @@ import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
   CheckCircle2, Clock, Inbox, X, AlertTriangle, Trash2,
-  Gift, CreditCard,
+  Gift, CreditCard, Plus, UserPlus,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -37,7 +37,9 @@ function copyText(text) {
 
 export default function AdminPage() {
   const [authed, setAuthed] = useState(null); // null=loading, false=login, true=ok
+  const [loginName, setLoginName] = useState("admin");
   const [password, setPassword] = useState("");
+  const [currentStaff, setCurrentStaff] = useState(null);
   const [loginError, setLoginError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
 
@@ -62,11 +64,12 @@ export default function AdminPage() {
   const [batchConfirm, setBatchConfirm] = useState(null); // null | "delete" | "invalid"
 
   // User/balance management
-  const [tab, setTab] = useState("orders"); // "orders" | "users" | "balance"
+  const [tab, setTab] = useState("orders"); // "orders" | "users" | "balance" | "staff"
   const [confirmUserAction, setConfirmUserAction] = useState(null); // { email, action: "ban" | "unban" | "delete" }
   const [userActionBusy, setUserActionBusy] = useState(false);
   const [userQuery, setUserQuery] = useState("");
   const [userInfo, setUserInfo] = useState(null); // {user, transactions}
+  const [userModalOpen, setUserModalOpen] = useState(false);
   const [userLoading, setUserLoading] = useState(false);
   const [userError, setUserError] = useState("");
   const [balForm, setBalForm] = useState({ amount: "", reason: "" });
@@ -91,12 +94,20 @@ export default function AdminPage() {
   const [withdrawalNote, setWithdrawalNote] = useState("");
   const [withdrawalBusy, setWithdrawalBusy] = useState(false);
   const [codes, setCodes] = useState([]);
+  const [codeBatches, setCodeBatches] = useState([]);
   const [codesLoading, setCodesLoading] = useState(false);
   const [codeType, setCodeType] = useState("balance");
   const [codeAmount, setCodeAmount] = useState("");
+  const [codeQuantity, setCodeQuantity] = useState("1");
+  const [codeRemark, setCodeRemark] = useState("");
   const [codeServices, setCodeServices] = useState([]);
   const [codeBusy, setCodeBusy] = useState("");
   const [codeResult, setCodeResult] = useState(null);
+  const [activeCodeBatch, setActiveCodeBatch] = useState(null);
+  const [staffPane, setStaffPane] = useState({ staff: [], actions: [] });
+  const [staffForm, setStaffForm] = useState({ username: "", password: "", remark: "" });
+  const [staffBusy, setStaffBusy] = useState("");
+  const [staffResult, setStaffResult] = useState(null);
 
   const loadGlobalLog = useCallback(async (q, filter, source) => {
     setLogLoading(true);
@@ -140,10 +151,25 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/redeem-codes", { credentials: "same-origin" });
       if (res.status === 401) { setAuthed(false); return; }
       const data = await res.json();
-      if (data.ok) setCodes(data.codes || []);
+      if (data.ok) {
+        setCodes(data.codes || []);
+        setCodeBatches(data.batches || []);
+      }
     } catch (e) {} finally {
       setCodesLoading(false);
     }
+  }, []);
+
+  const loadStaff = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/staff", { credentials: "same-origin" });
+      if (res.status === 401) { setAuthed(false); return; }
+      const data = await res.json();
+      if (data.ok) {
+        setCurrentStaff({ id: data.currentStaffId });
+        setStaffPane({ staff: data.staff || [], actions: data.actions || [] });
+      }
+    } catch (e) {}
   }, []);
 
   const loadAllUsers = useCallback(async (q) => {
@@ -168,7 +194,8 @@ export default function AdminPage() {
     if (tab === "balance") loadGlobalLog(logQuery, logFilter, logSource);
     if (tab === "withdrawals") loadWithdrawals();
     if (tab === "codes") loadCodes();
-  }, [authed, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes, logFilter, logSource]);
+    if (tab === "staff") loadStaff();
+  }, [authed, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes, loadStaff, logFilter, logSource]);
 
   async function executeUserAction() {
     if (!confirmUserAction || userActionBusy) return;
@@ -193,6 +220,7 @@ export default function AdminPage() {
         loadAllUsers(userListQuery);
         if (userInfo && userInfo.user.email === confirmUserAction.email && action === "delete") {
           setUserInfo(null);
+          setUserModalOpen(false);
         }
       }
     } catch (e) {} finally {
@@ -212,8 +240,10 @@ export default function AdminPage() {
       const data = await res.json();
       if (data.ok) {
         setUserInfo(data);
+        setUserModalOpen(true);
       } else {
         setUserInfo(null);
+        setUserModalOpen(false);
         setUserError(data.error === "user_not_found" ? "未找到该邮箱的注册用户" : (data.error || "查询失败"));
       }
     } catch (e) {
@@ -325,14 +355,23 @@ export default function AdminPage() {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: codeType, amount: codeAmount, services: codeServices }),
+        body: JSON.stringify({
+          type: codeType,
+          amount: codeAmount,
+          services: codeServices,
+          quantity: codeQuantity,
+          remark: codeRemark,
+        }),
       });
       const data = await res.json();
       if (data.ok) {
         setCodes(data.codes || []);
+        setCodeBatches(data.batches || []);
         setCodeAmount("");
+        setCodeQuantity("1");
+        setCodeRemark("");
         if (codeType === "service") setCodeServices([]);
-        setCodeResult({ type: "success", message: `已生成兑换码 ${data.code.code}` });
+        setCodeResult({ type: "success", message: `已生成 ${data.generatedCodes?.length || 1} 个兑换码` });
       } else {
         setCodeResult({ type: "error", message: data.error === "missing_services" ? "请至少选择一个服务" : "生成失败,请检查金额或服务" });
       }
@@ -367,6 +406,114 @@ export default function AdminPage() {
       setCodeResult({ type: "error", message: "网络错误" });
     } finally {
       setCodeBusy("");
+    }
+  }
+
+  async function codeActionV2(code, action) {
+    if (codeBusy) return;
+    setCodeBusy(action + code);
+    setCodeResult(null);
+    try {
+      const res = await fetch(`/api/admin/redeem-codes/${encodeURIComponent(code)}`, {
+        method: action === "delete" ? "DELETE" : "PATCH",
+        credentials: "same-origin",
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setCodes(data.codes || []);
+        setCodeBatches(data.batches || []);
+        if (activeCodeBatch) {
+          const refreshed = (data.batches || []).find((batch) => batch.id === activeCodeBatch.id);
+          if (refreshed) setActiveCodeBatch(refreshed);
+          else setActiveCodeBatch(null);
+        }
+        setCodeResult({ type: "success", message: action === "delete" ? "兑换码已删除" : "兑换码已作废" });
+      } else {
+        setCodeResult({ type: "error", message: data.error || "操作失败" });
+      }
+    } catch (e) {
+      setCodeResult({ type: "error", message: "网络错误" });
+    } finally {
+      setCodeBusy("");
+    }
+  }
+
+  async function batchCodeAction(batchId, action) {
+    if (codeBusy) return;
+    setCodeBusy(action + batchId);
+    setCodeResult(null);
+    try {
+      const res = await fetch(`/api/admin/redeem-code-batches/${encodeURIComponent(batchId)}`, {
+        method: action === "delete" ? "DELETE" : "PATCH",
+        credentials: "same-origin",
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setCodes(data.codes || []);
+        setCodeBatches(data.batches || []);
+        if (action === "delete") setActiveCodeBatch(null);
+        else {
+          const refreshed = (data.batches || []).find((batch) => batch.id === batchId);
+          if (refreshed) setActiveCodeBatch(refreshed);
+        }
+        setCodeResult({ type: "success", message: action === "delete" ? "批次已删除" : "批次内可用兑换码已作废" });
+      } else {
+        setCodeResult({ type: "error", message: data.error || "操作失败" });
+      }
+    } catch (e) {
+      setCodeResult({ type: "error", message: "网络错误" });
+    } finally {
+      setCodeBusy("");
+    }
+  }
+
+  async function createStaff(e) {
+    e.preventDefault();
+    if (staffBusy) return;
+    setStaffBusy("create");
+    setStaffResult(null);
+    try {
+      const res = await fetch("/api/admin/staff", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(staffForm),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setStaffPane({ staff: data.staff || [], actions: data.actions || [] });
+        setStaffForm({ username: "", password: "", remark: "" });
+        setStaffResult({ type: "success", message: `已新增工作人员 #${data.created.id}` });
+      } else {
+        setStaffResult({ type: "error", message: data.error || "新增失败" });
+      }
+    } catch (e) {
+      setStaffResult({ type: "error", message: "网络错误" });
+    } finally {
+      setStaffBusy("");
+    }
+  }
+
+  async function deleteStaff(id) {
+    if (staffBusy) return;
+    setStaffBusy("delete" + id);
+    setStaffResult(null);
+    try {
+      const res = await fetch(`/api/admin/staff/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setStaffPane({ staff: data.staff || [], actions: data.actions || [] });
+        setStaffResult({ type: "success", message: "工作人员已删除" });
+      } else {
+        setStaffResult({ type: "error", message: data.error || "删除失败" });
+      }
+    } catch (e) {
+      setStaffResult({ type: "error", message: "网络错误" });
+    } finally {
+      setStaffBusy("");
     }
   }
 
@@ -407,11 +554,12 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ username: loginName, password }),
       });
       const data = await res.json();
       if (data.ok) {
         setAuthed(true);
+        setCurrentStaff(data.staff || null);
         setPassword("");
         loadOrders(appliedSearch, filterStatus);
       } else {
@@ -427,6 +575,7 @@ export default function AdminPage() {
   async function doLogout() {
     await fetch("/api/admin/login", { method: "DELETE" });
     setAuthed(false);
+    setCurrentStaff(null);
     setOrders([]);
   }
 
@@ -591,6 +740,14 @@ export default function AdminPage() {
           {loginError && <div className="admin-alert error">{loginError}</div>}
           <form onSubmit={doLogin}>
             <input
+              type="text"
+              value={loginName}
+              onChange={(e) => setLoginName(e.target.value)}
+              placeholder="工作人员账号"
+              autoComplete="username"
+              required
+            />
+            <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -619,7 +776,7 @@ export default function AdminPage() {
       <header className="admin-header">
         <div className="admin-header-left">
           <Link href="/"><img src="/logo.png" alt="冒央会社" className="admin-logo" /></Link>
-          <span className="admin-tag">工作后台</span>
+          <span className="admin-tag">工作后台{currentStaff?.id ? ` · #${currentStaff.id}` : ""}</span>
         </div>
         <button type="button" className="admin-logout" onClick={doLogout}>
           <LogOut size={14} />退出
@@ -633,6 +790,7 @@ export default function AdminPage() {
           <button type="button" className={`admin-tab-btn${tab === "withdrawals" ? " active" : ""}`} onClick={() => setTab("withdrawals")}>提现审核</button>
           <button type="button" className={`admin-tab-btn${tab === "codes" ? " active" : ""}`} onClick={() => setTab("codes")}>兑换码</button>
           <button type="button" className={`admin-tab-btn${tab === "balance" ? " active" : ""}`} onClick={() => setTab("balance")}>余额变动</button>
+          <button type="button" className={`admin-tab-btn${tab === "staff" ? " active" : ""}`} onClick={() => setTab("staff")}>工作人员</button>
         </div>
 
         {tab === "users" ? (
@@ -712,7 +870,7 @@ export default function AdminPage() {
 
             {userError && <div className="admin-alert error" style={{ marginTop: 8 }}>{userError}</div>}
 
-            {userInfo && (
+            {false && userInfo && (
               <>
                 <div className="admin-user-card" style={{ marginTop: 10 }}>
                   <div className="admin-user-head">
@@ -774,7 +932,7 @@ export default function AdminPage() {
 
           </div>
         ) : tab === "withdrawals" ? (
-          <div className="admin-withdraw-pane">
+          <div className="admin-withdraw-pane single">
             <div className="admin-withdraw-list">
               <div className="admin-userlist-head">
                 <h3>提现申请 <em>{withdrawals.length}</em></h3>
@@ -805,7 +963,7 @@ export default function AdminPage() {
               </div>
             </div>
 
-            <div className="admin-withdraw-detail">
+            <div className="admin-withdraw-detail" style={{ display: "none" }}>
               {!activeWithdrawal ? (
                 <div className="admin-userlist-empty">点击提现申请查看支付宝、姓名与该用户所有余额明细</div>
               ) : (
@@ -858,6 +1016,27 @@ export default function AdminPage() {
                 <button type="button" className={codeType === "balance" ? "active" : ""} onClick={() => setCodeType("balance")}>余额码</button>
                 <button type="button" className={codeType === "service" ? "active" : ""} onClick={() => setCodeType("service")}>服务码</button>
               </div>
+              <div className="admin-code-inline-fields">
+                <label>
+                  <span>数量</span>
+                  <input
+                    value={codeQuantity}
+                    onChange={(e) => setCodeQuantity(e.target.value.replace(/\D/g, ""))}
+                    placeholder="1"
+                    inputMode="numeric"
+                    required
+                  />
+                </label>
+                <label>
+                  <span>备注</span>
+                  <input
+                    value={codeRemark}
+                    onChange={(e) => setCodeRemark(e.target.value)}
+                    placeholder="批次备注，可选"
+                    maxLength={80}
+                  />
+                </label>
+              </div>
               {codeType === "balance" ? (
                 <input
                   value={codeAmount}
@@ -887,6 +1066,22 @@ export default function AdminPage() {
               </button>
             </form>
             {codeResult && <div className={`admin-alert ${codeResult.type}`}>{codeResult.message}</div>}
+            <div className="admin-code-batch-list">
+              {codeBatches.length === 0 ? (
+                <div className="admin-userlist-empty">{codesLoading ? "加载中..." : "暂无兑换码批次"}</div>
+              ) : codeBatches.map((batch) => (
+                <button key={batch.id} type="button" className="admin-code-batch-item" onClick={() => setActiveCodeBatch(batch)}>
+                  <span>
+                    <strong>{batch.type === "service" ? "服务码批次" : "余额码批次"} · {batch.quantity || batch.codes?.length || 0} 个</strong>
+                    <small>{batch.createdAtBeijing || batch.createdAt} · 备注: {batch.remark || "无"}</small>
+                  </span>
+                  <span>
+                    <b>{batch.type === "service" ? (batch.services || []).map((s) => s.label).join(" + ") : `¥${Number(batch.amount || 0).toFixed(2)}`}</b>
+                    <em>可用 {batch.counts?.active || 0} · 已用 {batch.counts?.used || 0} · 作废 {batch.counts?.void || 0}</em>
+                  </span>
+                </button>
+              ))}
+            </div>
             <div className="admin-code-list">
               {codes.length === 0 ? (
                 <div className="admin-userlist-empty">{codesLoading ? "加载中..." : "暂无兑换码"}</div>
@@ -902,6 +1097,66 @@ export default function AdminPage() {
                     <button type="button" disabled={c.status !== "active"} onClick={() => codeAction(c.code, "void")}>作废</button>
                     <button type="button" className="danger" onClick={() => codeAction(c.code, "delete")}><Trash2 size={11} />删除</button>
                   </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : tab === "staff" ? (
+          <div className="admin-staff-pane">
+            <form className="admin-staff-form" onSubmit={createStaff}>
+              <div className="admin-card-title"><UserPlus size={15} />新增工作人员</div>
+              <input
+                value={staffForm.username}
+                onChange={(e) => setStaffForm({ ...staffForm, username: e.target.value })}
+                placeholder="账号，3-40位英文/数字"
+                autoComplete="off"
+                required
+              />
+              <input
+                value={staffForm.password}
+                onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })}
+                placeholder="密码，至少6位"
+                type="password"
+                autoComplete="new-password"
+                required
+              />
+              <input
+                value={staffForm.remark}
+                onChange={(e) => setStaffForm({ ...staffForm, remark: e.target.value })}
+                placeholder="备注，可选"
+                maxLength={80}
+              />
+              <button type="submit" disabled={staffBusy === "create"}>
+                {staffBusy === "create" ? <LoaderCircle size={12} className="spin-icon" /> : <Plus size={12} />}
+                新增人员
+              </button>
+            </form>
+            {staffResult && <div className={`admin-alert ${staffResult.type}`}>{staffResult.message}</div>}
+            <div className="admin-staff-list">
+              {staffPane.staff.map((item) => (
+                <div key={item.id} className={`admin-staff-item${item.active === false ? " disabled" : ""}`}>
+                  <span className="admin-staff-no">#{item.id}</span>
+                  <span>
+                    <strong>{item.username}</strong>
+                    <small>{item.root ? "环境变量主账号" : (item.remark || "无备注")} · {item.createdAtBeijing || ""}</small>
+                  </span>
+                  {!item.root && (
+                    <button type="button" className="admin-userlist-action delete" onClick={() => deleteStaff(item.id)} disabled={staffBusy === "delete" + item.id}>
+                      <Trash2 size={11} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="admin-action-log">
+              <div className="admin-tx-list-label">后台操作留痕</div>
+              {staffPane.actions.length === 0 ? (
+                <div className="admin-userlist-empty">暂无操作记录</div>
+              ) : staffPane.actions.map((log) => (
+                <div key={log.id} className="admin-action-log-item">
+                  <strong>#{log.staffId} · {log.action}</strong>
+                  <span>{log.target}</span>
+                  <small>{log.createdAtBeijing}</small>
                 </div>
               ))}
             </div>
@@ -1167,6 +1422,9 @@ export default function AdminPage() {
                   {activeOrder.completedAtBeijing && (
                     <div className="span-2"><span>完成时间</span><b>{activeOrder.completedAtBeijing}</b></div>
                   )}
+                  {activeOrder.staffAudit?.[0] && (
+                    <div className="span-2"><span>最近操作</span><b>{activeOrder.staffAudit[0].label || `#${activeOrder.staffAudit[0].staffId}`} · {activeOrder.staffAudit[0].createdAtBeijing}</b></div>
+                  )}
                 </div>
               </section>
 
@@ -1296,6 +1554,143 @@ export default function AdminPage() {
                     </div>
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {userModalOpen && userInfo && (
+        <div className="admin-modal-mask" onClick={() => !balBusy && setUserModalOpen(false)}>
+          <div className="admin-modal admin-compact-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="admin-modal-head">
+              <div>
+                <div className="admin-modal-id">{userInfo.user.username || "用户详情"}</div>
+                <div className="admin-modal-status status-received">余额 ¥{userInfo.user.balance.toFixed(2)}</div>
+              </div>
+              <button type="button" className="admin-modal-close" onClick={() => setUserModalOpen(false)} disabled={balBusy}><X size={16} /></button>
+            </div>
+            <div className="admin-modal-body">
+              <div className="admin-user-card">
+                <div className="admin-user-head">
+                  <span className="admin-user-email">{userInfo.user.email}</span>
+                  <span className="admin-user-balance">¥{userInfo.user.balance.toFixed(2)}</span>
+                </div>
+                <div className="admin-user-meta">注册于 {userInfo.user.createdAtBeijing || "--"}</div>
+              </div>
+              <div className="admin-balance-form">
+                <div className="admin-balance-row">
+                  <span>金额</span>
+                  <input type="number" inputMode="decimal" step="0.01" min="0.01" value={balForm.amount} onChange={(e) => setBalForm({ ...balForm, amount: e.target.value })} placeholder="例如 100" />
+                </div>
+                <div className="admin-balance-row">
+                  <span>原因</span>
+                  <textarea value={balForm.reason} onChange={(e) => setBalForm({ ...balForm, reason: e.target.value })} placeholder="将写入余额明细" rows={2} />
+                </div>
+                {balResult && <div className={`admin-alert ${balResult.type}`}>{balResult.message}</div>}
+                <div className="admin-balance-actions">
+                  <button type="button" className="admin-balance-add" disabled={balBusy} onClick={() => adjustBalance(+1)}><CheckCircle2 size={13} />增加</button>
+                  <button type="button" className="admin-balance-deduct" disabled={balBusy} onClick={() => adjustBalance(-1)}><AlertTriangle size={13} />扣除</button>
+                </div>
+              </div>
+              <div className="admin-tx-list">
+                <div className="admin-tx-list-label">余额明细 · {userInfo.transactions.length} 条</div>
+                {userInfo.transactions.map((tx) => (
+                  <div key={tx.id} className={`admin-tx-item${tx.amount > 0 ? " positive" : " negative"}`}>
+                    <div className="admin-tx-item-info">
+                      <strong>{tx.reason}</strong>
+                      <small>{tx.createdAtBeijing}{tx.staffId ? ` · #${tx.staffId}` : ""}</small>
+                    </div>
+                    <div className="admin-tx-item-amount">{tx.amount > 0 ? "+" : ""}¥{Math.abs(tx.amount).toFixed(2)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeWithdrawal && (
+        <div className="admin-modal-mask" onClick={() => !withdrawalBusy && setActiveWithdrawal(null)}>
+          <div className="admin-modal admin-compact-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="admin-modal-head">
+              <div>
+                <div className="admin-modal-id">{activeWithdrawal.withdrawal.username || "提现申请"}</div>
+                <div className="admin-modal-status status-received">{activeWithdrawal.withdrawal.statusLabel || "待审核"}</div>
+              </div>
+              <button type="button" className="admin-modal-close" onClick={() => setActiveWithdrawal(null)} disabled={withdrawalBusy}><X size={16} /></button>
+            </div>
+            <div className="admin-modal-body">
+              <div className="admin-withdraw-info-grid">
+                <div><span>邮箱</span><b>{activeWithdrawal.withdrawal.userEmail}</b></div>
+                <div><span>提现金额</span><b>¥{Number(activeWithdrawal.withdrawal.amount || 0).toFixed(2)}</b></div>
+                <div><span>支付宝</span><b>{activeWithdrawal.withdrawal.alipayAccount}</b></div>
+                <div><span>姓名</span><b>{activeWithdrawal.withdrawal.realName}</b></div>
+                <div><span>当前余额</span><b>¥{Number(activeWithdrawal.user?.balance || 0).toFixed(2)}</b></div>
+                <div><span>操作人员</span><b>{activeWithdrawal.withdrawal.updatedByStaffId ? `#${activeWithdrawal.withdrawal.updatedByStaffId}` : "--"}</b></div>
+              </div>
+              <form className="admin-withdraw-status-form compact" onSubmit={saveWithdrawalStatus}>
+                <label>
+                  <span>状态</span>
+                  <select value={withdrawalStatus} onChange={(e) => setWithdrawalStatus(e.target.value)}>
+                    {WITHDRAWAL_STATUS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>备注</span>
+                  <input value={withdrawalNote} onChange={(e) => setWithdrawalNote(e.target.value)} placeholder="内部备注，可选" />
+                </label>
+                <button type="submit" disabled={withdrawalBusy}>{withdrawalBusy ? <LoaderCircle size={12} className="spin-icon" /> : <CheckCircle2 size={12} />}更新</button>
+              </form>
+              <div className="admin-tx-list">
+                <div className="admin-tx-list-label">该用户余额明细 · {activeWithdrawal.transactions.length} 条</div>
+                {activeWithdrawal.transactions.map((tx) => (
+                  <div key={tx.id} className={`admin-tx-item${tx.amount > 0 ? " positive" : " negative"}`}>
+                    <div className="admin-tx-item-info">
+                      <strong>{tx.reason}</strong>
+                      <small>{tx.createdAtBeijing}{tx.statusLabel ? ` · ${tx.statusLabel}` : ""}</small>
+                    </div>
+                    <div className="admin-tx-item-amount">{tx.amount > 0 ? "+" : ""}¥{Math.abs(tx.amount).toFixed(2)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeCodeBatch && (
+        <div className="admin-modal-mask" onClick={() => !codeBusy && setActiveCodeBatch(null)}>
+          <div className="admin-modal admin-code-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="admin-modal-head">
+              <div>
+                <div className="admin-modal-id">{activeCodeBatch.type === "service" ? "服务码批次" : "余额码批次"}</div>
+                <div className="admin-modal-status status-received">{activeCodeBatch.createdAtBeijing || activeCodeBatch.createdAt}</div>
+              </div>
+              <button type="button" className="admin-modal-close" onClick={() => setActiveCodeBatch(null)} disabled={!!codeBusy}><X size={16} /></button>
+            </div>
+            <div className="admin-modal-body">
+              <div className="admin-code-batch-summary">
+                <span>{activeCodeBatch.remark || "无备注"}</span>
+                <b>{activeCodeBatch.type === "service" ? (activeCodeBatch.services || []).map((s) => s.label).join(" + ") : `¥${Number(activeCodeBatch.amount || 0).toFixed(2)}`}</b>
+                <small>可用 {activeCodeBatch.counts?.active || 0} · 已用 {activeCodeBatch.counts?.used || 0} · 作废 {activeCodeBatch.counts?.void || 0} · 生成 #{activeCodeBatch.createdByStaffId || 1}</small>
+              </div>
+              <div className="admin-code-batch-actions">
+                <button type="button" onClick={() => copyText((activeCodeBatch.codes || []).map((c) => c.code).join("\n"))}><Copy size={12} />复制全部</button>
+                <button type="button" onClick={() => batchCodeAction(activeCodeBatch.id, "void")} disabled={!!codeBusy}><AlertTriangle size={12} />全部作废</button>
+                <button type="button" className="danger" onClick={() => batchCodeAction(activeCodeBatch.id, "delete")} disabled={!!codeBusy}><Trash2 size={12} />删除批次</button>
+              </div>
+              <div className="admin-code-chip-grid">
+                {(activeCodeBatch.codes || []).map((c) => (
+                  <div key={c.code} className={`admin-code-chip status-${c.status}`}>
+                    <button type="button" className="admin-code-chip-main" onClick={() => copyText(c.code)}>
+                      <strong>{c.code}</strong>
+                      <small>{c.status === "active" ? "可兑换" : c.status === "used" ? "已使用" : "已作废"}{c.usedBy ? ` · ${c.usedBy}` : ""}{c.usedOrderId ? ` · ${c.usedOrderId}` : ""}</small>
+                    </button>
+                    <button type="button" disabled={c.status !== "active" || !!codeBusy} onClick={() => codeActionV2(c.code, "void")}>废</button>
+                    <button type="button" className="danger" disabled={!!codeBusy} onClick={() => codeActionV2(c.code, "delete")}>删</button>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

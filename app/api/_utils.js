@@ -113,8 +113,15 @@ export async function setOrderAt(index, order) {
 // Soft-delete: replace the entry at index with a tombstone {deleted:true,orderId}
 // getAllOrders filters these out so they vanish from queries.
 // LTRIM keeps the list capped at 200 newest, so tombstones eventually fall off.
-export async function softDeleteOrderAt(index, orderId) {
-  return setOrderAt(index, { deleted: true, orderId, deletedAt: new Date().toISOString() });
+export async function softDeleteOrderAt(index, orderId, meta = {}) {
+  const now = new Date();
+  return setOrderAt(index, {
+    deleted: true,
+    orderId,
+    deletedAt: now.toISOString(),
+    deletedAtBeijing: formatBeijingTime(now),
+    ...meta,
+  });
 }
 
 // ── Password hashing (scrypt) ──
@@ -173,6 +180,28 @@ export function setCookieValue(name, value, maxAgeSec = 60 * 60 * 24 * 14) {
 
 export function clearCookieValue(name) {
   return `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+}
+
+export function adminSessionFromRequest(request) {
+  const token = getCookieFromRequest(request, "lm_admin");
+  const session = verifySession(token);
+  return session && session.role === "admin" ? session : null;
+}
+
+export function adminActorFromSession(session) {
+  return {
+    staffId: Number(session?.staffId || 1),
+    staffUsername: clean(session?.staffUsername || session?.username || "admin", 60),
+  };
+}
+
+export function adminActorFromRequest(request) {
+  return adminActorFromSession(adminSessionFromRequest(request));
+}
+
+export function adminActorLabel(actor) {
+  const id = Number(actor?.staffId || 1);
+  return "工作人员 #" + id;
 }
 
 // Admin password check (constant-time)
@@ -450,7 +479,10 @@ export const WITHDRAWAL_STATUS_LABEL = {
 };
 
 const REDEEM_LIST_KEY = "liumeiti:redeem-codes";
+const REDEEM_BATCH_LIST_KEY = "liumeiti:redeem-code-batches";
 const WITHDRAWAL_LIST_KEY = "liumeiti:withdrawals";
+const ADMIN_STAFF_KEY = "liumeiti:admin:staff";
+const ADMIN_ACTION_LOG_KEY = "liumeiti:admin:action-log";
 
 export const REDEEM_SERVICE_PRODUCTS = {
   spotify: { label: "Spotify", amount: 128 },
@@ -461,6 +493,7 @@ export const REDEEM_SERVICE_PRODUCTS = {
 };
 
 function redeemCodeKey(code) { return "liumeiti:redeem-code:" + normalizeRedeemCode(code); }
+function redeemBatchKey(id) { return "liumeiti:redeem-code-batch:" + clean(id, 80); }
 function withdrawalKey(id) { return "liumeiti:withdrawal:" + clean(id, 80); }
 
 export function roundMoney(value) {
@@ -478,7 +511,8 @@ export function normalizeRedeemCode(value) {
 }
 
 function redeemCodeType(item) {
-  return item?.type === "service" || item?.kind === "service" || Array.isArray(item?.services) ? "service" : "balance";
+  const hasServices = Array.isArray(item?.services) && item.services.length > 0;
+  return item?.type === "service" || item?.kind === "service" || hasServices ? "service" : "balance";
 }
 
 function normalizeRedeemServices(services) {
@@ -670,7 +704,161 @@ async function setJsonKey(key, value) {
   } catch (e) { return false; }
 }
 
-export async function createRedeemCode(input) {
+async function adminStaffRecords() {
+  const records = await getJsonKey(ADMIN_STAFF_KEY);
+  return Array.isArray(records) ? records : [];
+}
+
+async function saveAdminStaffRecords(records) {
+  return setJsonKey(ADMIN_STAFF_KEY, Array.isArray(records) ? records : []);
+}
+
+export function envAdminUsername() {
+  return clean(process.env.ADMIN_USERNAME || process.env.ADMIN_USER || "admin", 60) || "admin";
+}
+
+export async function verifyAdminLogin(username, password) {
+  const inputUsername = clean(username || envAdminUsername(), 60);
+  const envUsername = envAdminUsername();
+  if (process.env.ADMIN_PASSWORD && inputUsername.toLowerCase() === envUsername.toLowerCase() && checkAdminPassword(password)) {
+    return { ok: true, staff: { id: 1, username: envUsername, root: true } };
+  }
+
+  const records = await adminStaffRecords();
+  const staff = records.find((item) =>
+    item && item.active !== false && String(item.username || "").toLowerCase() === inputUsername.toLowerCase()
+  );
+  if (staff && verifyPassword(password, staff.passwordHash)) {
+    return { ok: true, staff: { id: Number(staff.id), username: staff.username, remark: staff.remark || "" } };
+  }
+
+  return { ok: false, error: "invalid_credentials" };
+}
+
+export async function listAdminStaff() {
+  const records = await adminStaffRecords();
+  return [
+    {
+      id: 1,
+      username: envAdminUsername(),
+      root: true,
+      active: Boolean(process.env.ADMIN_PASSWORD),
+      createdAtBeijing: "环境变量主账号",
+      remark: "主账号",
+    },
+    ...records.map((item) => ({
+      id: Number(item.id),
+      username: item.username || "",
+      active: item.active !== false,
+      root: false,
+      remark: item.remark || "",
+      createdAt: item.createdAt || "",
+      createdAtBeijing: item.createdAtBeijing || "",
+      createdByStaffId: item.createdByStaffId || "",
+      deletedAtBeijing: item.deletedAtBeijing || "",
+      deletedByStaffId: item.deletedByStaffId || "",
+    })),
+  ];
+}
+
+export async function createAdminStaff(input, actor) {
+  const username = clean(input?.username, 60);
+  const password = String(input?.password || "");
+  const remark = clean(input?.remark, 160);
+  if (!/^[A-Za-z0-9_@.-]{3,40}$/.test(username)) return { ok: false, error: "invalid_username" };
+  if (password.length < 6 || password.length > 64) return { ok: false, error: "invalid_password" };
+
+  const records = await adminStaffRecords();
+  if (username.toLowerCase() === envAdminUsername().toLowerCase() ||
+      records.some((item) => String(item.username || "").toLowerCase() === username.toLowerCase())) {
+    return { ok: false, error: "username_exists" };
+  }
+  const nextId = Math.max(1, ...records.map((item) => Number(item.id) || 1)) + 1;
+  const now = new Date();
+  const staff = {
+    id: nextId,
+    username,
+    passwordHash: hashPassword(password),
+    active: true,
+    remark,
+    createdAt: now.toISOString(),
+    createdAtBeijing: formatBeijingTime(now),
+    createdByStaffId: Number(actor?.staffId || 1),
+  };
+  const saved = await saveAdminStaffRecords([staff, ...records]);
+  if (!saved) return { ok: false, error: "storage_failed" };
+  await pushAdminActionLog({
+    action: "staff_create",
+    actor,
+    target: "staff:" + nextId,
+    detail: { username },
+  });
+  return { ok: true, staff: { ...staff, passwordHash: undefined } };
+}
+
+export async function deleteAdminStaff(id, actor) {
+  const staffId = Number(id);
+  if (!Number.isFinite(staffId) || staffId <= 1) return { ok: false, error: "cannot_delete_root" };
+  const records = await adminStaffRecords();
+  const index = records.findIndex((item) => Number(item.id) === staffId);
+  if (index < 0) return { ok: false, error: "staff_not_found" };
+  const now = new Date();
+  const [removed] = records.splice(index, 1);
+  const saved = await saveAdminStaffRecords(records);
+  if (!saved) return { ok: false, error: "storage_failed" };
+  await pushAdminActionLog({
+    action: "staff_delete",
+    actor,
+    target: "staff:" + staffId,
+    detail: { username: removed?.username || "" },
+  });
+  return { ok: true, deleted: staffId, deletedAtBeijing: formatBeijingTime(now) };
+}
+
+export async function pushAdminActionLog({ action, actor, target, detail }) {
+  const staff = adminActorFromSession(actor);
+  const now = new Date();
+  const entry = {
+    id: makeId("AL"),
+    action: clean(action, 80),
+    target: clean(target, 180),
+    detail: detail && typeof detail === "object" ? detail : {},
+    staffId: Number(staff.staffId || 1),
+    staffUsername: clean(staff.staffUsername || "admin", 60),
+    createdAt: now.toISOString(),
+    createdAtBeijing: formatBeijingTime(now),
+  };
+  const r = redisConfig();
+  if (!r) return false;
+  try {
+    const res = await fetch(r.url + "/pipeline", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + r.token, "Content-Type": "application/json" },
+      body: JSON.stringify([
+        ["LPUSH", ADMIN_ACTION_LOG_KEY, JSON.stringify(entry)],
+        ["LTRIM", ADMIN_ACTION_LOG_KEY, "0", "499"],
+      ]),
+    });
+    return res.ok;
+  } catch (e) { return false; }
+}
+
+export async function getAdminActionLog() {
+  const rows = await redisCmd(["LRANGE", ADMIN_ACTION_LOG_KEY, "0", "199"]);
+  if (!Array.isArray(rows)) return [];
+  return rows.map((s) => { try { return JSON.parse(s); } catch (e) { return null; } }).filter(Boolean);
+}
+
+async function generateUniqueRedeemCode() {
+  for (let i = 0; i < 12; i += 1) {
+    const code = "LM" + randomBytes(4).toString("hex").toUpperCase();
+    const exists = await getJsonKey(redeemCodeKey(code));
+    if (!exists) return code;
+  }
+  return "LM" + randomBytes(5).toString("hex").toUpperCase();
+}
+
+function normalizeRedeemInput(input) {
   const body = input && typeof input === "object" && !Array.isArray(input) ? input : { type: "balance", amount: input };
   const type = clean(body.type || body.kind || "balance", 20) === "service" ? "service" : "balance";
   let value = roundMoney(body.amount);
@@ -682,29 +870,80 @@ export async function createRedeemCode(input) {
   } else if (value <= 0 || value > 100000) {
     return { ok: false, error: "invalid_amount" };
   }
-  let code = "";
-  for (let i = 0; i < 8; i += 1) {
-    code = "LM" + randomBytes(4).toString("hex").toUpperCase();
-    const exists = await getJsonKey(redeemCodeKey(code));
-    if (!exists) break;
-  }
+  const quantity = Math.max(1, Math.min(200, Math.floor(Number(body.quantity || body.count || 1) || 1)));
+  return { ok: true, body, type, value, services, quantity, remark: clean(body.remark || body.note, 180) };
+}
+
+export async function createRedeemCodes(input, actor = null) {
+  const normalized = normalizeRedeemInput(input);
+  if (!normalized.ok) return normalized;
+  const { type, value, services, quantity, remark } = normalized;
   const now = new Date();
-  const item = {
-    code,
+  const batchId = makeId("RB");
+  const actorInfo = actor ? adminActorFromSession(actor) : null;
+  const items = [];
+  for (let i = 0; i < quantity; i += 1) {
+    const code = await generateUniqueRedeemCode();
+    const item = {
+      code,
+      batchId,
+      batchIndex: i + 1,
+      batchSize: quantity,
+      remark,
+      type,
+      amount: value,
+      status: "active",
+      createdAt: now.toISOString(),
+      createdAtBeijing: formatBeijingTime(now),
+    };
+    if (type === "service") item.services = services;
+    if (actorInfo) {
+      item.createdByStaffId = actorInfo.staffId;
+      item.createdByStaffUsername = actorInfo.staffUsername;
+    }
+    items.push(item);
+  }
+  const batch = {
+    id: batchId,
     type,
     amount: value,
     services,
+    quantity,
+    remark,
     status: "active",
     createdAt: now.toISOString(),
     createdAtBeijing: formatBeijingTime(now),
+    codes: items.map((item) => item.code),
   };
-  const ok = await redisPipeline([
-    ["SET", redeemCodeKey(code), JSON.stringify(item)],
-    ["LPUSH", REDEEM_LIST_KEY, code],
+  if (actorInfo) {
+    batch.createdByStaffId = actorInfo.staffId;
+    batch.createdByStaffUsername = actorInfo.staffUsername;
+  }
+  const commands = [
+    ...items.flatMap((item) => [
+      ["SET", redeemCodeKey(item.code), JSON.stringify(item)],
+      ["LPUSH", REDEEM_LIST_KEY, item.code],
+    ]),
+    ["SET", redeemBatchKey(batchId), JSON.stringify(batch)],
+    ["LPUSH", REDEEM_BATCH_LIST_KEY, batchId],
     ["LTRIM", REDEEM_LIST_KEY, "0", "499"],
-  ]);
+    ["LTRIM", REDEEM_BATCH_LIST_KEY, "0", "199"],
+  ];
+  const ok = await redisPipeline(commands);
   if (!ok) return { ok: false, error: "storage_failed" };
-  return { ok: true, code: item };
+  await pushAdminActionLog({
+    action: "redeem_batch_create",
+    actor: actorInfo,
+    target: "redeem-batch:" + batchId,
+    detail: { type, amount: value, quantity, remark },
+  });
+  return { ok: true, code: items[0], codes: items, batch };
+}
+
+export async function createRedeemCode(input, actor = null) {
+  const result = await createRedeemCodes({ ...(input && typeof input === "object" ? input : { amount: input }), quantity: 1 }, actor);
+  if (!result.ok) return result;
+  return { ok: true, code: result.code, batch: result.batch };
 }
 
 export async function listRedeemCodes() {
@@ -717,6 +956,39 @@ export async function listRedeemCodes() {
     type: redeemCodeType(item),
     services: redeemCodeType(item) === "service" ? serviceSummaries((item.services || []).map((s) => s.key || s)) : [],
   }));
+}
+
+export async function listRedeemCodeBatches() {
+  const ids = await redisCmd(["LRANGE", REDEEM_BATCH_LIST_KEY, "0", "199"]);
+  if (!Array.isArray(ids)) return [];
+  const unique = Array.from(new Set(ids));
+  const batches = await Promise.all(unique.map((id) => getJsonKey(redeemBatchKey(id))));
+  const normalized = await Promise.all(batches.filter(Boolean).map(async (batch) => {
+    const codeList = Array.isArray(batch.codes) ? batch.codes : [];
+    const codeItems = (await Promise.all(codeList.map((code) => getJsonKey(redeemCodeKey(code)))))
+      .filter(Boolean)
+      .map((item) => ({
+        ...item,
+        type: redeemCodeType(item),
+        services: redeemCodeType(item) === "service" ? serviceSummaries((item.services || []).map((s) => s.key || s)) : [],
+      }));
+    const counts = codeItems.reduce((acc, item) => {
+      const status = item.status || "active";
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    }, { active: 0, used: 0, void: 0 });
+    const type = redeemCodeType(batch);
+    return {
+      ...batch,
+      type,
+      amount: roundMoney(batch.amount),
+      services: type === "service" ? serviceSummaries((batch.services || []).map((s) => s.key || s)) : [],
+      codes: codeItems,
+      quantity: Number(batch.quantity || codeItems.length || 0),
+      counts,
+    };
+  }));
+  return normalized;
 }
 
 export async function getRedeemCodePublic(codeValue) {
@@ -737,21 +1009,36 @@ export async function getRedeemCodePublic(codeValue) {
   };
 }
 
-export async function updateRedeemCodeStatus(codeValue, status) {
+export async function updateRedeemCodeStatus(codeValue, status, actor = null) {
   const code = normalizeRedeemCode(codeValue);
   const item = await getJsonKey(redeemCodeKey(code));
   if (!item) return { ok: false, error: "code_not_found" };
   if (item.status === "used" && status !== "deleted") return { ok: false, error: "code_already_used" };
   const now = new Date();
   const next = { ...item, status, updatedAt: now.toISOString() };
-  if (status === "void") next.voidedAtBeijing = formatBeijingTime(now);
+  const actorInfo = actor ? adminActorFromSession(actor) : null;
+  if (status === "void") {
+    next.voidedAt = now.toISOString();
+    next.voidedAtBeijing = formatBeijingTime(now);
+    if (actorInfo) {
+      next.voidedByStaffId = actorInfo.staffId;
+      next.voidedByStaffUsername = actorInfo.staffUsername;
+    }
+  }
   const saved = await setJsonKey(redeemCodeKey(code), next);
   if (!saved) return { ok: false, error: "save_failed" };
+  await pushAdminActionLog({
+    action: "redeem_code_" + status,
+    actor: actorInfo,
+    target: "redeem-code:" + code,
+    detail: { batchId: item.batchId || "", type: redeemCodeType(item), amount: item.amount || 0 },
+  });
   return { ok: true, code: next };
 }
 
-export async function deleteRedeemCode(codeValue) {
+export async function deleteRedeemCode(codeValue, actor = null) {
   const code = normalizeRedeemCode(codeValue);
+  const item = await getJsonKey(redeemCodeKey(code));
   const r = redisConfig();
   if (!r) return { ok: false, error: "storage_failed" };
   try {
@@ -762,6 +1049,82 @@ export async function deleteRedeemCode(codeValue) {
         ["DEL", redeemCodeKey(code)],
         ["LREM", REDEEM_LIST_KEY, "0", code],
       ]),
+    });
+    const actorInfo = actor ? adminActorFromSession(actor) : null;
+    await pushAdminActionLog({
+      action: "redeem_code_delete",
+      actor: actorInfo,
+      target: "redeem-code:" + code,
+      detail: { batchId: item?.batchId || "", type: item ? redeemCodeType(item) : "", amount: item?.amount || 0 },
+    });
+    return { ok: res.ok };
+  } catch (e) { return { ok: false, error: "delete_failed" }; }
+}
+
+export async function updateRedeemBatchStatus(batchId, status, actor = null) {
+  const id = clean(batchId, 80);
+  const batch = await getJsonKey(redeemBatchKey(id));
+  if (!batch) return { ok: false, error: "batch_not_found" };
+  const codes = Array.isArray(batch.codes) ? batch.codes : [];
+  const actorInfo = actor ? adminActorFromSession(actor) : null;
+  const results = [];
+  for (const code of codes) {
+    const item = await getJsonKey(redeemCodeKey(code));
+    if (!item || item.status !== "active") {
+      results.push({ code, ok: false, skipped: true });
+      continue;
+    }
+    const updated = await updateRedeemCodeStatus(code, status, actorInfo);
+    results.push({ code, ok: updated.ok });
+  }
+  const now = new Date();
+  const next = {
+    ...batch,
+    status,
+    updatedAt: now.toISOString(),
+    updatedAtBeijing: formatBeijingTime(now),
+  };
+  if (status === "void") {
+    next.voidedAtBeijing = formatBeijingTime(now);
+    if (actorInfo) next.voidedByStaffId = actorInfo.staffId;
+  }
+  await setJsonKey(redeemBatchKey(id), next);
+  await pushAdminActionLog({
+    action: "redeem_batch_" + status,
+    actor: actorInfo,
+    target: "redeem-batch:" + id,
+    detail: { total: codes.length, changed: results.filter((r) => r.ok).length },
+  });
+  return { ok: true, batch: next, results };
+}
+
+export async function deleteRedeemBatch(batchId, actor = null) {
+  const id = clean(batchId, 80);
+  const batch = await getJsonKey(redeemBatchKey(id));
+  if (!batch) return { ok: false, error: "batch_not_found" };
+  const codes = Array.isArray(batch.codes) ? batch.codes : [];
+  const r = redisConfig();
+  if (!r) return { ok: false, error: "storage_failed" };
+  const commands = [
+    ...codes.flatMap((code) => [
+      ["DEL", redeemCodeKey(code)],
+      ["LREM", REDEEM_LIST_KEY, "0", code],
+    ]),
+    ["DEL", redeemBatchKey(id)],
+    ["LREM", REDEEM_BATCH_LIST_KEY, "0", id],
+  ];
+  try {
+    const res = await fetch(r.url + "/pipeline", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + r.token, "Content-Type": "application/json" },
+      body: JSON.stringify(commands),
+    });
+    const actorInfo = actor ? adminActorFromSession(actor) : null;
+    await pushAdminActionLog({
+      action: "redeem_batch_delete",
+      actor: actorInfo,
+      target: "redeem-batch:" + id,
+      detail: { total: codes.length, type: redeemCodeType(batch), amount: batch.amount || 0 },
     });
     return { ok: res.ok };
   } catch (e) { return { ok: false, error: "delete_failed" }; }
@@ -943,7 +1306,7 @@ export function decorateWithdrawalTransactions(transactions, focusedWithdrawal =
   });
 }
 
-export async function updateWithdrawalStatus(id, status, note = "") {
+export async function updateWithdrawalStatus(id, status, note = "", actor = null) {
   const nextStatus = clean(status, 30);
   if (!WITHDRAWAL_STATUS_LABEL[nextStatus]) return { ok: false, error: "invalid_status" };
   const withdrawal = await getJsonKey(withdrawalKey(id));
@@ -953,6 +1316,7 @@ export async function updateWithdrawalStatus(id, status, note = "") {
   if (!user) return { ok: false, error: "user_not_found" };
   const now = new Date();
   const prev = roundMoney(user.balance);
+  const actorInfo = actor ? adminActorFromSession(actor) : null;
   let balanceChanged = false;
   if (oldStatus !== "failed" && nextStatus === "failed") {
     user.balance = roundMoney(prev + Number(withdrawal.amount || 0));
@@ -970,7 +1334,7 @@ export async function updateWithdrawalStatus(id, status, note = "") {
       createdAtBeijing: formatBeijingTime(now),
     };
     await addBalanceTx(withdrawal.userEmail, tx);
-    await pushAdminBalanceLog({ ...tx, email: withdrawal.userEmail, balanceBefore: prev });
+    await pushAdminBalanceLog({ ...tx, email: withdrawal.userEmail, balanceBefore: prev, staffId: actorInfo?.staffId || 1, staffUsername: actorInfo?.staffUsername || "admin" });
   } else if (oldStatus === "failed" && nextStatus !== "failed") {
     const amount = Number(withdrawal.amount || 0);
     if (prev < amount) return { ok: false, error: "insufficient_balance" };
@@ -989,7 +1353,7 @@ export async function updateWithdrawalStatus(id, status, note = "") {
       createdAtBeijing: formatBeijingTime(now),
     };
     await addBalanceTx(withdrawal.userEmail, tx);
-    await pushAdminBalanceLog({ ...tx, email: withdrawal.userEmail, balanceBefore: prev });
+    await pushAdminBalanceLog({ ...tx, email: withdrawal.userEmail, balanceBefore: prev, staffId: actorInfo?.staffId || 1, staffUsername: actorInfo?.staffUsername || "admin" });
   }
   if (balanceChanged) await setUser(withdrawal.userEmail, user);
   const next = {
@@ -1000,7 +1364,17 @@ export async function updateWithdrawalStatus(id, status, note = "") {
     updatedAt: now.toISOString(),
     updatedAtBeijing: formatBeijingTime(now),
   };
+  if (actorInfo) {
+    next.updatedByStaffId = actorInfo.staffId;
+    next.updatedByStaffUsername = actorInfo.staffUsername;
+  }
   const saved = await setJsonKey(withdrawalKey(id), next);
   if (!saved) return { ok: false, error: "save_failed" };
+  await pushAdminActionLog({
+    action: "withdrawal_status",
+    actor: actorInfo,
+    target: "withdrawal:" + withdrawal.id,
+    detail: { from: oldStatus, to: nextStatus, amount: withdrawal.amount || 0, email: withdrawal.userEmail },
+  });
   return { ok: true, withdrawal: next, balance: roundMoney(user.balance) };
 }

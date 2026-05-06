@@ -155,14 +155,6 @@ function GoogleIcon() {
   );
 }
 
-function AppleIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className="oauth-provider-icon">
-      <path fill="currentColor" d="M16.52 12.58c-.02-2.05 1.68-3.04 1.76-3.09-1-.1.14-2.06-3.92-2.2-1.65-.17-3.17.97-3.99.97-.84 0-2.1-.95-3.45-.92-1.78.03-3.42 1.04-4.34 2.64-1.85 3.2-.47 7.94 1.33 10.54.88 1.27 1.93 2.7 3.31 2.65 1.33-.05 1.83-.86 3.44-.86 1.6 0 2.06.86 3.46.83 1.43-.02 2.33-1.3 3.2-2.58 1.01-1.48 1.43-2.92 1.45-2.99-.03-.01-2.23-.85-2.25-3.49ZM13.27 5.55c.73-.88 1.22-2.1 1.08-3.32-1.05.04-2.32.7-3.07 1.58-.67.78-1.26 2.03-1.1 3.22 1.17.09 2.36-.59 3.09-1.48Z" />
-    </svg>
-  );
-}
-
 export default function Page() {
   const [selectedKey, setSelectedKey] = useState(null);
   const [faqOpen, setFaqOpen] = useState(0);
@@ -1048,12 +1040,6 @@ export default function Page() {
               </button>
             </div>
             <form className="auth-form" onSubmit={doAuth}>
-              {(authModal === "login" || authModal === "register") && (
-                <div className="oauth-login-grid">
-                  <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />Google 登录</a>
-                  <a href="/api/auth/oauth/apple/start" className="oauth-login-btn apple"><AppleIcon />Apple 登录</a>
-                </div>
-              )}
               <label className="auth-field">
                 <span>邮箱</span>
                 <input
@@ -1151,6 +1137,12 @@ export default function Page() {
                   : authModal === "forgot" ? "发送邮箱验证码"
                   : "重置密码并登录"}
               </button>
+
+              {(authModal === "login" || authModal === "register") && (
+                <div className="oauth-login-grid bottom">
+                  <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />Google 登录</a>
+                </div>
+              )}
 
               <div className="auth-hints">
                 {authModal === "login" && (
