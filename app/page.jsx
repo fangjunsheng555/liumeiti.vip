@@ -679,7 +679,7 @@ export default function Page() {
             <div className="redeem-card-copy">
               <div className="section-kicker">Redeem Code</div>
               <h2>兑换码兑换</h2>
-              <p>支持余额兑换码与服务兑换码。系统会自动识别类型,服务码可直接进入免支付订单填写。</p>
+              <p>请在下方准确输入兑换码后点击立即兑换，系统会自动识别跳转</p>
             </div>
             <form className="redeem-card-form" onSubmit={submitHomeRedeem}>
               <label>
@@ -690,7 +690,7 @@ export default function Page() {
                     setRedeemInput(e.target.value.toUpperCase());
                     if (redeemStatus?.type === "error") setRedeemStatus(null);
                   }}
-                  placeholder="输入工作人员发放的兑换码"
+                  placeholder="准确输入兑换码，支持粘贴"
                   autoComplete="off"
                 />
               </label>
