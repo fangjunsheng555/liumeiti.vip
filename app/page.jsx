@@ -549,7 +549,7 @@ export default function Page() {
                 <button type="button" className="hero-pair-btn secondary with-auth-tip" onClick={() => setAuthModal("login")}>
                   <Users size={14} />
                   登录 / 注册
-                  <span className="hero-auth-tip">新用户立减 ¥8.88</span>
+                  <span className="hero-auth-tip">新用户注册立减 ¥8.88</span>
                 </button>
               )}
             </div>
