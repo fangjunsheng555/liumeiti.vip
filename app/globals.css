@@ -248,6 +248,7 @@ button { cursor: pointer; border: none; background: transparent; }
   letter-spacing: -.05em;
   font-weight: 900;
   color: #020617;
+  overflow-wrap: anywhere;
 }
 .hero-title-highlight {
   background: linear-gradient(100deg, #020617 0%, #0f766e 45%, #2563eb 100%);
@@ -848,7 +849,7 @@ button { cursor: pointer; border: none; background: transparent; }
   border-top: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.72);
   backdrop-filter: blur(24px);
-  margin-top: 16px;
+  margin-top: 0;
 }
 .footer-inner {
   display: grid;
@@ -2490,6 +2491,8 @@ button { cursor: pointer; border: none; background: transparent; }
   display: grid;
   gap: 12px;
   align-content: start;
+  min-width: 0;
+  overflow: visible;
 }
 .product-card-mini .product-card-top {
   display: grid;
@@ -2766,6 +2769,7 @@ button { cursor: pointer; border: none; background: transparent; }
   max-width: 380px;
 }
 .hero-pair-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2796,6 +2800,20 @@ button { cursor: pointer; border: none; background: transparent; }
 .hero-pair-btn.secondary:hover {
   background: #fff;
   border-color: rgba(15, 23, 42, 0.5);
+}
+.hero-auth-tip {
+  position: absolute;
+  top: -11px;
+  right: 9px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #f59e0b, #ef4444);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: nowrap;
+  box-shadow: 0 8px 18px rgba(239, 68, 68, 0.22);
 }
 
 /* ── Hero micro trust line ── */
@@ -2903,6 +2921,94 @@ button { cursor: pointer; border: none; background: transparent; }
   white-space: nowrap;
 }
 .product-badge svg { color: #fff; }
+
+.redeem-section {
+  padding-top: 8px;
+}
+.redeem-card {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(260px, 1.1fr);
+  gap: 16px;
+  align-items: center;
+  padding: 18px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(240, 253, 250, 0.9));
+}
+.redeem-card-copy h2 {
+  margin-top: 8px;
+  font-size: 24px;
+  font-weight: 900;
+  color: var(--primary);
+  letter-spacing: -.02em;
+}
+.redeem-card-copy p {
+  margin-top: 8px;
+  max-width: 520px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+.redeem-card-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+.redeem-card-form label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+.redeem-card-form label span {
+  font-size: 11px;
+  font-weight: 900;
+  color: #0f766e;
+}
+.redeem-card-form input {
+  width: 100%;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #fff;
+  padding: 0 13px;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: .03em;
+  color: var(--primary);
+  outline: none;
+}
+.redeem-card-form input:focus {
+  border-color: rgba(20, 184, 166, 0.7);
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.12);
+}
+.redeem-card-form button {
+  height: 44px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #0f172a 0%, #134e4a 100%);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.redeem-card-form button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+.redeem-card-status {
+  grid-column: 1 / -1;
+  padding: 9px 11px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.redeem-card-status.info { background: #eff6ff; color: #1d4ed8; }
+.redeem-card-status.success { background: #ecfdf5; color: #047857; }
+.redeem-card-status.error { background: #fef2f2; color: #b91c1c; }
 
 .price-box-pro {
   display: grid;
@@ -3782,6 +3888,13 @@ button { cursor: pointer; border: none; background: transparent; }
   color: #d97706;
   font-weight: 800;
 }
+.cart-summary-row.coupon {
+  color: #0f766e;
+}
+.cart-summary-row.coupon b {
+  color: #0f766e;
+  font-weight: 900;
+}
 .cart-summary-row.total {
   margin-top: 4px;
   padding-top: 10px;
@@ -4290,6 +4403,9 @@ button { cursor: pointer; border: none; background: transparent; }
 }
 .faq-contact-pair > section {
   padding: 0;
+}
+.contact-section {
+  padding-bottom: 8px !important;
 }
 
 /* Adjust testimonials to 2 rows of 3 cols on desktop already, OK */
@@ -5051,7 +5167,7 @@ button { cursor: pointer; border: none; background: transparent; }
   /* Hero — center + slightly larger + longer for mobile */
   .hero-section { padding: 28px 0 26px; }
   .hero-single { text-align: center; }
-  .hero-title { font-size: 32px; line-height: 1.12; letter-spacing: -.025em; }
+  .hero-title { font-size: 30px; line-height: 1.12; letter-spacing: -.01em; }
   .hero-title-highlight { display: inline; }
   .hero-desc { margin: 14px auto 0; font-size: 14px; line-height: 1.7; max-width: 100%; }
   .hero-actions-pair {
@@ -5825,6 +5941,36 @@ button { cursor: pointer; border: none; background: transparent; }
   margin-top: 4px;
 }
 .auth-submit:disabled { opacity: 0.6; cursor: not-allowed; }
+.oauth-login-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.oauth-login-btn {
+  height: 40px;
+  border-radius: 11px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #fff;
+  color: var(--primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  font-size: 12.5px;
+  font-weight: 900;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+  gap: 7px;
+}
+.oauth-login-btn.apple {
+  background: #0f172a;
+  color: #fff;
+  border-color: #0f172a;
+}
+.oauth-provider-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
 .auth-hint {
   margin: 4px 0 0;
   text-align: center;
@@ -6497,6 +6643,137 @@ button { cursor: pointer; border: none; background: transparent; }
   color: #92400e;
 }
 
+.account-money-tools {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 16px;
+}
+.account-tool-alert {
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 800;
+  border: 1px solid transparent;
+}
+.account-tool-alert.success {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: rgba(16, 185, 129, 0.24);
+}
+.account-tool-alert.error {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: rgba(239, 68, 68, 0.24);
+}
+.account-coupon-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(255, 247, 237, 0.98), rgba(236, 253, 245, 0.92));
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  color: #0f766e;
+}
+.account-coupon-strip > svg {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  padding: 7px;
+  border-radius: 10px;
+  background: rgba(20, 184, 166, 0.12);
+}
+.account-coupon-strip div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.account-coupon-strip strong {
+  font-size: 12.5px;
+  font-weight: 900;
+  color: #134e4a;
+}
+.account-coupon-strip span {
+  font-size: 11.5px;
+  color: #0f766e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.account-tool-card {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+.account-tool-card.withdraw {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(240, 253, 250, 0.88));
+}
+.account-tool-head {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 900;
+  color: var(--primary);
+}
+.account-tool-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.account-tool-field.full {
+  grid-column: 1 / -1;
+}
+.account-tool-field span {
+  font-size: 11px;
+  font-weight: 800;
+  color: #64748b;
+}
+.account-tool-field input {
+  width: 100%;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #f8fafc;
+  padding: 0 11px;
+  font-size: 16px;
+  color: var(--primary);
+  outline: none;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.account-tool-field input:focus {
+  background: #fff;
+  border-color: rgba(20, 184, 166, 0.68);
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.12);
+}
+.account-tool-card button {
+  grid-column: 1 / -1;
+  height: 42px;
+  border: none;
+  border-radius: 11px;
+  background: linear-gradient(135deg, #0f172a 0%, #134e4a 100%);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.account-tool-card button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
 /* ── Checkout: balance payment option ── */
 .payment-method-icon.balance {
   background: linear-gradient(135deg, #f59e0b, #b45309);
@@ -6527,9 +6804,11 @@ button { cursor: pointer; border: none; background: transparent; }
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 4px;
+  overflow-x: auto;
 }
 .admin-tab-btn {
   flex: 1;
+  min-width: 72px;
   padding: 8px 10px;
   border-radius: 9px;
   background: transparent;
@@ -6845,6 +7124,317 @@ button { cursor: pointer; border: none; background: transparent; }
 .admin-userlist-action.ban:hover { background: #fde68a; }
 .admin-userlist-action.delete { background: #fef2f2; color: #b91c1c; border-color: rgba(220, 38, 38, 0.3); }
 .admin-userlist-action.delete:hover { background: #fee2e2; }
+
+.admin-withdraw-pane {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.9fr) minmax(0, 1.25fr);
+  gap: 12px;
+}
+.admin-withdraw-list,
+.admin-withdraw-detail,
+.admin-codes-pane {
+  padding: 12px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+.admin-withdraw-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: #f8fafc;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.admin-withdraw-item:hover {
+  background: #fff;
+  border-color: rgba(20, 184, 166, 0.48);
+}
+.admin-withdraw-item span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.admin-withdraw-item strong,
+.admin-code-item strong {
+  font-size: 12.5px;
+  font-weight: 900;
+  color: var(--primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-withdraw-item small,
+.admin-code-item small {
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-withdraw-item b,
+.admin-code-item b {
+  font-size: 13px;
+  font-weight: 900;
+  color: #134e4a;
+  overflow-wrap: anywhere;
+}
+.admin-withdraw-item em,
+.admin-code-item em {
+  font-style: normal;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 10px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.admin-withdraw-item.status-processing em { background: #dbeafe; color: #1d4ed8; }
+.admin-withdraw-item.status-success em { background: #dcfce7; color: #15803d; }
+.admin-withdraw-item.status-failed em,
+.admin-code-item.status-void em { background: #fee2e2; color: #b91c1c; }
+.admin-code-item.status-used em { background: #e0e7ff; color: #3730a3; }
+.admin-withdraw-info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.admin-withdraw-info-grid div {
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+.admin-withdraw-info-grid span {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--muted);
+}
+.admin-withdraw-info-grid b {
+  display: block;
+  font-size: 12.5px;
+  color: var(--primary);
+  overflow-wrap: anywhere;
+}
+.admin-withdraw-status-form,
+.admin-code-form {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 10px;
+}
+.admin-withdraw-status-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.admin-withdraw-status-form span {
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--muted);
+}
+.admin-withdraw-status-form input,
+.admin-withdraw-status-form select,
+.admin-code-form input {
+  width: 100%;
+  height: 38px;
+  border-radius: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #f8fafc;
+  padding: 0 10px;
+  font-size: 16px;
+  color: var(--primary);
+  outline: none;
+}
+.admin-withdraw-status-form button,
+.admin-code-form button,
+.admin-code-item button {
+  height: 38px;
+  border: none;
+  border-radius: 9px;
+  background: var(--primary);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.admin-withdraw-status-form button:disabled,
+.admin-code-form button:disabled,
+.admin-code-item button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.admin-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 900;
+  color: var(--primary);
+}
+.admin-code-form {
+  grid-template-columns: 1fr;
+  align-items: stretch;
+}
+.admin-code-type-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  padding: 4px;
+  border-radius: 10px;
+  background: #f1f5f9;
+}
+.admin-code-type-toggle button {
+  height: 32px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+}
+.admin-code-type-toggle button.active {
+  background: #fff;
+  color: #0f766e;
+  box-shadow: 0 5px 12px rgba(15, 23, 42, 0.08);
+}
+.admin-code-service-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 6px;
+}
+.admin-code-service-picker button {
+  height: 42px;
+  justify-content: flex-start;
+  background: #f8fafc;
+  color: var(--primary);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+.admin-code-service-picker button.selected {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: rgba(16, 185, 129, 0.35);
+}
+.admin-code-service-picker img {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  object-fit: cover;
+}
+.admin-code-list {
+  display: grid;
+  gap: 6px;
+  max-height: 430px;
+  overflow-y: auto;
+}
+.admin-code-item {
+  display: grid;
+  grid-template-columns: minmax(132px, 1fr) auto minmax(72px, 0.7fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+.admin-code-item > span {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-code-item > div {
+  display: flex;
+  gap: 5px;
+}
+.admin-code-item button {
+  height: 28px;
+  padding: 0 9px;
+  background: #ecfeff;
+  color: #0e7490;
+  border: 1px solid rgba(6, 182, 212, 0.24);
+}
+.admin-code-item button.danger {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: rgba(220, 38, 38, 0.22);
+}
+@media (max-width: 820px) {
+  .admin-withdraw-pane {
+    grid-template-columns: 1fr;
+  }
+  .admin-withdraw-status-form,
+  .admin-code-form {
+    grid-template-columns: 1fr;
+  }
+  .admin-card-title {
+    margin-bottom: 2px;
+  }
+  .admin-code-item {
+    grid-template-columns: 1fr auto;
+  }
+  .admin-code-item > span:nth-child(3),
+  .admin-code-item > div {
+    grid-column: 1 / -1;
+  }
+  .admin-code-item > div {
+    justify-content: flex-end;
+  }
+}
+@media (max-width: 560px) {
+  .account-tool-card,
+  .admin-withdraw-info-grid,
+  .oauth-login-grid {
+    grid-template-columns: 1fr;
+  }
+  .redeem-card,
+  .redeem-card-form {
+    grid-template-columns: 1fr;
+  }
+  .redeem-card {
+    padding: 14px;
+    gap: 12px;
+  }
+  .redeem-card-copy h2 {
+    font-size: 20px;
+  }
+  .account-coupon-strip span {
+    white-space: normal;
+  }
+  .admin-code-item {
+    grid-template-columns: 1fr;
+  }
+  .admin-code-item > div {
+    justify-content: stretch;
+  }
+  .admin-code-item button {
+    flex: 1;
+  }
+}
+@media (max-width: 420px) {
+  .hero-title-highlight {
+    display: block;
+  }
+}
 /* Override grid layout for the wrapper div */
 .admin-userlist-item {
   display: flex;

@@ -118,6 +118,7 @@ function publicOrder(order, type) {
     itemCount: items.length,
     serviceLabel: order.serviceLabel || items.map((i) => i.label).join(" + "),
     paymentMethod: order.paymentMethod || "alipay",
+    redeemCode: order.redeemCode || "",
     subtotal: Number(order.subtotal || order.originalAmount || items.reduce((s, i) => s + i.amount, 0)),
     discountRate: Number(order.discountRate || 0),
     discountLabel: order.discountLabel || "",

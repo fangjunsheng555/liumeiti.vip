@@ -245,10 +245,19 @@ export function useCart() {
     });
   }
 
+  function replaceCart(keys) {
+    const valid = new Set(PRODUCTS.map((p) => p.key));
+    const seen = new Set();
+    const next = (Array.isArray(keys) ? keys : [])
+      .filter((key) => typeof key === "string" && valid.has(key) && !seen.has(key) && seen.add(key));
+    setCartState(next);
+    saveCart(next);
+  }
+
   function clearCart() {
     setCartState([]);
     saveCart([]);
   }
 
-  return { cart, hydrated, addToCart, removeFromCart, toggleCart, clearCart };
+  return { cart, hydrated, addToCart, removeFromCart, toggleCart, replaceCart, clearCart };
 }

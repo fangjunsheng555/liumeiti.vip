@@ -13,6 +13,7 @@ function formatMoney(value) {
 
 export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, supportContact, usdtRate }) {
   const isUsdt = order.paymentMethod === "usdt";
+  const isRedeem = order.paymentMethod === "redeem";
   const items = Array.isArray(order.items) && order.items.length > 0
     ? order.items
     : [{
@@ -79,10 +80,14 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
   }).join("");
 
   // Paid value display
-  const paidValue = isUsdt
+  const paidValue = isRedeem
+    ? `服务兑换码`
+    : isUsdt
     ? `${order.paidAmount || order.finalUsdt} <span style="font-size:18px;color:#0f766e;font-weight:800;">USDT</span>`
     : formatMoney(order.paidAmount || order.finalAmount);
-  const paidNote = isUsdt
+  const paidNote = isRedeem
+    ? `已通过服务兑换码免支付兑换`
+    : isUsdt
     ? `已通过 USDT-TRC20 网络支付(已享 9 折)`
     : `已通过支付宝担保支付`;
 
@@ -94,7 +99,7 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
 <title>订单确认 - ${escapeHtml(brandName)}</title>
 </head>
 <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;color:#0f172a;-webkit-font-smoothing:antialiased;">
-  <div style="display:none;max-height:0;overflow:hidden;">请点击查阅邮件内容 · ${escapeHtml(brandName)} · 实付 ${isUsdt ? (order.paidAmount + " USDT") : ("¥" + order.finalAmount)}</div>
+  <div style="display:none;max-height:0;overflow:hidden;">请点击查阅邮件内容 · ${escapeHtml(brandName)} · 实付 ${isRedeem ? "服务兑换码" : isUsdt ? (order.paidAmount + " USDT") : ("¥" + order.finalAmount)}</div>
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f6fb;padding:32px 16px;">
     <tr>
       <td align="center">
@@ -163,7 +168,12 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
                 ${isCart && order.discountRate > 0 ? `
                 <tr>
                   <td style="padding:4px 16px;color:#d97706;font-size:13px;">组合优惠 · ${escapeHtml(order.discountLabel || "")}</td>
-                  <td style="padding:4px 16px;color:#d97706;font-size:13px;font-weight:600;text-align:right;">−${formatMoney(order.subtotal - order.finalAmount)}</td>
+                  <td style="padding:4px 16px;color:#d97706;font-size:13px;font-weight:600;text-align:right;">−${formatMoney(order.subtotal - (order.bundleFinalAmount || order.finalAmount))}</td>
+                </tr>` : ""}
+                ${isRedeem ? `
+                <tr>
+                  <td style="padding:4px 16px;color:#0f766e;font-size:13px;">服务兑换码抵扣</td>
+                  <td style="padding:4px 16px;color:#0f766e;font-size:13px;font-weight:700;text-align:right;">−${formatMoney(order.bundleFinalAmount || order.subtotal)}</td>
                 </tr>` : ""}
                 ${isUsdt ? `
                 <tr>
@@ -248,6 +258,7 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
 
 export function buildOrderEmailText({ order, brandName, siteDomain, siteUrl, usdtRate }) {
   const isUsdt = order.paymentMethod === "usdt";
+  const isRedeem = order.paymentMethod === "redeem";
   const items = Array.isArray(order.items) && order.items.length > 0
     ? order.items
     : [{ label: order.serviceLabel || "订单", cycle: order.cycle || "1年", amount: order.finalAmount || 0, account: order.account, password: order.password, service: order.service }];
@@ -274,10 +285,13 @@ export function buildOrderEmailText({ order, brandName, siteDomain, siteUrl, usd
   if (isCart) {
     lines.push(``, `商品总价: ¥${order.subtotal}`);
     if (order.discountRate > 0) {
-      lines.push(`组合优惠 ${order.discountLabel}: −¥${order.subtotal - order.finalAmount}`);
+      lines.push(`组合优惠 ${order.discountLabel}: −¥${order.subtotal - (order.bundleFinalAmount || order.finalAmount)}`);
     }
   }
-  if (isUsdt) {
+  if (isRedeem) {
+    lines.push(`服务兑换码: ${order.redeemCode || ""}`);
+    lines.push(`实付: 服务兑换码免支付`);
+  } else if (isUsdt) {
     lines.push(`折后人民币: ¥${order.finalAmount}`);
     lines.push(`实付: ${order.paidAmount} USDT (× 0.9 ÷ ${usdtRate || 6.85})`);
   } else {

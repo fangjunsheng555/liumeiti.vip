@@ -7,6 +7,7 @@ import {
   LoaderCircle, LogOut, Mail, ShoppingBag, X,
   AlertTriangle, Wallet, TrendingDown, TrendingUp,
   User, Edit3, Check,
+  Gift, Send, CreditCard,
 } from "lucide-react";
 
 const STATUS_LABEL = { received: "订单已收到", completed: "订单已完成", invalid: "订单无效·未收到付款" };
@@ -17,7 +18,7 @@ function copy(text) {
 }
 
 export default function AccountPage() {
-  const [state, setState] = useState({ loading: true, email: null, username: "", orders: [], balance: 0, txs: [] });
+  const [state, setState] = useState({ loading: true, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [] });
   const [activeOrder, setActiveOrder] = useState(null);
   const [showTxs, setShowTxs] = useState(false);
   const [copiedKey, setCopiedKey] = useState("");
@@ -25,6 +26,13 @@ export default function AccountPage() {
   const [nameDraft, setNameDraft] = useState("");
   const [nameSaving, setNameSaving] = useState(false);
   const [nameError, setNameError] = useState("");
+  const [moneyForm, setMoneyForm] = useState({
+    transferEmail: "", transferAmount: "",
+    redeemCode: "",
+    withdrawAmount: "", alipayAccount: "", realName: "",
+  });
+  const [moneyBusy, setMoneyBusy] = useState("");
+  const [moneyStatus, setMoneyStatus] = useState(null);
 
   async function load() {
     setState((s) => ({ ...s, loading: true }));
@@ -47,10 +55,12 @@ export default function AccountPage() {
           orders: me.orders,
           balance: Number(bal.balance || 0),
           txs: bal.transactions || [],
+          coupons: bal.coupons || me.coupons || [],
+          withdrawals: bal.withdrawals || [],
         });
       }
     } catch (e) {
-      setState({ loading: false, email: null, orders: [], balance: 0, txs: [] });
+      setState({ loading: false, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [] });
     }
   }
 
@@ -95,6 +105,38 @@ export default function AccountPage() {
       setNameError("网络错误");
     } finally {
       setNameSaving(false);
+    }
+  }
+
+  function updateMoneyField(field, value) {
+    setMoneyForm((cur) => ({ ...cur, [field]: value }));
+    if (moneyStatus?.type === "error") setMoneyStatus(null);
+  }
+
+  async function submitMoneyAction(action, endpoint, payload, resetFields = []) {
+    if (moneyBusy) return;
+    setMoneyBusy(action);
+    setMoneyStatus(null);
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.message || data.error || "操作失败");
+      setMoneyStatus({ type: "success", message: data.message || "操作成功" });
+      setMoneyForm((cur) => {
+        const next = { ...cur };
+        resetFields.forEach((k) => { next[k] = ""; });
+        return next;
+      });
+      await load();
+    } catch (e) {
+      setMoneyStatus({ type: "error", message: e.message || "操作失败,请稍后再试" });
+    } finally {
+      setMoneyBusy("");
     }
   }
 
@@ -175,7 +217,7 @@ export default function AccountPage() {
                     </div>
                     <div className="account-tx-info">
                       <strong>{tx.reason}</strong>
-                      <small>{tx.createdAtBeijing}</small>
+                      <small>{tx.createdAtBeijing}{tx.statusLabel ? ` · ${tx.statusLabel}` : ""}</small>
                     </div>
                     <div className="account-tx-amount">
                       {tx.amount > 0 ? "+" : ""}¥{Math.abs(tx.amount).toFixed(2)}
@@ -189,6 +231,87 @@ export default function AccountPage() {
               </div>
             </div>
           )}
+        </section>
+
+        <section className="account-money-tools">
+          {moneyStatus && <div className={`account-tool-alert ${moneyStatus.type}`}>{moneyStatus.message}</div>}
+          <div className="account-coupon-strip">
+            <Gift size={14} />
+            <div>
+              <strong>付款自动抵扣</strong>
+              <span>
+                {state.coupons.find((c) => c.status === "active")
+                  ? `可用优惠券 ¥${Number(state.coupons.find((c) => c.status === "active").amount || 0).toFixed(2)}`
+                  : "暂无可用优惠券"}
+              </span>
+            </div>
+          </div>
+
+          <form
+            className="account-tool-card"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitMoneyAction("transfer", "/api/auth/transfer", {
+                email: moneyForm.transferEmail,
+                amount: moneyForm.transferAmount,
+              }, ["transferEmail", "transferAmount"]);
+            }}
+          >
+            <div className="account-tool-head"><Send size={14} />邮箱转账</div>
+            <label className="account-tool-field">
+              <span>收款邮箱</span>
+              <input value={moneyForm.transferEmail} onChange={(e) => updateMoneyField("transferEmail", e.target.value)} placeholder="对方注册邮箱" inputMode="email" required />
+            </label>
+            <label className="account-tool-field">
+              <span>转账金额</span>
+              <input value={moneyForm.transferAmount} onChange={(e) => updateMoneyField("transferAmount", e.target.value)} placeholder="0.00" inputMode="decimal" required />
+            </label>
+            <button type="submit" disabled={moneyBusy === "transfer"}>{moneyBusy === "transfer" ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}确认转账</button>
+          </form>
+
+          <form
+            className="account-tool-card"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitMoneyAction("redeem", "/api/auth/redeem", {
+                code: moneyForm.redeemCode,
+              }, ["redeemCode"]);
+            }}
+          >
+            <div className="account-tool-head"><Gift size={14} />余额兑换码</div>
+            <label className="account-tool-field full">
+              <span>兑换码</span>
+              <input value={moneyForm.redeemCode} onChange={(e) => updateMoneyField("redeemCode", e.target.value.toUpperCase())} placeholder="输入工作人员发放的兑换码" autoComplete="off" required />
+            </label>
+            <button type="submit" disabled={moneyBusy === "redeem"}>{moneyBusy === "redeem" ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}立即兑换</button>
+          </form>
+
+          <form
+            className="account-tool-card withdraw"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitMoneyAction("withdraw", "/api/auth/withdraw", {
+                amount: moneyForm.withdrawAmount,
+                alipayAccount: moneyForm.alipayAccount,
+                realName: moneyForm.realName,
+              }, ["withdrawAmount", "alipayAccount", "realName"]);
+            }}
+          >
+            <div className="account-tool-head"><CreditCard size={14} />余额提现</div>
+            <label className="account-tool-field">
+              <span>提现金额</span>
+              <input value={moneyForm.withdrawAmount} onChange={(e) => updateMoneyField("withdrawAmount", e.target.value)} placeholder="0.00" inputMode="decimal" required />
+            </label>
+            <label className="account-tool-field">
+              <span>姓名</span>
+              <input value={moneyForm.realName} onChange={(e) => updateMoneyField("realName", e.target.value)} placeholder="支付宝实名" autoComplete="name" required />
+            </label>
+            <label className="account-tool-field full">
+              <span>支付宝账号</span>
+              <input value={moneyForm.alipayAccount} onChange={(e) => updateMoneyField("alipayAccount", e.target.value)} placeholder="手机号 / 邮箱 / 支付宝账号" required />
+            </label>
+            <button type="submit" disabled={moneyBusy === "withdraw"}>{moneyBusy === "withdraw" ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}提交待审核</button>
+          </form>
         </section>
 
         <section className="account-orders">
@@ -227,7 +350,7 @@ export default function AccountPage() {
                     {o.itemCount > 1 && <em>{o.itemCount} 件</em>}
                   </div>
                   <div className="account-order-bot">
-                    <span>{o.paidCurrency === "USDT" ? `${o.paidAmount} USDT` : `¥${o.paidAmount}`}</span>
+                    <span>{o.paidCurrency === "CODE" ? "兑换码" : o.paidCurrency === "USDT" ? `${o.paidAmount} USDT` : `¥${o.paidAmount}`}</span>
                     <small>{o.createdAtBeijing?.split(" ")[0] || ""}</small>
                   </div>
                 </button>
@@ -256,8 +379,8 @@ export default function AccountPage() {
             <div className="account-modal-body">
               <div className="account-modal-amount">
                 <span>实付金额</span>
-                <b>{activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b>
-                <em>{activeOrder.paymentMethod === "usdt" ? "USDT" : "支付宝"}</em>
+                <b>{activeOrder.paidCurrency === "CODE" ? "服务兑换码" : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b>
+                <em>{activeOrder.paymentMethod === "redeem" ? "兑换码" : activeOrder.paymentMethod === "usdt" ? "USDT" : "支付宝"}</em>
               </div>
 
               <div className="account-modal-items-label">商品明细 · {activeOrder.itemCount} 件</div>

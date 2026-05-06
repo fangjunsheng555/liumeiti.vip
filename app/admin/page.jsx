@@ -2,10 +2,12 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { PRODUCTS } from "../lib/store";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
   CheckCircle2, Clock, Inbox, X, AlertTriangle, Trash2,
+  Gift, CreditCard,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -19,6 +21,12 @@ const STATUS_ICON_KEY = {
   completed: "check",
   invalid: "x",
 };
+const WITHDRAWAL_STATUS = [
+  ["pending", "待审核"],
+  ["processing", "提现中"],
+  ["success", "提现成功"],
+  ["failed", "审核失败"],
+];
 
 function copyText(text) {
   if (typeof window === "undefined") return;
@@ -75,6 +83,21 @@ export default function AdminPage() {
   const [userListQuery, setUserListQuery] = useState("");
   const [userListLoading, setUserListLoading] = useState(false);
 
+  // Withdrawals + redeem codes
+  const [withdrawals, setWithdrawals] = useState([]);
+  const [withdrawalLoading, setWithdrawalLoading] = useState(false);
+  const [activeWithdrawal, setActiveWithdrawal] = useState(null);
+  const [withdrawalStatus, setWithdrawalStatus] = useState("pending");
+  const [withdrawalNote, setWithdrawalNote] = useState("");
+  const [withdrawalBusy, setWithdrawalBusy] = useState(false);
+  const [codes, setCodes] = useState([]);
+  const [codesLoading, setCodesLoading] = useState(false);
+  const [codeType, setCodeType] = useState("balance");
+  const [codeAmount, setCodeAmount] = useState("");
+  const [codeServices, setCodeServices] = useState([]);
+  const [codeBusy, setCodeBusy] = useState("");
+  const [codeResult, setCodeResult] = useState(null);
+
   const loadGlobalLog = useCallback(async (q, filter, source) => {
     setLogLoading(true);
     try {
@@ -99,6 +122,30 @@ export default function AdminPage() {
     }
   }, []);
 
+  const loadWithdrawals = useCallback(async () => {
+    setWithdrawalLoading(true);
+    try {
+      const res = await fetch("/api/admin/withdrawals", { credentials: "same-origin" });
+      if (res.status === 401) { setAuthed(false); return; }
+      const data = await res.json();
+      if (data.ok) setWithdrawals(data.withdrawals || []);
+    } catch (e) {} finally {
+      setWithdrawalLoading(false);
+    }
+  }, []);
+
+  const loadCodes = useCallback(async () => {
+    setCodesLoading(true);
+    try {
+      const res = await fetch("/api/admin/redeem-codes", { credentials: "same-origin" });
+      if (res.status === 401) { setAuthed(false); return; }
+      const data = await res.json();
+      if (data.ok) setCodes(data.codes || []);
+    } catch (e) {} finally {
+      setCodesLoading(false);
+    }
+  }, []);
+
   const loadAllUsers = useCallback(async (q) => {
     setUserListLoading(true);
     try {
@@ -119,7 +166,9 @@ export default function AdminPage() {
     if (!authed) return;
     if (tab === "users") loadAllUsers(userListQuery);
     if (tab === "balance") loadGlobalLog(logQuery, logFilter, logSource);
-  }, [authed, tab, loadGlobalLog, loadAllUsers, logFilter, logSource]);
+    if (tab === "withdrawals") loadWithdrawals();
+    if (tab === "codes") loadCodes();
+  }, [authed, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes, logFilter, logSource]);
 
   async function executeUserAction() {
     if (!confirmUserAction || userActionBusy) return;
@@ -223,6 +272,101 @@ export default function AdminPage() {
       setBalResult({ type: "error", message: "网络错误" });
     } finally {
       setBalBusy(false);
+    }
+  }
+
+  async function openWithdrawal(id) {
+    setWithdrawalBusy(true);
+    try {
+      const res = await fetch(`/api/admin/withdrawals/${encodeURIComponent(id)}`, { credentials: "same-origin" });
+      const data = await res.json();
+      if (data.ok) {
+        setActiveWithdrawal(data);
+        setWithdrawalStatus(data.withdrawal.status || "pending");
+        setWithdrawalNote(data.withdrawal.reviewNote || "");
+      }
+    } catch (e) {} finally {
+      setWithdrawalBusy(false);
+    }
+  }
+
+  async function saveWithdrawalStatus(e) {
+    e.preventDefault();
+    if (!activeWithdrawal || withdrawalBusy) return;
+    setWithdrawalBusy(true);
+    try {
+      const res = await fetch(`/api/admin/withdrawals/${encodeURIComponent(activeWithdrawal.withdrawal.id)}`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: withdrawalStatus, reviewNote: withdrawalNote }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setActiveWithdrawal(data);
+        await loadWithdrawals();
+      }
+    } catch (e) {} finally {
+      setWithdrawalBusy(false);
+    }
+  }
+
+  async function createCode(e) {
+    e.preventDefault();
+    if (codeBusy) return;
+    if (codeType === "service" && codeServices.length === 0) {
+      setCodeResult({ type: "error", message: "请至少选择一个服务" });
+      return;
+    }
+    setCodeBusy("create");
+    setCodeResult(null);
+    try {
+      const res = await fetch("/api/admin/redeem-codes", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: codeType, amount: codeAmount, services: codeServices }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setCodes(data.codes || []);
+        setCodeAmount("");
+        if (codeType === "service") setCodeServices([]);
+        setCodeResult({ type: "success", message: `已生成兑换码 ${data.code.code}` });
+      } else {
+        setCodeResult({ type: "error", message: data.error === "missing_services" ? "请至少选择一个服务" : "生成失败,请检查金额或服务" });
+      }
+    } catch (e) {
+      setCodeResult({ type: "error", message: "网络错误" });
+    } finally {
+      setCodeBusy("");
+    }
+  }
+
+  function toggleCodeService(key) {
+    setCodeServices((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
+  }
+
+  async function codeAction(code, action) {
+    if (codeBusy) return;
+    setCodeBusy(action + code);
+    setCodeResult(null);
+    try {
+      const res = await fetch(`/api/admin/redeem-codes/${encodeURIComponent(code)}`, {
+        method: action === "delete" ? "DELETE" : "PATCH",
+        credentials: "same-origin",
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setCodes(data.codes || []);
+        setCodeResult({ type: "success", message: action === "delete" ? "兑换码已删除" : "兑换码已作废" });
+      } else {
+        setCodeResult({ type: "error", message: data.error || "操作失败" });
+      }
+    } catch (e) {
+      setCodeResult({ type: "error", message: "网络错误" });
+    } finally {
+      setCodeBusy("");
     }
   }
 
@@ -486,6 +630,8 @@ export default function AdminPage() {
         <div className="admin-tabs">
           <button type="button" className={`admin-tab-btn${tab === "orders" ? " active" : ""}`} onClick={() => setTab("orders")}>订单管理</button>
           <button type="button" className={`admin-tab-btn${tab === "users" ? " active" : ""}`} onClick={() => setTab("users")}>用户管理</button>
+          <button type="button" className={`admin-tab-btn${tab === "withdrawals" ? " active" : ""}`} onClick={() => setTab("withdrawals")}>提现审核</button>
+          <button type="button" className={`admin-tab-btn${tab === "codes" ? " active" : ""}`} onClick={() => setTab("codes")}>兑换码</button>
           <button type="button" className={`admin-tab-btn${tab === "balance" ? " active" : ""}`} onClick={() => setTab("balance")}>余额变动</button>
         </div>
 
@@ -626,6 +772,139 @@ export default function AdminPage() {
               </>
             )}
 
+          </div>
+        ) : tab === "withdrawals" ? (
+          <div className="admin-withdraw-pane">
+            <div className="admin-withdraw-list">
+              <div className="admin-userlist-head">
+                <h3>提现申请 <em>{withdrawals.length}</em></h3>
+                <button type="button" className="admin-filter-btn" onClick={loadWithdrawals} disabled={withdrawalLoading}>
+                  {withdrawalLoading ? "刷新中" : "刷新"}
+                </button>
+              </div>
+              <div className="admin-userlist-body">
+                {withdrawals.length === 0 ? (
+                  <div className="admin-userlist-empty">{withdrawalLoading ? "加载中..." : "暂无提现申请"}</div>
+                ) : withdrawals.map((w) => (
+                  <button
+                    key={w.id}
+                    type="button"
+                    className={`admin-withdraw-item status-${w.status}`}
+                    onClick={() => openWithdrawal(w.id)}
+                  >
+                    <span>
+                      <strong>{w.username || "未设置用户名"}</strong>
+                      <small>{w.userEmail}</small>
+                    </span>
+                    <span>
+                      <b>¥{Number(w.amount || 0).toFixed(2)}</b>
+                      <em>{w.statusLabel || "待审核"}</em>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="admin-withdraw-detail">
+              {!activeWithdrawal ? (
+                <div className="admin-userlist-empty">点击提现申请查看支付宝、姓名与该用户所有余额明细</div>
+              ) : (
+                <>
+                  <div className="admin-withdraw-info-grid">
+                    <div><span>用户名</span><b>{activeWithdrawal.withdrawal.username || "未设置"}</b></div>
+                    <div><span>邮箱</span><b>{activeWithdrawal.withdrawal.userEmail}</b></div>
+                    <div><span>提现金额</span><b>¥{Number(activeWithdrawal.withdrawal.amount || 0).toFixed(2)}</b></div>
+                    <div><span>当前余额</span><b>¥{Number(activeWithdrawal.user?.balance || 0).toFixed(2)}</b></div>
+                    <div><span>支付宝</span><b>{activeWithdrawal.withdrawal.alipayAccount}</b></div>
+                    <div><span>姓名</span><b>{activeWithdrawal.withdrawal.realName}</b></div>
+                  </div>
+                  <form className="admin-withdraw-status-form" onSubmit={saveWithdrawalStatus}>
+                    <label>
+                      <span>状态</span>
+                      <select value={withdrawalStatus} onChange={(e) => setWithdrawalStatus(e.target.value)}>
+                        {WITHDRAWAL_STATUS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      <span>备注</span>
+                      <input value={withdrawalNote} onChange={(e) => setWithdrawalNote(e.target.value)} placeholder="可选,给工作人员内部记录" />
+                    </label>
+                    <button type="submit" disabled={withdrawalBusy}>
+                      {withdrawalBusy ? <LoaderCircle size={12} className="spin-icon" /> : <CheckCircle2 size={12} />}
+                      更新状态
+                    </button>
+                  </form>
+                  <div className="admin-tx-list">
+                    <div className="admin-tx-list-label">该用户余额明细 · {activeWithdrawal.transactions.length} 笔</div>
+                    {activeWithdrawal.transactions.map((tx) => (
+                      <div key={tx.id} className={`admin-tx-item${tx.amount > 0 ? " positive" : " negative"}`}>
+                        <div className="admin-tx-item-info">
+                          <strong>{tx.reason}</strong>
+                          <small>{tx.createdAtBeijing}{tx.statusLabel ? ` · ${tx.statusLabel}` : ""}</small>
+                        </div>
+                        <div className="admin-tx-item-amount">{tx.amount > 0 ? "+" : ""}¥{Math.abs(tx.amount).toFixed(2)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        ) : tab === "codes" ? (
+          <div className="admin-codes-pane">
+            <form className="admin-code-form" onSubmit={createCode}>
+              <div className="admin-card-title"><Gift size={15} />生成兑换码</div>
+              <div className="admin-code-type-toggle">
+                <button type="button" className={codeType === "balance" ? "active" : ""} onClick={() => setCodeType("balance")}>余额码</button>
+                <button type="button" className={codeType === "service" ? "active" : ""} onClick={() => setCodeType("service")}>服务码</button>
+              </div>
+              {codeType === "balance" ? (
+                <input
+                  value={codeAmount}
+                  onChange={(e) => setCodeAmount(e.target.value)}
+                  placeholder="输入兑换金额,例如 50 或 88.88"
+                  inputMode="decimal"
+                  required
+                />
+              ) : (
+                <div className="admin-code-service-picker">
+                  {PRODUCTS.map((p) => (
+                    <button
+                      key={p.key}
+                      type="button"
+                      className={codeServices.includes(p.key) ? "selected" : ""}
+                      onClick={() => toggleCodeService(p.key)}
+                    >
+                      <img src={p.image} alt="" />
+                      <span>{p.title}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <button type="submit" disabled={codeBusy === "create"}>
+                {codeBusy === "create" ? <LoaderCircle size={12} className="spin-icon" /> : <Gift size={12} />}
+                生成兑换码
+              </button>
+            </form>
+            {codeResult && <div className={`admin-alert ${codeResult.type}`}>{codeResult.message}</div>}
+            <div className="admin-code-list">
+              {codes.length === 0 ? (
+                <div className="admin-userlist-empty">{codesLoading ? "加载中..." : "暂无兑换码"}</div>
+              ) : codes.map((c) => (
+                <div key={c.code} className={`admin-code-item status-${c.status}`}>
+                  <span>
+                    <strong>{c.code}</strong>
+                    <small>{c.type === "service" ? "服务兑换码" : "余额兑换码"} · {c.createdAtBeijing || c.createdAt}</small>
+                  </span>
+                  <span><b>{c.type === "service" ? (c.services || []).map((s) => s.label).join(" + ") : `¥${Number(c.amount || 0).toFixed(2)}`}</b><em>{c.status === "active" ? "可兑换" : c.status === "used" ? "已使用" : "已作废"}</em></span>
+                  <span>{c.usedBy || c.usedOrderId || "--"}</span>
+                  <div>
+                    <button type="button" disabled={c.status !== "active"} onClick={() => codeAction(c.code, "void")}>作废</button>
+                    <button type="button" className="danger" onClick={() => codeAction(c.code, "delete")}><Trash2 size={11} />删除</button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         ) : tab === "balance" ? (
           <div className="admin-balance-pane">
@@ -829,7 +1108,7 @@ export default function AdminPage() {
                     </div>
                     <div className="admin-order-bot">
                       <span className="admin-order-paid">
-                        {o.paidCurrency === "USDT" ? `${o.paidAmount} USDT` : `¥${o.paidAmount}`}
+                        {o.paidCurrency === "CODE" ? "兑换码" : o.paidCurrency === "USDT" ? `${o.paidAmount} USDT` : `¥${o.paidAmount}`}
                       </span>
                       <span className="admin-order-time">{o.createdAtBeijing?.split(" ")[1] || ""}</span>
                     </div>
@@ -867,8 +1146,8 @@ export default function AdminPage() {
                 <h3>订单概览</h3>
                 <div className="admin-summary-grid">
                   <div><span>下单时间</span><b>{activeOrder.createdAtBeijing}</b></div>
-                  <div><span>支付方式</span><b>{activeOrder.paymentMethod === "usdt" ? "USDT-TRC20" : "支付宝"}</b></div>
-                  <div><span>实付金额</span><b>{activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b></div>
+                  <div><span>支付方式</span><b>{activeOrder.paymentMethod === "redeem" ? "服务兑换码" : activeOrder.paymentMethod === "usdt" ? "USDT-TRC20" : "支付宝"}</b></div>
+                  <div><span>实付金额</span><b>{activeOrder.paidCurrency === "CODE" ? "兑换码抵扣" : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b></div>
                   <div><span>件数</span><b>{activeOrder.itemCount} 件</b></div>
                   <div><span>邮箱</span>
                     <b>

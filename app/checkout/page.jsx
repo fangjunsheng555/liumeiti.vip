@@ -40,7 +40,7 @@ import {
 
 export default function CheckoutPage() {
   const router = useRouter();
-  const { cart, hydrated, removeFromCart, clearCart } = useCart();
+  const { cart, hydrated, removeFromCart, replaceCart, clearCart } = useCart();
   const [step, setStep] = useState("form");
   const [form, setForm] = useState(blankCheckoutForm);
   const [paymentMethod, setPaymentMethod] = useState("alipay");
@@ -50,26 +50,59 @@ export default function CheckoutPage() {
   const [copiedKey, setCopiedKey] = useState(null);
   const [orderResults, setOrderResults] = useState([]);
   const [authedUser, setAuthedUser] = useState(null); // {email, balance} | null
+  const [redeemMode, setRedeemMode] = useState({ loading: true, code: "", info: null });
   // Pre-fill email + load balance for logged-in user
   useEffect(() => {
     fetch("/api/auth/balance", { credentials: "same-origin" })
       .then((r) => r.ok ? r.json() : null)
       .then((d) => {
         if (d && d.ok) {
-          setAuthedUser({ email: d.email, balance: Number(d.balance || 0) });
+          setAuthedUser({ email: d.email, balance: Number(d.balance || 0), coupons: d.coupons || [] });
           setForm((cur) => cur.email ? cur : { ...cur, email: d.email });
         }
       })
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const code = (params.get("redeem") || "").trim().toUpperCase();
+    if (!code) {
+      setRedeemMode({ loading: false, code: "", info: null });
+      return;
+    }
+    setRedeemMode({ loading: true, code, info: null });
+    fetch(`/api/redeem-code?code=${encodeURIComponent(code)}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data.ok || data.status !== "active" || data.type !== "service") {
+          setStatus({ type: "error", message: "服务兑换码无效、已使用或已作废。" });
+          setRedeemMode({ loading: false, code, info: null });
+          return;
+        }
+        const keys = (data.services || []).map((item) => item.key).filter(Boolean);
+        replaceCart(keys);
+        setPaymentMethod("redeem");
+        setRedeemMode({ loading: false, code, info: data });
+      })
+      .catch(() => {
+        setStatus({ type: "error", message: "兑换码识别失败,请稍后再试。" });
+        setRedeemMode({ loading: false, code, info: null });
+      });
+  }, []);
+
   const cartItems = cart.map((key) => PRODUCTS.find((p) => p.key === key)).filter(Boolean);
   const cartCount = cartItems.length;
   const subtotal = cartSubtotalCny(cartItems);
   const discountRate = bundleDiscountRate(cartCount);
-  const finalCny = cartFinalCny(cartItems);
-  const finalUsdt = cartFinalUsdt(cartItems);
-  const savings = subtotal - finalCny;
+  const bundleFinalCny = cartFinalCny(cartItems);
+  const serviceRedeemActive = Boolean(redeemMode.info && redeemMode.info.type === "service");
+  const activeCoupon = (authedUser?.coupons || []).find((c) => c.status === "active");
+  const couponDiscount = !serviceRedeemActive && activeCoupon ? Math.min(Number(activeCoupon.amount || 0), bundleFinalCny) : 0;
+  const finalCny = Math.max(0, Math.round((bundleFinalCny - couponDiscount) * 100) / 100);
+  const finalUsdt = Math.round((finalCny * 0.9 / USDT_RATE) * 100) / 100;
+  const savings = subtotal - bundleFinalCny;
 
   function handleCopy(value, key) {
     copyText(value);
@@ -121,6 +154,10 @@ export default function CheckoutPage() {
       return;
     }
     setStatus(null);
+    if (serviceRedeemActive) {
+      submitOrders();
+      return;
+    }
     setStep("pay");
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -155,6 +192,7 @@ export default function CheckoutPage() {
           contact: form.contact.trim(),
           remark: form.remark.trim(),
           paymentMethod,
+          redeemCode: serviceRedeemActive ? redeemMode.code : "",
           items,
         }),
       });
@@ -166,6 +204,7 @@ export default function CheckoutPage() {
         items: data.items || [],
         paidAmount: data.paidAmount,
         paidCurrency: data.paidCurrency,
+        paymentMethod: data.paymentMethod || (serviceRedeemActive ? "redeem" : paymentMethod),
       }]);
       setStep("done");
       setStatus({ type: "success", message: "订单已成功提交" });
@@ -179,7 +218,7 @@ export default function CheckoutPage() {
   }
 
   // Empty cart state
-  if (hydrated && cartCount === 0 && step !== "done") {
+  if (hydrated && !redeemMode.loading && cartCount === 0 && step !== "done") {
     return (
       <div className="checkout-page">
         <header className="checkout-header">
@@ -214,7 +253,7 @@ export default function CheckoutPage() {
         </Link>
         <div className="checkout-secure">
           <Lock size={13} />
-          {paymentMethod === "usdt" ? "USDT-TRC20 安全结算" : "支付宝担保结算"}
+          {serviceRedeemActive ? "兑换码免支付" : paymentMethod === "usdt" ? "USDT-TRC20 安全结算" : "支付宝担保结算"}
         </div>
       </header>
 
@@ -237,6 +276,12 @@ export default function CheckoutPage() {
           <div className={`checkout-alert ${status.type}`}>{status.message}</div>
         )}
 
+        {serviceRedeemActive && (
+          <div className="checkout-alert success">
+            服务兑换码已识别: {(redeemMode.info.services || []).map((item) => item.label).join(" + ")}。填写必要信息后可直接提交,无需支付。
+          </div>
+        )}
+
         {step === "form" && (
           <form className="checkout-grid" onSubmit={goPay}>
             <div className="checkout-left">
@@ -252,20 +297,22 @@ export default function CheckoutPage() {
               <section className="checkout-card">
                 <div className="checkout-card-head">
                   <h3>已选商品 <em>{cartCount}</em></h3>
-                  <Link href="/#products" className="text-link">+ 继续选购</Link>
+                  {!serviceRedeemActive && <Link href="/#products" className="text-link">+ 继续选购</Link>}
                 </div>
                 <div className="cart-items-grid">
                   {cartItems.map((item) => (
                     <div key={item.key} className="cart-tile">
-                      <button
-                        type="button"
-                        className="cart-tile-remove"
-                        onClick={() => removeFromCart(item.key)}
-                        aria-label={`移除 ${item.title}`}
-                        title={`移除 ${item.title}`}
-                      >
-                        <X size={11} strokeWidth={3} />
-                      </button>
+                      {!serviceRedeemActive && (
+                        <button
+                          type="button"
+                          className="cart-tile-remove"
+                          onClick={() => removeFromCart(item.key)}
+                          aria-label={`移除 ${item.title}`}
+                          title={`移除 ${item.title}`}
+                        >
+                          <X size={11} strokeWidth={3} />
+                        </button>
+                      )}
                       <img src={item.image} alt={item.title} className="cart-tile-img" />
                       <div className="cart-tile-name">{item.title}</div>
                       <div className="cart-tile-price">¥{item.amount}</div>
@@ -388,8 +435,24 @@ export default function CheckoutPage() {
                     </div>
                   )}
                   <div className="cart-summary-row total">
-                    <span>折后总额</span>
-                    <b>¥{finalCny}</b>
+                    <span>组合折后</span>
+                    <b>¥{bundleFinalCny}</b>
+                  </div>
+                  {couponDiscount > 0 && (
+                    <div className="cart-summary-row coupon">
+                      <span>{activeCoupon?.title || "优惠券自动抵扣"}</span>
+                      <b>−¥{couponDiscount.toFixed(2)}</b>
+                    </div>
+                  )}
+                  {serviceRedeemActive && (
+                    <div className="cart-summary-row coupon">
+                      <span>服务兑换码抵扣</span>
+                      <b>−¥{bundleFinalCny.toFixed(2)}</b>
+                    </div>
+                  )}
+                  <div className="cart-summary-row total">
+                    <span>应付总额</span>
+                    <b>¥{serviceRedeemActive ? "0.00" : finalCny.toFixed(2)}</b>
                   </div>
                   {cartCount === 1 && (
                     <div className="cart-bundle-hint">
@@ -404,7 +467,7 @@ export default function CheckoutPage() {
                 </div>
 
                 {/* Payment method */}
-                <div className="payment-method-group">
+                {!serviceRedeemActive && <div className="payment-method-group">
                   <div className="payment-method-label">选择支付方式</div>
                   <div className="payment-method-options">
                     <label className={`payment-method-option${paymentMethod === "alipay" ? " selected" : ""}`}>
@@ -470,10 +533,10 @@ export default function CheckoutPage() {
                       </div>
                     </label>
                   </div>
-                </div>
+                </div>}
 
                 <button type="submit" className="primary-btn primary-btn-lg checkout-submit-btn">
-                  前往支付 · {paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}
+                  {serviceRedeemActive ? "确认兑换并提交订单" : `前往支付 · ${paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}`}
                   <ArrowRight size={15} />
                 </button>
               </section>
@@ -482,11 +545,11 @@ export default function CheckoutPage() {
             {/* Mobile sticky bottom CTA */}
             <div className="checkout-mobile-cta">
               <div className="checkout-mobile-cta-info">
-                <small>{paymentMethod === "usdt" ? "USDT-TRC20" : "支付宝"}</small>
-                <b>{paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}</b>
+                <small>{serviceRedeemActive ? "服务兑换码" : paymentMethod === "usdt" ? "USDT-TRC20" : "支付宝"}</small>
+                <b>{serviceRedeemActive ? "免支付" : paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}</b>
               </div>
               <button type="submit" className="primary-btn checkout-mobile-cta-btn">
-                前往支付
+                {serviceRedeemActive ? "提交兑换" : "前往支付"}
                 <ArrowRight size={15} />
               </button>
             </div>
@@ -578,6 +641,12 @@ export default function CheckoutPage() {
                     <div className="checkout-cart-row discount">
                       <span>组合优惠 · {bundleDiscountLabel(cartCount)}</span>
                       <b>−¥{savings}</b>
+                    </div>
+                  )}
+                  {couponDiscount > 0 && (
+                    <div className="checkout-cart-row discount">
+                      <span>{activeCoupon?.title || "优惠券自动抵扣"}</span>
+                      <b>−¥{couponDiscount.toFixed(2)}</b>
                     </div>
                   )}
                 </div>
@@ -672,7 +741,7 @@ export default function CheckoutPage() {
                 </div>
                 <div className="order-result-paid">
                   <span>实付</span>
-                  <b>{orderResults[0].paidCurrency === "USDT" ? `${orderResults[0].paidAmount} USDT` : `¥${orderResults[0].paidAmount}`}</b>
+                  <b>{orderResults[0].paidCurrency === "CODE" ? "服务兑换码" : orderResults[0].paidCurrency === "USDT" ? `${orderResults[0].paidAmount} USDT` : `¥${orderResults[0].paidAmount}`}</b>
                 </div>
               </div>
             )}

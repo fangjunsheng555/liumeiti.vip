@@ -27,6 +27,7 @@ export async function GET(request) {
     ok: true,
     user: {
       email: user.email,
+      username: user.username || "",
       balance: Number(user.balance || 0),
       createdAtBeijing: user.createdAtBeijing || "",
     },

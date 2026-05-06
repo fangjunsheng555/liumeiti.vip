@@ -140,7 +140,27 @@ function orderTime(order) {
 }
 
 function paymentLabel(order) {
+  if (order.paymentMethod === "redeem") return "兑换码";
   return order.paymentMethod === "usdt" ? "USDT" : "支付宝";
+}
+
+function GoogleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="oauth-provider-icon">
+      <path fill="#4285F4" d="M21.6 12.23c0-.74-.07-1.45-.19-2.13H12v4.03h5.38a4.6 4.6 0 0 1-2 3.02v2.51h3.24c1.9-1.75 2.98-4.33 2.98-7.43Z" />
+      <path fill="#34A853" d="M12 22c2.7 0 4.97-.9 6.62-2.34l-3.24-2.51c-.9.6-2.05.95-3.38.95-2.6 0-4.81-1.76-5.6-4.12H3.06v2.59A9.99 9.99 0 0 0 12 22Z" />
+      <path fill="#FBBC05" d="M6.4 13.98A6.01 6.01 0 0 1 6.08 12c0-.69.12-1.35.32-1.98V7.43H3.06A9.99 9.99 0 0 0 2 12c0 1.61.39 3.13 1.06 4.57l3.34-2.59Z" />
+      <path fill="#EA4335" d="M12 5.9c1.47 0 2.79.51 3.83 1.5l2.87-2.87C16.96 2.91 14.7 2 12 2a9.99 9.99 0 0 0-8.94 5.43l3.34 2.59C7.19 7.66 9.4 5.9 12 5.9Z" />
+    </svg>
+  );
+}
+
+function AppleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="oauth-provider-icon">
+      <path fill="currentColor" d="M16.52 12.58c-.02-2.05 1.68-3.04 1.76-3.09-1-.1.14-2.06-3.92-2.2-1.65-.17-3.17.97-3.99.97-.84 0-2.1-.95-3.45-.92-1.78.03-3.42 1.04-4.34 2.64-1.85 3.2-.47 7.94 1.33 10.54.88 1.27 1.93 2.7 3.31 2.65 1.33-.05 1.83-.86 3.44-.86 1.6 0 2.06.86 3.46.83 1.43-.02 2.33-1.3 3.2-2.58 1.01-1.48 1.43-2.92 1.45-2.99-.03-.01-2.23-.85-2.25-3.49ZM13.27 5.55c.73-.88 1.22-2.1 1.08-3.32-1.05.04-2.32.7-3.07 1.58-.67.78-1.26 2.03-1.1 3.22 1.17.09 2.36-.59 3.09-1.48Z" />
+    </svg>
+  );
 }
 
 export default function Page() {
@@ -163,6 +183,9 @@ export default function Page() {
   const [queryResults, setQueryResults] = useState([]);
   const [expandedOrderId, setExpandedOrderId] = useState("");
   const [queryDetailOrder, setQueryDetailOrder] = useState(null);
+  const [redeemInput, setRedeemInput] = useState("");
+  const [redeemBusy, setRedeemBusy] = useState(false);
+  const [redeemStatus, setRedeemStatus] = useState(null);
 
   const { cart, toggleCart: toggleCartStore, removeFromCart } = useCart();
 
@@ -203,6 +226,11 @@ export default function Page() {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
     if (params.get("auth") === "login") setAuthModal("login");
+    if (params.get("auth") === "oauth_new") setAuthNotice("注册成功,新用户 ¥8.88 优惠券已发放,结算时自动抵扣。");
+    if (params.get("auth") && params.get("auth").includes("not_configured")) {
+      setAuthModal("login");
+      setAuthError("第三方登录尚未配置,请先使用邮箱登录或注册。");
+    }
   }, []);
 
   async function doAuth(e) {
@@ -361,6 +389,53 @@ export default function Page() {
     window.location.href = "/checkout";
   }
 
+  async function submitHomeRedeem(event) {
+    event.preventDefault();
+    const code = redeemInput.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!code) {
+      setRedeemStatus({ type: "error", message: "请输入兑换码。" });
+      return;
+    }
+    setRedeemBusy(true);
+    setRedeemStatus({ type: "info", message: "正在识别兑换码..." });
+    try {
+      const infoRes = await fetch(`/api/redeem-code?code=${encodeURIComponent(code)}`, { cache: "no-store" });
+      const info = await infoRes.json();
+      if (!info.ok || info.status !== "active") {
+        setRedeemStatus({ type: "error", message: "兑换码不存在、已使用或已作废。" });
+        return;
+      }
+      if (info.type === "service") {
+        window.location.href = `/checkout?redeem=${encodeURIComponent(code)}`;
+        return;
+      }
+      if (!authUser || authUser === false) {
+        setAuthModal("login");
+        setAuthNotice("余额兑换码需要先登录账号,登录后再次点击兑换即可到账。");
+        setRedeemStatus({ type: "error", message: "余额兑换码需要登录账号后兑换。" });
+        return;
+      }
+      const res = await fetch("/api/auth/redeem", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        setRedeemStatus({ type: "error", message: data.message || "兑换失败,请联系客服。" });
+        return;
+      }
+      setAuthUser((cur) => cur && cur !== false ? { ...cur, balance: Number(data.balance || cur.balance || 0) } : cur);
+      setRedeemInput("");
+      setRedeemStatus({ type: "success", message: `兑换成功,余额已到账。当前余额 ¥${Number(data.balance || 0).toFixed(2)}` });
+    } catch (e) {
+      setRedeemStatus({ type: "error", message: "兑换失败,请稍后再试。" });
+    } finally {
+      setRedeemBusy(false);
+    }
+  }
+
   async function submitQuery(event) {
     event.preventDefault();
     const query = queryInput.trim();
@@ -466,9 +541,10 @@ export default function Page() {
                   个人中心
                 </a>
               ) : (
-                <button type="button" className="hero-pair-btn secondary" onClick={() => setAuthModal("login")}>
+                <button type="button" className="hero-pair-btn secondary with-auth-tip" onClick={() => setAuthModal("login")}>
                   <Users size={14} />
                   登录 / 注册
+                  <span className="hero-auth-tip">新用户立减 ¥8.88</span>
                 </button>
               )}
             </div>
@@ -594,6 +670,36 @@ export default function Page() {
                 </article>
               );
             })}
+          </div>
+        </section>
+
+        {/* ── Redeem Code ── */}
+        <section className="section container redeem-section">
+          <div className="redeem-card glass-card">
+            <div className="redeem-card-copy">
+              <div className="section-kicker">Redeem Code</div>
+              <h2>兑换码兑换</h2>
+              <p>支持余额兑换码与服务兑换码。系统会自动识别类型,服务码可直接进入免支付订单填写。</p>
+            </div>
+            <form className="redeem-card-form" onSubmit={submitHomeRedeem}>
+              <label>
+                <span>兑换码</span>
+                <input
+                  value={redeemInput}
+                  onChange={(e) => {
+                    setRedeemInput(e.target.value.toUpperCase());
+                    if (redeemStatus?.type === "error") setRedeemStatus(null);
+                  }}
+                  placeholder="输入工作人员发放的兑换码"
+                  autoComplete="off"
+                />
+              </label>
+              <button type="submit" disabled={redeemBusy}>
+                {redeemBusy ? <LoaderCircle size={14} className="spin-icon" /> : <Gift size={14} />}
+                立即兑换
+              </button>
+              {redeemStatus && <div className={`redeem-card-status ${redeemStatus.type}`}>{redeemStatus.message}</div>}
+            </form>
           </div>
         </section>
 
@@ -733,7 +839,7 @@ export default function Page() {
         </section>
 
         {/* ── FAQ + Contact (2-column on desktop) ── */}
-        <section className="section container">
+        <section className="section container contact-section">
           <div className="faq-contact-pair">
             <div id="faq" className="faq-pair-block">
               <div className="section-head simple-head">
@@ -784,10 +890,6 @@ export default function Page() {
                 ))}
               </div>
 
-              <div className="contact-hours-line">
-                <Clock size={14} />
-                客服在线:北京时间 09:00 – 23:00 · 真人客服值守
-              </div>
             </div>
           </div>
         </section>
@@ -946,6 +1048,12 @@ export default function Page() {
               </button>
             </div>
             <form className="auth-form" onSubmit={doAuth}>
+              {(authModal === "login" || authModal === "register") && (
+                <div className="oauth-login-grid">
+                  <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />Google 登录</a>
+                  <a href="/api/auth/oauth/apple/start" className="oauth-login-btn apple"><AppleIcon />Apple 登录</a>
+                </div>
+              )}
               <label className="auth-field">
                 <span>邮箱</span>
                 <input
@@ -1154,7 +1262,10 @@ export default function Page() {
               subscriptionLinks: queryDetailOrder.subscriptionLinks,
             }];
         const isUsdt = queryDetailOrder.paymentMethod === "usdt";
-        const paidDisplay = isUsdt && queryDetailOrder.paidAmount
+        const isRedeem = queryDetailOrder.paymentMethod === "redeem";
+        const paidDisplay = isRedeem
+          ? "服务兑换码"
+          : isUsdt && queryDetailOrder.paidAmount
           ? `${queryDetailOrder.paidAmount} USDT`
           : `¥${queryDetailOrder.paidAmount || queryDetailOrder.finalAmount}`;
         return (

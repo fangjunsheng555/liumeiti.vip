@@ -1,6 +1,7 @@
 import {
   getCookieFromRequest, verifySession, getAllOrders,
   getUser, setUser, validUsername, generateRandomUsername, clean,
+  publicCoupons,
 } from "../../_utils.js";
 
 function subscriptionLinks(username) {
@@ -52,9 +53,12 @@ function publicOrder(order) {
     itemCount: items.length,
     serviceLabel: order.serviceLabel || items.map((i) => i.label).join(" + "),
     paymentMethod: order.paymentMethod || "alipay",
+    redeemCode: order.redeemCode || "",
     finalAmount: Number(order.finalAmount || 0),
     paidAmount: Number(order.paidAmount || (order.paymentMethod === "usdt" ? order.finalUsdt : order.finalAmount) || 0),
     paidCurrency: order.paidCurrency || (order.paymentMethod === "usdt" ? "USDT" : "CNY"),
+    couponDiscount: Number(order.couponDiscount || 0),
+    couponTitle: order.couponTitle || "",
     contact: order.contact || "",
     remark: order.remark || "",
     staffNotes: order.staffNotes || "",
@@ -94,6 +98,7 @@ export async function GET(request) {
     email: sessionEmail,
     username: username || "",
     balance: Number(user?.balance || 0),
+    coupons: publicCoupons(user),
     banned: !!user?.banned,
     orders: myOrders,
   });
