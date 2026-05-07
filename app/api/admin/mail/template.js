@@ -37,20 +37,20 @@ export function buildCustomerMailHtml({ subject, content, brandName, siteDomain,
             <tr>
               <td style="padding:22px 20px;background:linear-gradient(135deg,#0f172a,#0f766e);color:#ffffff;">
                 <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.78;">Customer Service</div>
-                <div style="font-size:24px;font-weight:900;line-height:1.25;margin-top:6px;">${safeBrand}客服人员</div>
+                <div style="font-size:24px;font-weight:900;line-height:1.25;margin-top:6px;">${safeBrand}客服</div>
                 <div style="font-size:13px;line-height:1.7;margin-top:8px;opacity:.88;">${safeSubject}</div>
               </td>
             </tr>
             <tr>
               <td style="padding:22px 20px 8px;">
                 <div style="font-size:15px;line-height:1.8;color:#334155;">
-                  <p style="margin:0 0 12px;">您好，这里是${safeBrand}客服人员,关于您的服务咨询或订单协助，我们整理了以下说明：</p>
+                  <p style="margin:0 0 12px;">您好，这里是${safeBrand}客服人员,我们很高兴您跟我们取得联系，关于您的服务咨询或订单协助，我们整理了以下说明：</p>
                 </div>
                 <div style="border:1px solid #dbeafe;background:#f8fbff;border-radius:16px;padding:16px 15px;font-size:15px;line-height:1.85;color:#102033;">
                   ${htmlLines(content)}
                 </div>
                 <div style="font-size:15px;line-height:1.8;color:#334155;margin-top:14px;">
-                  <p style="margin:0;">如仍需协助，请通过网站联系方式联系在线客服，我们会继续为您处理。感谢您选择${safeBrand}</p>
+                  <p style="margin:0;">希望我的答复可以帮助到您，祝您生活愉快工作顺利！感谢您选择${safeBrand}！</p>
                 </div>
               </td>
             </tr>
