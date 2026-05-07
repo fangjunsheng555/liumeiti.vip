@@ -125,6 +125,8 @@ export default function AdminPage() {
   const [mailBatchMode, setMailBatchMode] = useState(false);
   const [selectedMailIds, setSelectedMailIds] = useState(new Set());
   const [mailDeleteBusy, setMailDeleteBusy] = useState(false);
+  const [mailComposeOpen, setMailComposeOpen] = useState(false);
+  const [activeMailLog, setActiveMailLog] = useState(null);
 
   const isRootStaff = Boolean(currentStaff?.root || Number(currentStaff?.id || 0) === 1);
 
@@ -484,6 +486,7 @@ export default function AdminPage() {
       const data = await res.json();
       if (data.ok) {
         setMailForm((current) => ({ ...current, to: "", content: "" }));
+        setMailComposeOpen(false);
         setMailResult({ type: "success", message: "邮件已发送，并已记录工作人员编号" });
         await loadMailLogs();
       } else {
@@ -520,6 +523,7 @@ export default function AdminPage() {
       if (data.ok) {
         setSelectedMailIds(new Set());
         setMailBatchMode(false);
+        if (activeMailLog && ids.includes(activeMailLog.id)) setActiveMailLog(null);
         setMailResult({ type: "success", message: `已删除 ${data.deletedCount || ids.length} 条发信记录` });
         await loadMailLogs();
       } else {
@@ -1354,51 +1358,12 @@ export default function AdminPage() {
           </div>
         ) : tab === "mail" ? (
           <div className="admin-mail-pane">
-            <form className="admin-mail-form" onSubmit={sendCustomerMail}>
+            <div className="admin-mail-compose-card">
               <div className="admin-card-title"><Mail size={15} />客服发信</div>
-              <div className="admin-mail-form-grid">
-                <label>
-                  <span>收件邮箱</span>
-                  <input
-                    type="email"
-                    inputMode="email"
-                    value={mailForm.to}
-                    onChange={(e) => setMailForm({ ...mailForm, to: e.target.value })}
-                    placeholder="customer@example.com"
-                    required
-                  />
-                </label>
-                <label>
-                  <span>邮件主题</span>
-                  <input
-                    value={mailForm.subject}
-                    onChange={(e) => setMailForm({ ...mailForm, subject: e.target.value })}
-                    placeholder="客服服务通知"
-                    maxLength={80}
-                    required
-                  />
-                </label>
-              </div>
-              <label className="admin-mail-body-field">
-                <span>正文内容</span>
-                <textarea
-                  value={mailForm.content}
-                  onChange={(e) => setMailForm({ ...mailForm, content: e.target.value })}
-                  placeholder="输入需要告知用户的内容；邮件会自动加入客服开头与结尾。"
-                  rows={7}
-                  maxLength={3000}
-                  required
-                />
-              </label>
-              <div className="admin-mail-helper">
-                <span>发件人：冒央会社客服人员</span>
-                <span>自动套用客服开头与结尾，正文保留换行。</span>
-              </div>
-              <button type="submit" disabled={mailBusy}>
-                {mailBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Mail size={12} />}
-                发送邮件
+              <button type="button" onClick={() => { setMailResult(null); setMailComposeOpen(true); }}>
+                <Mail size={13} />写邮件
               </button>
-            </form>
+            </div>
 
             {mailResult && <div className={`admin-alert ${mailResult.type}`}>{mailResult.message}</div>}
 
@@ -1442,9 +1407,9 @@ export default function AdminPage() {
                       key={item.id}
                       className={`admin-mail-log-item${ok ? " ok" : " failed"}${mailBatchMode ? " batch-mode" : ""}${selected ? " selected" : ""}`}
                       data-staff-id={item.staffId ? String(item.staffId) : ""}
-                      onClick={() => mailBatchMode && toggleMailSelect(item.id)}
-                      role={mailBatchMode ? "button" : undefined}
-                      tabIndex={mailBatchMode ? 0 : undefined}
+                      onClick={() => mailBatchMode ? toggleMailSelect(item.id) : setActiveMailLog(item)}
+                      role="button"
+                      tabIndex={0}
                     >
                       {mailBatchMode && (
                         <span className={`admin-order-checkbox${selected ? " checked" : ""}`} aria-hidden="true">
@@ -1458,7 +1423,6 @@ export default function AdminPage() {
                           <span className={`admin-mail-status ${ok ? "ok" : "failed"}`}>{ok ? "已发送" : "失败"}</span>
                         </div>
                         <small>{item.subject || "客服服务通知"} · {item.createdAtBeijing || item.createdAt}</small>
-                        <p>{item.preview || item.content || "--"}</p>
                         {!ok && item.reason && <em>{item.reason}</em>}
                       </div>
                       <button
@@ -1956,6 +1920,99 @@ export default function AdminPage() {
                     </div>
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mailComposeOpen && (
+        <div className="admin-modal-mask" onClick={() => !mailBusy && setMailComposeOpen(false)}>
+          <div className="admin-modal admin-compact-modal admin-mail-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="admin-modal-head">
+              <div>
+                <div className="admin-modal-id">客服发信</div>
+                <div className="admin-modal-status status-received">冒央会社客服人员</div>
+              </div>
+              <button type="button" className="admin-modal-close" onClick={() => setMailComposeOpen(false)} disabled={mailBusy}><X size={16} /></button>
+            </div>
+            <div className="admin-modal-body">
+              <form className="admin-mail-form" onSubmit={sendCustomerMail}>
+                <div className="admin-mail-form-grid">
+                  <label>
+                    <span>收件邮箱</span>
+                    <input
+                      type="email"
+                      inputMode="email"
+                      value={mailForm.to}
+                      onChange={(e) => setMailForm({ ...mailForm, to: e.target.value })}
+                      placeholder="customer@example.com"
+                      required
+                    />
+                  </label>
+                  <label>
+                    <span>邮件主题</span>
+                    <input
+                      value={mailForm.subject}
+                      onChange={(e) => setMailForm({ ...mailForm, subject: e.target.value })}
+                      placeholder="客服服务通知"
+                      maxLength={80}
+                      required
+                    />
+                  </label>
+                </div>
+                <label className="admin-mail-body-field">
+                  <span>正文内容</span>
+                  <textarea
+                    value={mailForm.content}
+                    onChange={(e) => setMailForm({ ...mailForm, content: e.target.value })}
+                    placeholder="输入需要告知用户的内容；邮件会自动加入客服开头与结尾。"
+                    rows={7}
+                    maxLength={3000}
+                    required
+                  />
+                </label>
+                <div className="admin-mail-helper">
+                  <span>自动加入客服开头与结尾</span>
+                  <span>正文保留换行</span>
+                </div>
+                <button type="submit" disabled={mailBusy}>
+                  {mailBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Mail size={12} />}
+                  发送邮件
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeMailLog && (
+        <div className="admin-modal-mask" onClick={() => setActiveMailLog(null)}>
+          <div className="admin-modal admin-compact-modal admin-mail-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="admin-modal-head">
+              <div>
+                <div className="admin-modal-id">发信记录</div>
+                <div className={`admin-modal-status ${activeMailLog.ok === false ? "status-invalid" : "status-received"}`}>{activeMailLog.ok === false ? "发送失败" : "已发送"}</div>
+              </div>
+              <button type="button" className="admin-modal-close" onClick={() => setActiveMailLog(null)}><X size={16} /></button>
+            </div>
+            <div className="admin-modal-body">
+              <div className="admin-mail-detail-grid">
+                <div><span>收件邮箱</span><b>{activeMailLog.to}</b></div>
+                <div><span>工作人员</span><b>#{activeMailLog.staffId || 1}</b></div>
+                <div><span>发送时间</span><b>{activeMailLog.createdAtBeijing || activeMailLog.createdAt}</b></div>
+                <div><span>邮件主题</span><b>{activeMailLog.subject || "客服服务通知"}</b></div>
+              </div>
+              <div className="admin-mail-detail-content">
+                <span>完整正文</span>
+                <p>{activeMailLog.content || activeMailLog.preview || "--"}</p>
+              </div>
+              {activeMailLog.ok === false && activeMailLog.reason && (
+                <div className="admin-alert error">{activeMailLog.reason}</div>
+              )}
+              <div className="admin-mail-detail-actions">
+                <button type="button" onClick={() => copyText(activeMailLog.to)}><Copy size={12} />复制邮箱</button>
+                <button type="button" onClick={() => copyText(activeMailLog.content || activeMailLog.preview || "")}><Copy size={12} />复制正文</button>
               </div>
             </div>
           </div>
