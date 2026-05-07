@@ -1043,7 +1043,7 @@ export default function Page() {
                   <button type="button" className={`auth-tab${authModal === "login" ? " active" : ""}`} onClick={() => setAuthModal("login")}>登录</button>
                   <button type="button" className={`auth-tab register-tab${authModal === "register" ? " active" : ""}`} onClick={() => setAuthModal("register")}>
                     注册
-                    <span className="auth-tab-tip">新用户注册立减¥8.88</span>
+                    <span className="auth-tab-tip">立减¥8.88</span>
                   </button>
                 </div>
               ) : (
