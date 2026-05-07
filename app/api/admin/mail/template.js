@@ -44,22 +44,22 @@ export function buildCustomerMailHtml({ subject, content, brandName, siteDomain,
             <tr>
               <td style="padding:22px 20px 8px;">
                 <div style="font-size:15px;line-height:1.8;color:#334155;">
-                  <p style="margin:0 0 12px;">您好，这里是${safeBrand}客服人员。关于您的服务咨询或订单协助，我们整理了以下说明：</p>
+                  <p style="margin:0 0 12px;">您好，这里是${safeBrand}客服人员,关于您的服务咨询或订单协助，我们整理了以下说明：</p>
                 </div>
                 <div style="border:1px solid #dbeafe;background:#f8fbff;border-radius:16px;padding:16px 15px;font-size:15px;line-height:1.85;color:#102033;">
                   ${htmlLines(content)}
                 </div>
                 <div style="font-size:15px;line-height:1.8;color:#334155;margin-top:14px;">
-                  <p style="margin:0;">如仍需协助，请通过网站联系方式联系在线客服，我们会继续为您处理。感谢您选择${safeBrand}。</p>
+                  <p style="margin:0;">如仍需协助，请通过网站联系方式联系在线客服，我们会继续为您处理。感谢您选择${safeBrand}</p>
                 </div>
               </td>
             </tr>
             <tr>
               <td style="padding:14px 20px 22px;">
                 <div style="border-top:1px solid #e2e8f0;padding-top:14px;font-size:12px;line-height:1.7;color:#64748b;">
-                  本邮件由${safeBrand}客服人员发送，工作人员编号 ${staffBadge}。请勿直接回复，如需继续沟通请访问
+                  本邮件由${safeBrand}客服人员发送，工作人员编号 ${staffBadge},如仍需协助可直接回复此邮件或访问
                   <a href="${safeSiteUrl}" style="color:#0f766e;text-decoration:none;font-weight:700;">${safeSiteDomain}</a>
-                  联系在线客服。
+                  联系在线客服
                 </div>
               </td>
             </tr>
@@ -76,11 +76,11 @@ export function buildCustomerMailText({ subject, content, brandName, siteDomain,
   return [
     `${brand}客服人员 · ${subject || "客服服务通知"}`,
     "",
-    `您好，这里是${brand}客服人员。关于您的服务咨询或订单协助，我们整理了以下说明：`,
+    `您好，这里是${brand}客服人员，关于您的服务咨询或订单协助，我们整理了以下说明：`,
     "",
     String(content || "").trim(),
     "",
-    `如仍需协助，请通过网站联系方式联系在线客服，我们会继续为您处理。感谢您选择${brand}。`,
+    `如仍需协助，可直接回复此邮件或通过网站联系方式联系在线客服，我们会继续为您处理。感谢您选择${brand}`,
     "",
     `工作人员编号 #${staffId || 1}`,
     `${siteDomain || "liumeiti.vip"} ${siteUrl || "https://liumeiti.vip"}`,
