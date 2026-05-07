@@ -21,6 +21,7 @@ export async function POST(request) {
     services: Array.isArray(body.services) ? body.services : [],
     quantity: body.quantity,
     remark: body.remark,
+    customCode: body.customCode,
   }, adminActorFromSession(session));
   if (!result.ok) return Response.json({ ok: false, error: clean(result.error, 80) }, { status: 400 });
   const [codes, batches] = await Promise.all([listRedeemCodes(), listRedeemCodeBatches()]);

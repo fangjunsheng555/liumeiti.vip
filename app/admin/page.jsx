@@ -108,6 +108,7 @@ export default function AdminPage() {
   const [codeAmount, setCodeAmount] = useState("");
   const [codeQuantity, setCodeQuantity] = useState("1");
   const [codeRemark, setCodeRemark] = useState("");
+  const [codeCustom, setCodeCustom] = useState("");
   const [codeServices, setCodeServices] = useState([]);
   const [codeBusy, setCodeBusy] = useState("");
   const [codeResult, setCodeResult] = useState(null);
@@ -455,6 +456,7 @@ export default function AdminPage() {
           services: codeServices,
           quantity: codeQuantity,
           remark: codeRemark,
+          customCode: codeCustom,
         }),
       });
       const data = await res.json();
@@ -464,10 +466,16 @@ export default function AdminPage() {
         setCodeAmount("");
         setCodeQuantity("1");
         setCodeRemark("");
+        setCodeCustom("");
         if (codeType === "service") setCodeServices([]);
         setCodeResult({ type: "success", message: `已生成 ${data.generatedCodes?.length || 1} 个兑换码` });
       } else {
-        setCodeResult({ type: "error", message: data.error === "missing_services" ? "请至少选择一个服务" : "生成失败,请检查金额或服务" });
+        const msg = {
+          missing_services: "请选择至少一个服务",
+          invalid_custom_code: "自定义代码需为4-40位字母或数字",
+          custom_code_exists: "该自定义兑换码已存在,请换一个",
+        }[data.error] || "生成失败,请检查金额或服务";
+        setCodeResult({ type: "error", message: msg });
       }
     } catch (e) {
       setCodeResult({ type: "error", message: "网络错误" });
@@ -1152,6 +1160,7 @@ export default function AdminPage() {
                     onChange={(e) => setCodeQuantity(e.target.value.replace(/\D/g, ""))}
                     placeholder="1"
                     inputMode="numeric"
+                    disabled={Boolean(codeCustom.trim())}
                     required
                   />
                 </label>
@@ -1165,6 +1174,20 @@ export default function AdminPage() {
                   />
                 </label>
               </div>
+              <label className="admin-code-custom-field">
+                <span>自定义代码</span>
+                <input
+                  value={codeCustom}
+                  onChange={(e) => {
+                    const next = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 40);
+                    setCodeCustom(next);
+                    if (next) setCodeQuantity("1");
+                  }}
+                  placeholder="可选,留空随机生成;填写后仅生成1个"
+                  autoComplete="off"
+                  maxLength={40}
+                />
+              </label>
               {codeType === "balance" ? (
                 <input
                   value={codeAmount}

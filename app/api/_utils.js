@@ -893,6 +893,9 @@ async function generateUniqueRedeemCode() {
 function normalizeRedeemInput(input) {
   const body = input && typeof input === "object" && !Array.isArray(input) ? input : { type: "balance", amount: input };
   const type = clean(body.type || body.kind || "balance", 20) === "service" ? "service" : "balance";
+  const customCodeRaw = clean(body.customCode || body.code || body.redeemCode, 80);
+  const customCode = customCodeRaw ? normalizeRedeemCode(customCodeRaw) : "";
+  if (customCodeRaw && (customCode.length < 4 || customCode.length > 40)) return { ok: false, error: "invalid_custom_code" };
   let value = roundMoney(body.amount);
   let services = [];
   if (type === "service") {
@@ -902,20 +905,24 @@ function normalizeRedeemInput(input) {
   } else if (value <= 0 || value > 100000) {
     return { ok: false, error: "invalid_amount" };
   }
-  const quantity = Math.max(1, Math.min(200, Math.floor(Number(body.quantity || body.count || 1) || 1)));
-  return { ok: true, body, type, value, services, quantity, remark: clean(body.remark || body.note, 180) };
+  const quantity = customCode ? 1 : Math.max(1, Math.min(200, Math.floor(Number(body.quantity || body.count || 1) || 1)));
+  return { ok: true, body, type, value, services, quantity, remark: clean(body.remark || body.note, 180), customCode };
 }
 
 export async function createRedeemCodes(input, actor = null) {
   const normalized = normalizeRedeemInput(input);
   if (!normalized.ok) return normalized;
-  const { type, value, services, quantity, remark } = normalized;
+  const { type, value, services, quantity, remark, customCode } = normalized;
   const now = new Date();
   const batchId = makeId("RB");
   const actorInfo = actor ? adminActorFromSession(actor) : null;
+  if (customCode) {
+    const exists = await getJsonKey(redeemCodeKey(customCode));
+    if (exists) return { ok: false, error: "custom_code_exists" };
+  }
   const items = [];
   for (let i = 0; i < quantity; i += 1) {
-    const code = await generateUniqueRedeemCode();
+    const code = customCode && i === 0 ? customCode : await generateUniqueRedeemCode();
     const item = {
       code,
       batchId,
@@ -925,6 +932,7 @@ export async function createRedeemCodes(input, actor = null) {
       type,
       amount: value,
       status: "active",
+      customCode: Boolean(customCode && code === customCode),
       createdAt: now.toISOString(),
       createdAtBeijing: formatBeijingTime(now),
     };
@@ -943,9 +951,11 @@ export async function createRedeemCodes(input, actor = null) {
     quantity,
     remark,
     status: "active",
+    customCreated: Boolean(customCode),
     createdAt: now.toISOString(),
     createdAtBeijing: formatBeijingTime(now),
     codes: items.map((item) => item.code),
+    customCode: customCode || "",
   };
   if (actorInfo) {
     batch.createdByStaffId = actorInfo.staffId;
@@ -967,7 +977,7 @@ export async function createRedeemCodes(input, actor = null) {
     action: "redeem_batch_create",
     actor: actorInfo,
     target: "redeem-batch:" + batchId,
-    detail: { type, amount: value, quantity, remark },
+    detail: { type, amount: value, quantity, remark, customCode: customCode || "" },
   });
   return { ok: true, code: items[0], codes: items, batch };
 }
