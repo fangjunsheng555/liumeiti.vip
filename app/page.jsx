@@ -54,8 +54,8 @@ const SITE_CONTENT = {
   domain: "liumeiti.vip",
   heroBadge: "来自中国台湾 · 专注流媒体会员6年",
   heroTitleLine1: "冒央",
-  heroTitleHighlight: "流媒体服务",
-  heroDesc: "正版流媒体会员，全网最低价 · 付款后极速到账",
+  heroTitleHighlight: "会员",
+  heroDesc: "一站式流媒体平台，全年无休售后 · 使用问题包解决",
   heroStats: [
     { num: "500k+", label: "累计用户", icon: Users },
     { num: "1M+", label: "服务案例", icon: TrendingUp },
