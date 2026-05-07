@@ -15,6 +15,7 @@ export async function POST(request) {
     role: "admin",
     staffId: login.staff.id,
     staffUsername: login.staff.username,
+    staffRoot: Boolean(login.staff.root),
     exp: Date.now() + 12 * 60 * 60 * 1000,
   });
   return Response.json({ ok: true, staff: login.staff }, {

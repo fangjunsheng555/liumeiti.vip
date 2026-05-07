@@ -1,15 +1,9 @@
 import {
   getAllOrders,
-  getCookieFromRequest,
-  verifySession,
   formatBeijingTime,
+  adminSessionFromRequest,
+  isRootAdminSession,
 } from "../../_utils.js";
-
-function adminOk(request) {
-  const token = getCookieFromRequest(request, "lm_admin");
-  const session = verifySession(token);
-  return session && session.role === "admin";
-}
 
 function subscriptionLinks(username) {
   const encoded = encodeURIComponent(String(username || "").trim());
@@ -81,7 +75,8 @@ function normalizeOrder(order) {
 
 // GET /api/admin/orders[?q=search]
 export async function GET(request) {
-  if (!adminOk(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const session = adminSessionFromRequest(request);
+  if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const url = new URL(request.url);
   const q = String(url.searchParams.get("q") || "").trim().toLowerCase();
   const status = String(url.searchParams.get("status") || "").trim();
@@ -105,5 +100,10 @@ export async function GET(request) {
     orders: filtered.slice(0, 200),
     total: all.length,
     filteredCount: filtered.length,
+    currentStaff: {
+      id: Number(session.staffId || 1),
+      username: session.staffUsername || "admin",
+      root: isRootAdminSession(session),
+    },
   });
 }

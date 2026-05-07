@@ -1041,7 +1041,10 @@ export default function Page() {
               {authModal === "login" || authModal === "register" ? (
                 <div className="auth-modal-tabs">
                   <button type="button" className={`auth-tab${authModal === "login" ? " active" : ""}`} onClick={() => setAuthModal("login")}>登录</button>
-                  <button type="button" className={`auth-tab${authModal === "register" ? " active" : ""}`} onClick={() => setAuthModal("register")}>注册</button>
+                  <button type="button" className={`auth-tab register-tab${authModal === "register" ? " active" : ""}`} onClick={() => setAuthModal("register")}>
+                    注册
+                    <span className="auth-tab-tip">新用户注册立减¥8.88</span>
+                  </button>
                 </div>
               ) : (
                 <div className="auth-modal-title">
@@ -1152,6 +1155,10 @@ export default function Page() {
               </button>
 
               {(authModal === "login" || authModal === "register") && (
+                <div className="auth-divider"><span>或使用</span></div>
+              )}
+
+              {(authModal === "login" || authModal === "register") && (
                 <div className="oauth-login-grid bottom">
                   <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />Google 登录</a>
                 </div>
@@ -1181,8 +1188,8 @@ export default function Page() {
 
       {/* ── Product Detail Modal ── */}
       {selectedProduct && (
-        <div className="modal-mask" onClick={closeProduct}>
-          <div className="modal-card modal-large" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-mask product-detail-mask" onClick={closeProduct}>
+          <div className="modal-card modal-large product-detail-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-head">
               <div className="modal-head-left">
                 <img

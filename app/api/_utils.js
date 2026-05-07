@@ -199,6 +199,10 @@ export function adminActorFromRequest(request) {
   return adminActorFromSession(adminSessionFromRequest(request));
 }
 
+export function isRootAdminSession(session) {
+  return Number(session?.staffId || 0) === 1;
+}
+
 export function adminActorLabel(actor) {
   const id = Number(actor?.staffId || 1);
   return "工作人员 #" + id;
@@ -340,6 +344,34 @@ export async function getAdminBalanceLog() {
       ? data.result.map((s) => { try { return JSON.parse(s); } catch (e) { return null; } }).filter(Boolean)
       : [];
   } catch (e) { return []; }
+}
+
+export async function deleteAdminBalanceLogEntries(ids, actor = null) {
+  const idSet = new Set((Array.isArray(ids) ? ids : [])
+    .map((id) => clean(id, 120))
+    .filter(Boolean));
+  if (idSet.size === 0) return { ok: false, error: "no_ids" };
+  const entries = await getAdminBalanceLog();
+  const removed = entries.filter((entry) => idSet.has(clean(entry.id, 120)));
+  const remaining = entries.filter((entry) => !idSet.has(clean(entry.id, 120)));
+  if (removed.length === 0) return { ok: false, error: "not_found" };
+  const commands = [
+    ["DEL", ADMIN_BAL_LOG_KEY],
+    ...remaining.map((entry) => ["RPUSH", ADMIN_BAL_LOG_KEY, JSON.stringify(entry)]),
+  ];
+  const saved = await redisPipeline(commands);
+  if (!saved) return { ok: false, error: "storage_failed" };
+  await pushAdminActionLog({
+    action: "balance_log_delete",
+    actor,
+    target: "balance-log:" + removed.length,
+    detail: { ids: Array.from(idSet), deletedCount: removed.length },
+  });
+  return {
+    ok: true,
+    deletedCount: removed.length,
+    notFound: Array.from(idSet).filter((id) => !removed.some((entry) => clean(entry.id, 120) === id)),
+  };
 }
 
 export async function addBalanceTx(email, tx) {
@@ -729,7 +761,7 @@ export async function verifyAdminLogin(username, password) {
     item && item.active !== false && String(item.username || "").toLowerCase() === inputUsername.toLowerCase()
   );
   if (staff && verifyPassword(password, staff.passwordHash)) {
-    return { ok: true, staff: { id: Number(staff.id), username: staff.username, remark: staff.remark || "" } };
+    return { ok: true, staff: { id: Number(staff.id), username: staff.username, remark: staff.remark || "", root: false } };
   }
 
   return { ok: false, error: "invalid_credentials" };
@@ -1274,6 +1306,36 @@ export async function listWithdrawals() {
   const unique = Array.from(new Set(ids));
   const items = await Promise.all(unique.map((id) => getJsonKey(withdrawalKey(id))));
   return items.filter(Boolean);
+}
+
+export async function deleteWithdrawals(ids, actor = null) {
+  const idSet = new Set((Array.isArray(ids) ? ids : [])
+    .map((id) => clean(id, 120))
+    .filter(Boolean));
+  if (idSet.size === 0) return { ok: false, error: "no_ids" };
+  const rawIds = await redisCmd(["LRANGE", WITHDRAWAL_LIST_KEY, "0", "499"]);
+  const currentIds = Array.isArray(rawIds) ? rawIds.map((id) => clean(id, 120)).filter(Boolean) : [];
+  const removedIds = Array.from(new Set(currentIds.filter((id) => idSet.has(id))));
+  if (removedIds.length === 0) return { ok: false, error: "not_found" };
+  const remainingIds = currentIds.filter((id) => !idSet.has(id));
+  const commands = [
+    ["DEL", WITHDRAWAL_LIST_KEY],
+    ...remainingIds.map((id) => ["RPUSH", WITHDRAWAL_LIST_KEY, id]),
+    ...removedIds.map((id) => ["DEL", withdrawalKey(id)]),
+  ];
+  const saved = await redisPipeline(commands);
+  if (!saved) return { ok: false, error: "storage_failed" };
+  await pushAdminActionLog({
+    action: "withdrawal_delete",
+    actor,
+    target: "withdrawals:" + removedIds.length,
+    detail: { ids: Array.from(idSet), deletedCount: removedIds.length },
+  });
+  return {
+    ok: true,
+    deletedCount: removedIds.length,
+    notFound: Array.from(idSet).filter((id) => !removedIds.includes(id)),
+  };
 }
 
 export async function getWithdrawalDetail(id) {

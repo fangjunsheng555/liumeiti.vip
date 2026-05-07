@@ -1,16 +1,12 @@
 import {
-  getCookieFromRequest, verifySession, getAdminBalanceLog,
+  adminSessionFromRequest, adminActorFromSession, isRootAdminSession,
+  getAdminBalanceLog, deleteAdminBalanceLogEntries, clean,
 } from "../../_utils.js";
-
-function adminOk(request) {
-  const token = getCookieFromRequest(request, "lm_admin");
-  const session = verifySession(token);
-  return session && session.role === "admin";
-}
 
 // GET /api/admin/balance-log[?q=...&filter=add|deduct]
 export async function GET(request) {
-  if (!adminOk(request)) {
+  const session = adminSessionFromRequest(request);
+  if (!session) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
   const url = new URL(request.url);
@@ -46,5 +42,22 @@ export async function GET(request) {
     adminCount,
     orderCount,
     entries,
+    currentStaff: {
+      id: Number(session.staffId || 1),
+      username: session.staffUsername || "admin",
+      root: isRootAdminSession(session),
+    },
   });
+}
+
+export async function DELETE(request) {
+  const session = adminSessionFromRequest(request);
+  if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!isRootAdminSession(session)) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  let body = {};
+  try { body = await request.json(); } catch (e) {}
+  const ids = Array.isArray(body.ids) ? body.ids.map((id) => clean(id, 120)).filter(Boolean) : [];
+  const result = await deleteAdminBalanceLogEntries(ids, adminActorFromSession(session));
+  if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: 400 });
+  return Response.json(result);
 }

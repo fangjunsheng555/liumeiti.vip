@@ -80,6 +80,10 @@ export default function AdminPage() {
   const [logSource, setLogSource] = useState("all"); // all | admin | order
   const [logQuery, setLogQuery] = useState("");
   const [logLoading, setLogLoading] = useState(false);
+  const [logBatchMode, setLogBatchMode] = useState(false);
+  const [selectedLogIds, setSelectedLogIds] = useState(new Set());
+  const [logDeleteBusy, setLogDeleteBusy] = useState(false);
+  const [logDeleteResult, setLogDeleteResult] = useState(null);
 
   // All registered users
   const [allUsers, setAllUsers] = useState({ users: [], total: 0 });
@@ -93,6 +97,10 @@ export default function AdminPage() {
   const [withdrawalStatus, setWithdrawalStatus] = useState("pending");
   const [withdrawalNote, setWithdrawalNote] = useState("");
   const [withdrawalBusy, setWithdrawalBusy] = useState(false);
+  const [withdrawalBatchMode, setWithdrawalBatchMode] = useState(false);
+  const [selectedWithdrawalIds, setSelectedWithdrawalIds] = useState(new Set());
+  const [withdrawalDeleteBusy, setWithdrawalDeleteBusy] = useState(false);
+  const [withdrawalDeleteResult, setWithdrawalDeleteResult] = useState(null);
   const [codes, setCodes] = useState([]);
   const [codeBatches, setCodeBatches] = useState([]);
   const [codesLoading, setCodesLoading] = useState(false);
@@ -109,6 +117,8 @@ export default function AdminPage() {
   const [staffBusy, setStaffBusy] = useState("");
   const [staffResult, setStaffResult] = useState(null);
 
+  const isRootStaff = Boolean(currentStaff?.root || Number(currentStaff?.id || 0) === 1);
+
   const loadGlobalLog = useCallback(async (q, filter, source) => {
     setLogLoading(true);
     try {
@@ -119,6 +129,7 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/balance-log?" + params.toString(), { credentials: "same-origin" });
       const data = await res.json();
       if (data.ok) {
+        if (data.currentStaff) setCurrentStaff(data.currentStaff);
         setGlobalLog({
           entries: data.entries || [],
           total: data.total || 0,
@@ -139,7 +150,10 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/withdrawals", { credentials: "same-origin" });
       if (res.status === 401) { setAuthed(false); return; }
       const data = await res.json();
-      if (data.ok) setWithdrawals(data.withdrawals || []);
+      if (data.ok) {
+        if (data.currentStaff) setCurrentStaff(data.currentStaff);
+        setWithdrawals(data.withdrawals || []);
+      }
     } catch (e) {} finally {
       setWithdrawalLoading(false);
     }
@@ -166,7 +180,7 @@ export default function AdminPage() {
       if (res.status === 401) { setAuthed(false); return; }
       const data = await res.json();
       if (data.ok) {
-        setCurrentStaff({ id: data.currentStaffId });
+        setCurrentStaff({ id: data.currentStaffId, root: data.currentStaffRoot });
         setStaffPane({ staff: data.staff || [], actions: data.actions || [] });
       }
     } catch (e) {}
@@ -194,8 +208,11 @@ export default function AdminPage() {
     if (tab === "balance") loadGlobalLog(logQuery, logFilter, logSource);
     if (tab === "withdrawals") loadWithdrawals();
     if (tab === "codes") loadCodes();
-    if (tab === "staff") loadStaff();
-  }, [authed, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes, loadStaff, logFilter, logSource]);
+    if (tab === "staff") {
+      if (isRootStaff) loadStaff();
+      else if (currentStaff) setTab("orders");
+    }
+  }, [authed, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes, loadStaff, logFilter, logSource, isRootStaff, currentStaff?.id]);
 
   async function executeUserAction() {
     if (!confirmUserAction || userActionBusy) return;
@@ -338,6 +355,83 @@ export default function AdminPage() {
       }
     } catch (e) {} finally {
       setWithdrawalBusy(false);
+    }
+  }
+
+  function toggleWithdrawalSelect(id) {
+    setSelectedWithdrawalIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleLogSelect(id) {
+    setSelectedLogIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function deleteSelectedWithdrawals() {
+    if (!isRootStaff || withdrawalDeleteBusy || selectedWithdrawalIds.size === 0) return;
+    if (typeof window !== "undefined" && !window.confirm(`确认删除 ${selectedWithdrawalIds.size} 条提现审核记录？`)) return;
+    setWithdrawalDeleteBusy(true);
+    setWithdrawalDeleteResult(null);
+    try {
+      const ids = Array.from(selectedWithdrawalIds);
+      const res = await fetch("/api/admin/withdrawals", {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setSelectedWithdrawalIds(new Set());
+        setWithdrawalBatchMode(false);
+        if (activeWithdrawal && ids.includes(activeWithdrawal.withdrawal.id)) setActiveWithdrawal(null);
+        setWithdrawalDeleteResult({ type: "success", message: `已删除 ${data.deletedCount || ids.length} 条提现记录` });
+        await loadWithdrawals();
+      } else {
+        setWithdrawalDeleteResult({ type: "error", message: data.error === "forbidden" ? "仅主账号可批量删除" : (data.error || "删除失败") });
+      }
+    } catch (e) {
+      setWithdrawalDeleteResult({ type: "error", message: "网络错误" });
+    } finally {
+      setWithdrawalDeleteBusy(false);
+    }
+  }
+
+  async function deleteSelectedBalanceLogs() {
+    if (!isRootStaff || logDeleteBusy || selectedLogIds.size === 0) return;
+    if (typeof window !== "undefined" && !window.confirm(`确认删除 ${selectedLogIds.size} 条余额变动记录？`)) return;
+    setLogDeleteBusy(true);
+    setLogDeleteResult(null);
+    try {
+      const ids = Array.from(selectedLogIds);
+      const res = await fetch("/api/admin/balance-log", {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setSelectedLogIds(new Set());
+        setLogBatchMode(false);
+        setLogDeleteResult({ type: "success", message: `已删除 ${data.deletedCount || ids.length} 条余额记录` });
+        await loadGlobalLog(logQuery, logFilter, logSource);
+      } else {
+        setLogDeleteResult({ type: "error", message: data.error === "forbidden" ? "仅主账号可批量删除" : (data.error || "删除失败") });
+      }
+    } catch (e) {
+      setLogDeleteResult({ type: "error", message: "网络错误" });
+    } finally {
+      setLogDeleteBusy(false);
     }
   }
 
@@ -532,6 +626,7 @@ export default function AdminPage() {
       const data = await res.json();
       if (data.ok) {
         setOrders(data.orders || []);
+        if (data.currentStaff) setCurrentStaff(data.currentStaff);
         setAuthed(true);
       }
     } catch (e) {
@@ -790,7 +885,7 @@ export default function AdminPage() {
           <button type="button" className={`admin-tab-btn${tab === "withdrawals" ? " active" : ""}`} onClick={() => setTab("withdrawals")}>提现审核</button>
           <button type="button" className={`admin-tab-btn${tab === "codes" ? " active" : ""}`} onClick={() => setTab("codes")}>兑换码</button>
           <button type="button" className={`admin-tab-btn${tab === "balance" ? " active" : ""}`} onClick={() => setTab("balance")}>余额变动</button>
-          <button type="button" className={`admin-tab-btn${tab === "staff" ? " active" : ""}`} onClick={() => setTab("staff")}>工作人员</button>
+          {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "staff" ? " active" : ""}`} onClick={() => setTab("staff")}>工作人员</button>}
         </div>
 
         {tab === "users" ? (
@@ -936,21 +1031,52 @@ export default function AdminPage() {
             <div className="admin-withdraw-list">
               <div className="admin-userlist-head">
                 <h3>提现申请 <em>{withdrawals.length}</em></h3>
-                <button type="button" className="admin-filter-btn" onClick={loadWithdrawals} disabled={withdrawalLoading}>
-                  {withdrawalLoading ? "刷新中" : "刷新"}
-                </button>
+                <div className="admin-inline-actions">
+                  {isRootStaff && (
+                    <>
+                      <button
+                        type="button"
+                        className={`admin-filter-btn${withdrawalBatchMode ? " active" : ""}`}
+                        onClick={() => {
+                          setWithdrawalBatchMode((value) => !value);
+                          setSelectedWithdrawalIds(new Set());
+                          setWithdrawalDeleteResult(null);
+                        }}
+                      >{withdrawalBatchMode ? "取消" : "批量"}</button>
+                      {withdrawalBatchMode && (
+                        <>
+                          <button type="button" className="admin-filter-btn" onClick={() => setSelectedWithdrawalIds(new Set(withdrawals.map((w) => w.id)))}>全选</button>
+                          <button type="button" className="admin-filter-btn danger" onClick={deleteSelectedWithdrawals} disabled={withdrawalDeleteBusy || selectedWithdrawalIds.size === 0}>
+                            {withdrawalDeleteBusy ? "删除中" : `删除 ${selectedWithdrawalIds.size}`}
+                          </button>
+                        </>
+                      )}
+                    </>
+                  )}
+                  <button type="button" className="admin-filter-btn" onClick={loadWithdrawals} disabled={withdrawalLoading}>
+                    {withdrawalLoading ? "刷新中" : "刷新"}
+                  </button>
+                </div>
               </div>
+              {withdrawalDeleteResult && <div className={`admin-alert ${withdrawalDeleteResult.type}`}>{withdrawalDeleteResult.message}</div>}
               <div className="admin-userlist-body">
                 {withdrawals.length === 0 ? (
                   <div className="admin-userlist-empty">{withdrawalLoading ? "加载中..." : "暂无提现申请"}</div>
-                ) : withdrawals.map((w) => (
+                ) : withdrawals.map((w) => {
+                  const selected = selectedWithdrawalIds.has(w.id);
+                  return (
                   <button
                     key={w.id}
                     type="button"
-                    className={`admin-withdraw-item status-${w.status}`}
+                    className={`admin-withdraw-item status-${w.status}${withdrawalBatchMode ? " batch-mode" : ""}${selected ? " selected" : ""}`}
                     data-staff-id={w.updatedByStaffId ? String(w.updatedByStaffId) : ""}
-                    onClick={() => openWithdrawal(w.id)}
+                    onClick={() => withdrawalBatchMode ? toggleWithdrawalSelect(w.id) : openWithdrawal(w.id)}
                   >
+                    {withdrawalBatchMode && (
+                      <span className={`admin-order-checkbox${selected ? " checked" : ""}`} aria-hidden="true">
+                        {selected && <CheckCircle2 size={13} />}
+                      </span>
+                    )}
                     <span>
                       <strong>{w.username || "未设置用户名"}</strong>
                       <small>{w.userEmail}</small>
@@ -960,7 +1086,8 @@ export default function AdminPage() {
                       <em>{w.statusLabel || "待审核"}</em>
                     </span>
                   </button>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
@@ -1162,7 +1289,29 @@ export default function AdminPage() {
                   <span className="stat-add">累计加 <b>+¥{globalLog.totalAdded.toFixed(2)}</b></span>
                   <span className="stat-deduct">累计减 <b>−¥{globalLog.totalDeducted.toFixed(2)}</b></span>
                 </div>
+                {isRootStaff && (
+                  <div className="admin-inline-actions">
+                    <button
+                      type="button"
+                      className={`admin-filter-btn${logBatchMode ? " active" : ""}`}
+                      onClick={() => {
+                        setLogBatchMode((value) => !value);
+                        setSelectedLogIds(new Set());
+                        setLogDeleteResult(null);
+                      }}
+                    >{logBatchMode ? "取消" : "批量"}</button>
+                    {logBatchMode && (
+                      <>
+                        <button type="button" className="admin-filter-btn" onClick={() => setSelectedLogIds(new Set(globalLog.entries.map((tx) => tx.id).filter(Boolean)))}>全选</button>
+                        <button type="button" className="admin-filter-btn danger" onClick={deleteSelectedBalanceLogs} disabled={logDeleteBusy || selectedLogIds.size === 0}>
+                          {logDeleteBusy ? "删除中" : `删除 ${selectedLogIds.size}`}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
+              {logDeleteResult && <div className={`admin-alert ${logDeleteResult.type}`}>{logDeleteResult.message}</div>}
               <div className="admin-global-log-toolbar">
                 <form
                   className="admin-search admin-search-mini"
@@ -1210,8 +1359,21 @@ export default function AdminPage() {
               <div className="admin-tx-list">
                 {globalLog.entries.length === 0 ? (
                   <div className="admin-tx-item"><div className="admin-tx-item-info"><small>暂无变动记录</small></div></div>
-                ) : globalLog.entries.map((tx) => (
-                  <div key={tx.id} className={`admin-tx-item admin-global-log-item${tx.amount > 0 ? " positive" : " negative"}`}>
+                ) : globalLog.entries.map((tx) => {
+                  const selected = selectedLogIds.has(tx.id);
+                  return (
+                  <div
+                    key={tx.id}
+                    className={`admin-tx-item admin-global-log-item${tx.amount > 0 ? " positive" : " negative"}${logBatchMode ? " batch-mode" : ""}${selected ? " selected" : ""}`}
+                    onClick={() => logBatchMode && toggleLogSelect(tx.id)}
+                    role={logBatchMode ? "button" : undefined}
+                    tabIndex={logBatchMode ? 0 : undefined}
+                  >
+                    {logBatchMode && (
+                      <span className={`admin-order-checkbox${selected ? " checked" : ""}`} aria-hidden="true">
+                        {selected && <CheckCircle2 size={13} />}
+                      </span>
+                    )}
                     <div className="admin-tx-item-info">
                       <div className="admin-global-log-row">
                         <strong>{tx.email}</strong>
@@ -1227,7 +1389,8 @@ export default function AdminPage() {
                       <small>余额 ¥{Number(tx.balanceAfter || 0).toFixed(2)}</small>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
