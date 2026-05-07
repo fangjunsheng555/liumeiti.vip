@@ -68,7 +68,7 @@ export async function POST(request) {
     subject: mailSubject,
     text,
     html,
-    fromName: "冒央会社客服人员",
+    fromName: "冒央会社客服",
   });
   const log = await pushAdminMailLog({
     to,
