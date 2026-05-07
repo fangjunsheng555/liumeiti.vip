@@ -7,7 +7,7 @@ import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
   CheckCircle2, Clock, Inbox, X, AlertTriangle, Trash2,
-  Gift, CreditCard, Plus, UserPlus,
+  Gift, CreditCard, Plus, UserPlus, Mail,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -117,6 +117,14 @@ export default function AdminPage() {
   const [staffForm, setStaffForm] = useState({ username: "", password: "", remark: "" });
   const [staffBusy, setStaffBusy] = useState("");
   const [staffResult, setStaffResult] = useState(null);
+  const [mailLogs, setMailLogs] = useState([]);
+  const [mailForm, setMailForm] = useState({ to: "", subject: "客服服务通知", content: "" });
+  const [mailLoading, setMailLoading] = useState(false);
+  const [mailBusy, setMailBusy] = useState(false);
+  const [mailResult, setMailResult] = useState(null);
+  const [mailBatchMode, setMailBatchMode] = useState(false);
+  const [selectedMailIds, setSelectedMailIds] = useState(new Set());
+  const [mailDeleteBusy, setMailDeleteBusy] = useState(false);
 
   const isRootStaff = Boolean(currentStaff?.root || Number(currentStaff?.id || 0) === 1);
 
@@ -187,6 +195,21 @@ export default function AdminPage() {
     } catch (e) {}
   }, []);
 
+  const loadMailLogs = useCallback(async () => {
+    setMailLoading(true);
+    try {
+      const res = await fetch("/api/admin/mail", { credentials: "same-origin" });
+      if (res.status === 401) { setAuthed(false); return; }
+      const data = await res.json();
+      if (data.ok) {
+        if (data.currentStaff) setCurrentStaff(data.currentStaff);
+        setMailLogs(data.logs || []);
+      }
+    } catch (e) {} finally {
+      setMailLoading(false);
+    }
+  }, []);
+
   const loadAllUsers = useCallback(async (q) => {
     setUserListLoading(true);
     try {
@@ -209,11 +232,12 @@ export default function AdminPage() {
     if (tab === "balance") loadGlobalLog(logQuery, logFilter, logSource);
     if (tab === "withdrawals") loadWithdrawals();
     if (tab === "codes") loadCodes();
+    if (tab === "mail") loadMailLogs();
     if (tab === "staff") {
       if (isRootStaff) loadStaff();
       else if (currentStaff) setTab("orders");
     }
-  }, [authed, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes, loadStaff, logFilter, logSource, isRootStaff, currentStaff?.id]);
+  }, [authed, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes, loadMailLogs, loadStaff, logFilter, logSource, isRootStaff, currentStaff?.id]);
 
   async function executeUserAction() {
     if (!confirmUserAction || userActionBusy) return;
@@ -433,6 +457,78 @@ export default function AdminPage() {
       setLogDeleteResult({ type: "error", message: "网络错误" });
     } finally {
       setLogDeleteBusy(false);
+    }
+  }
+
+  function toggleMailSelect(id) {
+    setSelectedMailIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function sendCustomerMail(e) {
+    e.preventDefault();
+    if (mailBusy) return;
+    setMailBusy(true);
+    setMailResult(null);
+    try {
+      const res = await fetch("/api/admin/mail", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(mailForm),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setMailForm((current) => ({ ...current, to: "", content: "" }));
+        setMailResult({ type: "success", message: "邮件已发送，并已记录工作人员编号" });
+        await loadMailLogs();
+      } else {
+        const msg = {
+          invalid_email: "请填写正确的收件邮箱",
+          content_required: "请填写邮件正文内容",
+          smtp_or_to_missing: "SMTP 发信配置不完整",
+          send_failed_after_retry: "邮件发送失败，请检查 SMTP 配置或稍后重试",
+        }[data.error] || data.detail || data.error || "发送失败";
+        setMailResult({ type: "error", message: msg });
+        await loadMailLogs();
+      }
+    } catch (e) {
+      setMailResult({ type: "error", message: "网络错误" });
+    } finally {
+      setMailBusy(false);
+    }
+  }
+
+  async function deleteSelectedMailLogs() {
+    if (!isRootStaff || mailDeleteBusy || selectedMailIds.size === 0) return;
+    if (typeof window !== "undefined" && !window.confirm(`确认删除 ${selectedMailIds.size} 条发信记录？`)) return;
+    setMailDeleteBusy(true);
+    setMailResult(null);
+    try {
+      const ids = Array.from(selectedMailIds);
+      const res = await fetch("/api/admin/mail", {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setSelectedMailIds(new Set());
+        setMailBatchMode(false);
+        setMailResult({ type: "success", message: `已删除 ${data.deletedCount || ids.length} 条发信记录` });
+        await loadMailLogs();
+      } else {
+        setMailResult({ type: "error", message: data.error === "forbidden" ? "仅主账号可批量删除" : (data.error || "删除失败") });
+      }
+    } catch (e) {
+      setMailResult({ type: "error", message: "网络错误" });
+    } finally {
+      setMailDeleteBusy(false);
     }
   }
 
@@ -893,6 +989,7 @@ export default function AdminPage() {
           <button type="button" className={`admin-tab-btn${tab === "withdrawals" ? " active" : ""}`} onClick={() => setTab("withdrawals")}>提现审核</button>
           <button type="button" className={`admin-tab-btn${tab === "codes" ? " active" : ""}`} onClick={() => setTab("codes")}>兑换码</button>
           <button type="button" className={`admin-tab-btn${tab === "balance" ? " active" : ""}`} onClick={() => setTab("balance")}>余额变动</button>
+          <button type="button" className={`admin-tab-btn${tab === "mail" ? " active" : ""}`} onClick={() => setTab("mail")}>客服发信</button>
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "staff" ? " active" : ""}`} onClick={() => setTab("staff")}>工作人员</button>}
         </div>
 
@@ -1253,6 +1350,129 @@ export default function AdminPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        ) : tab === "mail" ? (
+          <div className="admin-mail-pane">
+            <form className="admin-mail-form" onSubmit={sendCustomerMail}>
+              <div className="admin-card-title"><Mail size={15} />客服发信</div>
+              <div className="admin-mail-form-grid">
+                <label>
+                  <span>收件邮箱</span>
+                  <input
+                    type="email"
+                    inputMode="email"
+                    value={mailForm.to}
+                    onChange={(e) => setMailForm({ ...mailForm, to: e.target.value })}
+                    placeholder="customer@example.com"
+                    required
+                  />
+                </label>
+                <label>
+                  <span>邮件主题</span>
+                  <input
+                    value={mailForm.subject}
+                    onChange={(e) => setMailForm({ ...mailForm, subject: e.target.value })}
+                    placeholder="客服服务通知"
+                    maxLength={80}
+                    required
+                  />
+                </label>
+              </div>
+              <label className="admin-mail-body-field">
+                <span>正文内容</span>
+                <textarea
+                  value={mailForm.content}
+                  onChange={(e) => setMailForm({ ...mailForm, content: e.target.value })}
+                  placeholder="输入需要告知用户的内容；邮件会自动加入客服开头与结尾。"
+                  rows={7}
+                  maxLength={3000}
+                  required
+                />
+              </label>
+              <div className="admin-mail-helper">
+                <span>发件人：冒央会社客服人员</span>
+                <span>自动套用客服开头与结尾，正文保留换行。</span>
+              </div>
+              <button type="submit" disabled={mailBusy}>
+                {mailBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Mail size={12} />}
+                发送邮件
+              </button>
+            </form>
+
+            {mailResult && <div className={`admin-alert ${mailResult.type}`}>{mailResult.message}</div>}
+
+            <div className="admin-mail-log">
+              <div className="admin-userlist-head">
+                <h3>发信记录 <em>{mailLogs.length}</em></h3>
+                <div className="admin-inline-actions">
+                  {isRootStaff && (
+                    <>
+                      <button
+                        type="button"
+                        className={`admin-filter-btn${mailBatchMode ? " active" : ""}`}
+                        onClick={() => {
+                          setMailBatchMode((value) => !value);
+                          setSelectedMailIds(new Set());
+                        }}
+                      >{mailBatchMode ? "取消" : "批量"}</button>
+                      {mailBatchMode && (
+                        <>
+                          <button type="button" className="admin-filter-btn" onClick={() => setSelectedMailIds(new Set(mailLogs.map((item) => item.id).filter(Boolean)))}>全选</button>
+                          <button type="button" className="admin-filter-btn danger" onClick={deleteSelectedMailLogs} disabled={mailDeleteBusy || selectedMailIds.size === 0}>
+                            {mailDeleteBusy ? "删除中" : `删除 ${selectedMailIds.size}`}
+                          </button>
+                        </>
+                      )}
+                    </>
+                  )}
+                  <button type="button" className="admin-filter-btn" onClick={loadMailLogs} disabled={mailLoading}>
+                    {mailLoading ? "刷新中" : "刷新"}
+                  </button>
+                </div>
+              </div>
+              <div className="admin-mail-log-list">
+                {mailLogs.length === 0 ? (
+                  <div className="admin-userlist-empty">{mailLoading ? "加载中..." : "暂无发信记录"}</div>
+                ) : mailLogs.map((item) => {
+                  const selected = selectedMailIds.has(item.id);
+                  const ok = item.ok !== false;
+                  return (
+                    <div
+                      key={item.id}
+                      className={`admin-mail-log-item${ok ? " ok" : " failed"}${mailBatchMode ? " batch-mode" : ""}${selected ? " selected" : ""}`}
+                      data-staff-id={item.staffId ? String(item.staffId) : ""}
+                      onClick={() => mailBatchMode && toggleMailSelect(item.id)}
+                      role={mailBatchMode ? "button" : undefined}
+                      tabIndex={mailBatchMode ? 0 : undefined}
+                    >
+                      {mailBatchMode && (
+                        <span className={`admin-order-checkbox${selected ? " checked" : ""}`} aria-hidden="true">
+                          {selected && <CheckCircle2 size={13} />}
+                        </span>
+                      )}
+                      <div className="admin-mail-log-main">
+                        <div className="admin-mail-log-row">
+                          <strong>{item.to}</strong>
+                          {item.staffId && <span className="staff-mini-badge">{item.staffId}</span>}
+                          <span className={`admin-mail-status ${ok ? "ok" : "failed"}`}>{ok ? "已发送" : "失败"}</span>
+                        </div>
+                        <small>{item.subject || "客服服务通知"} · {item.createdAtBeijing || item.createdAt}</small>
+                        <p>{item.preview || item.content || "--"}</p>
+                        {!ok && item.reason && <em>{item.reason}</em>}
+                      </div>
+                      <button
+                        type="button"
+                        className="admin-mail-copy"
+                        onClick={(e) => { e.stopPropagation(); copyText(item.to); }}
+                        title="复制邮箱"
+                      >
+                        <Copy size={12} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         ) : tab === "staff" ? (

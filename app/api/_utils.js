@@ -446,12 +446,12 @@ export async function deleteResetCode(email) {
 
 // Send a generic email via configured SMTP. Returns {ok, ...}
 // Retries once on transient failures (iCloud sometimes throttles connections).
-export async function sendSimpleEmail({ to, subject, text, html }) {
+export async function sendSimpleEmail({ to, subject, text, html, fromName }) {
   const host = process.env.SMTP_HOST;
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
   const from = process.env.SMTP_FROM || user;
-  const brandName = process.env.BRAND_NAME || "冒央会社";
+  const brandName = fromName || process.env.BRAND_NAME || "冒央会社";
   if (!host || !user || !pass || !from || !to) {
     return { ok: false, reason: "smtp_or_to_missing" };
   }
@@ -515,6 +515,7 @@ const REDEEM_BATCH_LIST_KEY = "liumeiti:redeem-code-batches";
 const WITHDRAWAL_LIST_KEY = "liumeiti:withdrawals";
 const ADMIN_STAFF_KEY = "liumeiti:admin:staff";
 const ADMIN_ACTION_LOG_KEY = "liumeiti:admin:action-log";
+const ADMIN_MAIL_LOG_KEY = "liumeiti:admin:mail-log";
 
 export const REDEEM_SERVICE_PRODUCTS = {
   spotify: { label: "Spotify", amount: 128 },
@@ -879,6 +880,66 @@ export async function getAdminActionLog() {
   const rows = await redisCmd(["LRANGE", ADMIN_ACTION_LOG_KEY, "0", "199"]);
   if (!Array.isArray(rows)) return [];
   return rows.map((s) => { try { return JSON.parse(s); } catch (e) { return null; } }).filter(Boolean);
+}
+
+export async function pushAdminMailLog(entry) {
+  const actor = {
+    staffId: Number(entry?.staffId || 1),
+    staffUsername: clean(entry?.staffUsername || "admin", 60),
+  };
+  const now = entry?.createdAt ? new Date(entry.createdAt) : new Date();
+  const item = {
+    id: clean(entry?.id, 80) || makeId("ML"),
+    to: clean(entry?.to, 180).toLowerCase(),
+    subject: clean(entry?.subject, 180),
+    content: clean(entry?.content, 3000),
+    preview: clean(entry?.preview || entry?.content, 240),
+    ok: Boolean(entry?.ok),
+    reason: clean(entry?.reason || entry?.error || "", 200),
+    messageId: clean(entry?.messageId, 180),
+    staffId: actor.staffId,
+    staffUsername: actor.staffUsername,
+    createdAt: now.toISOString(),
+    createdAtBeijing: entry?.createdAtBeijing || formatBeijingTime(now),
+  };
+  const saved = await redisPipeline([
+    ["LPUSH", ADMIN_MAIL_LOG_KEY, JSON.stringify(item)],
+    ["LTRIM", ADMIN_MAIL_LOG_KEY, "0", "499"],
+  ]);
+  return saved ? item : null;
+}
+
+export async function getAdminMailLog() {
+  const rows = await redisCmd(["LRANGE", ADMIN_MAIL_LOG_KEY, "0", "499"]);
+  if (!Array.isArray(rows)) return [];
+  return rows.map((s) => { try { return JSON.parse(s); } catch (e) { return null; } }).filter(Boolean);
+}
+
+export async function deleteAdminMailLogEntries(ids, actor = null) {
+  const idSet = new Set((Array.isArray(ids) ? ids : [])
+    .map((id) => clean(id, 120))
+    .filter(Boolean));
+  if (idSet.size === 0) return { ok: false, error: "no_ids" };
+  const entries = await getAdminMailLog();
+  const removed = entries.filter((entry) => idSet.has(clean(entry.id, 120)));
+  const remaining = entries.filter((entry) => !idSet.has(clean(entry.id, 120)));
+  if (removed.length === 0) return { ok: false, error: "not_found" };
+  const saved = await redisPipeline([
+    ["DEL", ADMIN_MAIL_LOG_KEY],
+    ...remaining.map((entry) => ["RPUSH", ADMIN_MAIL_LOG_KEY, JSON.stringify(entry)]),
+  ]);
+  if (!saved) return { ok: false, error: "storage_failed" };
+  await pushAdminActionLog({
+    action: "mail_log_delete",
+    actor,
+    target: "mail-log:" + removed.length,
+    detail: { ids: Array.from(idSet), deletedCount: removed.length },
+  });
+  return {
+    ok: true,
+    deletedCount: removed.length,
+    notFound: Array.from(idSet).filter((id) => !removed.some((entry) => clean(entry.id, 120) === id)),
+  };
 }
 
 async function generateUniqueRedeemCode() {

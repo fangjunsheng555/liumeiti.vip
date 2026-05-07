@@ -7904,6 +7904,13 @@ button { cursor: pointer; border: none; background: transparent; }
   border-color: var(--accent);
   color: #fff;
 }
+.admin-withdraw-item.selected .admin-order-checkbox,
+.admin-tx-item.selected .admin-order-checkbox,
+.admin-mail-log-item.selected .admin-order-checkbox {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
 .admin-order-content { display: grid; gap: 4px; min-width: 0; }
 
 .admin-card-badges {
@@ -8169,6 +8176,194 @@ button { cursor: pointer; border: none; background: transparent; }
   font-weight: 900;
 }
 
+.admin-mail-pane {
+  display: grid;
+  gap: 10px;
+}
+.admin-mail-form,
+.admin-mail-log {
+  padding: 12px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+.admin-mail-form {
+  display: grid;
+  gap: 8px;
+}
+.admin-mail-form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr);
+  gap: 8px;
+}
+.admin-mail-form label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.admin-mail-form label > span {
+  font-size: 10.5px;
+  font-weight: 900;
+  color: var(--muted);
+}
+.admin-mail-form input,
+.admin-mail-form textarea {
+  width: 100%;
+  border-radius: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #f8fafc;
+  color: var(--primary);
+  font-size: 16px;
+  outline: none;
+}
+.admin-mail-form input {
+  height: 38px;
+  padding: 0 10px;
+}
+.admin-mail-form textarea {
+  min-height: 124px;
+  max-height: 240px;
+  padding: 10px;
+  line-height: 1.55;
+  resize: vertical;
+}
+.admin-mail-form input:focus,
+.admin-mail-form textarea:focus {
+  border-color: rgba(20, 184, 166, 0.58);
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.1);
+  background: #fff;
+}
+.admin-mail-helper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.admin-mail-helper span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #ecfeff;
+  color: #0f766e;
+  font-size: 10.5px;
+  font-weight: 800;
+}
+.admin-mail-form > button {
+  height: 38px;
+  border-radius: 9px;
+  border: none;
+  background: var(--primary);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 900;
+}
+.admin-mail-form > button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+.admin-mail-log-list {
+  display: grid;
+  gap: 6px;
+  max-height: 520px;
+  overflow-y: auto;
+}
+.admin-mail-log-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 9px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: #f8fafc;
+}
+.admin-mail-log-item.failed {
+  background: #fff7ed;
+  border-color: rgba(249, 115, 22, 0.28);
+}
+.admin-mail-log-item.batch-mode {
+  grid-template-columns: 22px minmax(0, 1fr) 30px;
+  cursor: pointer;
+}
+.admin-mail-log-item.selected {
+  background: #ecfeff;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.admin-mail-log-main {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.admin-mail-log-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.admin-mail-log-row strong {
+  min-width: 0;
+  color: var(--primary);
+  font-size: 12.5px;
+  font-weight: 900;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-mail-log-main small {
+  display: block;
+  color: var(--muted);
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-mail-log-main p {
+  color: #334155;
+  font-size: 11.5px;
+  line-height: 1.45;
+  margin: 1px 0 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.admin-mail-log-main em {
+  color: #b91c1c;
+  font-style: normal;
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+.admin-mail-status {
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.admin-mail-status.ok {
+  background: #dcfce7;
+  color: #15803d;
+}
+.admin-mail-status.failed {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.admin-mail-copy {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--primary);
+}
+
 .admin-staff-pane { display: grid; gap: 10px; }
 .admin-staff-form {
   display: grid;
@@ -8248,6 +8443,14 @@ button { cursor: pointer; border: none; background: transparent; }
   .admin-code-batch-item { grid-template-columns: 1fr; }
   .admin-code-batch-actions { grid-template-columns: 1fr 1fr 1fr; }
   .admin-code-batch-actions button { padding: 0 4px; font-size: 10.5px; }
+  .admin-mail-form,
+  .admin-mail-log { padding: 10px; }
+  .admin-mail-form-grid { grid-template-columns: 1fr; gap: 7px; }
+  .admin-mail-form textarea { min-height: 112px; max-height: 210px; }
+  .admin-mail-helper span { font-size: 10px; padding: 3px 7px; }
+  .admin-mail-log-item { padding: 7px 8px; border-radius: 9px; }
+  .admin-mail-log-row { gap: 4px; }
+  .admin-mail-status { font-size: 9.5px; padding: 2px 5px; }
   .admin-staff-form { grid-template-columns: 1fr; padding: 10px; }
   .account-money-modal {
     width: calc(100vw - 14px);
