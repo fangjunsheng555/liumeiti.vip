@@ -63,10 +63,10 @@ const SITE_CONTENT = {
     { num: "2020至今", label: "专注服务", icon: Clock },
   ],
   layoutCards: [
-    ["选择所需服务", "Spotify / Netflix / Disney+ / Hbomax / 机场节点"],
-    ["查看详情介绍", "请查阅我们的服务介绍，确保服务满足您的需求"],
-    ["付款下单", "正确填写信息后扫码付款，付款完成提交订单，工作人员将在10分钟内处理"],
-    ["售后服务", "成交只是开始，专业团队全程售后保障用户使用体验"],
+    ["选择/兑换服务", "Spotify / Netflix / Disney+ / Hbomax / 机场节点"],
+    ["正确填写信息", "按照网站引导，准确填写你的订单所需的信息"],
+    ["提交订单", "核实填写信息无误后提交订单，你的邮箱将收到订单确认信息"],
+    ["售后服务", "工作人员将在10分钟内处理完毕，成交只是开始，专业团队全程售后保障用户使用体验"],
   ],
   faq: [
     {
@@ -715,7 +715,7 @@ export default function Page() {
               <div className="section-head simple-head">
                 <div>
                   <div className="section-kicker">Place Guide</div>
-                  <h2 className="section-title">下单流程</h2>
+                  <h2 className="section-title">下单/兑换流程</h2>
                 </div>
               </div>
 
