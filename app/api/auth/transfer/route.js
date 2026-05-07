@@ -4,7 +4,7 @@ import {
 
 const MESSAGES = {
   invalid_recipient: "收款邮箱不正确,请核对后再试",
-  recipient_not_found: "未找到该邮箱用户,请确认对方已注册登录",
+  recipient_not_found: "未找到该邮箱用户,请确认对方已注册",
   recipient_unavailable: "收款用户当前不可用",
   invalid_amount: "请输入正确的转账金额",
   insufficient_balance: "余额不足,无法转账",
