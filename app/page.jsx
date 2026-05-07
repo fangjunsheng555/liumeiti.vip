@@ -53,8 +53,8 @@ const SITE_CONTENT = {
   brandEn: "MAOYANG TAIWAN INC",
   domain: "liumeiti.vip",
   heroBadge: "来自中国台湾 · 专注流媒体会员6年",
-  heroTitleLine1: "冒央会社",
-  heroTitleHighlight: "·流媒体会员服务",
+  heroTitleLine1: "冒央",
+  heroTitleHighlight: "·流媒体服务",
   heroDesc: "正版流媒体会员，全网最低价 · 付款后极速到账",
   heroStats: [
     { num: "500k+", label: "累计用户", icon: Users },
