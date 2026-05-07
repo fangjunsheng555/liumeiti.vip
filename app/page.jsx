@@ -274,7 +274,7 @@ export default function Page() {
 
       if (authModal === "forgot") {
         // Always show success (don't leak whether email registered)
-        setAuthNotice("如果邮箱已注册,验证码已发送至邮箱。请查看收件箱(或垃圾邮件)。");
+        setAuthNotice("验证码已发送至邮箱。请查看收件箱(或垃圾邮件)。");
         setAuthModal("reset");
         setAuthForm((f) => ({ ...f, code: "", newPassword: "" }));
         return;
