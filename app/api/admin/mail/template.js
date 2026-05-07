@@ -50,7 +50,7 @@ export function buildCustomerMailHtml({ subject, content, brandName, siteDomain,
                   ${htmlLines(content)}
                 </div>
                 <div style="font-size:15px;line-height:1.8;color:#334155;margin-top:14px;">
-                  <p style="margin:0;">希望我的答复可以帮助到您，祝您生活愉快工作顺利！感谢您选择${safeBrand}！</p>
+                  <p style="margin:0;">希望我们的答复可以帮助到您，祝您生活愉快工作顺利！感谢您选择${safeBrand}！</p>
                 </div>
               </td>
             </tr>
