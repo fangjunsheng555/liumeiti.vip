@@ -44,7 +44,7 @@ export function buildCustomerMailHtml({ subject, content, brandName, siteDomain,
             <tr>
               <td style="padding:22px 20px 8px;">
                 <div style="font-size:15px;line-height:1.8;color:#334155;">
-                  <p style="margin:0 0 12px;">您好，这里是${safeBrand}客服人员,我们很高兴您跟我们取得联系，关于您的服务咨询或订单协助，我们整理了以下说明：</p>
+                  <p style="margin:0 0 12px;">您好，这里是${safeBrand}客服,关于您的服务咨询或订单协助，我们整理了以下说明：</p>
                 </div>
                 <div style="border:1px solid #dbeafe;background:#f8fbff;border-radius:16px;padding:16px 15px;font-size:15px;line-height:1.85;color:#102033;">
                   ${htmlLines(content)}
@@ -76,7 +76,7 @@ export function buildCustomerMailText({ subject, content, brandName, siteDomain,
   return [
     `${brand}客服人员 · ${subject || "客服服务通知"}`,
     "",
-    `您好，这里是${brand}客服人员，关于您的服务咨询或订单协助，我们整理了以下说明：`,
+    `您好，这里是${brand}客服，关于您的服务咨询或订单协助，我们整理了以下说明：`,
     "",
     String(content || "").trim(),
     "",
