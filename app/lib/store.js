@@ -29,7 +29,7 @@ export const PRODUCTS = [
     key: "netflix",
     image: "/products/netflix.jpg",
     title: "Netflix",
-    subtitle: "全球可用4K杜比套餐独立车位",
+    subtitle: "全球可用4K杜比独立车位",
     amount: 168,
     cycle: "1年",
     price: "仅需¥168/年",
