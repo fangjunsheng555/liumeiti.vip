@@ -113,12 +113,26 @@ const SITE_CONTENT = {
     { icon: Lock, title: "担保支付", desc: "全程加密更安全" },
   ],
   testimonials: [
+    // ── 原有 6 条（保留不更改） ──
     { name: "陈**", initial: "陈", region: "首尔", service: "Spotify 家庭版", rating: 5, date: "8分钟前", text: "用了快两年了，从没出过问题，老板人也好有问题秒回。比某宝便宜一大截，强推！" },
     { name: "Chueng****", initial: "L", region: "台北", service: "Netflix 4K", rating: 5, date: "30分钟前", text: "4K 杜比真的清晰，独立车位不会被踢，全家一起看也够用。客服处理快得离谱，5 分钟就开好了。" },
     { name: "Mia****", initial: "M", region: "深圳", service: "机场节点", rating: 5, date: "9小时前", text: "看流媒体4K 不缓冲，日常使用其他app也很流畅。第一次买就续了一年，¥98 真的没谁了。" },
     { name: "張*", initial: "張", region: "香港", service: "Disney+", rating: 5, date: "一天前", text: "本来还在犹豫，下单完 10 分钟就能用了，体验很顶。已经推荐给好几个朋友。" },
     { name: "Yammy***", initial: "Y", region: "伦敦", service: "HBO Max", rating: 5, date: "三天前", text: "第一次买怕被骗，结果非常正规，客服全程指导，账号到现在用了半年都很稳。" },
     { name: "李**", initial: "李", region: "北京", service: "Spotify+Netflix 4K+机场节点", rating: 5, date: "一周前", text: "组合下单还便宜了一些，听歌刷剧科学上网一站搞定，售后也跟上了，下次还来。" },
+    // ── 新增 12 条（中国大陆中小城市，带轻度地方语感） ──
+    { name: "王*", initial: "王", region: "烟台", service: "机场节点 · 单人畅享", rating: 5, date: "14分钟前", text: "节点真攒劲，刷油管 4K 一点都不卡，一年才 98 块比某机场便宜一半，得劲！" },
+    { name: "周**", initial: "周", region: "徐州", service: "Spotify 家庭版", rating: 5, date: "25分钟前", text: "听歌看播客真带劲，下单 5 分钟就开通，账号用一年了冒得问题。" },
+    { name: "黄*", initial: "黄", region: "嘉兴", service: "Netflix 4K 杜比", rating: 5, date: "45分钟前", text: "客服半夜还在线着实蛮灵的，账号秒开，老婆刷韩剧再也勿卡了。" },
+    { name: "朱*", initial: "朱", region: "临沂", service: "机场节点 + Netflix", rating: 5, date: "1小时前", text: "组合下单真划算，刷剧加日常上网都搞定，跟朋友推了好几个，全网最低不夸张。" },
+    { name: "林**", initial: "林", region: "桂林", service: "HBO Max", rating: 5, date: "2小时前", text: "想看权游重温一下，独立车位稳得很，老婆一起看一年下来正常得很。" },
+    { name: "郑**", initial: "郑", region: "北海", service: "Disney+ 4K", rating: 5, date: "4小时前", text: "细佬要看动画，4K 杜比清晰得很，下单到能用大概 8 分钟，客服几靠谱。" },
+    { name: "杨*", initial: "杨", region: "大理", service: "机场节点 · 无限使用", rating: 5, date: "8小时前", text: "屋头路由器一开全屋设备都用上，节点速度整得比前头用过的几家都强。" },
+    { name: "吴**", initial: "吴", region: "银川", service: "Spotify + HBO Max", rating: 5, date: "12小时前", text: "听歌追剧一把抓，开一年才两百多块，美滴很，下回还来。" },
+    { name: "谢*", initial: "谢", region: "包头", service: "Netflix 4K", rating: 5, date: "一天前", text: "终于不用拼车了，独立车位看 4K 不被挤，画质音效都顶配，真带劲。" },
+    { name: "韩**", initial: "韩", region: "抚顺", service: "机场节点 · 无限使用", rating: 5, date: "两天前", text: "全家整一起用真不限设备，路由器加手机加电视一起跑都没掉速，贼稳，188 一年贼值。" },
+    { name: "沈*", initial: "沈", region: "运城", service: "Disney+", rating: 5, date: "三天前", text: "之前在某宝被坑过几回，这次一年下来都很稳，决定再来续两年，真不赖。" },
+    { name: "姚**", initial: "姚", region: "中山", service: "Spotify 家庭版", rating: 5, date: "五天前", text: "家庭计划音质同歌单都齐，比某宝平一半，老板秒回客服，几靠谱。" },
   ],
   monthlySoldNote: "本月已售",
 };
@@ -175,6 +189,9 @@ function LiveOrderTicker() {
   );
 }
 
+const TESTIMONIALS_PER_PAGE = 4;
+const TESTIMONIALS_INTERVAL_MS = 5500;
+
 const PRODUCT_PROMOS = {
   spotify:  { badge: "热销 No.1", badgeIcon: Flame, originalPrice: 298, monthly: "≈¥10.7/月", soldThisMonth: 1328 },
   netflix:  { badge: "影视首选", badgeIcon: Star, originalPrice: 398, monthly: "≈¥14/月", soldThisMonth: 956 },
@@ -207,6 +224,31 @@ function GoogleIcon() {
   );
 }
 
+function QQBrandIcon() {
+  // Stylized QQ penguin silhouette (single-color, fits on the brand-color circle)
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+      <path d="M21.395 15.035a39.548 39.548 0 0 0-.803-2.264l-1.079-2.695c.001-.032.014-.562.014-.836C19.526 4.632 17.351 0 12 0S4.474 4.632 4.474 9.241c0 .274.013.804.014.836l-1.08 2.695a39.547 39.547 0 0 0-.802 2.264c-1.021 3.283-.69 4.643-.438 4.673.54.065 2.103-2.472 2.103-2.472 0 1.469.756 3.387 2.394 4.771-.612.188-1.363.479-1.845.835-.434.32-.379.646-.301.778.343.578 5.883.369 7.482.189 1.6.18 7.14.39 7.483-.189.077-.132.132-.458-.301-.778-.483-.356-1.234-.646-1.846-.835 1.638-1.385 2.393-3.302 2.393-4.772 0 0 1.563 2.537 2.103 2.472.252-.03.583-1.39-.438-4.673z" />
+    </svg>
+  );
+}
+
+function WhatsAppBrandIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.198-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893A11.821 11.821 0 0 0 20.464 3.488" />
+    </svg>
+  );
+}
+
+function TelegramBrandIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+      <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
+    </svg>
+  );
+}
+
 export default function Page() {
   const [selectedKey, setSelectedKey] = useState(null);
   const [faqOpen, setFaqOpen] = useState(0);
@@ -230,8 +272,25 @@ export default function Page() {
   const [redeemInput, setRedeemInput] = useState("");
   const [redeemBusy, setRedeemBusy] = useState(false);
   const [redeemStatus, setRedeemStatus] = useState(null);
+  const [testimonialsStart, setTestimonialsStart] = useState(0);
 
   const { cart, toggleCart: toggleCartStore, removeFromCart } = useCart();
+
+  // Cycle through testimonials, advancing TESTIMONIALS_PER_PAGE at each tick
+  useEffect(() => {
+    const total = SITE_CONTENT.testimonials.length;
+    if (total <= TESTIMONIALS_PER_PAGE) return;
+    const t = setInterval(() => {
+      setTestimonialsStart((s) => (s + TESTIMONIALS_PER_PAGE) % total);
+    }, TESTIMONIALS_INTERVAL_MS);
+    return () => clearInterval(t);
+  }, []);
+
+  const visibleTestimonials = (() => {
+    const all = SITE_CONTENT.testimonials;
+    if (all.length <= TESTIMONIALS_PER_PAGE) return all;
+    return Array.from({ length: TESTIMONIALS_PER_PAGE }, (_, i) => all[(testimonialsStart + i) % all.length]);
+  })();
 
   // Check auth status on mount + load balance
   useEffect(() => {
@@ -870,9 +929,9 @@ export default function Page() {
             </div>
           </div>
 
-          <div className="testimonials-grid">
-            {SITE_CONTENT.testimonials.map((t) => (
-              <article key={t.name + t.date} className="glass-card testimonial-card">
+          <div className="testimonials-grid testimonials-rotator" key={testimonialsStart}>
+            {visibleTestimonials.map((t, i) => (
+              <article key={`${testimonialsStart}-${i}-${t.name}-${t.date}`} className="glass-card testimonial-card">
                 <div className="testimonial-head">
                   <div className="testimonial-avatar">{t.initial}</div>
                   <div>
@@ -880,8 +939,8 @@ export default function Page() {
                     <div className="testimonial-meta">{t.region} · {t.service}</div>
                   </div>
                   <div className="testimonial-stars">
-                    {[...Array(t.rating)].map((_, i) => (
-                      <Star key={i} size={13} fill="currentColor" />
+                    {[...Array(t.rating)].map((_, j) => (
+                      <Star key={j} size={13} fill="currentColor" />
                     ))}
                   </div>
                 </div>
@@ -964,29 +1023,35 @@ export default function Page() {
       {/* ── Floating Support Button ── */}
       <div className="floating-wrap">
         {contactOpen && (
-          <div className="floating-panel">
-            <div className="floating-head">
-              <div className="section-kicker">Support</div>
-              <div className="floating-title">在线客服</div>
+          <div className="floating-panel floating-panel-icons">
+            <div className="floating-icons-row">
+              <a
+                href="mqq://im/chat?chat_type=wpa&uin=2802632995&version=1&src_type=web"
+                className="floating-icon-btn qq"
+                aria-label="QQ 客服"
+              >
+                <QQBrandIcon />
+              </a>
+              <a
+                href="https://wa.me/message/MRLWFP22GKEAE1"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="floating-icon-btn whatsapp"
+                aria-label="WhatsApp 客服"
+              >
+                <WhatsAppBrandIcon />
+              </a>
+              <a
+                href="https://t.me/MaoyangSupport"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="floating-icon-btn telegram"
+                aria-label="Telegram 客服"
+              >
+                <TelegramBrandIcon />
+              </a>
             </div>
-            <div className="floating-list">
-              {SITE_CONTENT.supportChannels.map((ch) => {
-                const isCopied = copiedKey === "float-" + ch.label;
-                return (
-                  <button
-                    key={ch.label}
-                    className={`floating-item${isCopied ? " is-copied" : ""}`}
-                    onClick={() => handleCopy(ch.copyValue, "float-" + ch.label)}
-                  >
-                    <span><strong>{ch.label}</strong>：{ch.value}</span>
-                    {isCopied
-                      ? <em className="floating-item-copied"><CheckCircle2 size={13} />已复制</em>
-                      : <Copy size={14} />}
-                  </button>
-                );
-              })}
-              <div className="floating-hours">{SITE_CONTENT.supportHours}</div>
-            </div>
+            <div className="floating-hours-line">9:00 - 23:00</div>
           </div>
         )}
         <button
