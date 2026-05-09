@@ -102,7 +102,7 @@ export const PRODUCTS = [
 ];
 
 export const ROCKET_PLANS = {
-  single: { id: "single", label: "单人畅享", amount: 98, desc: "单人独享 / 1 设备最佳" },
+  single: { id: "single", label: "单人畅享", amount: 98, desc: "2 设备内最佳" },
   unlimited: { id: "unlimited", label: "无限使用", amount: 188, desc: "不限设备 / 全家共享" },
 };
 export const DEFAULT_ROCKET_PLAN = "single";

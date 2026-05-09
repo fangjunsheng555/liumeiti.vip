@@ -67,7 +67,6 @@ export default function AdminPage() {
   const [tab, setTab] = useState("orders"); // "orders" | "users" | "balance" | "staff"
   const [confirmUserAction, setConfirmUserAction] = useState(null); // { email, action: "ban" | "unban" | "delete" }
   const [userActionBusy, setUserActionBusy] = useState(false);
-  const [userQuery, setUserQuery] = useState("");
   const [userInfo, setUserInfo] = useState(null); // {user, transactions}
   const [userModalOpen, setUserModalOpen] = useState(false);
   const [userLoading, setUserLoading] = useState(false);
@@ -1038,7 +1037,7 @@ export default function AdminPage() {
                     <button
                       type="button"
                       className="admin-userlist-main"
-                      onClick={() => { setUserQuery(u.email); loadUser(u.email); }}
+                      onClick={() => loadUser(u.email)}
                     >
                       <span className="admin-userlist-name">
                         {u.username || "—"}
@@ -1065,24 +1064,6 @@ export default function AdminPage() {
                 ))}
               </div>
             </div>
-
-            {/* User detail / balance adjust */}
-            <form
-              className="admin-search"
-              onSubmit={(e) => { e.preventDefault(); loadUser(userQuery); }}
-            >
-              <Search size={14} />
-              <input
-                type="email"
-                inputMode="email"
-                value={userQuery}
-                onChange={(e) => setUserQuery(e.target.value)}
-                placeholder="按注册邮箱查询用户"
-              />
-              <button type="submit" disabled={userLoading}>
-                {userLoading ? <LoaderCircle size={12} className="spin-icon" /> : "查询"}
-              </button>
-            </form>
 
             {userError && <div className="admin-alert error" style={{ marginTop: 8 }}>{userError}</div>}
 
