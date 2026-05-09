@@ -100,7 +100,7 @@ const SITE_CONTENT = {
   ],
   supportChannels: [
     { label: "QQ", value: "2802632995", copyValue: "2802632995" },
-    { label: "WhatsApp", value: "+1 431 509 3334", copyValue: "+1 4315093334" },
+    { label: "WhatsApp", value: "+1 4315093334", copyValue: "+1 4315093334" },
     { label: "Telegram", value: "@MaoyangSupport", copyValue: "@MaoyangSupport" },
   ],
   supportHours: "在线时间：北京时间 09:00 – 23:00",
