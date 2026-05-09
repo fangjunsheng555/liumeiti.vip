@@ -242,11 +242,10 @@ function WhatsAppBrandIcon() {
 }
 
 function TelegramBrandIcon() {
-  // Plane-only path — the surrounding .telegram wrapper already provides the blue circle.
-  // (Original path included a 24x24 outer circle, which combined with currentColor=white
-  // filled the whole icon white and hid the plane.)
+  // Plane-only path. Tightened viewBox (3 → 21 in both axes) so the plane fills more
+  // of the surrounding blue circle and stays centered.
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+    <svg viewBox="3 3 18 18" aria-hidden="true" fill="currentColor">
       <path d="M21.94 4.18l-2.71 12.81c-.2.91-.74 1.13-1.5.71l-4.16-3.07-2.01 1.94c-.22.22-.41.41-.84.41l.3-4.27 7.68-6.94c.33-.3-.07-.46-.52-.16L7.7 13.13 3.6 11.85c-.89-.28-.91-.89.18-1.32l16.07-6.21c.74-.27 1.39.18 1.09 1.85z" />
     </svg>
   );
@@ -426,6 +425,20 @@ export default function Page() {
     await fetch("/api/auth/login", { method: "DELETE" });
     setAuthUser(false);
   }
+
+  // Auto-fill redeem input + scroll to redeem section if ?redeem=CODE in URL (admin email link)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const code = (params.get("redeem") || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (code) {
+      setRedeemInput(code);
+      setRedeemStatus({ type: "info", message: "已为您填入兑换码，点击下方「立即兑换」即可使用。" });
+      setTimeout(() => {
+        document.getElementById("redeem")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 200);
+    }
+  }, []);
 
   // Auto-query if ?order=LMxxxxx in URL (from email link)
   useEffect(() => {
@@ -790,7 +803,7 @@ export default function Page() {
         </section>
 
         {/* ── Redeem Code ── */}
-        <section className="section container redeem-section">
+        <section id="redeem" className="section container redeem-section">
           <div className="redeem-card glass-card">
             <div className="redeem-card-copy">
               <div className="section-kicker">Redeem Code</div>

@@ -112,6 +112,10 @@ export default function AdminPage() {
   const [codeBusy, setCodeBusy] = useState("");
   const [codeResult, setCodeResult] = useState(null);
   const [activeCodeBatch, setActiveCodeBatch] = useState(null);
+  const [sendCodeModal, setSendCodeModal] = useState(null); // { code, type, label } | null
+  const [sendCodeEmail, setSendCodeEmail] = useState("");
+  const [sendCodeBusy, setSendCodeBusy] = useState(false);
+  const [sendCodeResult, setSendCodeResult] = useState(null);
   const [staffPane, setStaffPane] = useState({ staff: [], actions: [] });
   const [staffForm, setStaffForm] = useState({ username: "", password: "", remark: "" });
   const [staffBusy, setStaffBusy] = useState("");
@@ -677,6 +681,47 @@ export default function AdminPage() {
       setCodeResult({ type: "error", message: "网络错误" });
     } finally {
       setCodeBusy("");
+    }
+  }
+
+  async function sendRedeemCodeEmail(e) {
+    e.preventDefault();
+    if (sendCodeBusy || !sendCodeModal) return;
+    const email = sendCodeEmail.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setSendCodeResult({ type: "error", message: "请填写有效邮箱" });
+      return;
+    }
+    setSendCodeBusy(true);
+    setSendCodeResult(null);
+    try {
+      const res = await fetch(`/api/admin/redeem-codes/${encodeURIComponent(sendCodeModal.code)}/send`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setSendCodeResult({ type: "success", message: `已发送至 ${email}` });
+        setTimeout(() => {
+          setSendCodeModal(null);
+          setSendCodeEmail("");
+          setSendCodeResult(null);
+        }, 1200);
+      } else {
+        const msg = {
+          invalid_email: "邮箱格式错误",
+          code_not_found: "兑换码不存在",
+          code_unavailable: "兑换码已使用或已作废，无法发送",
+          send_failed: "邮件发送失败，请稍后再试",
+        }[data.error] || data.error || "发送失败";
+        setSendCodeResult({ type: "error", message: msg });
+      }
+    } catch (err) {
+      setSendCodeResult({ type: "error", message: "网络错误" });
+    } finally {
+      setSendCodeBusy(false);
     }
   }
 
@@ -2163,12 +2208,67 @@ export default function AdminPage() {
                       <strong>{c.code}</strong>
                       <small>{c.status === "active" ? "可兑换" : c.status === "used" ? "已使用" : "已作废"}{c.usedBy ? ` · ${c.usedBy}` : ""}{c.usedOrderId ? ` · ${c.usedOrderId}` : ""}</small>
                     </button>
+                    <button
+                      type="button"
+                      className="send"
+                      title="发送至邮箱"
+                      disabled={c.status !== "active"}
+                      onClick={() => {
+                        setSendCodeModal({ code: c.code, type: c.type || activeCodeBatch.type, label: activeCodeBatch.type === "service"
+                          ? (activeCodeBatch.services || []).map((s) => s.label).join(" + ")
+                          : `¥${Number(activeCodeBatch.amount || 0).toFixed(2)}` });
+                        setSendCodeEmail("");
+                        setSendCodeResult(null);
+                      }}
+                    >发</button>
                     <button type="button" disabled={c.status !== "active" || !!codeBusy} onClick={() => codeActionV2(c.code, "void")}>废</button>
                     <button type="button" className="danger" disabled={!!codeBusy} onClick={() => codeActionV2(c.code, "delete")}>删</button>
                   </div>
                 ))}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Send redeem code via email */}
+      {sendCodeModal && (
+        <div className="admin-modal-mask" onClick={() => !sendCodeBusy && setSendCodeModal(null)}>
+          <div className="admin-confirm-modal admin-send-code-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="admin-send-code-head">
+              <Mail size={20} />
+              <h3>发送兑换码到邮箱</h3>
+              <button type="button" className="admin-modal-close" onClick={() => !sendCodeBusy && setSendCodeModal(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="admin-send-code-info">
+              <div><span>兑换码</span><code>{sendCodeModal.code}</code></div>
+              <div><span>{sendCodeModal.type === "service" ? "服务" : "金额"}</span><b>{sendCodeModal.label}</b></div>
+            </div>
+            <form className="admin-send-code-form" onSubmit={sendRedeemCodeEmail}>
+              <label>
+                <span>收件人邮箱</span>
+                <input
+                  type="email"
+                  inputMode="email"
+                  autoComplete="off"
+                  value={sendCodeEmail}
+                  onChange={(e) => { setSendCodeEmail(e.target.value); if (sendCodeResult?.type === "error") setSendCodeResult(null); }}
+                  placeholder="customer@example.com"
+                  required
+                  autoFocus
+                  disabled={sendCodeBusy}
+                />
+              </label>
+              {sendCodeResult && <div className={`admin-alert ${sendCodeResult.type}`}>{sendCodeResult.message}</div>}
+              <div className="admin-send-code-actions">
+                <button type="button" onClick={() => setSendCodeModal(null)} disabled={sendCodeBusy}>取消</button>
+                <button type="submit" className="primary" disabled={sendCodeBusy}>
+                  {sendCodeBusy ? <><LoaderCircle size={13} className="spin-icon" />发送中</> : <><Mail size={13} />发送</>}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
