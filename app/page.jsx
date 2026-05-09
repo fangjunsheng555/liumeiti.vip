@@ -104,8 +104,8 @@ const SITE_CONTENT = {
     { label: "Telegram", value: "@MaoyangSupport", copyValue: "@MaoyangSupport" },
   ],
   supportHours: "在线时间：北京时间 09:00 – 23:00",
-  footerRecord: "地址：台灣新北市板橋區遠東路1號3號218",
-  footerNote: "Copyright © 2026 Maoyang Taiwan Inc. All rights reserved",
+  footerRecord: "地址：台湾新北市板桥区远东路1号3-218",
+  footerNote: "Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved",
   trustStrip: [
     { icon: Zap, title: "极速开通", desc: "支付后客服极速处理" },
     { icon: ShieldCheck, title: "7 天退款", desc: "账号原因全额退" },
@@ -1013,7 +1013,7 @@ export default function Page() {
         <div className="container footer-inner">
           <div>
             <div className="footer-brand">{SITE_CONTENT.brandCn} · {SITE_CONTENT.brandEn}</div>
-            <div className="footer-sub">{SITE_CONTENT.domain} · Since 2020</div>
+            <div className="footer-sub">{SITE_CONTENT.domain} · joinvip.vip</div>
           </div>
           <div className="footer-pill">{SITE_CONTENT.footerRecord}</div>
           <div className="footer-pill">{SITE_CONTENT.footerNote}</div>
