@@ -1051,7 +1051,7 @@ export default function Page() {
                 <TelegramBrandIcon />
               </a>
             </div>
-            <div className="floating-hours-line">9:00 - 23:00</div>
+            <div className="floating-hours-line">在线时间:9:00 - 23:00</div>
           </div>
         )}
         <button
