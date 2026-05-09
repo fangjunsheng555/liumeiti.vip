@@ -986,21 +986,30 @@ export default function Page() {
                 </div>
               </div>
 
-              <div className="channels-grid channels-stack">
-                {SITE_CONTENT.supportChannels.map((ch) => (
-                  <div key={ch.label} className="glass-card channel-card">
-                    <MessageCircleMore size={28} className="channel-icon" />
-                    <div className="channel-label">{ch.label}</div>
-                    <div className="channel-value">{ch.value}</div>
-                    <button
-                      className={`channel-copy-btn${copiedKey === ch.label ? " copied" : ""}`}
-                      onClick={() => handleCopy(ch.copyValue, ch.label)}
-                    >
-                      <Copy size={14} />
-                      {copiedKey === ch.label ? "已复制" : "复制"}
-                    </button>
-                  </div>
-                ))}
+              <div className="channels-grid channels-row">
+                {SITE_CONTENT.supportChannels.map((ch) => {
+                  const kind = ch.label.toLowerCase();
+                  const BrandIcon = kind === "qq" ? QQBrandIcon
+                    : kind === "whatsapp" ? WhatsAppBrandIcon
+                    : kind === "telegram" ? TelegramBrandIcon
+                    : null;
+                  return (
+                    <div key={ch.label} className="glass-card channel-card">
+                      <span className={`channel-icon-wrap ${kind}`} aria-hidden="true">
+                        {BrandIcon ? <BrandIcon /> : <MessageCircleMore size={22} />}
+                      </span>
+                      <div className="channel-label">{ch.label}</div>
+                      <div className="channel-value">{ch.value}</div>
+                      <button
+                        className={`channel-copy-btn${copiedKey === ch.label ? " copied" : ""}`}
+                        onClick={() => handleCopy(ch.copyValue, ch.label)}
+                      >
+                        <Copy size={14} />
+                        {copiedKey === ch.label ? "已复制" : "复制"}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
 
             </div>

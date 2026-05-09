@@ -555,6 +555,21 @@ button { cursor: pointer; border: none; background: transparent; }
   box-shadow: var(--shadow-md);
 }
 .channel-icon { color: var(--accent); }
+.channel-icon-wrap {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  color: #fff;
+  flex-shrink: 0;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.10);
+}
+.channel-icon-wrap svg { width: 22px; height: 22px; fill: currentColor; }
+.channel-icon-wrap.qq { background: #12B7F5; }
+.channel-icon-wrap.whatsapp { background: #25D366; }
+.channel-icon-wrap.telegram { background: linear-gradient(135deg, #2AABEE 0%, #229ED9 100%); }
+.channels-grid.channels-row { grid-template-columns: repeat(3, 1fr); }
 .channel-label {
   font-size: 18px;
   font-weight: 800;
@@ -1544,8 +1559,8 @@ button { cursor: pointer; border: none; background: transparent; }
   .section        { padding: 26px 0 34px; }
   .hero-cards-grid,
   .products-grid,
-  .layout-grid,
-  .channels-grid  { grid-template-columns: 1fr; }
+  .layout-grid    { grid-template-columns: 1fr; }
+  .channels-grid  { grid-template-columns: repeat(3, 1fr); gap: 10px; }
   .hero-grid      { gap: 28px; }
   .hero-title     { font-size: 38px; letter-spacing: -.03em; }
   .hero-desc      { font-size: 15px; line-height: 1.75; }
@@ -1847,26 +1862,28 @@ button { cursor: pointer; border: none; background: transparent; }
   .query-detail b { font-size: 13px; }
   .query-subscriptions button { display: grid; justify-items: stretch; }
   .query-subscriptions em { justify-self: start; margin-top: 2px; }
-  .channels-grid  { gap: 14px; }
+  .channels-grid  { gap: 10px; grid-template-columns: repeat(3, 1fr); }
   .channel-card {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 10px 12px;
-    text-align: left;
-    padding: 18px;
+    text-align: center;
+    gap: 6px;
+    padding: 12px 8px;
   }
-  .channel-icon { grid-row: 1 / 3; }
-  .channel-label { font-size: 16px; }
+  .channel-icon-wrap { width: 36px; height: 36px; }
+  .channel-icon-wrap svg { width: 18px; height: 18px; }
+  .channel-label { font-size: 13px; }
   .channel-value {
     min-width: 0;
-    font-size: 14px;
+    font-size: 11.5px;
+    color: var(--muted);
     overflow-wrap: anywhere;
   }
   .channel-copy-btn {
-    grid-row: 1 / 3;
-    grid-column: 3;
-    margin-top: 0;
+    margin-top: 4px;
+    padding: 5px 10px;
+    font-size: 11.5px;
     padding: 9px 12px;
     white-space: nowrap;
   }
@@ -2138,12 +2155,17 @@ button { cursor: pointer; border: none; background: transparent; }
   .section-title { font-size: 25px; }
   .product-card-top { grid-template-columns: minmax(0, 1fr) 56px; }
   .product-image { width: 56px; height: 56px; }
-  .channel-card { grid-template-columns: auto minmax(0, 1fr); }
+  .channels-grid { gap: 6px; }
+  .channel-card { padding: 10px 6px; gap: 4px; }
+  .channel-icon-wrap { width: 32px; height: 32px; }
+  .channel-icon-wrap svg { width: 16px; height: 16px; }
+  .channel-label { font-size: 11.5px; }
+  .channel-value { font-size: 10.5px; }
   .channel-copy-btn {
-    grid-column: 1 / -1;
-    grid-row: auto;
-    justify-content: center;
     width: 100%;
+    justify-content: center;
+    padding: 4px 6px;
+    font-size: 10.5px;
   }
   .order-modal-body.order-pay-body {
     gap: 7px;
