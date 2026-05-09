@@ -433,7 +433,7 @@ export default function Page() {
     const code = (params.get("redeem") || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
     if (code) {
       setRedeemInput(code);
-      setRedeemStatus({ type: "info", message: "已为您填入兑换码，点击下方「立即兑换」即可使用" });
+      setRedeemStatus({ type: "info", message: "已为您填入兑换码，点击「立即兑换」按钮即可使用" });
       setTimeout(() => {
         document.getElementById("redeem")?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 200);
