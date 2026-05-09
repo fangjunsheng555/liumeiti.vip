@@ -12,8 +12,19 @@ const PRODUCTS = {
   netflix: { label: "Netflix", amount: 168, cycle: "1年" },
   disney: { label: "Disney+", amount: 108, cycle: "1年" },
   max: { label: "HBO Max", amount: 148, cycle: "1年" },
-  rocket: { label: "机场节点", amount: 98, cycle: "1年" },
+  rocket: { label: "机场节点", amount: 98, cycle: "1年", hasPlan: true },
 };
+
+const ROCKET_PLANS = {
+  single: { id: "single", label: "单人畅享", amount: 98 },
+  unlimited: { id: "unlimited", label: "无限使用", amount: 188 },
+};
+const DEFAULT_ROCKET_PLAN = "single";
+
+function resolveRocketPlan(value) {
+  const id = clean(value, 20);
+  return ROCKET_PLANS[id] ? ROCKET_PLANS[id] : ROCKET_PLANS[DEFAULT_ROCKET_PLAN];
+}
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "liumeiti.vip";
@@ -302,13 +313,26 @@ export async function POST(request) {
       return Response.json({ ok: false, error: "missing_credentials:" + product.label }, { status: 400 });
     }
     if (product.needsContact) needsContact = true;
+    let amount = product.amount;
+    let label = product.label;
+    let rocketPlan = "";
+    let rocketPlanLabel = "";
+    if (service === "rocket") {
+      const plan = resolveRocketPlan(raw.rocketPlan);
+      rocketPlan = plan.id;
+      rocketPlanLabel = plan.label;
+      amount = plan.amount;
+      label = `${product.label} · ${plan.label}`;
+    }
     const item = {
       service,
-      label: product.label,
+      label,
       cycle: product.cycle,
-      amount: product.amount,
+      amount,
       account: product.needsAccountPassword ? account : "",
       password: product.needsAccountPassword ? password : "",
+      rocketPlan,
+      rocketPlanLabel,
     };
     items.push(item);
   }
@@ -318,7 +342,10 @@ export async function POST(request) {
 
   let serviceRedeem = null;
   if (paymentMethod === "redeem") {
-    const checked = await validateServiceRedeemCode(redeemCode, items.map((item) => item.service));
+    const checked = await validateServiceRedeemCode(
+      redeemCode,
+      items.map((item) => ({ key: item.service, plan: item.rocketPlan || "" })),
+    );
     if (!checked.ok) {
       return Response.json({ ok: false, error: checked.error || "invalid_redeem_code" }, { status: 400 });
     }

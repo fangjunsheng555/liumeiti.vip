@@ -522,8 +522,19 @@ export const REDEEM_SERVICE_PRODUCTS = {
   netflix: { label: "Netflix", amount: 168 },
   disney: { label: "Disney+", amount: 108 },
   max: { label: "HBO Max", amount: 148 },
-  rocket: { label: "机场节点", amount: 98 },
+  rocket: { label: "机场节点", amount: 98, hasPlan: true },
 };
+
+export const ROCKET_PLANS = {
+  single: { id: "single", label: "单人畅享", amount: 98 },
+  unlimited: { id: "unlimited", label: "无限使用", amount: 188 },
+};
+export const DEFAULT_ROCKET_PLAN = "single";
+
+function resolveRocketPlanInternal(value) {
+  const id = clean(value, 20);
+  return ROCKET_PLANS[id] ? ROCKET_PLANS[id] : ROCKET_PLANS[DEFAULT_ROCKET_PLAN];
+}
 
 function redeemCodeKey(code) { return "liumeiti:redeem-code:" + normalizeRedeemCode(code); }
 function redeemBatchKey(id) { return "liumeiti:redeem-code-batch:" + clean(id, 80); }
@@ -549,19 +560,61 @@ function redeemCodeType(item) {
 }
 
 function normalizeRedeemServices(services) {
-  const keys = Array.isArray(services) ? services : [];
+  const list = Array.isArray(services) ? services : [];
   const seen = new Set();
-  return keys
-    .map((v) => clean(typeof v === "string" ? v : v?.key, 40))
-    .filter((key) => REDEEM_SERVICE_PRODUCTS[key] && !seen.has(key) && seen.add(key));
+  const result = [];
+  for (const raw of list) {
+    let key;
+    let plan = "";
+    if (typeof raw === "string") {
+      key = clean(raw, 40);
+    } else if (raw && typeof raw === "object") {
+      key = clean(raw.key, 40);
+      plan = clean(raw.plan, 20);
+    } else {
+      continue;
+    }
+    const product = REDEEM_SERVICE_PRODUCTS[key];
+    if (!product) continue;
+    let entryPlan = "";
+    let dedupKey = key;
+    if (product.hasPlan) {
+      entryPlan = resolveRocketPlanInternal(plan).id;
+      dedupKey = `${key}:${entryPlan}`;
+    }
+    if (seen.has(dedupKey)) continue;
+    seen.add(dedupKey);
+    result.push({ key, plan: entryPlan });
+  }
+  return result;
 }
 
-function serviceSummaries(keys) {
-  return normalizeRedeemServices(keys).map((key) => ({
-    key,
-    label: REDEEM_SERVICE_PRODUCTS[key].label,
-    amount: REDEEM_SERVICE_PRODUCTS[key].amount,
-  }));
+function serviceSummaries(items) {
+  return normalizeRedeemServices(items).map(({ key, plan }) => {
+    const product = REDEEM_SERVICE_PRODUCTS[key];
+    if (product.hasPlan) {
+      const planInfo = resolveRocketPlanInternal(plan);
+      return {
+        key,
+        label: `${product.label} · ${planInfo.label}`,
+        amount: planInfo.amount,
+        plan: planInfo.id,
+        planLabel: planInfo.label,
+      };
+    }
+    return {
+      key,
+      label: product.label,
+      amount: product.amount,
+      plan: "",
+      planLabel: "",
+    };
+  });
+}
+
+function servicesEqual(a, b) {
+  const norm = (list) => list.map((s) => `${s.key}:${s.plan || ""}`).sort().join(",");
+  return norm(a) === norm(b);
 }
 
 export function createRegisterCoupon(now = new Date()) {
@@ -1057,7 +1110,7 @@ export async function listRedeemCodes() {
   return items.filter(Boolean).map((item) => ({
     ...item,
     type: redeemCodeType(item),
-    services: redeemCodeType(item) === "service" ? serviceSummaries((item.services || []).map((s) => s.key || s)) : [],
+    services: redeemCodeType(item) === "service" ? serviceSummaries(item.services || []) : [],
   }));
 }
 
@@ -1073,7 +1126,7 @@ export async function listRedeemCodeBatches() {
       .map((item) => ({
         ...item,
         type: redeemCodeType(item),
-        services: redeemCodeType(item) === "service" ? serviceSummaries((item.services || []).map((s) => s.key || s)) : [],
+        services: redeemCodeType(item) === "service" ? serviceSummaries(item.services || []) : [],
       }));
     const counts = codeItems.reduce((acc, item) => {
       const status = item.status || "active";
@@ -1085,7 +1138,7 @@ export async function listRedeemCodeBatches() {
       ...batch,
       type,
       amount: roundMoney(batch.amount),
-      services: type === "service" ? serviceSummaries((batch.services || []).map((s) => s.key || s)) : [],
+      services: type === "service" ? serviceSummaries(batch.services || []) : [],
       codes: codeItems,
       quantity: Number(batch.quantity || codeItems.length || 0),
       counts,
@@ -1106,7 +1159,7 @@ export async function getRedeemCodePublic(codeValue) {
     type,
     status: item.status || "active",
     amount: roundMoney(item.amount),
-    services: type === "service" ? serviceSummaries((item.services || []).map((s) => s.key || s)) : [],
+    services: type === "service" ? serviceSummaries(item.services || []) : [],
     requiresLogin: type === "balance",
     createdAtBeijing: item.createdAtBeijing || "",
   };
@@ -1278,11 +1331,11 @@ export async function validateServiceRedeemCode(codeValue, orderServices) {
   if (!item) return { ok: false, error: "code_not_found" };
   if (item.status !== "active") return { ok: false, error: "code_unavailable" };
   if (redeemCodeType(item) !== "service") return { ok: false, error: "not_service_code" };
-  const codeServices = normalizeRedeemServices((item.services || []).map((s) => s.key || s));
+  const codeServices = normalizeRedeemServices(item.services || []);
   const submitted = normalizeRedeemServices(orderServices);
-  const a = [...codeServices].sort().join(",");
-  const b = [...submitted].sort().join(",");
-  if (!a || a !== b) return { ok: false, error: "service_mismatch", services: serviceSummaries(codeServices) };
+  if (codeServices.length === 0 || !servicesEqual(codeServices, submitted)) {
+    return { ok: false, error: "service_mismatch", services: serviceSummaries(codeServices) };
+  }
   return { ok: true, code, item: { ...item, type: "service", services: serviceSummaries(codeServices) } };
 }
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { PRODUCTS } from "../lib/store";
+import { PRODUCTS, ROCKET_PLANS, DEFAULT_ROCKET_PLAN } from "../lib/store";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
@@ -584,8 +584,20 @@ export default function AdminPage() {
     }
   }
 
-  function toggleCodeService(key) {
-    setCodeServices((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
+  function toggleCodeService(entry) {
+    const target = typeof entry === "string" ? { key: entry, plan: "" } : { key: entry.key, plan: entry.plan || "" };
+    setCodeServices((current) => {
+      const list = current.map((item) =>
+        typeof item === "string" ? { key: item, plan: "" } : { key: item.key, plan: item.plan || "" }
+      );
+      const matchIdx = list.findIndex((s) => s.key === target.key && (s.plan || "") === (target.plan || ""));
+      if (matchIdx >= 0) return list.filter((_, i) => i !== matchIdx);
+      // For rocket, only one plan can be selected at a time per service code
+      if (target.key === "rocket") {
+        return [...list.filter((s) => s.key !== "rocket"), target];
+      }
+      return [...list, target];
+    });
   }
 
   async function codeAction(code, action) {
@@ -1299,17 +1311,41 @@ export default function AdminPage() {
                 />
               ) : (
                 <div className="admin-code-service-picker">
-                  {PRODUCTS.map((p) => (
-                    <button
-                      key={p.key}
-                      type="button"
-                      className={codeServices.includes(p.key) ? "selected" : ""}
-                      onClick={() => toggleCodeService(p.key)}
-                    >
-                      <img src={p.image} alt="" />
-                      <span>{p.title}</span>
-                    </button>
-                  ))}
+                  {PRODUCTS.flatMap((p) => {
+                    if (p.key === "rocket") {
+                      return Object.values(ROCKET_PLANS).map((plan) => {
+                        const selected = codeServices.some((s) => {
+                          const sk = typeof s === "string" ? s : s.key;
+                          const sp = typeof s === "string" ? "" : (s.plan || "");
+                          return sk === "rocket" && sp === plan.id;
+                        });
+                        return (
+                          <button
+                            key={`rocket-${plan.id}`}
+                            type="button"
+                            className={selected ? "selected" : ""}
+                            onClick={() => toggleCodeService({ key: "rocket", plan: plan.id })}
+                          >
+                            <img src={p.image} alt="" />
+                            <span>{p.title}</span>
+                            <em className="admin-code-service-plan-tag">{plan.label} ¥{plan.amount}</em>
+                          </button>
+                        );
+                      });
+                    }
+                    const selected = codeServices.some((s) => (typeof s === "string" ? s : s.key) === p.key);
+                    return [(
+                      <button
+                        key={p.key}
+                        type="button"
+                        className={selected ? "selected" : ""}
+                        onClick={() => toggleCodeService({ key: p.key })}
+                      >
+                        <img src={p.image} alt="" />
+                        <span>{p.title}</span>
+                      </button>
+                    )];
+                  })}
                 </div>
               )}
               <button type="submit" disabled={codeBusy === "create"}>

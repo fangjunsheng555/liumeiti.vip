@@ -36,6 +36,10 @@ import {
   productNeedsAccountPassword,
   subscriptionLinks,
   blankCheckoutForm,
+  ROCKET_PLANS,
+  DEFAULT_ROCKET_PLAN,
+  getRocketPlan,
+  productItemAmount,
 } from "../lib/store";
 
 export default function CheckoutPage() {
@@ -84,6 +88,18 @@ export default function CheckoutPage() {
         const keys = (data.services || []).map((item) => item.key).filter(Boolean);
         replaceCart(keys);
         setPaymentMethod("redeem");
+        // If the service code includes rocket with a fixed plan, lock that plan
+        // into the per-product field so checkout totals + submitted item match.
+        const rocketEntry = (data.services || []).find((s) => s.key === "rocket");
+        if (rocketEntry && rocketEntry.plan) {
+          setForm((current) => ({
+            ...current,
+            fields: {
+              ...(current.fields || {}),
+              rocket: { ...((current.fields || {}).rocket || {}), plan: rocketEntry.plan },
+            },
+          }));
+        }
         setRedeemMode({ loading: false, code, info: data });
       })
       .catch(() => {
@@ -94,15 +110,24 @@ export default function CheckoutPage() {
 
   const cartItems = cart.map((key) => PRODUCTS.find((p) => p.key === key)).filter(Boolean);
   const cartCount = cartItems.length;
-  const subtotal = cartSubtotalCny(cartItems);
+  const cartHasRocket = cartItems.some((p) => p.key === "rocket");
+  const rocketPlanId = (form.fields?.rocket?.plan && ROCKET_PLANS[form.fields.rocket.plan])
+    ? form.fields.rocket.plan
+    : DEFAULT_ROCKET_PLAN;
+  const planMap = { rocket: rocketPlanId };
+  const subtotal = cartSubtotalCny(cartItems, planMap);
   const discountRate = bundleDiscountRate(cartCount);
-  const bundleFinalCny = cartFinalCny(cartItems);
+  const bundleFinalCny = cartFinalCny(cartItems, planMap);
   const serviceRedeemActive = Boolean(redeemMode.info && redeemMode.info.type === "service");
+  const serviceRedeemRocketPlan = serviceRedeemActive
+    ? ((redeemMode.info?.services || []).find((s) => s.key === "rocket")?.plan || "")
+    : "";
   const activeCoupon = (authedUser?.coupons || []).find((c) => c.status === "active");
   const couponDiscount = !serviceRedeemActive && activeCoupon ? Math.min(Number(activeCoupon.amount || 0), bundleFinalCny) : 0;
   const finalCny = Math.max(0, Math.round((bundleFinalCny - couponDiscount) * 100) / 100);
   const finalUsdt = Math.round((finalCny * 0.9 / USDT_RATE) * 100) / 100;
   const savings = subtotal - bundleFinalCny;
+  const rocketPlanInfo = getRocketPlan(rocketPlanId);
 
   function handleCopy(value, key) {
     copyText(value);
@@ -176,11 +201,15 @@ export default function CheckoutPage() {
 
     const items = cartItems.map((p) => {
       const f = form.fields[p.key] || {};
-      return {
+      const item = {
         service: p.key,
         account: (f.account || "").trim(),
         password: productNeedsAccountPassword(p) ? (f.password || "").trim() : "",
       };
+      if (p.key === "rocket") {
+        item.rocketPlan = ROCKET_PLANS[f.plan] ? f.plan : DEFAULT_ROCKET_PLAN;
+      }
+      return item;
     });
 
     try {
@@ -300,26 +329,76 @@ export default function CheckoutPage() {
                   {!serviceRedeemActive && <Link href="/#products" className="text-link">+ 继续选购</Link>}
                 </div>
                 <div className="cart-items-grid">
-                  {cartItems.map((item) => (
-                    <div key={item.key} className="cart-tile">
-                      {!serviceRedeemActive && (
-                        <button
-                          type="button"
-                          className="cart-tile-remove"
-                          onClick={() => removeFromCart(item.key)}
-                          aria-label={`移除 ${item.title}`}
-                          title={`移除 ${item.title}`}
-                        >
-                          <X size={11} strokeWidth={3} />
-                        </button>
-                      )}
-                      <img src={item.image} alt={item.title} className="cart-tile-img" />
-                      <div className="cart-tile-name">{item.title}</div>
-                      <div className="cart-tile-price">¥{item.amount}</div>
-                    </div>
-                  ))}
+                  {cartItems.map((item) => {
+                    const itemAmount = productItemAmount(item, planMap[item.key]);
+                    const isRocket = item.key === "rocket";
+                    return (
+                      <div key={item.key} className="cart-tile">
+                        {!serviceRedeemActive && (
+                          <button
+                            type="button"
+                            className="cart-tile-remove"
+                            onClick={() => removeFromCart(item.key)}
+                            aria-label={`移除 ${item.title}`}
+                            title={`移除 ${item.title}`}
+                          >
+                            <X size={11} strokeWidth={3} />
+                          </button>
+                        )}
+                        <img src={item.image} alt={item.title} className="cart-tile-img" />
+                        <div className="cart-tile-name">
+                          {item.title}
+                          {isRocket && (
+                            <span className="cart-tile-plan-tag">{rocketPlanInfo.label}</span>
+                          )}
+                        </div>
+                        <div className="cart-tile-price">¥{itemAmount}</div>
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
+
+              {/* Rocket plan picker (机场节点 套餐选择) */}
+              {cartHasRocket && (
+                <section className="checkout-card">
+                  <div className="checkout-card-head">
+                    <h3>机场节点 · 套餐选择</h3>
+                    {serviceRedeemActive && serviceRedeemRocketPlan && (
+                      <span className="checkout-card-note">兑换码已锁定套餐</span>
+                    )}
+                  </div>
+                  <div className="rocket-plan-picker">
+                    {Object.values(ROCKET_PLANS).map((plan) => {
+                      const selected = rocketPlanId === plan.id;
+                      const locked = serviceRedeemActive && serviceRedeemRocketPlan && serviceRedeemRocketPlan !== plan.id;
+                      return (
+                        <label
+                          key={plan.id}
+                          className={`rocket-plan-option${selected ? " selected" : ""}${locked ? " locked" : ""}`}
+                        >
+                          <input
+                            type="radio"
+                            name="rocketPlan"
+                            value={plan.id}
+                            checked={selected}
+                            onChange={() => updateProductField("rocket", "plan", plan.id)}
+                            disabled={locked}
+                          />
+                          <div className="rocket-plan-info">
+                            <strong>{plan.label}</strong>
+                            <small>{plan.desc}</small>
+                          </div>
+                          <div className="rocket-plan-price">
+                            <b>¥{plan.amount}</b>
+                            <em>/年</em>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
 
               {/* Per-product extra fields */}
               {cartItems.some((p) => productNeedsAccountPassword(p)) && (

@@ -87,18 +87,39 @@ export const PRODUCTS = [
     amount: 98,
     cycle: "1年",
     needsUsername: true,
-    price: "仅需¥98/年",
+    hasPlan: true,
+    price: "¥98 起 / 年",
     shortIntro: "大厂机房多线路，最高5Gbps带宽，解锁所有流媒体/AI/社交软件，高峰不卡顿",
     highlights: ["不限设备/流量", "高速稳定多节点", "全加密无日志"],
-    detailTitle: "大厂机房多线路，不限设备不限流量，年仅¥98",
+    detailTitle: "大厂机房多线路，不限设备不限流量，年仅¥98 起",
     detailBody:
-      "优选大厂VPS，多线路港日台韩新美英德法等，不限制设备，不限制流量，最高速率可达5Gbps，高峰不拥堵不卡顿，解锁所有主流流媒体/AI软件/社交软件，全加密协议无日志隐私保障，实时维护24×7线路不中断",
-    orderTitle: "机场节点 · 支付宝扫码支付 ¥98",
+      "优选大厂VPS，多线路港日台韩新美英德法等，不限制设备，不限制流量，最高速率可达5Gbps，高峰不拥堵不卡顿，解锁所有主流流媒体/AI软件/社交软件，全加密协议无日志隐私保障，实时维护24×7线路不中断。可选 单人畅享 ¥98/年 或 无限使用 ¥188/年",
+    orderTitle: "机场节点 · 支付宝扫码支付",
     orderBody:
       "请在支付完成后点击付款完成提交订单，系统自动将为你生成订阅链接。",
     qrImage: "/payment/alipay.jpg",
   },
 ];
+
+export const ROCKET_PLANS = {
+  single: { id: "single", label: "单人畅享", amount: 98, desc: "单人独享 / 1 设备最佳" },
+  unlimited: { id: "unlimited", label: "无限使用", amount: 188, desc: "不限设备 / 全家共享" },
+};
+export const DEFAULT_ROCKET_PLAN = "single";
+
+export function getRocketPlan(planId) {
+  return ROCKET_PLANS[planId] || ROCKET_PLANS[DEFAULT_ROCKET_PLAN];
+}
+
+export function rocketPlanLabel(planId) {
+  return getRocketPlan(planId).label;
+}
+
+export function productItemAmount(product, plan) {
+  if (!product) return 0;
+  if (product.key === "rocket") return getRocketPlan(plan).amount;
+  return product.amount;
+}
 
 export function copyText(text) {
   if (typeof window === "undefined") return;
@@ -153,18 +174,18 @@ export function bundleDiscountLabel(itemCount) {
   return "";
 }
 
-export function cartSubtotalCny(items) {
-  return items.reduce((sum, p) => sum + (p?.amount || 0), 0);
+export function cartSubtotalCny(items, planMap = {}) {
+  return items.reduce((sum, p) => sum + productItemAmount(p, planMap?.[p?.key]), 0);
 }
 
-export function cartFinalCny(items) {
-  const subtotal = cartSubtotalCny(items);
+export function cartFinalCny(items, planMap = {}) {
+  const subtotal = cartSubtotalCny(items, planMap);
   const rate = bundleDiscountRate(items.length);
   return Math.round(subtotal * (1 - rate));
 }
 
-export function cartFinalUsdt(items) {
-  const cny = cartFinalCny(items);
+export function cartFinalUsdt(items, planMap = {}) {
+  const cny = cartFinalCny(items, planMap);
   return Math.round((cny * USDT_DISCOUNT / USDT_RATE) * 100) / 100;
 }
 
