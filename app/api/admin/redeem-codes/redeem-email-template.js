@@ -36,10 +36,10 @@ export function buildRedeemEmailText({ code, type, services, amount, brandName, 
     redeemUrl,
     ``,
     isService
-      ? `服务码无需登录，跳转后系统将自动识别并跳转至结算页提交。`
-      : `余额码需要先登录账号，金额将充入您的账户余额。`,
+      ? `服务码无需登录，跳转后系统将自动识别并跳转至结算页提交`
+      : `余额码需要先登录账号，金额将充入您的账户余额`,
     ``,
-    `如有任何问题，请联系在线客服。`,
+    `如有任何问题，请联系在线客服`,
     `站点: ${siteUrl}`,
   ];
   return lines.join("\n");
@@ -63,11 +63,11 @@ export function buildRedeemEmailHtml({
     : `<span style="font-family:ui-monospace,Menlo,Consolas,monospace;">${escapeHtml(formatMoney(amount))}</span>`;
   const heroTitle = isService ? "您收到一份服务兑换码" : "您收到一份余额兑换码";
   const heroDesc = isService
-    ? "兑换码可直接兑换以下服务，无需支付。点击下方按钮即可一键跳转兑换。"
-    : "兑换码可为您账户充值以下余额。需登录账号后兑换，金额将直接到账。";
+    ? "兑换码可直接兑换以下服务，无需支付，点击下方按钮即可一键跳转兑换"
+    : "兑换码可为您账户充值以下余额，需登录账号后兑换，金额将直接到账";
   const usageHint = isService
-    ? "服务码无需登录账号即可兑换。点击「立即兑换」按钮跳转后，系统将自动识别并引导您完成订单提交（免支付）。"
-    : "余额码需要先登录账号。点击「立即兑换」按钮跳转首页后请先登录，金额将立即到账。";
+    ? "点击「立即兑换」按钮跳转后，系统将自动识别并引导您完成订单提交（免支付）"
+    : "点击「立即兑换」按钮跳转首页后请先登录，金额将立即到账";
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -153,7 +153,7 @@ export function buildRedeemEmailHtml({
             <td style="padding:18px 32px 0;">
               <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:6px;">无法点击按钮？</div>
               <p style="margin:0;font-size:12.5px;color:#475569;line-height:1.65;">
-                请复制下方链接到浏览器打开，或直接访问 <a href="${escapeHtml(siteUrl)}" style="color:#0f766e;font-weight:700;text-decoration:underline;">${escapeHtml(siteDomain)}</a> 在「兑换码兑换」中粘贴兑换码。
+                请复制下方链接到浏览器打开，或直接访问 <a href="${escapeHtml(siteUrl)}" style="color:#0f766e;font-weight:700;text-decoration:underline;">${escapeHtml(siteDomain)}</a> 在「兑换码兑换」中粘贴兑换码
               </p>
               <div style="margin-top:6px;padding:10px 12px;background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:#334155;word-break:break-all;">${escapeHtml(redeemUrl)}</div>
             </td>
@@ -178,7 +178,7 @@ export function buildRedeemEmailHtml({
                   <td style="text-align:right;color:#94a3b8;font-size:11.5px;">${escapeHtml(siteDomain)}</td>
                 </tr>
               </table>
-              <p style="margin:10px 0 0;font-size:11px;color:#cbd5e1;line-height:1.6;">本邮件由系统自动发送，请勿直接回复。请妥善保管兑换码，遗失或泄露恕不补发。</p>
+              <p style="margin:10px 0 0;font-size:11px;color:#cbd5e1;line-height:1.6;">本邮件由系统自动发送，请勿直接回复。请妥善保管兑换码，遗失或泄露恕不补发</p>
             </td>
           </tr>
 
