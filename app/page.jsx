@@ -71,31 +71,31 @@ const SITE_CONTENT = {
   faq: [
     {
       q: "下单后多久能用？",
-      a: "支付完成后客服将在 10 分钟内处理（高峰期不超过 1 小时），通常 5-15 分钟即可使用。所有开通均由真人客服核对，确保稳定准确。",
+      a: "支付完成后客服将在 10 分钟内处理（高峰期不超过 1 小时），通常 5-15 分钟即可使用。所有开通均由真人客服核对，确保稳定准确",
     },
     {
       q: "账号安全有保障吗？会被封禁吗？",
-      a: "我们采用源头独立渠道，账号长期稳定可用。Netflix / Disney+ / HBO 均为独立车位上锁，不会被踢；Spotify 为正规家庭组邀请；机场节点为大厂纯净 IP。如出现问题联系在线客服解决即可。",
+      a: "我们采用源头独立渠道，账号长期稳定可用。Netflix / Disney+ / HBO 均为独立车位上锁，不会被踢；Spotify 为正规家庭组邀请；机场节点为大厂纯净 IP。如出现问题联系在线客服解决即可",
     },
     {
       q: "支付方式有哪些？支付安全吗？",
-      a: "支持支付宝担保支付（推荐），及 USDT 加密货币支付（9折）。所有支付通道均为持牌正规渠道，资金通过支付宝担保托管，不直接接触账户，安全无忧。",
+      a: "支持支付宝担保支付（推荐），及 USDT 加密货币支付（9折）。所有支付通道均为持牌正规渠道，资金通过支付宝担保托管，不直接接触账户，安全无忧",
     },
     {
       q: "是否支持售后服务？",
-      a: "支持。我们支持 7 天内账号原因退款，并且提供在线客服协助、问题排查与订单服务咨询，如您有任何问题，随时联系我们的在线客服团队。",
+      a: "支持。我们支持 7 天内账号原因退款，并且提供在线客服协助、问题排查与订单服务咨询，如您有任何问题，随时联系我们的在线客服团队",
     },
     {
       q: "如何联系在线客服？",
-      a: "可通过 QQ、WhatsApp、Telegram 与我们联系，在线时间为北京时间早 9 点至晚 11 点。下单后客服会主动联系你确认信息。",
+      a: "可通过 QQ、WhatsApp、Telegram 与我们联系，在线时间为北京时间早 9 点至晚 11 点。下单后客服会主动联系你确认信息",
     },
     {
       q: "关于我们？",
-      a: "冒央会社来自中国台湾，长期专注流媒体会员服务、使用指导、售后协助。我们重视响应速度、服务体验与长期口碑，持续为用户提供廉价、稳定、优质的服务。",
+      a: "冒央会社来自中国台湾，长期专注流媒体会员服务、使用指导、售后协助。我们重视响应速度、服务体验与长期口碑，持续为用户提供廉价、稳定、优质的服务",
     },
     {
       q: "是否可以定制企业或团队方案？",
-      a: "可以。我们全网拥有 200+ 代理合作伙伴，若你有长期合作、批量需求或企业场景，可联系客服进一步沟通。",
+      a: "可以。我们全网拥有 200+ 代理合作伙伴，若你有长期合作、批量需求或企业场景，可联系客服进一步沟通",
     },
   ],
   supportChannels: [
@@ -115,24 +115,24 @@ const SITE_CONTENT = {
   testimonials: [
     // ── 原有 6 条（保留不更改） ──
     { name: "陈**", initial: "陈", region: "首尔", service: "Spotify 家庭版", rating: 5, date: "8分钟前", text: "用了快两年了，从没出过问题，老板人也好有问题秒回。比某宝便宜一大截，强推！" },
-    { name: "Chueng****", initial: "L", region: "台北", service: "Netflix 4K", rating: 5, date: "30分钟前", text: "4K 杜比真的清晰，独立车位不会被踢，全家一起看也够用。客服处理快得离谱，5 分钟就开好了。" },
-    { name: "Mia****", initial: "M", region: "深圳", service: "机场节点", rating: 5, date: "9小时前", text: "看流媒体4K 不缓冲，日常使用其他app也很流畅。第一次买就续了一年，¥98 真的没谁了。" },
-    { name: "張*", initial: "張", region: "香港", service: "Disney+", rating: 5, date: "一天前", text: "本来还在犹豫，下单完 10 分钟就能用了，体验很顶。已经推荐给好几个朋友。" },
-    { name: "Yammy***", initial: "Y", region: "伦敦", service: "HBO Max", rating: 5, date: "三天前", text: "第一次买怕被骗，结果非常正规，客服全程指导，账号到现在用了半年都很稳。" },
-    { name: "李**", initial: "李", region: "北京", service: "Spotify+Netflix 4K+机场节点", rating: 5, date: "一周前", text: "组合下单还便宜了一些，听歌刷剧科学上网一站搞定，售后也跟上了，下次还来。" },
+    { name: "Chueng****", initial: "L", region: "台北", service: "Netflix 4K", rating: 5, date: "30分钟前", text: "4K 杜比真的清晰，独立车位不会被踢，全家一起看也够用。客服处理快得离谱，5 分钟就开好了" },
+    { name: "Mia****", initial: "M", region: "深圳", service: "机场节点", rating: 5, date: "9小时前", text: "看流媒体4K 不缓冲，日常使用其他app也很流畅。第一次买就续了一年，¥98 真的没谁了" },
+    { name: "張*", initial: "張", region: "香港", service: "Disney+", rating: 5, date: "一天前", text: "本来还在犹豫，下单完 10 分钟就能用了，体验很顶。已经推荐给好几个朋友" },
+    { name: "Yammy***", initial: "Y", region: "伦敦", service: "HBO Max", rating: 5, date: "三天前", text: "第一次买怕被骗，结果非常正规，客服全程指导，账号到现在用了半年都很稳" },
+    { name: "李**", initial: "李", region: "北京", service: "Spotify+Netflix 4K+机场节点", rating: 5, date: "一周前", text: "组合下单还便宜了一些，听歌刷剧科学上网一站搞定，售后也跟上了，下次还来" },
     // ── 新增 12 条（中国大陆中小城市，带轻度地方语感） ──
     { name: "王*", initial: "王", region: "烟台", service: "机场节点 · 单人畅享", rating: 5, date: "14分钟前", text: "节点真攒劲，刷油管 4K 一点都不卡，一年才 98 块比某机场便宜一半，得劲！" },
-    { name: "周**", initial: "周", region: "徐州", service: "Spotify 家庭版", rating: 5, date: "25分钟前", text: "听歌看播客真带劲，下单 5 分钟就开通，账号用一年了冒得问题。" },
-    { name: "黄*", initial: "黄", region: "嘉兴", service: "Netflix 4K 杜比", rating: 5, date: "45分钟前", text: "客服半夜还在线着实蛮灵的，账号秒开，老婆刷韩剧再也勿卡了。" },
-    { name: "朱*", initial: "朱", region: "临沂", service: "机场节点 + Netflix", rating: 5, date: "1小时前", text: "组合下单真划算，刷剧加日常上网都搞定，跟朋友推了好几个，全网最低不夸张。" },
-    { name: "林**", initial: "林", region: "桂林", service: "HBO Max", rating: 5, date: "2小时前", text: "想看权游重温一下，独立车位稳得很，老婆一起看一年下来正常得很。" },
-    { name: "郑**", initial: "郑", region: "北海", service: "Disney+ 4K", rating: 5, date: "4小时前", text: "细佬要看动画，4K 杜比清晰得很，下单到能用大概 8 分钟，客服几靠谱。" },
-    { name: "杨*", initial: "杨", region: "大理", service: "机场节点 · 无限使用", rating: 5, date: "8小时前", text: "屋头路由器一开全屋设备都用上，节点速度整得比前头用过的几家都强。" },
-    { name: "吴**", initial: "吴", region: "银川", service: "Spotify + HBO Max", rating: 5, date: "12小时前", text: "听歌追剧一把抓，开一年才两百多块，美滴很，下回还来。" },
-    { name: "谢*", initial: "谢", region: "包头", service: "Netflix 4K", rating: 5, date: "一天前", text: "终于不用拼车了，独立车位看 4K 不被挤，画质音效都顶配，真带劲。" },
-    { name: "韩**", initial: "韩", region: "抚顺", service: "机场节点 · 无限使用", rating: 5, date: "两天前", text: "全家整一起用真不限设备，路由器加手机加电视一起跑都没掉速，贼稳，188 一年贼值。" },
-    { name: "沈*", initial: "沈", region: "运城", service: "Disney+", rating: 5, date: "三天前", text: "之前在某宝被坑过几回，这次一年下来都很稳，决定再来续两年，真不赖。" },
-    { name: "姚**", initial: "姚", region: "中山", service: "Spotify 家庭版", rating: 5, date: "五天前", text: "家庭计划音质同歌单都齐，比某宝平一半，老板秒回客服，几靠谱。" },
+    { name: "周**", initial: "周", region: "徐州", service: "Spotify 家庭版", rating: 5, date: "25分钟前", text: "听歌看播客真带劲，下单 5 分钟就开通，账号用一年了冒得问题" },
+    { name: "黄*", initial: "黄", region: "嘉兴", service: "Netflix 4K 杜比", rating: 5, date: "45分钟前", text: "客服半夜还在线着实蛮灵的，账号秒开，老婆刷韩剧再也勿卡了" },
+    { name: "朱*", initial: "朱", region: "临沂", service: "机场节点 + Netflix", rating: 5, date: "1小时前", text: "组合下单真划算，刷剧加日常上网都搞定，跟朋友推了好几个，全网最低不夸张" },
+    { name: "林**", initial: "林", region: "桂林", service: "HBO Max", rating: 5, date: "2小时前", text: "想看权游重温一下，独立车位稳得很，老婆一起看一年下来划算得很" },
+    { name: "郑**", initial: "郑", region: "北海", service: "Disney+ 4K", rating: 5, date: "4小时前", text: "细佬要看动画，4K 杜比清晰得很，下单到能用大概 8 分钟，客服几靠谱" },
+    { name: "杨*", initial: "杨", region: "大理", service: "机场节点 · 无限使用", rating: 5, date: "8小时前", text: "屋头路由器一开全屋设备都用上，节点速度整得比前头用过的几家都强" },
+    { name: "吴**", initial: "吴", region: "银川", service: "Spotify + HBO Max", rating: 5, date: "12小时前", text: "听歌追剧一把抓，开一年才两百多块，美滴很，下回还来" },
+    { name: "谢*", initial: "谢", region: "包头", service: "Netflix 4K", rating: 5, date: "一天前", text: "终于不用拼车了，独立车位看 4K 不被挤，画质音效都顶配，真带劲" },
+    { name: "韩**", initial: "韩", region: "抚顺", service: "机场节点 · 无限使用", rating: 5, date: "两天前", text: "全家整一起用真不限设备，路由器加手机加电视一起跑都没掉速，贼稳，188 一年贼值" },
+    { name: "沈*", initial: "沈", region: "运城", service: "Disney+", rating: 5, date: "三天前", text: "之前在某宝被坑过几回，这次一年下来都很稳，决定再来续两年，真不赖" },
+    { name: "姚**", initial: "姚", region: "中山", service: "Spotify 家庭版", rating: 5, date: "五天前", text: "家庭计划音质同歌单都齐，比某宝平一半，老板秒回客服，几靠谱" },
   ],
   monthlySoldNote: "本月已售",
 };
@@ -331,10 +331,10 @@ export default function Page() {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
     if (params.get("auth") === "login") setAuthModal("login");
-    if (params.get("auth") === "oauth_new") setAuthNotice("注册成功,新用户 ¥8.88 优惠券已发放,结算时自动抵扣。");
+    if (params.get("auth") === "oauth_new") setAuthNotice("注册成功,新用户 ¥8.88 优惠券已发放,结算时自动抵扣");
     if (params.get("auth") && params.get("auth").includes("not_configured")) {
       setAuthModal("login");
-      setAuthError("第三方登录尚未配置,请先使用邮箱登录或注册。");
+      setAuthError("第三方登录尚未配置,请先使用邮箱登录或注册");
     }
     const oauthErrorMap = {
       invalid_oauth_state: "\u0047\u006f\u006f\u0067\u006c\u0065 \u767b\u5f55\u72b6\u6001\u5df2\u5931\u6548\uff0c\u8bf7\u91cd\u65b0\u70b9\u51fb Google \u767b\u5f55\u3002",
@@ -387,7 +387,7 @@ export default function Page() {
 
       if (authModal === "forgot") {
         // Always show success (don't leak whether email registered)
-        setAuthNotice("验证码已发送至邮箱。请查看收件箱(或垃圾邮件)。");
+        setAuthNotice("验证码已发送至邮箱。请查看收件箱(或垃圾邮件)");
         setAuthModal("reset");
         setAuthForm((f) => ({ ...f, code: "", newPassword: "" }));
         return;
@@ -433,7 +433,7 @@ export default function Page() {
     const code = (params.get("redeem") || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
     if (code) {
       setRedeemInput(code);
-      setRedeemStatus({ type: "info", message: "已为您填入兑换码，点击下方「立即兑换」即可使用。" });
+      setRedeemStatus({ type: "info", message: "已为您填入兑换码，点击下方「立即兑换」即可使用" });
       setTimeout(() => {
         document.getElementById("redeem")?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 200);
@@ -462,12 +462,12 @@ export default function Page() {
             const match = data.orders.find((o) => o.matchType === "orderId") || data.orders[0];
             setQueryResults(data.orders);
             setQueryDetailOrder(match);
-            setQueryStatus({ type: "success", message: "已找到订单。" });
+            setQueryStatus({ type: "success", message: "已找到订单" });
           } else {
-            setQueryStatus({ type: "error", message: "未查询到该订单,请联系客服。" });
+            setQueryStatus({ type: "error", message: "未查询到该订单,请联系客服" });
           }
         } catch (e) {
-          setQueryStatus({ type: "error", message: "查询失败,请稍后再试。" });
+          setQueryStatus({ type: "error", message: "查询失败,请稍后再试" });
         } finally {
           setQueryLoading(false);
         }
@@ -525,7 +525,7 @@ export default function Page() {
     event.preventDefault();
     const code = redeemInput.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
     if (!code) {
-      setRedeemStatus({ type: "error", message: "请输入兑换码。" });
+      setRedeemStatus({ type: "error", message: "请输入兑换码" });
       return;
     }
     setRedeemBusy(true);
@@ -534,7 +534,7 @@ export default function Page() {
       const infoRes = await fetch(`/api/redeem-code?code=${encodeURIComponent(code)}`, { cache: "no-store" });
       const info = await infoRes.json();
       if (!info.ok || info.status !== "active") {
-        setRedeemStatus({ type: "error", message: "兑换码不存在、已使用或已作废。" });
+        setRedeemStatus({ type: "error", message: "兑换码不存在、已使用或已作废" });
         return;
       }
       if (info.type === "service") {
@@ -543,8 +543,8 @@ export default function Page() {
       }
       if (!authUser || authUser === false) {
         setAuthModal("login");
-        setAuthNotice("余额兑换码需要先登录账号,登录后再次点击兑换即可到账。");
-        setRedeemStatus({ type: "error", message: "余额兑换码需要登录账号后兑换。" });
+        setAuthNotice("余额兑换码需要先登录账号,登录后再次点击兑换即可到账");
+        setRedeemStatus({ type: "error", message: "余额兑换码需要登录账号后兑换" });
         return;
       }
       const res = await fetch("/api/auth/redeem", {
@@ -555,14 +555,14 @@ export default function Page() {
       });
       const data = await res.json();
       if (!data.ok) {
-        setRedeemStatus({ type: "error", message: data.message || "兑换失败,请联系客服。" });
+        setRedeemStatus({ type: "error", message: data.message || "兑换失败,请联系客服" });
         return;
       }
       setAuthUser((cur) => cur && cur !== false ? { ...cur, balance: Number(data.balance || cur.balance || 0) } : cur);
       setRedeemInput("");
-      setRedeemStatus({ type: "success", message: `兑换成功,余额已到账。当前余额 ¥${Number(data.balance || 0).toFixed(2)}` });
+      setRedeemStatus({ type: "success", message: `兑换成功,余额已到账，当前余额 ¥${Number(data.balance || 0).toFixed(2)}` });
     } catch (e) {
-      setRedeemStatus({ type: "error", message: "兑换失败,请稍后再试。" });
+      setRedeemStatus({ type: "error", message: "兑换失败,请稍后再试" });
     } finally {
       setRedeemBusy(false);
     }
@@ -572,7 +572,7 @@ export default function Page() {
     event.preventDefault();
     const query = queryInput.trim();
     if (!query) {
-      setQueryStatus({ type: "error", message: "请输入完整订单号或下单邮箱。" });
+      setQueryStatus({ type: "error", message: "请输入完整订单号或下单邮箱" });
       setQueryResults([]);
       setExpandedOrderId("");
       return;
@@ -592,7 +592,7 @@ export default function Page() {
       if (!response.ok || !data.ok) throw new Error(data.error || "query_failed");
       if (!data.configured) {
         setQueryResults([]);
-        setQueryStatus({ type: "error", message: "订单存储尚未连接，请联系在线客服查询。" });
+        setQueryStatus({ type: "error", message: "订单存储尚未连接，请联系在线客服查询" });
         return;
       }
       const orders = data.orders || [];
@@ -607,13 +607,13 @@ export default function Page() {
         type: orders.length ? "success" : "error",
         message: orders.length
           ? orderIdMatch
-            ? "已通过订单号查询到订单。"
-            : "已找到 " + orders.length + " 条订单,点击查看详情。"
-          : "未查询到订单,请核对订单号或邮箱。",
+            ? "已通过订单号查询到订单"
+            : "已找到 " + orders.length + " 条订单,点击查看详情"
+          : "未查询到订单,请核对订单号或邮箱",
       });
     } catch (error) {
       setQueryResults([]);
-      setQueryStatus({ type: "error", message: "查询失败，请稍后再试或联系在线客服。" });
+      setQueryStatus({ type: "error", message: "查询失败，请稍后再试或联系在线客服" });
     } finally {
       setQueryLoading(false);
     }
