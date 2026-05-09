@@ -123,6 +123,38 @@ const SITE_CONTENT = {
   monthlySoldNote: "本月已售",
 };
 
+const LIVE_ORDERS = [
+  { city: "新北", name: "H**",      product: "机场节点 · 单人畅享", time: "24 分钟前" },
+  { city: "深圳", name: "李**",     product: "Spotify 家庭版",     time: "12 分钟前" },
+  { city: "首尔", name: "Chu***",   product: "Netflix 4K 杜比",    time: "8 分钟前" },
+  { city: "香港", name: "張*",      product: "Disney+ 4K",         time: "刚刚" },
+  { city: "北京", name: "M****",    product: "机场节点 · 无限使用", time: "33 分钟前" },
+  { city: "台北", name: "Y***",     product: "HBO Max",            time: "1 小时前" },
+  { city: "上海", name: "陈**",     product: "Spotify + 机场节点", time: "5 分钟前" },
+  { city: "伦敦", name: "Mia****",  product: "Netflix + Disney+",  time: "37 分钟前" },
+  { city: "成都", name: "Zh***",    product: "机场节点 · 无限使用", time: "16 分钟前" },
+  { city: "广州", name: "王*",      product: "HBO Max + Spotify",  time: "2 分钟前" },
+  { city: "杭州", name: "T***",     product: "机场节点 · 单人畅享", time: "9 分钟前" },
+  { city: "纽约", name: "Anna**",   product: "Netflix 4K",         time: "44 分钟前" },
+];
+
+function LiveOrderTicker() {
+  const [idx, setIdx] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setIdx((i) => (i + 1) % LIVE_ORDERS.length), 3200);
+    return () => clearInterval(t);
+  }, []);
+  const order = LIVE_ORDERS[idx];
+  return (
+    <div className="live-order-ticker" role="status" aria-live="polite">
+      <span className="live-order-dot" aria-hidden="true" />
+      <div key={idx} className="live-order-text">
+        <strong>{order.city}</strong> {order.name} 下单了 {order.product} · {order.time}
+      </div>
+    </div>
+  );
+}
+
 const PRODUCT_PROMOS = {
   spotify:  { badge: "热销 No.1", badgeIcon: Flame, originalPrice: 298, monthly: "≈¥10.7/月", soldThisMonth: 1328 },
   netflix:  { badge: "影视首选", badgeIcon: Star, originalPrice: 398, monthly: "≈¥14/月", soldThisMonth: 956 },
@@ -598,10 +630,7 @@ export default function Page() {
               <div className="section-kicker">Services</div>
               <h2 className="section-title">流媒体会员服务</h2>
             </div>
-            <div className="section-note section-note-acc">
-              <ShieldCheck size={13} />
-              全场支持 7 天内退款
-            </div>
+            <LiveOrderTicker />
           </div>
 
           <div className="products-grid products-grid-32">
