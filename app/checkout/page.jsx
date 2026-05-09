@@ -81,7 +81,7 @@ export default function CheckoutPage() {
       .then((r) => r.json())
       .then((data) => {
         if (!data.ok || data.status !== "active" || data.type !== "service") {
-          setStatus({ type: "error", message: "服务兑换码无效、已使用或已作废。" });
+          setStatus({ type: "error", message: "服务兑换码无效、已使用或已作废" });
           setRedeemMode({ loading: false, code, info: null });
           return;
         }
@@ -103,7 +103,7 @@ export default function CheckoutPage() {
         setRedeemMode({ loading: false, code, info: data });
       })
       .catch(() => {
-        setStatus({ type: "error", message: "兑换码识别失败,请稍后再试。" });
+        setStatus({ type: "error", message: "兑换码识别失败,请稍后再试" });
         setRedeemMode({ loading: false, code, info: null });
       });
   }, []);
@@ -155,17 +155,17 @@ export default function CheckoutPage() {
   const contactRequired = cartItems.some((p) => p.key === "spotify");
 
   function validateForm() {
-    if (cartCount === 0) return "购物车为空,请先选购商品。";
+    if (cartCount === 0) return "购物车为空,请先选购商品";
     if (!validEmail(form.email)) {
-      return "请填写有效的邮箱地址,客服将通过邮箱发送订单与开通信息。";
+      return "请填写有效的邮箱地址,客服将通过邮箱发送订单与开通信息";
     }
     if (contactRequired && !form.contact.trim()) {
-      return "Spotify 订单需要填写联系方式,工作人员会通过此方式联系您。";
+      return "Spotify 订单需要填写联系方式,工作人员会通过此方式联系您";
     }
     for (const p of cartItems) {
       const f = form.fields[p.key] || {};
       if (productNeedsAccountPassword(p) && (!f.account?.trim() || !f.password?.trim())) {
-        return `请为「${p.title}」填写需要开通的账号和密码。`;
+        return `请为「${p.title}」填写需要开通的账号和密码`;
       }
     }
     return "";
@@ -240,7 +240,7 @@ export default function CheckoutPage() {
       clearCart();
       if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error) {
-      setStatus({ type: "error", message: "订单提交失败,请联系在线客服处理。" });
+      setStatus({ type: "error", message: "订单提交失败,请联系在线客服处理" });
     } finally {
       setSubmitting(false);
     }
@@ -263,7 +263,7 @@ export default function CheckoutPage() {
         <div className="checkout-empty">
           <ShoppingCart size={64} className="checkout-empty-icon" />
           <h2>购物车为空</h2>
-          <p>还没有选购商品,先回首页看看吧。</p>
+          <p>还没有选购商品,先回首页看看吧</p>
           <Link href="/" className="primary-btn primary-btn-lg">
             <ArrowLeft size={15} />
             返回首页选购
@@ -307,7 +307,7 @@ export default function CheckoutPage() {
 
         {serviceRedeemActive && (
           <div className="checkout-alert success">
-            服务兑换码已识别: {(redeemMode.info.services || []).map((item) => item.label).join(" + ")}。填写必要信息后可直接提交,无需支付。
+            服务兑换码已识别: {(redeemMode.info.services || []).map((item) => item.label).join(" + ")}，填写必要信息后可直接提交,无需支付
           </div>
         )}
 
@@ -669,10 +669,10 @@ export default function CheckoutPage() {
               {/* 重要提示 */}
               <div className="pay-tip">
                 {paymentMethod === "usdt"
-                  ? `请使用 TRON (TRC20) 网络转账精确金额 ${finalUsdt} USDT 到下方地址,付款完成后请记得返回本页面点击「付款完成」按钮提交订单。`
+                  ? `请使用 TRON (TRC20) 网络转账精确金额 ${finalUsdt} USDT 到下方地址,付款完成后请记得返回本页面点击「付款完成」按钮提交订单`
                   : paymentMethod === "balance"
-                  ? `点击下方「确认扣款并提交订单」后,系统将自动从您的账户余额(¥${authedUser?.balance.toFixed(2) || "0.00"})扣除 ¥${finalCny},随后提交订单。`
-                  : "请按上方金额完成支付宝付款。付款完成后请记得返回本页面点击「付款完成」按钮,充值人员 10 分钟内处理。"}
+                  ? `点击下方「确认扣款并提交订单」后,系统将自动从您的账户余额(¥${authedUser?.balance.toFixed(2) || "0.00"})扣除 ¥${finalCny},随后提交订单`
+                  : "请按上方金额完成支付宝付款。付款完成后请记得返回本页面点击「付款完成」按钮,充值人员 10 分钟内处理"}
               </div>
 
               {/* QR 二维码 — 只对支付宝/USDT 显示,余额支付不需要 */}
@@ -765,7 +765,7 @@ export default function CheckoutPage() {
               <CheckCircle2 size={56} />
             </div>
             <h2>订单已提交</h2>
-            <p>客服将在 10 分钟内联系您。订单确认邮件已发送至您的邮箱,请保持邮箱及联系方式畅通。</p>
+            <p>客服将在 10 分钟内联系您。订单确认邮件已发送至您的邮箱,请保持邮箱及联系方式畅通</p>
 
             {orderResults[0] && (
               <div className="order-result-single">
