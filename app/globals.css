@@ -5246,11 +5246,12 @@ button { cursor: pointer; border: none; background: transparent; }
   transform: translateY(-5px);
   box-shadow: var(--shadow-md);
 }
-/* "即将上线" badge — purple/indigo gradient instead of red so it reads as
- * upcoming/feature rather than hot/now */
+/* "即将上线" badge — same dark-slate → teal gradient as the other product
+ * badges (defined later in the V3 polish block) so the promo tile reads as
+ * part of the same product family */
 .product-badge.product-badge-soon {
-  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-  box-shadow: 0 6px 16px rgba(99, 102, 241, 0.35);
+  background: linear-gradient(135deg, #1e293b 0%, #0f766e 100%);
+  box-shadow: 0 6px 14px rgba(15, 118, 110, 0.28);
 }
 
 /* ── V5 responsive overrides ── */
