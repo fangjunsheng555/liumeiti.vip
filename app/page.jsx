@@ -801,6 +801,10 @@ export default function Page() {
             })}
             {/* Promo tile fills the empty 6th cell on tablet/mobile 2-col layouts */}
             <article className="glass-card product-promo-card" aria-label="更多服务敬请期待">
+              <div className="product-badge product-badge-soon">
+                <Clock size={11} />
+                即将上线
+              </div>
               <img src="/liumeiti-promo.png" alt="更多服务敬请期待" />
             </article>
           </div>

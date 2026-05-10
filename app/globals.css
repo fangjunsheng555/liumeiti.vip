@@ -5225,11 +5225,11 @@ button { cursor: pointer; border: none; background: transparent; }
 /* Promo tile (more-services teaser) — fills the empty 6th cell on tablet/mobile.
  * Border-radius mirrors the cascade applied to .product-card.glass-card so it
  * matches whichever value the surrounding product cards are using at each
- * breakpoint. */
+ * breakpoint. Hover-lift mirrors .product-card:hover. */
 .product-promo-card {
   display: none;
   padding: 0;
-  overflow: hidden;
+  overflow: visible; /* let the badge poke out the top-right corner */
   align-items: stretch;
   justify-content: stretch;
   position: relative;
@@ -5240,6 +5240,17 @@ button { cursor: pointer; border: none; background: transparent; }
   height: 100%;
   object-fit: cover;
   display: block;
+  border-radius: inherit; /* clip image to the card's rounded corners */
+}
+.product-promo-card:hover {
+  transform: translateY(-5px);
+  box-shadow: var(--shadow-md);
+}
+/* "即将上线" badge — purple/indigo gradient instead of red so it reads as
+ * upcoming/feature rather than hot/now */
+.product-badge.product-badge-soon {
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+  box-shadow: 0 6px 16px rgba(99, 102, 241, 0.35);
 }
 
 /* ── V5 responsive overrides ── */
