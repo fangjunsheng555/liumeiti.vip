@@ -5928,7 +5928,7 @@ button { cursor: pointer; border: none; background: transparent; }
   width: 100%; min-height: 70px;
   padding: 10px 12px; border-radius: 10px;
   border: 1.5px solid rgba(148, 163, 184, 0.3);
-  font-size: 14px; font-family: inherit;
+  font-size: 16px; font-family: inherit;
   color: var(--primary); background: #fff; resize: vertical;
 }
 .admin-notes:focus { outline: none; border-color: var(--accent); }
@@ -8852,6 +8852,8 @@ button { cursor: pointer; border: none; background: transparent; }
   .admin-mail-compose-card button { height: 34px; padding: 0 11px; }
   .admin-mail-form,
   .admin-mail-log { padding: 10px; }
+  .admin-notes,
+  .admin-mail-modal .admin-mail-form input[type="email"] { font-size: 16px !important; }
   .admin-mail-form-grid { grid-template-columns: 1fr; gap: 7px; }
   .admin-mail-form textarea { min-height: 112px; max-height: 210px; }
   .admin-mail-modal .admin-mail-form textarea { min-height: 136px; max-height: 38dvh; }
