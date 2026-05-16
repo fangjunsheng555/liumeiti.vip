@@ -3120,7 +3120,7 @@ button { cursor: pointer; border: none; background: transparent; }
   border: 1px solid rgba(148, 163, 184, 0.35);
   background: #fff;
   padding: 0 13px;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: 0;
   color: var(--primary);
@@ -4565,7 +4565,7 @@ button { cursor: pointer; border: none; background: transparent; }
   padding: 0;
 }
 .contact-section {
-  padding-bottom: 8px !important;
+  padding-bottom: 4px !important;
   position: relative;
 }
 .contact-section::after {
@@ -4573,7 +4573,7 @@ button { cursor: pointer; border: none; background: transparent; }
   display: block;
   width: min(100%, 420px);
   height: 1px;
-  margin: 18px auto 0;
+  margin: 12px auto 0;
   background: linear-gradient(90deg, transparent, rgba(15, 118, 110, 0.18), transparent);
 }
 
@@ -5318,7 +5318,7 @@ button { cursor: pointer; border: none; background: transparent; }
   align-items: center;
   justify-content: center;
   gap: 6px;
-  margin-top: 2px;
+  margin: 5px 0 2px;
   color: #64748b;
   font-size: 13px;
   font-weight: 800;
@@ -5360,7 +5360,7 @@ button { cursor: pointer; border: none; background: transparent; }
   .more-service-logo-card img { max-height: 24px; }
   .more-service-logo-card.dazn img { max-height: 28px; }
   .more-service-logo-card.prime img { max-height: 22px; }
-  .more-service-countdown { font-size: 12px; gap: 4px; }
+  .more-service-countdown { font-size: 12px; gap: 4px; margin: 5px 0 3px; }
   .more-service-countdown b { font-size: 15px; }
   .product-card-mini { padding: 11px; gap: 8px; }
   .product-card-mini .product-card-top { grid-template-columns: 40px minmax(0, 1fr); gap: 8px; }
@@ -7987,10 +7987,11 @@ button { cursor: pointer; border: none; background: transparent; }
   border-top: none;
   background: transparent;
   backdrop-filter: none;
+  padding: 4px 0 8px;
 }
 .site-footer .footer-inner {
   gap: 2px;
-  padding: 12px 0 10px;
+  padding: 4px 0 6px;
 }
 .site-footer .footer-brand,
 .site-footer .footer-sub,
