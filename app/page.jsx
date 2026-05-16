@@ -889,7 +889,7 @@ export default function Page() {
               </div>
 
               <div className="more-service-countdown">
-                <Clock size={15} />
+                <Clock size={18} />
                 <span>上线倒数：<b>{moreServiceCountdown}</b></span>
               </div>
             </article>
