@@ -1,3 +1,5 @@
+import { buildEmailBrandHeader } from "../../email-brand.js";
+
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -83,16 +85,7 @@ export function buildRedeemEmailHtml({
       <td align="center">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:580px;background:#ffffff;border-radius:20px;box-shadow:0 8px 32px rgba(15,23,42,0.06);overflow:hidden;">
           <!-- Header -->
-          <tr>
-            <td style="padding:28px 32px 20px;background:linear-gradient(135deg,#0f172a 0%,#0f766e 100%);">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td style="color:#ffffff;font-size:18px;font-weight:800;letter-spacing:-0.02em;">${escapeHtml(brandName)}</td>
-                  <td style="text-align:right;color:rgba(255,255,255,0.7);font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;">Redeem Code</td>
-                </tr>
-              </table>
-            </td>
-          </tr>
+          ${buildEmailBrandHeader({ brandName, siteDomain, label: "Redeem Code" })}
 
           <!-- Hero -->
           <tr>

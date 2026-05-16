@@ -1,3 +1,5 @@
+import { buildEmailBrandHeader } from "../email-brand.js";
+
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -65,14 +67,7 @@ export function buildCompletionEmailHtml({ order, brandName, siteDomain, siteUrl
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f6fb;padding:32px 16px;">
     <tr><td align="center">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:580px;background:#ffffff;border-radius:20px;box-shadow:0 8px 32px rgba(15,23,42,0.06);overflow:hidden;">
-        <tr><td style="padding:28px 32px 20px;background:linear-gradient(135deg,#047857 0%,#0f766e 100%);">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-            <tr>
-              <td style="color:#ffffff;font-size:18px;font-weight:800;letter-spacing:-0.02em;">${escapeHtml(brandName)}</td>
-              <td style="text-align:right;color:rgba(255,255,255,0.7);font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;">Order Completed</td>
-            </tr>
-          </table>
-        </td></tr>
+        ${buildEmailBrandHeader({ brandName, siteDomain, label: "Order Completed" })}
 
         <tr><td style="padding:32px 32px 12px;text-align:center;">
           <div style="display:inline-block;width:72px;height:72px;line-height:72px;border-radius:50%;background:linear-gradient(135deg,#d1fae5,#a7f3d0);margin-bottom:16px;">

@@ -1,3 +1,5 @@
+import { buildEmailBrandHeader } from "../../email-brand.js";
+
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -34,11 +36,12 @@ export function buildCustomerMailHtml({ subject, content, brandName, siteDomain,
       <tr>
         <td align="center">
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:580px;background:#ffffff;border-radius:20px;overflow:hidden;border:1px solid #dbe7ef;box-shadow:0 16px 40px rgba(15,23,42,.08);">
+            ${buildEmailBrandHeader({ brandName, siteDomain, label: "Customer Service" })}
             <tr>
-              <td style="padding:22px 20px;background:linear-gradient(135deg,#0f172a,#0f766e);color:#ffffff;">
-                <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.78;">Customer Service</div>
-                <div style="font-size:24px;font-weight:900;line-height:1.25;margin-top:6px;">${safeBrand}客服</div>
-                <div style="font-size:13px;line-height:1.7;margin-top:8px;opacity:.88;">${safeSubject}</div>
+              <td style="padding:20px 20px 0;background:#ffffff;">
+                <div style="display:inline-block;padding:4px 9px;border-radius:999px;background:#ecfeff;border:1px solid #ccfbf1;color:#0f766e;font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;">Customer Service</div>
+                <div style="font-size:23px;font-weight:900;line-height:1.25;margin-top:8px;color:#0f172a;letter-spacing:-0.03em;">${safeBrand}客服</div>
+                <div style="font-size:13px;line-height:1.7;margin-top:7px;color:#64748b;">${safeSubject}</div>
               </td>
             </tr>
             <tr>

@@ -1,8 +1,10 @@
 import {
   validEmail, getUser, setResetCode, sendSimpleEmail,
 } from "../../_utils.js";
+import { buildEmailBrandHeader } from "../../email-brand.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
+const SITE_DOMAIN = process.env.SITE_DOMAIN || "liumeiti.vip";
 
 function generateCode() {
   // 6-digit numeric code
@@ -29,10 +31,7 @@ export async function POST(request) {
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f6fb;padding:32px 16px;">
   <tr><td align="center">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;background:#fff;border-radius:18px;overflow:hidden;box-shadow:0 8px 32px rgba(15,23,42,0.06);">
-      <tr><td style="padding:24px 32px;background:linear-gradient(135deg,#0f172a 0%,#0f766e 100%);color:#fff;">
-        <div style="font-size:17px;font-weight:800;letter-spacing:-0.02em;">${BRAND_NAME}</div>
-        <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:rgba(255,255,255,0.7);margin-top:2px;">Password Reset</div>
-      </td></tr>
+      ${buildEmailBrandHeader({ brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, label: "Password Reset" })}
       <tr><td style="padding:30px 32px 14px;">
         <h2 style="margin:0 0 8px;font-size:20px;font-weight:900;color:#0f172a;letter-spacing:-0.02em;">找回密码验证码</h2>
         <p style="margin:0 0 18px;font-size:13.5px;color:#475569;line-height:1.7;">您正在重置 ${BRAND_NAME} 账号密码。请在 10 分钟内输入下方验证码完成重置。如果不是您本人操作,请忽略此邮件。</p>
