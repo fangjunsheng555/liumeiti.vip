@@ -27,6 +27,7 @@ import {
   Headphones,
   Image as ImageIcon,
   LayoutPanelTop,
+  Layers,
   LoaderCircle,
   Lock,
   MessageCircleMore,
@@ -199,6 +200,29 @@ const PRODUCT_PROMOS = {
   max:      { badge: "影迷经典最爱", badgeIcon: Tag, originalPrice: 348, monthly: "≈¥12.3/月", soldThisMonth: 487 },
   rocket:   { badge: "必备工具", badgeIcon: Sparkles, originalPrice: 218, monthly: "≈¥8.2/月", soldThisMonth: 1580 },
 };
+
+const MORE_SERVICE_LOGOS = [
+  {
+    label: "YouTube Premium",
+    src: "https://commons.wikimedia.org/wiki/Special:FilePath/YouTube_Premium_logo_2024.svg",
+    tone: "youtube",
+  },
+  {
+    label: "Apple TV+",
+    src: "https://commons.wikimedia.org/wiki/Special:FilePath/Apple_TV_Plus_Logo.svg",
+    tone: "apple",
+  },
+  {
+    label: "DAZN",
+    src: "https://commons.wikimedia.org/wiki/Special:FilePath/DAZN_Logo_Master.svg",
+    tone: "dazn",
+  },
+  {
+    label: "Prime Video",
+    src: "https://commons.wikimedia.org/wiki/Special:FilePath/Prime_Video_logo_(2024).svg",
+    tone: "prime",
+  },
+];
 
 // PRODUCTS, USDT constants and pure helpers are imported from ./lib/store
 
@@ -792,12 +816,33 @@ export default function Page() {
               );
             })}
             {/* Promo tile fills the empty 6th cell on tablet/mobile 2-col layouts */}
-            <article className="glass-card product-promo-card" aria-label="更多服务敬请期待">
+            <article className="glass-card product-card product-card-mini product-promo-card" aria-label="更多服务敬请期待">
               <div className="product-badge product-badge-soon">
                 <Clock size={11} />
                 即将上线
               </div>
-              <img src="/liumeiti-promo.png" alt="更多服务敬请期待" />
+              <div className="product-card-top more-service-top">
+                <div className="more-service-icon" aria-hidden="true">
+                  <Layers size={23} />
+                </div>
+                <div className="product-name-block">
+                  <div className="product-name">更多服务</div>
+                  <div className="product-subtitle">更多平台 · 更多套餐 · 持续更新</div>
+                </div>
+              </div>
+
+              <div className="more-service-logo-grid" aria-label="即将上线的平台">
+                {MORE_SERVICE_LOGOS.map((service) => (
+                  <div key={service.label} className={`more-service-logo-card ${service.tone}`}>
+                    <img src={service.src} alt={service.label} loading="eager" />
+                  </div>
+                ))}
+              </div>
+
+              <div className="more-service-countdown">
+                <Clock size={13} />
+                <span>上线倒数：<b>9 天</b></span>
+              </div>
             </article>
           </div>
         </section>

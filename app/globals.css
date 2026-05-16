@@ -136,29 +136,44 @@ button { cursor: pointer; border: none; background: transparent; }
 }
 .desktop-nav {
   display: flex;
-  gap: 24px;
-  font-size: 14px;
-  font-weight: 500;
-  color: #475569;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
 }
 .desktop-nav a {
-  transition: color 0.2s;
   position: relative;
-  padding-bottom: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 118, 110, 0.14);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(241, 250, 249, 0.94) 100%);
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 900;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 5px 12px rgba(15, 23, 42, 0.055);
+  transition: transform 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
 }
 .desktop-nav a::after {
-  content: '';
-  position: absolute;
-  bottom: -2px;
-  left: 0;
-  width: 0;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--accent);
-  transition: width 0.25s;
+  display: none;
 }
-.desktop-nav a:hover { color: var(--primary); }
-.desktop-nav a:hover::after { width: 100%; }
+.desktop-nav a:hover {
+  color: #0f766e;
+  border-color: rgba(15, 118, 110, 0.34);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.96),
+    0 8px 18px rgba(15, 118, 110, 0.12);
+}
 
 .pill-link {
   padding: 9px 18px;
@@ -5223,33 +5238,85 @@ button { cursor: pointer; border: none; background: transparent; }
   .checkout-mobile-cta-btn { padding: 11px 14px; font-size: 13px; }
 }
 
-/* Promo tile (more-services teaser) — fills the empty 6th cell on tablet/mobile.
- * Border-radius mirrors the cascade applied to .product-card.glass-card so it
- * matches whichever value the surrounding product cards are using at each
- * breakpoint. Hover-lift mirrors .product-card:hover. */
+/* Promo tile (more-services teaser) — fills the empty 6th cell on tablet/mobile. */
 .product-promo-card {
   display: none;
-  padding: 0;
-  overflow: visible; /* let the badge poke out the top-right corner */
-  align-items: stretch;
-  justify-content: stretch;
+  padding: 16px;
+  overflow: visible;
   position: relative;
-  /* Default radius inherits from .glass-card (28px desktop / 22px ≤820 etc.) */
-}
-.product-promo-card img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-  border-radius: inherit; /* clip image to the card's rounded corners */
+  align-content: start;
+  background:
+    radial-gradient(circle at 12% 6%, rgba(45, 212, 191, 0.16), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 252, 252, 0.96) 100%);
 }
 .product-promo-card:hover {
   transform: translateY(-5px);
   box-shadow: var(--shadow-md);
 }
-/* "即将上线" badge — same dark-slate → teal gradient as the other product
- * badges (defined later in the V3 polish block) so the promo tile reads as
- * part of the same product family */
+.product-promo-card .more-service-top {
+  align-items: center;
+}
+.more-service-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  color: #0f766e;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  background: linear-gradient(180deg, #ffffff 0%, #effdf9 100%);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+}
+.more-service-logo-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px dashed rgba(20, 184, 166, 0.44);
+  background: rgba(236, 253, 245, 0.52);
+}
+.more-service-logo-card {
+  min-height: 52px;
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  border-radius: 11px;
+  border: 1px solid rgba(226, 232, 240, 0.92);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.045);
+}
+.more-service-logo-card img {
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 30px;
+  object-fit: contain;
+  display: block;
+}
+.more-service-logo-card.dazn img {
+  max-height: 34px;
+}
+.more-service-logo-card.prime img {
+  max-height: 28px;
+}
+.more-service-countdown {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: auto;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 800;
+}
+.more-service-countdown svg {
+  color: #f97316;
+}
+.more-service-countdown b {
+  color: #0f172a;
+  font-size: 16px;
+}
 .product-badge.product-badge-soon {
   background: linear-gradient(135deg, #1e293b 0%, #0f766e 100%);
   box-shadow: 0 6px 14px rgba(15, 118, 110, 0.28);
@@ -5259,7 +5326,7 @@ button { cursor: pointer; border: none; background: transparent; }
 @media (max-width: 1100px) {
   /* Tablet: 2 cards per row uniformly */
   .products-grid-32 > .product-card-mini:nth-child(n) { grid-column: span 3 !important; }
-  .product-promo-card { display: flex; grid-column: span 3; }
+  .product-promo-card { display: grid; grid-column: span 3; }
 }
 @media (max-width: 820px) {
   /* Match the .product-card.glass-card 14px override */
@@ -5270,6 +5337,15 @@ button { cursor: pointer; border: none; background: transparent; }
   .products-grid-32 { grid-template-columns: 1fr 1fr; gap: 8px; }
   .products-grid-32 > .product-card-mini:nth-child(n) { grid-column: auto !important; }
   .product-promo-card { grid-column: auto; }
+  .product-promo-card { padding: 11px; gap: 8px; }
+  .more-service-icon { width: 40px; height: 40px; border-radius: 11px; }
+  .more-service-logo-grid { gap: 6px; padding: 8px; border-radius: 12px; }
+  .more-service-logo-card { min-height: 43px; padding: 6px; border-radius: 9px; }
+  .more-service-logo-card img { max-height: 24px; }
+  .more-service-logo-card.dazn img { max-height: 28px; }
+  .more-service-logo-card.prime img { max-height: 22px; }
+  .more-service-countdown { font-size: 12px; gap: 4px; }
+  .more-service-countdown b { font-size: 15px; }
   .product-card-mini { padding: 11px; gap: 8px; }
   .product-card-mini .product-card-top { grid-template-columns: 40px minmax(0, 1fr); gap: 8px; }
   .product-card-mini .product-image { width: 40px; height: 40px; border-radius: 11px; }
@@ -5301,6 +5377,11 @@ button { cursor: pointer; border: none; background: transparent; }
 @media (max-width: 380px) {
   .product-card-mini .product-name { font-size: 14.5px; }
   .product-card-mini .price-now { font-size: 16px; }
+  .more-service-logo-grid { gap: 5px; padding: 7px; }
+  .more-service-logo-card { min-height: 38px; padding: 5px; }
+  .more-service-logo-card img { max-height: 21px; }
+  .more-service-logo-card.dazn img { max-height: 24px; }
+  .more-service-logo-card.prime img { max-height: 19px; }
 }
 
 /* Query result row mobile */
@@ -7793,23 +7874,30 @@ button { cursor: pointer; border: none; background: transparent; }
     flex: 1 1 auto;
     min-width: 0;
     justify-content: flex-end;
-    gap: 6px;
+    gap: 5px;
     overflow: visible;
-    padding: 0;
+    padding: 3px;
+    border-color: rgba(15, 118, 110, 0.12);
+    background: rgba(255, 255, 255, 0.68);
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.055);
   }
   .site-header .desktop-nav::-webkit-scrollbar { display: none; }
   .site-header .desktop-nav a {
     flex: 0 1 auto;
     min-width: 0;
-    padding: 8px 12px;
+    min-height: 34px;
+    padding: 0 12px;
     border-radius: 999px;
-    background: linear-gradient(180deg, #f8fbff 0%, #edf6fb 100%);
-    border: 1px solid rgba(148, 163, 184, 0.24);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(238, 249, 247, 0.96) 100%);
+    border: 1px solid rgba(15, 118, 110, 0.16);
     color: #0f172a;
     font-size: 12px;
-    font-weight: 800;
+    font-weight: 900;
     white-space: nowrap;
-    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.95),
+      0 5px 12px rgba(15, 23, 42, 0.065);
   }
   .site-header .desktop-nav a::after { display: none; }
   .hero-section.container {
@@ -7870,7 +7958,8 @@ button { cursor: pointer; border: none; background: transparent; }
     font-size: 12px;
   }
   .site-header .desktop-nav a {
-    padding: 7px 9px;
+    min-height: 31px;
+    padding: 0 9px;
     font-size: 11.5px;
   }
   .site-header .brand-img {
