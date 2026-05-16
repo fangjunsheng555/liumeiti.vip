@@ -423,7 +423,7 @@ export default function AccountPage() {
               {moneyStatus && <div className={`account-tool-alert ${moneyStatus.type}`}>{moneyStatus.message}</div>}
               <button type="submit" disabled={!!moneyBusy} className="account-money-submit">
                 {moneyBusy ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}
-                {moneyModal === "withdraw" ? "提交待审核" : "确认提交"}
+                {moneyBusy ? "处理中" : moneyModal === "withdraw" ? "提交待审核" : "确认提交"}
               </button>
             </form>
           </div>

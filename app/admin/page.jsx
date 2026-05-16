@@ -1376,7 +1376,7 @@ export default function AdminPage() {
               )}
               <button type="submit" disabled={codeBusy === "create"}>
                 {codeBusy === "create" ? <LoaderCircle size={12} className="spin-icon" /> : <Gift size={12} />}
-                生成兑换码
+                {codeBusy === "create" ? "生成中" : "生成兑换码"}
               </button>
             </form>
             {codeResult && <div className={`admin-alert ${codeResult.type}`}>{codeResult.message}</div>}
@@ -1528,7 +1528,7 @@ export default function AdminPage() {
               />
               <button type="submit" disabled={staffBusy === "create"}>
                 {staffBusy === "create" ? <LoaderCircle size={12} className="spin-icon" /> : <Plus size={12} />}
-                新增人员
+                {staffBusy === "create" ? "新增中" : "新增人员"}
               </button>
             </form>
             {staffResult && <div className={`admin-alert ${staffResult.type}`}>{staffResult.message}</div>}
@@ -2040,7 +2040,7 @@ export default function AdminPage() {
                 </div>
                 <button type="submit" disabled={mailBusy}>
                   {mailBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Mail size={12} />}
-                  发送邮件
+                  {mailBusy ? "发送中" : "发送邮件"}
                 </button>
               </form>
             </div>

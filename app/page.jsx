@@ -540,6 +540,25 @@ export default function Page() {
     setTimeout(() => setCopiedKey(null), 1800);
   }
 
+  function normalizeRedeemCode(value) {
+    return String(value || "").replace(/\s+/g, "").replace(/[＿_—–]/g, "-").toUpperCase();
+  }
+
+  async function pasteHomeRedeem() {
+    try {
+      const text = await navigator.clipboard?.readText?.();
+      const next = normalizeRedeemCode(text);
+      if (!next) {
+        setRedeemStatus({ type: "error", message: "剪贴板里没有可用的兑换码" });
+        return;
+      }
+      setRedeemInput(next);
+      if (redeemStatus?.type === "error") setRedeemStatus(null);
+    } catch (e) {
+      setRedeemStatus({ type: "error", message: "无法读取剪贴板,请长按输入框手动粘贴" });
+    }
+  }
+
   function closeProduct() {
     setSelectedKey(null);
   }
@@ -770,7 +789,11 @@ export default function Page() {
               const PromoIcon = promo.badgeIcon;
               const saved = promo.originalPrice ? promo.originalPrice - item.amount : 0;
               return (
-                <article key={item.key} className="glass-card product-card product-card-mini">
+                <article
+                  key={item.key}
+                  className={`glass-card product-card product-card-mini product-card-clickable${isInCart(item.key) ? " product-card-selected" : ""}`}
+                  onClick={() => setSelectedKey(item.key)}
+                >
                   {promo.badge && (
                     <div className="product-badge">
                       {PromoIcon && <PromoIcon size={11} />}
@@ -810,14 +833,20 @@ export default function Page() {
                     <button
                       type="button"
                       className="text-btn product-detail-link"
-                      onClick={() => setSelectedKey(item.key)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setSelectedKey(item.key);
+                      }}
                     >
                       查看详情
                     </button>
                     <button
                       type="button"
                       className={`primary-btn product-cta${isInCart(item.key) ? " in-cart" : ""}`}
-                      onClick={() => toggleCart(item.key)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleCart(item.key);
+                      }}
                     >
                       {isInCart(item.key) ? (
                         <>
@@ -878,19 +907,24 @@ export default function Page() {
             <form className="redeem-card-form" onSubmit={submitHomeRedeem}>
               <label>
                 <span></span>
-                <input
-                  value={redeemInput}
-                  onChange={(e) => {
-                    setRedeemInput(e.target.value.toUpperCase());
-                    if (redeemStatus?.type === "error") setRedeemStatus(null);
-                  }}
-                  placeholder="准确输入兑换码，支持粘贴"
-                  autoComplete="off"
-                />
+                <div className="redeem-input-wrap">
+                  <input
+                    value={redeemInput}
+                    onChange={(e) => {
+                      setRedeemInput(normalizeRedeemCode(e.target.value));
+                      if (redeemStatus?.type === "error") setRedeemStatus(null);
+                    }}
+                    placeholder="准确输入兑换码，支持粘贴"
+                    autoComplete="off"
+                  />
+                  <button type="button" className="redeem-paste-btn" onClick={pasteHomeRedeem} disabled={redeemBusy}>
+                    粘贴
+                  </button>
+                </div>
               </label>
               <button type="submit" disabled={redeemBusy}>
                 {redeemBusy ? <LoaderCircle size={14} className="spin-icon" /> : <Gift size={14} />}
-                立即兑换
+                {redeemBusy ? "处理中" : "立即兑换"}
               </button>
               {redeemStatus && <div className={`redeem-card-status ${redeemStatus.type}`}>{redeemStatus.message}</div>}
             </form>
