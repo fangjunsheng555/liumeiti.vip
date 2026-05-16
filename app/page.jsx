@@ -656,6 +656,7 @@ export default function Page() {
         {/* ── Hero ── */}
         <section className="hero-section container">
           <div className="hero-single">
+            <img src="/logo.png" alt={`${SITE_CONTENT.brandCn} ${SITE_CONTENT.brandEn}`} className="hero-card-logo" />
             <h1 className="hero-title">
               {SITE_CONTENT.heroTitleLine1}
               <span className="hero-title-highlight">{SITE_CONTENT.heroTitleHighlight}</span>

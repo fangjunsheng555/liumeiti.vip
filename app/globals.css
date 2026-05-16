@@ -7714,6 +7714,170 @@ button { cursor: pointer; border: none; background: transparent; }
     display: block;
   }
 }
+
+/* Hero refresh */
+.hero-section.container {
+  padding-top: 34px;
+  padding-bottom: 32px;
+}
+.hero-single {
+  max-width: 910px;
+  margin: 0 auto;
+  padding: 42px 34px 30px;
+  border-radius: 28px;
+  text-align: center;
+  background:
+    radial-gradient(circle at 12% 18%, rgba(255, 255, 255, 0.92) 0, rgba(255, 255, 255, 0) 32%),
+    radial-gradient(circle at 88% 8%, rgba(209, 250, 229, 0.55) 0, rgba(209, 250, 229, 0) 34%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.96) 0%, rgba(236, 253, 252, 0.94) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.08);
+}
+.hero-card-logo {
+  display: block;
+  width: min(265px, 70vw);
+  height: auto;
+  margin: 0 auto 13px;
+  object-fit: contain;
+}
+.hero-single .hero-title {
+  font-size: clamp(34px, 5.1vw, 56px);
+  line-height: 1.08;
+  letter-spacing: -.045em;
+}
+.hero-single .hero-desc {
+  margin: 12px auto 0;
+  max-width: none;
+  font-size: 15px;
+  line-height: 1.7;
+}
+.hero-single .hero-actions-pair {
+  margin: 22px auto 0;
+  max-width: 435px;
+  gap: 10px;
+}
+.hero-single .hero-pair-btn {
+  height: 48px;
+  border-radius: 14px;
+}
+.hero-single .hero-microtrust {
+  justify-content: center;
+  margin-top: 15px;
+  color: #26445f;
+}
+.hero-single .hero-microtrust .dot {
+  display: none;
+}
+
+@media (max-width: 820px) {
+  .site-header {
+    background: #fff;
+    border-bottom: none;
+  }
+  .site-header .header-inner {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "brand auth"
+      "nav nav";
+    gap: 10px 8px;
+    padding: 8px 0 10px;
+  }
+  .site-header .brand-wrap { grid-area: brand; }
+  .site-header .header-auth {
+    grid-area: auth;
+    justify-self: end;
+  }
+  .site-header .desktop-nav {
+    grid-area: nav;
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 0 1px 1px;
+    scrollbar-width: none;
+  }
+  .site-header .desktop-nav::-webkit-scrollbar { display: none; }
+  .site-header .desktop-nav a {
+    flex: 0 0 auto;
+    padding: 9px 14px;
+    border-radius: 18px;
+    background: #f1f7fd;
+    border: 1px solid #dbe7ef;
+    color: #0f172a;
+    font-size: 12.5px;
+    font-weight: 800;
+    box-shadow: 0 3px 10px rgba(15, 23, 42, 0.04);
+  }
+  .site-header .desktop-nav a::after { display: none; }
+  .hero-section.container {
+    width: 100%;
+    max-width: none;
+    padding: 17px 6px 18px;
+    background: linear-gradient(180deg, #cceff8 0%, #dff7f4 100%);
+  }
+  .hero-single {
+    max-width: none;
+    padding: 22px 18px 16px;
+    border-radius: 24px;
+    box-shadow: none;
+  }
+  .hero-card-logo {
+    width: min(250px, 68vw);
+    margin-bottom: 11px;
+  }
+  .hero-single .hero-title {
+    font-size: clamp(28px, 7.4vw, 35px);
+    line-height: 1.08;
+    letter-spacing: -.05em;
+    white-space: nowrap;
+  }
+  .hero-single .hero-title-highlight {
+    display: inline;
+  }
+  .hero-single .hero-desc {
+    margin-top: 10px;
+    font-size: 13px;
+    line-height: 1.55;
+    white-space: nowrap;
+  }
+  .hero-single .hero-actions-pair {
+    margin-top: 20px;
+    max-width: none;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .hero-single .hero-pair-btn {
+    height: 46px;
+    border-radius: 13px;
+    font-size: 14px;
+  }
+  .hero-single .hero-auth-tip {
+    top: -10px;
+    right: 6px;
+    font-size: 9px;
+    padding: 3px 7px;
+  }
+  .hero-single .hero-microtrust {
+    margin-top: 13px;
+    gap: 8px 14px;
+    font-size: 12px;
+    flex-wrap: nowrap;
+  }
+}
+
+@media (max-width: 380px) {
+  .hero-single .hero-title {
+    font-size: 26px;
+  }
+  .hero-single .hero-desc {
+    font-size: 12px;
+  }
+  .hero-single .hero-microtrust {
+    gap: 6px 8px;
+    font-size: 11px;
+  }
+}
+
 /* Override grid layout for the wrapper div */
 .admin-userlist-item {
   display: flex;
