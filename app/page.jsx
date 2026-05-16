@@ -192,6 +192,18 @@ function LiveOrderTicker() {
 
 const TESTIMONIALS_PER_PAGE = 4;
 const TESTIMONIALS_INTERVAL_MS = 5500;
+const MORE_SERVICE_COUNTDOWN_CYCLE_MS = 72 * 60 * 60 * 1000;
+const MORE_SERVICE_COUNTDOWN_EPOCH = Date.UTC(2026, 0, 1, 0, 0, 0);
+
+function formatMoreServiceCountdown(now = Date.now()) {
+  const elapsed = ((now - MORE_SERVICE_COUNTDOWN_EPOCH) % MORE_SERVICE_COUNTDOWN_CYCLE_MS + MORE_SERVICE_COUNTDOWN_CYCLE_MS) % MORE_SERVICE_COUNTDOWN_CYCLE_MS;
+  const remaining = elapsed === 0 ? MORE_SERVICE_COUNTDOWN_CYCLE_MS : MORE_SERVICE_COUNTDOWN_CYCLE_MS - elapsed;
+  const totalSeconds = Math.floor(remaining / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
+}
 
 const PRODUCT_PROMOS = {
   spotify:  { badge: "热销 No.1", badgeIcon: Flame, originalPrice: 298, monthly: "≈¥10.7/月", soldThisMonth: 1328 },
@@ -299,6 +311,7 @@ export default function Page() {
   const [redeemBusy, setRedeemBusy] = useState(false);
   const [redeemStatus, setRedeemStatus] = useState(null);
   const [testimonialsStart, setTestimonialsStart] = useState(0);
+  const [moreServiceCountdown, setMoreServiceCountdown] = useState("72:00:00");
 
   const { cart, toggleCart: toggleCartStore, removeFromCart } = useCart();
 
@@ -309,6 +322,13 @@ export default function Page() {
     const t = setInterval(() => {
       setTestimonialsStart((s) => (s + TESTIMONIALS_PER_PAGE) % total);
     }, TESTIMONIALS_INTERVAL_MS);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const tick = () => setMoreServiceCountdown(formatMoreServiceCountdown());
+    tick();
+    const t = setInterval(tick, 1000);
     return () => clearInterval(t);
   }, []);
 
@@ -841,7 +861,7 @@ export default function Page() {
 
               <div className="more-service-countdown">
                 <Clock size={13} />
-                <span>上线倒数：<b>9 天</b></span>
+                <span>上线倒数：<b>{moreServiceCountdown}</b></span>
               </div>
             </article>
           </div>

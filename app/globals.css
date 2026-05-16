@@ -137,12 +137,11 @@ button { cursor: pointer; border: none; background: transparent; }
 .desktop-nav {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px;
-  border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 .desktop-nav a {
   position: relative;
@@ -152,9 +151,9 @@ button { cursor: pointer; border: none; background: transparent; }
   min-height: 34px;
   padding: 0 16px;
   border-radius: 999px;
-  border: 1px solid rgba(15, 118, 110, 0.14);
+  border: 1px solid rgba(15, 118, 110, 0.16);
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(241, 250, 249, 0.94) 100%);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(241, 250, 249, 0.95) 100%);
   color: #0f172a;
   font-size: 13px;
   font-weight: 900;
@@ -3121,11 +3120,15 @@ button { cursor: pointer; border: none; background: transparent; }
   border: 1px solid rgba(148, 163, 184, 0.35);
   background: #fff;
   padding: 0 13px;
-  font-size: 16px;
-  font-weight: 800;
-  letter-spacing: .03em;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
   color: var(--primary);
   outline: none;
+}
+.redeem-card-form input::placeholder {
+  color: #94a3b8;
+  font-weight: 600;
 }
 .redeem-card-form input:focus {
   border-color: rgba(20, 184, 166, 0.7);
@@ -4563,6 +4566,15 @@ button { cursor: pointer; border: none; background: transparent; }
 }
 .contact-section {
   padding-bottom: 8px !important;
+  position: relative;
+}
+.contact-section::after {
+  content: "";
+  display: block;
+  width: min(100%, 420px);
+  height: 1px;
+  margin: 18px auto 0;
+  background: linear-gradient(90deg, transparent, rgba(15, 118, 110, 0.18), transparent);
 }
 
 /* Adjust testimonials to 2 rows of 3 cols on desktop already, OK */
@@ -5275,6 +5287,7 @@ button { cursor: pointer; border: none; background: transparent; }
   border-radius: 14px;
   border: 1px dashed rgba(20, 184, 166, 0.44);
   background: rgba(236, 253, 245, 0.52);
+  margin-bottom: 2px;
 }
 .more-service-logo-card {
   min-height: 52px;
@@ -5305,17 +5318,20 @@ button { cursor: pointer; border: none; background: transparent; }
   align-items: center;
   justify-content: center;
   gap: 6px;
-  margin-top: auto;
+  margin-top: 2px;
   color: #64748b;
   font-size: 13px;
   font-weight: 800;
+  line-height: 1.2;
 }
 .more-service-countdown svg {
   color: #f97316;
 }
 .more-service-countdown b {
   color: #0f172a;
-  font-size: 16px;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
 }
 .product-badge.product-badge-soon {
   background: linear-gradient(135deg, #1e293b 0%, #0f766e 100%);
@@ -7874,12 +7890,12 @@ button { cursor: pointer; border: none; background: transparent; }
     flex: 1 1 auto;
     min-width: 0;
     justify-content: flex-end;
-    gap: 5px;
+    gap: 6px;
     overflow: visible;
-    padding: 3px;
-    border-color: rgba(15, 118, 110, 0.12);
-    background: rgba(255, 255, 255, 0.68);
-    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.055);
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
   }
   .site-header .desktop-nav::-webkit-scrollbar { display: none; }
   .site-header .desktop-nav a {
@@ -7888,16 +7904,15 @@ button { cursor: pointer; border: none; background: transparent; }
     min-height: 34px;
     padding: 0 12px;
     border-radius: 999px;
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(238, 249, 247, 0.96) 100%);
-    border: 1px solid rgba(15, 118, 110, 0.16);
+    background: linear-gradient(180deg, #ffffff 0%, #f1fbf9 100%);
+    border: 1px solid rgba(15, 118, 110, 0.14);
     color: #0f172a;
     font-size: 12px;
     font-weight: 900;
     white-space: nowrap;
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.95),
-      0 5px 12px rgba(15, 23, 42, 0.065);
+      0 3px 9px rgba(15, 23, 42, 0.06);
   }
   .site-header .desktop-nav a::after { display: none; }
   .hero-section.container {
