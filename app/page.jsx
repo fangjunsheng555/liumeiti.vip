@@ -633,11 +633,9 @@ export default function Page() {
           </a>
 
           <nav className="desktop-nav">
-            <a href="#products">服务产品</a>
             <a href="#layout">下单流程</a>
             <a href="#order-query">订单查询</a>
             <a href="#faq">FAQ</a>
-            <a href="#contact">联系我们</a>
           </nav>
 
           <div className="header-auth">
@@ -682,13 +680,6 @@ export default function Page() {
               )}
             </div>
 
-            <div className="hero-microtrust">
-              <span><Zap size={13} />即时开通</span>
-              <span className="dot" />
-              <span><ShieldCheck size={13} />7 天内退款</span>
-              <span className="dot" />
-              <span><Sparkles size={13} />全网最低价</span>
-            </div>
           </div>
         </section>
 
