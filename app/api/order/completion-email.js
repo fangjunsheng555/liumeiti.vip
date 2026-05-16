@@ -131,7 +131,7 @@ export function buildCompletionEmailHtml({ order, brandName, siteDomain, siteUrl
               <td style="text-align:right;color:#94a3b8;font-size:11.5px;">${escapeHtml(siteDomain)}</td>
             </tr>
           </table>
-          <p style="margin:10px 0 0;font-size:11px;color:#cbd5e1;line-height:1.6;">本邮件由系统自动发送,请勿直接回复。</p>
+          <p style="margin:10px 0 0;font-size:11px;color:#cbd5e1;line-height:1.6;">本邮件由系统自动发送,请勿直接回复</p>
         </td></tr>
       </table>
     </td></tr>
