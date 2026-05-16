@@ -102,8 +102,8 @@ export const PRODUCTS = [
 ];
 
 export const ROCKET_PLANS = {
-  single: { id: "single", label: "单人畅享", amount: 98, desc: "2 设备内最佳" },
-  unlimited: { id: "unlimited", label: "无限使用", amount: 188, desc: "不限设备 / 全家共享" },
+  single: { id: "single", label: "单人畅享", amount: 98, desc: "100 GB/月真实流量" },
+  unlimited: { id: "unlimited", label: "无限使用", amount: 188, desc: "不限设备 / 不限流量" },
 };
 export const DEFAULT_ROCKET_PLAN = "single";
 
