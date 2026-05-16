@@ -7838,7 +7838,7 @@ button { cursor: pointer; border: none; background: transparent; }
   margin: 0 auto 13px;
   object-fit: cover;
   object-position: 58% 50%;
-  mix-blend-mode: multiply;
+  mix-blend-mode: darken;
   border-radius: 16px;
 }
 .hero-single .hero-title {
