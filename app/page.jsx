@@ -27,7 +27,6 @@ import {
   Headphones,
   Image as ImageIcon,
   LayoutPanelTop,
-  Layers,
   LoaderCircle,
   Lock,
   MessageCircleMore,
@@ -192,18 +191,6 @@ function LiveOrderTicker() {
 
 const TESTIMONIALS_PER_PAGE = 4;
 const TESTIMONIALS_INTERVAL_MS = 5500;
-const MORE_SERVICE_COUNTDOWN_CYCLE_MS = 72 * 60 * 60 * 1000;
-const MORE_SERVICE_COUNTDOWN_EPOCH = Date.UTC(2026, 0, 1, 0, 0, 0);
-
-function formatMoreServiceCountdown(now = Date.now()) {
-  const elapsed = ((now - MORE_SERVICE_COUNTDOWN_EPOCH) % MORE_SERVICE_COUNTDOWN_CYCLE_MS + MORE_SERVICE_COUNTDOWN_CYCLE_MS) % MORE_SERVICE_COUNTDOWN_CYCLE_MS;
-  const remaining = elapsed === 0 ? MORE_SERVICE_COUNTDOWN_CYCLE_MS : MORE_SERVICE_COUNTDOWN_CYCLE_MS - elapsed;
-  const totalSeconds = Math.floor(remaining / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  return [hours, minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
-}
 
 const PRODUCT_PROMOS = {
   spotify:  { badge: "热销 No.1", badgeIcon: Flame, originalPrice: 298, monthly: "≈¥10.7/月", soldThisMonth: 1328 },
@@ -212,29 +199,6 @@ const PRODUCT_PROMOS = {
   max:      { badge: "影迷经典最爱", badgeIcon: Tag, originalPrice: 348, monthly: "≈¥12.3/月", soldThisMonth: 487 },
   rocket:   { badge: "必备工具", badgeIcon: Sparkles, originalPrice: 218, monthly: "≈¥8.2/月", soldThisMonth: 1580 },
 };
-
-const MORE_SERVICE_LOGOS = [
-  {
-    label: "YouTube Premium",
-    src: "https://commons.wikimedia.org/wiki/Special:FilePath/YouTube_Premium_logo_2024.svg",
-    tone: "youtube",
-  },
-  {
-    label: "Apple TV+",
-    src: "https://commons.wikimedia.org/wiki/Special:FilePath/Apple_TV_Plus_Logo.svg",
-    tone: "apple",
-  },
-  {
-    label: "DAZN",
-    src: "https://commons.wikimedia.org/wiki/Special:FilePath/DAZN_Logo_Master.svg",
-    tone: "dazn",
-  },
-  {
-    label: "Prime Video",
-    src: "https://commons.wikimedia.org/wiki/Special:FilePath/Prime_Video_logo_(2024).svg",
-    tone: "prime",
-  },
-];
 
 // PRODUCTS, USDT constants and pure helpers are imported from ./lib/store
 
@@ -311,7 +275,6 @@ export default function Page() {
   const [redeemBusy, setRedeemBusy] = useState(false);
   const [redeemStatus, setRedeemStatus] = useState(null);
   const [testimonialsStart, setTestimonialsStart] = useState(0);
-  const [moreServiceCountdown, setMoreServiceCountdown] = useState("72:00:00");
 
   const { cart, toggleCart: toggleCartStore, removeFromCart } = useCart();
 
@@ -322,13 +285,6 @@ export default function Page() {
     const t = setInterval(() => {
       setTestimonialsStart((s) => (s + TESTIMONIALS_PER_PAGE) % total);
     }, TESTIMONIALS_INTERVAL_MS);
-    return () => clearInterval(t);
-  }, []);
-
-  useEffect(() => {
-    const tick = () => setMoreServiceCountdown(formatMoreServiceCountdown());
-    tick();
-    const t = setInterval(tick, 1000);
     return () => clearInterval(t);
   }, []);
 
@@ -581,7 +537,8 @@ export default function Page() {
 
   function goCheckout() {
     if (cartCount === 0) return;
-    window.location.href = "/checkout";
+    const items = cartItems.map((item) => item.key).join(",");
+    window.location.href = `/checkout?items=${encodeURIComponent(items)}`;
   }
 
   async function submitHomeRedeem(event) {
@@ -865,32 +822,52 @@ export default function Page() {
               );
             })}
             {/* Promo tile fills the empty 6th cell on tablet/mobile 2-col layouts */}
-            <article className="glass-card product-card product-card-mini product-promo-card" aria-label="更多服务敬请期待">
+            <article className="glass-card product-card product-card-mini product-promo-card" aria-label="咨询更多流媒体服务">
               <div className="product-badge product-badge-soon">
-                <Clock size={11} />
-                即将上线
+                <MessageCircleMore size={11} />
+                人工报价
               </div>
               <div className="product-card-top more-service-top">
                 <div className="more-service-icon" aria-hidden="true">
-                  <Layers size={23} />
+                  <MessageCircleMore size={23} />
                 </div>
                 <div className="product-name-block">
-                  <div className="product-name">更多服务</div>
-                  <div className="product-subtitle">更多平台 · 更多套餐 · 持续更新</div>
+                  <div className="product-name">更多服务咨询</div>
+                  <div className="product-subtitle">YouTube / Apple TV+ / DAZN / Prime Video 等</div>
                 </div>
               </div>
 
-              <div className="more-service-logo-grid" aria-label="即将上线的平台">
-                {MORE_SERVICE_LOGOS.map((service) => (
-                  <div key={service.label} className={`more-service-logo-card ${service.tone}`}>
-                    <img src={service.src} alt={service.label} loading="eager" />
-                  </div>
-                ))}
+              <div className="more-service-consult-box">
+                <strong>没找到想要的平台？</strong>
+                <span>联系客服说明平台、地区、时长或团队数量，工作人员会按需报价。</span>
               </div>
 
-              <div className="more-service-countdown">
-                <Clock size={18} />
-                <span>上线倒数：<b>{moreServiceCountdown}</b></span>
+              <div className="more-service-tags" aria-label="可咨询服务示例">
+                <span>YouTube</span>
+                <span>Apple TV+</span>
+                <span>DAZN</span>
+                <span>Prime Video</span>
+              </div>
+
+              <div className="more-service-consult-actions">
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleCopy("@MaoyangSupport", "more-service-telegram");
+                  }}
+                >
+                  {copiedKey === "more-service-telegram" ? "已复制" : "复制 Telegram"}
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleCopy("+1 4315093334", "more-service-whatsapp");
+                  }}
+                >
+                  {copiedKey === "more-service-whatsapp" ? "已复制" : "复制 WhatsApp"}
+                </button>
               </div>
             </article>
           </div>

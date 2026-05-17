@@ -14,6 +14,16 @@ function cleanMailBody(value) {
     .slice(0, 3000);
 }
 
+const MAX_MAIL_RECIPIENTS = 20;
+
+function parseMailRecipients(value) {
+  const seen = new Set();
+  return String(value || "")
+    .split(/[,，;\n\r]+/)
+    .map((item) => item.trim().toLowerCase())
+    .filter((email) => email && !seen.has(email) && seen.add(email));
+}
+
 function currentStaffPayload(session) {
   return {
     id: Number(session.staffId || 1),
@@ -36,10 +46,24 @@ export async function POST(request) {
   let body = {};
   try { body = await request.json(); } catch (e) {}
 
-  const to = String(body.to || "").trim().toLowerCase();
+  const recipients = parseMailRecipients(body.to);
   const subject = clean(body.subject || "客服服务通知", 120) || "客服服务通知";
   const content = cleanMailBody(body.content);
-  if (!validEmail(to)) return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
+  const invalidRecipients = recipients.filter((email) => !validEmail(email));
+  if (recipients.length === 0 || invalidRecipients.length > 0) {
+    return Response.json({
+      ok: false,
+      error: "invalid_email",
+      detail: invalidRecipients.join(", "),
+    }, { status: 400 });
+  }
+  if (recipients.length > MAX_MAIL_RECIPIENTS) {
+    return Response.json({
+      ok: false,
+      error: "too_many_recipients",
+      limit: MAX_MAIL_RECIPIENTS,
+    }, { status: 400 });
+  }
   if (!content) return Response.json({ ok: false, error: "content_required" }, { status: 400 });
 
   const brandName = process.env.BRAND_NAME || "冒央会社";
@@ -63,40 +87,74 @@ export async function POST(request) {
     staffId: actor.staffId,
   });
 
-  const result = await sendSimpleEmail({
-    to,
-    subject: mailSubject,
-    text,
-    html,
-    fromName: "冒央会社客服",
-  });
-  const log = await pushAdminMailLog({
-    to,
-    subject: mailSubject,
-    content,
-    preview: content,
-    ok: result.ok,
-    reason: result.ok ? "" : (result.reason || result.error || result.code || "send_failed"),
-    messageId: result.messageId || "",
-    staffId: actor.staffId,
-    staffUsername: actor.staffUsername,
-  });
+  const results = [];
+  const logs = [];
+  for (const to of recipients) {
+    const result = await sendSimpleEmail({
+      to,
+      subject: mailSubject,
+      text,
+      html,
+      fromName: "冒央会社客服",
+    });
+    const reason = result.ok ? "" : (result.reason || result.error || result.code || "send_failed");
+    const log = await pushAdminMailLog({
+      to,
+      subject: mailSubject,
+      content,
+      preview: content,
+      ok: result.ok,
+      reason,
+      messageId: result.messageId || "",
+      staffId: actor.staffId,
+      staffUsername: actor.staffUsername,
+    });
+    if (log) logs.push(log);
+    results.push({
+      to,
+      ok: result.ok,
+      reason,
+      messageId: result.messageId || "",
+      logId: log?.id || "",
+    });
+  }
+
+  const sentCount = results.filter((item) => item.ok).length;
+  const failedCount = results.length - sentCount;
   await pushAdminActionLog({
     action: "customer_mail_send",
     actor,
-    target: "mail:" + to,
-    detail: { ok: result.ok, subject: mailSubject, logId: log?.id || "" },
+    target: recipients.length === 1 ? "mail:" + recipients[0] : "mail-batch:" + recipients.length,
+    detail: {
+      ok: sentCount > 0,
+      subject: mailSubject,
+      recipients,
+      sentCount,
+      failedCount,
+      logIds: logs.map((item) => item.id),
+    },
   });
 
-  if (!result.ok) {
+  if (sentCount === 0) {
     return Response.json({
       ok: false,
-      error: result.reason || "send_failed",
-      detail: result.error || result.code || "",
-      log,
+      error: "send_failed",
+      detail: results[0]?.reason || "",
+      logs,
+      results,
+      sentCount,
+      failedCount,
     }, { status: 502 });
   }
-  return Response.json({ ok: true, log, messageId: result.messageId || "" });
+  return Response.json({
+    ok: true,
+    log: logs[0] || null,
+    logs,
+    results,
+    sentCount,
+    failedCount,
+    messageId: results.find((item) => item.messageId)?.messageId || "",
+  });
 }
 
 export async function DELETE(request) {

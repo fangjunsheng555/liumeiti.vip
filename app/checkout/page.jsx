@@ -108,6 +108,21 @@ export default function CheckoutPage() {
       });
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("redeem")) return;
+    const rawItems = String(params.get("items") || "");
+    if (!rawItems) return;
+    const valid = new Set(PRODUCTS.map((item) => item.key));
+    const seen = new Set();
+    const keys = rawItems
+      .split(",")
+      .map((item) => item.trim())
+      .filter((key) => valid.has(key) && !seen.has(key) && seen.add(key));
+    if (keys.length > 0) replaceCart(keys);
+  }, []);
+
   const cartItems = cart.map((key) => PRODUCTS.find((p) => p.key === key)).filter(Boolean);
   const cartCount = cartItems.length;
   const cartHasRocket = cartItems.some((p) => p.key === "rocket");

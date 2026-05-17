@@ -488,16 +488,25 @@ export default function AdminPage() {
       });
       const data = await res.json();
       if (data.ok) {
+        const sentCount = Number(data.sentCount || 1);
+        const failedCount = Number(data.failedCount || 0);
         setMailForm((current) => ({ ...current, to: "", content: "" }));
         setMailComposeOpen(false);
-        setMailResult({ type: "success", message: "邮件已发送，并已记录工作人员编号" });
+        setMailResult({
+          type: failedCount > 0 ? "error" : "success",
+          message: failedCount > 0
+            ? `已发送 ${sentCount} 封，${failedCount} 封失败，请查看发信记录`
+            : `邮件已发送 ${sentCount} 封，并已记录工作人员编号`,
+        });
         await loadMailLogs();
       } else {
         const msg = {
-          invalid_email: "请填写正确的收件邮箱",
+          invalid_email: data.detail ? `邮箱格式错误：${data.detail}` : "请填写正确的收件邮箱",
+          too_many_recipients: `单次最多发送 ${data.limit || 20} 个邮箱`,
           content_required: "请填写邮件正文内容",
           smtp_or_to_missing: "SMTP 发信配置不完整",
           send_failed_after_retry: "邮件发送失败，请检查 SMTP 配置或稍后重试",
+          send_failed: "邮件发送失败，请检查 SMTP 配置或稍后重试",
         }[data.error] || data.detail || data.error || "发送失败";
         setMailResult({ type: "error", message: msg });
         await loadMailLogs();
@@ -776,8 +785,9 @@ export default function AdminPage() {
   }
 
   // Try fetching orders to detect if authed
-  const loadOrders = useCallback(async (q, status) => {
-    setLoading(true);
+  const loadOrders = useCallback(async (q, status, options = {}) => {
+    const silent = Boolean(options.silent);
+    if (!silent) setLoading(true);
     try {
       const params = new URLSearchParams();
       if (q) params.set("q", q);
@@ -796,13 +806,23 @@ export default function AdminPage() {
     } catch (e) {
       console.error(e);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     loadOrders(appliedSearch, filterStatus);
   }, [loadOrders, appliedSearch, filterStatus]);
+
+  useEffect(() => {
+    if (!authed || tab !== "orders") return;
+    const timer = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      if (activeOrder) return;
+      loadOrders(appliedSearch, filterStatus, { silent: true });
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [authed, tab, activeOrder, loadOrders, appliedSearch, filterStatus]);
 
   async function doLogin(e) {
     e.preventDefault();
@@ -2004,11 +2024,11 @@ export default function AdminPage() {
                   <label>
                     <span>收件邮箱</span>
                     <input
-                      type="email"
+                      type="text"
                       inputMode="email"
                       value={mailForm.to}
                       onChange={(e) => setMailForm({ ...mailForm, to: e.target.value })}
-                      placeholder="customer@example.com"
+                      placeholder="customer@example.com, another@example.com"
                       required
                     />
                   </label>
@@ -2035,6 +2055,7 @@ export default function AdminPage() {
                   />
                 </label>
                 <div className="admin-mail-helper">
+                  <span>多个邮箱用英文逗号隔开</span>
                   <span>自动加入客服开头与结尾</span>
                   <span>正文保留换行</span>
                 </div>
