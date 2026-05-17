@@ -553,8 +553,8 @@ export default function Page() {
     try {
       const infoRes = await fetch(`/api/redeem-code?code=${encodeURIComponent(code)}`, { cache: "no-store" });
       const info = await infoRes.json();
-      if (!info.ok || info.status !== "active") {
-        setRedeemStatus({ type: "error", message: "兑换码不存在、已使用或已作废" });
+      if (!infoRes.ok || !info.ok || info.status !== "active") {
+        setRedeemStatus({ type: "error", message: info.message || "兑换码不存在、已使用或已作废" });
         return;
       }
       if (info.type === "service") {

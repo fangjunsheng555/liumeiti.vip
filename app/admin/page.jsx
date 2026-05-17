@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { PRODUCTS, ROCKET_PLANS, DEFAULT_ROCKET_PLAN } from "../lib/store";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
   CheckCircle2, Clock, Inbox, X, AlertTriangle, Trash2,
-  Gift, CreditCard, Plus, UserPlus, Mail,
+  Gift, CreditCard, Plus, UserPlus, Mail, BellRing, BarChart3,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -130,8 +130,81 @@ export default function AdminPage() {
   const [mailDeleteBusy, setMailDeleteBusy] = useState(false);
   const [mailComposeOpen, setMailComposeOpen] = useState(false);
   const [activeMailLog, setActiveMailLog] = useState(null);
+  const [overview, setOverview] = useState(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [newOrderAlert, setNewOrderAlert] = useState(null);
+  const [highlightOrderIds, setHighlightOrderIds] = useState(new Set());
+  const overviewRef = useRef(null);
 
   const isRootStaff = Boolean(currentStaff?.root || Number(currentStaff?.id || 0) === 1);
+
+  const triggerNewOrderNotice = useCallback((next, previous) => {
+    const count = Math.max(1, Number(next.ordersTotal || 0) - Number(previous?.ordersTotal || 0));
+    setNewOrderAlert({
+      count,
+      orderId: next.latestOrderId || "",
+      service: next.latestOrderService || "",
+      time: next.latestOrderTime || "",
+    });
+    if (next.latestOrderId) {
+      setHighlightOrderIds((current) => new Set([...Array.from(current), next.latestOrderId]));
+    }
+    if (typeof window !== "undefined") {
+      try { window.navigator?.vibrate?.([80, 35, 80]); } catch (e) {}
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (AudioContext) {
+          const ctx = new AudioContext();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.value = 880;
+          gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.055, ctx.currentTime + 0.03);
+          gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.24);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.26);
+          setTimeout(() => ctx.close?.(), 450);
+        }
+      } catch (e) {}
+    }
+  }, []);
+
+  const loadOverview = useCallback(async (options = {}) => {
+    const silent = Boolean(options.silent);
+    const watch = Boolean(options.watch);
+    if (!silent) setOverviewLoading(true);
+    try {
+      const res = await fetch("/api/admin/overview", { credentials: "same-origin", cache: "no-store" });
+      if (res.status === 401) {
+        setAuthed(false);
+        return;
+      }
+      const data = await res.json();
+      if (data.ok) {
+        if (data.currentStaff) setCurrentStaff(data.currentStaff);
+        const previous = overviewRef.current;
+        const nextOverview = data.overview || null;
+        if (
+          watch &&
+          previous?.latestOrderId &&
+          nextOverview?.latestOrderId &&
+          nextOverview.latestOrderId !== previous.latestOrderId &&
+          Number(nextOverview.ordersTotal || 0) > Number(previous.ordersTotal || 0)
+        ) {
+          triggerNewOrderNotice(nextOverview, previous);
+        }
+        overviewRef.current = nextOverview;
+        setOverview(nextOverview);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      if (!silent) setOverviewLoading(false);
+    }
+  }, [triggerNewOrderNotice]);
 
   const loadGlobalLog = useCallback(async (q, filter, source) => {
     setLogLoading(true);
@@ -243,6 +316,29 @@ export default function AdminPage() {
       else if (currentStaff) setTab("orders");
     }
   }, [authed, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes, loadMailLogs, loadStaff, logFilter, logSource, isRootStaff, currentStaff?.id]);
+
+  useEffect(() => {
+    if (!authed) return;
+    loadOverview();
+  }, [authed, loadOverview]);
+
+  useEffect(() => {
+    if (!authed) return;
+    const timer = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      loadOverview({ silent: true, watch: true });
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [authed, loadOverview]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const original = document.title || "冒央会社后台";
+    if (newOrderAlert) {
+      document.title = `(${newOrderAlert.count}) 新订单 · 冒央会社后台`;
+    }
+    return () => { document.title = original; };
+  }, [newOrderAlert]);
 
   async function executeUserAction() {
     if (!confirmUserAction || userActionBusy) return;
@@ -824,6 +920,43 @@ export default function AdminPage() {
     return () => clearInterval(timer);
   }, [authed, tab, activeOrder, loadOrders, appliedSearch, filterStatus]);
 
+  function openNewOrderNotice() {
+    setTab("orders");
+    setSearchInput("");
+    setAppliedSearch("");
+    setFilterStatus("all");
+    setNewOrderAlert(null);
+    loadOrders("", "all", { silent: true });
+    loadOverview({ silent: true });
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function openOverviewTarget(target) {
+    if (target === "orders") {
+      setTab("orders");
+      setSearchInput("");
+      setAppliedSearch("");
+      setFilterStatus("received");
+      loadOrders("", "received", { silent: true });
+      return;
+    }
+    if (target === "withdrawals") {
+      setTab("withdrawals");
+      return;
+    }
+    if (target === "codes") {
+      setTab("codes");
+      return;
+    }
+    if (target === "mail") {
+      setTab("mail");
+      return;
+    }
+    if (target === "users") {
+      setTab("users");
+    }
+  }
+
   async function doLogin(e) {
     e.preventDefault();
     if (loggingIn) return;
@@ -856,9 +989,18 @@ export default function AdminPage() {
     setAuthed(false);
     setCurrentStaff(null);
     setOrders([]);
+    overviewRef.current = null;
+    setOverview(null);
+    setNewOrderAlert(null);
   }
 
   function openOrder(order) {
+    setHighlightOrderIds((current) => {
+      if (!current.has(order.orderId)) return current;
+      const next = new Set(current);
+      next.delete(order.orderId);
+      return next;
+    });
     setActiveOrder(order);
     setEditForm({
       status: order.status,
@@ -930,6 +1072,7 @@ export default function AdminPage() {
         setSelectedIds(new Set());
         setBatchConfirm(null);
         loadOrders(appliedSearch, filterStatus);
+        loadOverview({ silent: true });
       } else {
         setBatchResult({ type: "error", message: data.error || "批量操作失败" });
       }
@@ -955,6 +1098,7 @@ export default function AdminPage() {
         setEditForm(null);
         setConfirmDelete(false);
         loadOrders(appliedSearch, filterStatus);
+        loadOverview({ silent: true });
       } else {
         setSaveResult({ type: "error", message: data.error || "删除失败" });
       }
@@ -997,6 +1141,7 @@ export default function AdminPage() {
       if (data.ok) {
         setSaveResult({ type: "success", message: "已保存" + (data.completion?.email?.ok ? " · 完成邮件已发送" : data.completion ? " · 邮件发送失败" : "") });
         loadOrders(appliedSearch, filterStatus);
+        loadOverview({ silent: true });
         setActiveOrder(data.order);
       } else {
         setSaveResult({ type: "error", message: data.error || "保存失败" });
@@ -1062,16 +1207,67 @@ export default function AdminPage() {
         </button>
       </header>
 
-      <main className="admin-main">
+      <main className="admin-main admin-shell">
+        <aside className="admin-overview-column" aria-label="关键状态总览">
+          <div className="admin-overview-card">
+            <div className="admin-overview-head">
+              <span><BarChart3 size={13} />状态总览</span>
+              {overviewLoading && <LoaderCircle size={12} className="spin-icon" />}
+            </div>
+            <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("orders")}>
+              <span>待处理订单</span>
+              <b>{overview?.pendingOrders ?? 0}</b>
+            </button>
+            <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("withdrawals")}>
+              <span>待审核提现</span>
+              <b>{overview?.pendingWithdrawals ?? 0}</b>
+            </button>
+            <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("codes")}>
+              <span>可用兑换码</span>
+              <b>{overview?.activeCodes ?? 0}</b>
+            </button>
+            <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("mail")}>
+              <span>失败邮件</span>
+              <b>{overview?.failedMails ?? 0}</b>
+            </button>
+            <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("users")}>
+              <span>注册用户</span>
+              <b>{overview?.usersTotal ?? 0}</b>
+            </button>
+            <div className="admin-overview-mini">
+              <span>今日订单</span>
+              <b>{overview?.todayOrders ?? 0}</b>
+            </div>
+            <div className="admin-overview-latest">
+              <span>最新订单</span>
+              <b>{overview?.latestOrderId || "暂无"}</b>
+              {overview?.latestOrderService && <small>{overview.latestOrderService}</small>}
+            </div>
+          </div>
+        </aside>
+
+        <section className="admin-workspace">
         <div className="admin-tabs">
-          <button type="button" className={`admin-tab-btn${tab === "orders" ? " active" : ""}`} onClick={() => setTab("orders")}>订单管理</button>
+          <button type="button" className={`admin-tab-btn${tab === "orders" ? " active" : ""}`} onClick={() => setTab("orders")}>
+            订单管理{Number(overview?.pendingOrders || 0) > 0 && <em className="admin-tab-badge">{overview.pendingOrders}</em>}
+          </button>
           <button type="button" className={`admin-tab-btn${tab === "users" ? " active" : ""}`} onClick={() => setTab("users")}>用户管理</button>
-          <button type="button" className={`admin-tab-btn${tab === "withdrawals" ? " active" : ""}`} onClick={() => setTab("withdrawals")}>提现审核</button>
+          <button type="button" className={`admin-tab-btn${tab === "withdrawals" ? " active" : ""}`} onClick={() => setTab("withdrawals")}>
+            提现审核{Number(overview?.pendingWithdrawals || 0) > 0 && <em className="admin-tab-badge">{overview.pendingWithdrawals}</em>}
+          </button>
           <button type="button" className={`admin-tab-btn${tab === "codes" ? " active" : ""}`} onClick={() => setTab("codes")}>兑换码</button>
           <button type="button" className={`admin-tab-btn${tab === "balance" ? " active" : ""}`} onClick={() => setTab("balance")}>余额变动</button>
           <button type="button" className={`admin-tab-btn${tab === "mail" ? " active" : ""}`} onClick={() => setTab("mail")}>客服发信</button>
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "staff" ? " active" : ""}`} onClick={() => setTab("staff")}>工作人员</button>}
         </div>
+
+        {newOrderAlert && (
+          <button type="button" className="admin-new-order-alert" onClick={openNewOrderNotice}>
+            <BellRing size={14} />
+            <b>新订单 +{newOrderAlert.count}</b>
+            <span>{newOrderAlert.orderId || "点击查看最新订单"}</span>
+          </button>
+        )}
 
         {tab === "users" ? (
           <div className="admin-users-pane">
@@ -1781,10 +1977,11 @@ export default function AdminPage() {
           <div className="admin-orders">
             {orders.map((o) => {
               const isSelected = selectedIds.has(o.orderId);
+              const isNew = highlightOrderIds.has(o.orderId);
               return (
                 <div
                   key={o.orderId}
-                  className={`admin-order-card status-${o.status}${batchMode ? " batch-mode" : ""}${isSelected ? " selected" : ""}`}
+                  className={`admin-order-card status-${o.status}${batchMode ? " batch-mode" : ""}${isSelected ? " selected" : ""}${isNew ? " is-new" : ""}`}
                   onClick={() => batchMode ? toggleSelect(o.orderId) : openOrder(o)}
                   role="button"
                   tabIndex={0}
@@ -1824,6 +2021,7 @@ export default function AdminPage() {
         )}
         </>
         )}
+        </section>
       </main>
 
       {/* Edit modal */}

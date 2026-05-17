@@ -554,6 +554,51 @@ export function normalizeRedeemCode(value) {
   return clean(value, 80).toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
+const REDEEM_GUARD_LIMIT = 5;
+const REDEEM_GUARD_WINDOW_SECONDS = 5 * 60;
+
+function clientGuardFingerprint(request) {
+  const forwarded = request?.headers?.get("x-forwarded-for") || "";
+  const ip = clean(forwarded.split(",")[0] || request?.headers?.get("x-real-ip") || "unknown", 80);
+  const ua = clean(request?.headers?.get("user-agent") || "unknown", 160);
+  const secret = process.env.AUTH_SECRET || process.env.ADMIN_PASSWORD || "liumeiti";
+  return createHmac("sha256", secret).update(`${ip}|${ua}`).digest("hex").slice(0, 32);
+}
+
+export async function checkRedeemRateLimit(request) {
+  const r = redisConfig();
+  if (!r) return { ok: true, key: "" };
+  const key = "liumeiti:redeem-guard:" + clientGuardFingerprint(request);
+  const current = Number(await redisCmd(["GET", key]) || 0);
+  if (current >= REDEEM_GUARD_LIMIT) {
+    const ttl = Number(await redisCmd(["TTL", key]) || REDEEM_GUARD_WINDOW_SECONDS);
+    return {
+      ok: false,
+      key,
+      retryAfter: ttl > 0 ? ttl : REDEEM_GUARD_WINDOW_SECONDS,
+      limit: REDEEM_GUARD_LIMIT,
+    };
+  }
+  return { ok: true, key };
+}
+
+export async function recordRedeemRateFailure(guard) {
+  if (!guard?.key) return 0;
+  const count = Number(await redisCmd(["INCR", guard.key]) || 0);
+  if (count === 1) await redisCmd(["EXPIRE", guard.key, String(REDEEM_GUARD_WINDOW_SECONDS)]);
+  return count;
+}
+
+export async function clearRedeemRateLimit(guard) {
+  if (!guard?.key) return;
+  await redisCmd(["DEL", guard.key]);
+}
+
+export function redeemRateLimitMessage(retryAfter = REDEEM_GUARD_WINDOW_SECONDS) {
+  const minutes = Math.max(1, Math.ceil(Number(retryAfter || REDEEM_GUARD_WINDOW_SECONDS) / 60));
+  return `兑换码尝试过多，请 ${minutes} 分钟后再试`;
+}
+
 function redeemCodeType(item) {
   const hasServices = Array.isArray(item?.services) && item.services.length > 0;
   return item?.type === "service" || item?.kind === "service" || hasServices ? "service" : "balance";

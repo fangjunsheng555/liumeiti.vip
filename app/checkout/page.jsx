@@ -42,6 +42,10 @@ import {
   productItemAmount,
 } from "../lib/store";
 
+const CHECKOUT_DRAFT_KEY = "liumeiti:checkout-draft:v2";
+const CHECKOUT_PENDING_KEY = "liumeiti:checkout-pending:v1";
+const CHECKOUT_DRAFT_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
+
 export default function CheckoutPage() {
   const router = useRouter();
   const { cart, hydrated, removeFromCart, replaceCart, clearCart } = useCart();
@@ -55,6 +59,7 @@ export default function CheckoutPage() {
   const [orderResults, setOrderResults] = useState([]);
   const [authedUser, setAuthedUser] = useState(null); // {email, balance} | null
   const [redeemMode, setRedeemMode] = useState({ loading: true, code: "", info: null });
+  const [draftReady, setDraftReady] = useState(false);
   // Pre-fill email + load balance for logged-in user
   useEffect(() => {
     fetch("/api/auth/balance", { credentials: "same-origin" })
@@ -81,7 +86,7 @@ export default function CheckoutPage() {
       .then((r) => r.json())
       .then((data) => {
         if (!data.ok || data.status !== "active" || data.type !== "service") {
-          setStatus({ type: "error", message: "服务兑换码无效、已使用或已作废" });
+          setStatus({ type: "error", message: data.message || "服务兑换码无效、已使用或已作废" });
           setRedeemMode({ loading: false, code, info: null });
           return;
         }
@@ -122,6 +127,58 @@ export default function CheckoutPage() {
       .filter((key) => valid.has(key) && !seen.has(key) && seen.add(key));
     if (keys.length > 0) replaceCart(keys);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !hydrated || draftReady) return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const hasRedeem = Boolean(params.get("redeem"));
+      const hasItems = Boolean(params.get("items"));
+      const rawPending = window.localStorage.getItem(CHECKOUT_PENDING_KEY);
+      const rawDraft = window.localStorage.getItem(CHECKOUT_DRAFT_KEY);
+      const saved = rawPending ? JSON.parse(rawPending) : rawDraft ? JSON.parse(rawDraft) : null;
+      if (saved && Date.now() - Number(saved.createdAt || 0) < CHECKOUT_DRAFT_MAX_AGE) {
+        if (saved.form && typeof saved.form === "object") {
+          setForm((current) => ({
+            ...current,
+            ...saved.form,
+            fields: { ...(current.fields || {}), ...((saved.form && saved.form.fields) || {}) },
+          }));
+        }
+        if (["alipay", "usdt", "balance"].includes(saved.paymentMethod)) {
+          setPaymentMethod(saved.paymentMethod);
+        }
+        if (!hasRedeem && !hasItems && cart.length === 0 && Array.isArray(saved.cart)) {
+          const valid = new Set(PRODUCTS.map((item) => item.key));
+          const keys = saved.cart.filter((key) => valid.has(key));
+          if (keys.length > 0) replaceCart(keys);
+        }
+        setStatus({
+          type: "info",
+          message: rawPending ? "已恢复上次未完成的订单内容，请核对后重新提交" : "已恢复上次未提交的填写内容",
+        });
+      }
+    } catch (e) {
+      try {
+        window.localStorage.removeItem(CHECKOUT_PENDING_KEY);
+        window.localStorage.removeItem(CHECKOUT_DRAFT_KEY);
+      } catch (ignore) {}
+    } finally {
+      setDraftReady(true);
+    }
+  }, [hydrated, draftReady]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !hydrated || !draftReady || step === "done") return;
+    try {
+      window.localStorage.setItem(CHECKOUT_DRAFT_KEY, JSON.stringify({
+        createdAt: Date.now(),
+        form,
+        paymentMethod,
+        cart,
+      }));
+    } catch (e) {}
+  }, [hydrated, draftReady, form, paymentMethod, cart, step]);
 
   const cartItems = cart.map((key) => PRODUCTS.find((p) => p.key === key)).filter(Boolean);
   const cartCount = cartItems.length;
@@ -228,20 +285,30 @@ export default function CheckoutPage() {
     });
 
     try {
+      const payload = {
+        email: form.email.trim(),
+        contact: form.contact.trim(),
+        remark: form.remark.trim(),
+        paymentMethod,
+        redeemCode: serviceRedeemActive ? redeemMode.code : "",
+        items,
+      };
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(CHECKOUT_PENDING_KEY, JSON.stringify({
+          createdAt: Date.now(),
+          form,
+          paymentMethod,
+          cart,
+          payload,
+        }));
+      }
       const response = await fetch("/api/order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: form.email.trim(),
-          contact: form.contact.trim(),
-          remark: form.remark.trim(),
-          paymentMethod,
-          redeemCode: serviceRedeemActive ? redeemMode.code : "",
-          items,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await response.json();
-      if (!data.ok) throw new Error(data.error || "submit_failed");
+      if (!data.ok) throw new Error(data.message || data.error || "submit_failed");
 
       setOrderResults([{
         orderId: data.orderId,
@@ -253,9 +320,13 @@ export default function CheckoutPage() {
       setStep("done");
       setStatus({ type: "success", message: "订单已成功提交" });
       clearCart();
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(CHECKOUT_PENDING_KEY);
+        window.localStorage.removeItem(CHECKOUT_DRAFT_KEY);
+      }
       if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error) {
-      setStatus({ type: "error", message: "订单提交失败,请联系在线客服处理" });
+      setStatus({ type: "error", message: `${error.message || "订单提交失败"}，已保留填写内容，可稍后重试或联系在线客服处理` });
     } finally {
       setSubmitting(false);
     }

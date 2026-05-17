@@ -3,6 +3,7 @@ import {
   consumeBestCoupon, restoreCoupon, verifySession, getUser,
   setUser, addBalanceTx, pushAdminBalanceLog, makeId, roundMoney,
   validateServiceRedeemCode, consumeServiceRedeemCode, restoreServiceRedeemCode,
+  checkRedeemRateLimit, recordRedeemRateFailure, clearRedeemRateLimit, redeemRateLimitMessage,
 } from "../_utils.js";
 
 const ORDERS_KEY = "liumeiti:orders";
@@ -341,12 +342,23 @@ export async function POST(request) {
   }
 
   let serviceRedeem = null;
+  let redeemGuard = null;
   if (paymentMethod === "redeem") {
+    redeemGuard = await checkRedeemRateLimit(request);
+    if (!redeemGuard.ok) {
+      return Response.json({
+        ok: false,
+        error: "too_many_attempts",
+        message: redeemRateLimitMessage(redeemGuard.retryAfter),
+        retryAfter: redeemGuard.retryAfter,
+      }, { status: 429, headers: { "Retry-After": String(redeemGuard.retryAfter || 300) } });
+    }
     const checked = await validateServiceRedeemCode(
       redeemCode,
       items.map((item) => ({ key: item.service, plan: item.rocketPlan || "" })),
     );
     if (!checked.ok) {
+      await recordRedeemRateFailure(redeemGuard);
       return Response.json({ ok: false, error: checked.error || "invalid_redeem_code" }, { status: 400 });
     }
     serviceRedeem = checked.item;
@@ -478,8 +490,10 @@ export async function POST(request) {
   if (paymentMethod === "redeem") {
     consumedServiceCode = await consumeServiceRedeemCode(redeemCode, email, order.orderId);
     if (!consumedServiceCode.ok) {
+      await recordRedeemRateFailure(redeemGuard);
       return Response.json({ ok: false, error: consumedServiceCode.error || "redeem_code_failed" }, { status: 400 });
     }
+    await clearRedeemRateLimit(redeemGuard);
   }
 
   const text = orderText(order);
