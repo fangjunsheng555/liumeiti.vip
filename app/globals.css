@@ -5891,15 +5891,14 @@ button { cursor: pointer; border: none; background: transparent; }
   color: var(--primary); font-size: 12px; font-weight: 700; cursor: pointer;
 }
 
-.admin-main { width: min(960px, calc(100% - 24px)); margin: 14px auto 0; }
-.admin-shell {
-  width: min(1120px, calc(100% - 24px));
+.admin-main { width: min(1120px, calc(100% - 24px)); margin: 14px auto 0; }
+.admin-orders-layout {
   display: grid;
   grid-template-columns: 150px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
 }
-.admin-workspace { min-width: 0; }
+.admin-orders-workspace { min-width: 0; }
 .admin-overview-column {
   position: sticky;
   top: 62px;
@@ -9317,8 +9316,7 @@ button { cursor: pointer; border: none; background: transparent; }
 .admin-staff-item small { display: block; font-size: 10.5px; color: var(--muted); overflow-wrap: anywhere; }
 @media (max-width: 560px) {
   .admin-main { width: calc(100% - 14px); margin-top: 8px; }
-  .admin-shell {
-    width: calc(100% - 10px);
+  .admin-orders-layout {
     grid-template-columns: 86px minmax(0, 1fr);
     gap: 7px;
   }

@@ -1207,46 +1207,7 @@ export default function AdminPage() {
         </button>
       </header>
 
-      <main className="admin-main admin-shell">
-        <aside className="admin-overview-column" aria-label="关键状态总览">
-          <div className="admin-overview-card">
-            <div className="admin-overview-head">
-              <span><BarChart3 size={13} />状态总览</span>
-              {overviewLoading && <LoaderCircle size={12} className="spin-icon" />}
-            </div>
-            <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("orders")}>
-              <span>待处理订单</span>
-              <b>{overview?.pendingOrders ?? 0}</b>
-            </button>
-            <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("withdrawals")}>
-              <span>待审核提现</span>
-              <b>{overview?.pendingWithdrawals ?? 0}</b>
-            </button>
-            <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("codes")}>
-              <span>可用兑换码</span>
-              <b>{overview?.activeCodes ?? 0}</b>
-            </button>
-            <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("mail")}>
-              <span>失败邮件</span>
-              <b>{overview?.failedMails ?? 0}</b>
-            </button>
-            <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("users")}>
-              <span>注册用户</span>
-              <b>{overview?.usersTotal ?? 0}</b>
-            </button>
-            <div className="admin-overview-mini">
-              <span>今日订单</span>
-              <b>{overview?.todayOrders ?? 0}</b>
-            </div>
-            <div className="admin-overview-latest">
-              <span>最新订单</span>
-              <b>{overview?.latestOrderId || "暂无"}</b>
-              {overview?.latestOrderService && <small>{overview.latestOrderService}</small>}
-            </div>
-          </div>
-        </aside>
-
-        <section className="admin-workspace">
+      <main className="admin-main">
         <div className="admin-tabs">
           <button type="button" className={`admin-tab-btn${tab === "orders" ? " active" : ""}`} onClick={() => setTab("orders")}>
             订单管理{Number(overview?.pendingOrders || 0) > 0 && <em className="admin-tab-badge">{overview.pendingOrders}</em>}
@@ -1880,7 +1841,46 @@ export default function AdminPage() {
             </div>
           </div>
         ) : (
-        <>
+        <div className="admin-orders-layout">
+          <aside className="admin-overview-column" aria-label="关键状态总览">
+            <div className="admin-overview-card">
+              <div className="admin-overview-head">
+                <span><BarChart3 size={13} />状态总览</span>
+                {overviewLoading && <LoaderCircle size={12} className="spin-icon" />}
+              </div>
+              <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("orders")}>
+                <span>待处理订单</span>
+                <b>{overview?.pendingOrders ?? 0}</b>
+              </button>
+              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("withdrawals")}>
+                <span>待审核提现</span>
+                <b>{overview?.pendingWithdrawals ?? 0}</b>
+              </button>
+              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("codes")}>
+                <span>可用兑换码</span>
+                <b>{overview?.activeCodes ?? 0}</b>
+              </button>
+              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("mail")}>
+                <span>失败邮件</span>
+                <b>{overview?.failedMails ?? 0}</b>
+              </button>
+              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("users")}>
+                <span>注册用户</span>
+                <b>{overview?.usersTotal ?? 0}</b>
+              </button>
+              <div className="admin-overview-mini">
+                <span>今日订单</span>
+                <b>{overview?.todayOrders ?? 0}</b>
+              </div>
+              <div className="admin-overview-latest">
+                <span>最新订单</span>
+                <b>{overview?.latestOrderId || "暂无"}</b>
+                {overview?.latestOrderService && <small>{overview.latestOrderService}</small>}
+              </div>
+            </div>
+          </aside>
+
+          <div className="admin-orders-workspace">
         <div className="admin-toolbar">
           <form
             className="admin-search"
@@ -2019,9 +2019,9 @@ export default function AdminPage() {
             })}
           </div>
         )}
-        </>
+          </div>
+        </div>
         )}
-        </section>
       </main>
 
       {/* Edit modal */}
