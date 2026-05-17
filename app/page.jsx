@@ -829,11 +829,11 @@ export default function Page() {
               </div>
               <div className="product-card-top more-service-top">
                 <div className="more-service-icon" aria-hidden="true">
-                  <MessageCircleMore size={23} />
+                  <img src="/more-service-logo.png" alt="" />
                 </div>
                 <div className="product-name-block">
                   <div className="product-name">更多服务咨询</div>
-                  <div className="product-subtitle">YouTube / Apple TV+ / DAZN / Prime Video 等</div>
+                  <div className="product-subtitle">YouTube / Apple TV+ / DAZN / Prime Video / ChatGPT 等</div>
                 </div>
               </div>
 
@@ -847,9 +847,19 @@ export default function Page() {
                 <span>Apple TV+</span>
                 <span>DAZN</span>
                 <span>Prime Video</span>
+                <span>ChatGPT</span>
               </div>
 
               <div className="more-service-consult-actions">
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleCopy("2802632995", "more-service-qq");
+                  }}
+                >
+                  {copiedKey === "more-service-qq" ? "已复制" : "复制 QQ"}
+                </button>
                 <button
                   type="button"
                   onClick={(event) => {
@@ -858,15 +868,6 @@ export default function Page() {
                   }}
                 >
                   {copiedKey === "more-service-telegram" ? "已复制" : "复制 Telegram"}
-                </button>
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    handleCopy("+1 4315093334", "more-service-whatsapp");
-                  }}
-                >
-                  {copiedKey === "more-service-whatsapp" ? "已复制" : "复制 WhatsApp"}
                 </button>
               </div>
             </article>
