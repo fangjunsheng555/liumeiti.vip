@@ -5891,19 +5891,8 @@ button { cursor: pointer; border: none; background: transparent; }
   color: var(--primary); font-size: 12px; font-weight: 700; cursor: pointer;
 }
 
-.admin-main { width: min(1120px, calc(100% - 24px)); margin: 14px auto 0; }
-.admin-orders-layout {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-}
-.admin-orders-workspace { min-width: 0; }
-.admin-overview-column {
-  position: sticky;
-  top: 62px;
-  z-index: 22;
-}
+.admin-main { width: min(960px, calc(100% - 24px)); margin: 14px auto 0; }
+.admin-overview-page { display: grid; gap: 10px; }
 .admin-overview-card {
   display: grid;
   gap: 7px;
@@ -5912,6 +5901,14 @@ button { cursor: pointer; border: none; background: transparent; }
   background: rgba(255, 255, 255, 0.96);
   border: 1px solid var(--line);
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+.admin-overview-page .admin-overview-card {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.admin-overview-page .admin-overview-head,
+.admin-overview-page .admin-overview-latest {
+  grid-column: 1 / -1;
 }
 .admin-overview-head {
   display: flex;
@@ -9316,15 +9313,7 @@ button { cursor: pointer; border: none; background: transparent; }
 .admin-staff-item small { display: block; font-size: 10.5px; color: var(--muted); overflow-wrap: anywhere; }
 @media (max-width: 560px) {
   .admin-main { width: calc(100% - 14px); margin-top: 8px; }
-  .admin-orders-layout {
-    grid-template-columns: 86px minmax(0, 1fr);
-    gap: 7px;
-  }
-  .admin-overview-column {
-    top: 57px;
-    max-height: calc(100dvh - 66px);
-    overflow-y: auto;
-  }
+  .admin-overview-page .admin-overview-card { gap: 5px; }
   .admin-overview-card { padding: 7px; border-radius: 12px; gap: 5px; }
   .admin-overview-head span { font-size: 10px; gap: 3px; }
   .admin-overview-head svg { width: 11px; height: 11px; }

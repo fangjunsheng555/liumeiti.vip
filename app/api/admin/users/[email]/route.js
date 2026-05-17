@@ -1,13 +1,17 @@
 import {
-  getCookieFromRequest, verifySession, adminActorFromRequest, pushAdminActionLog,
+  getCookieFromRequest, verifySession, adminActorFromRequest, pushAdminActionLog, isRootAdminSession,
   getUser, setUser, deleteUser,
   validEmail,
 } from "../../../_utils.js";
 
-function adminOk(request) {
+function adminSession(request) {
   const token = getCookieFromRequest(request, "lm_admin");
   const session = verifySession(token);
-  return session && session.role === "admin";
+  return session && session.role === "admin" ? session : null;
+}
+
+function adminOk(request) {
+  return Boolean(adminSession(request));
 }
 
 // PATCH /api/admin/users/:email   body: { banned: boolean }
@@ -46,7 +50,9 @@ export async function PATCH(request, { params }) {
 // DELETE /api/admin/users/:email
 // Permanently removes user record + transaction list + email from set.
 export async function DELETE(request, { params }) {
-  if (!adminOk(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const session = adminSession(request);
+  if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!isRootAdminSession(session)) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const actor = adminActorFromRequest(request);
   const { email: rawEmail } = await params;
   const email = decodeURIComponent(rawEmail || "").toLowerCase().trim();

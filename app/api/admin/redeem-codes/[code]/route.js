@@ -1,5 +1,5 @@
 import {
-  adminSessionFromRequest, adminActorFromSession,
+  adminSessionFromRequest, adminActorFromSession, isRootAdminSession,
   updateRedeemCodeStatus, deleteRedeemCode, listRedeemCodes, listRedeemCodeBatches, clean,
 } from "../../../_utils.js";
 
@@ -16,6 +16,7 @@ export async function PATCH(request, { params }) {
 export async function DELETE(request, { params }) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!isRootAdminSession(session)) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const { code } = await params;
   const result = await deleteRedeemCode(code, adminActorFromSession(session));
   if (!result.ok) return Response.json({ ok: false, error: clean(result.error, 80) }, { status: 400 });

@@ -1,19 +1,20 @@
 import {
   getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
-  pushAdminActionLog, formatBeijingTime,
+  pushAdminActionLog, formatBeijingTime, isRootAdminSession,
 } from "../../../_utils.js";
 
-function adminOk(request) {
+function adminSession(request) {
   const token = getCookieFromRequest(request, "lm_admin");
   const session = verifySession(token);
-  return session && session.role === "admin";
+  return session && session.role === "admin" ? session : null;
 }
 
 // POST /api/admin/orders/batch
 // body: { orderIds: string[], action: "delete" | "invalid" }
 export async function POST(request) {
-  if (!adminOk(request)) {
+  const session = adminSession(request);
+  if (!session) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
   const actor = adminActorFromRequest(request);
@@ -30,6 +31,9 @@ export async function POST(request) {
   }
   if (!action) {
     return Response.json({ ok: false, error: "invalid_action" }, { status: 400 });
+  }
+  if (action === "delete" && !isRootAdminSession(session)) {
+    return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   }
 
   const all = await getAllOrdersWithIndex();

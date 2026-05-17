@@ -64,7 +64,7 @@ export default function AdminPage() {
   const [batchConfirm, setBatchConfirm] = useState(null); // null | "delete" | "invalid"
 
   // User/balance management
-  const [tab, setTab] = useState("orders"); // "orders" | "users" | "balance" | "staff"
+  const [tab, setTab] = useState("overview"); // "overview" | "orders" | "users" | "balance" | "staff"
   const [confirmUserAction, setConfirmUserAction] = useState(null); // { email, action: "ban" | "unban" | "delete" }
   const [userActionBusy, setUserActionBusy] = useState(false);
   const [userInfo, setUserInfo] = useState(null); // {user, transactions}
@@ -345,6 +345,11 @@ export default function AdminPage() {
     setUserActionBusy(true);
     try {
       const { email, action } = confirmUserAction;
+      if (action === "delete" && !isRootStaff) {
+        setUserError("仅主账号可删除用户");
+        setConfirmUserAction(null);
+        return;
+      }
       let res;
       if (action === "delete") {
         res = await fetch(`/api/admin/users/${encodeURIComponent(email)}`, {
@@ -710,6 +715,10 @@ export default function AdminPage() {
 
   async function codeAction(code, action) {
     if (codeBusy) return;
+    if (action === "delete" && !isRootStaff) {
+      setCodeResult({ type: "error", message: "仅主账号可删除后台数据" });
+      return;
+    }
     setCodeBusy(action + code);
     setCodeResult(null);
     try {
@@ -733,6 +742,10 @@ export default function AdminPage() {
 
   async function codeActionV2(code, action) {
     if (codeBusy) return;
+    if (action === "delete" && !isRootStaff) {
+      setCodeResult({ type: "error", message: "仅主账号可删除后台数据" });
+      return;
+    }
     setCodeBusy(action + code);
     setCodeResult(null);
     try {
@@ -762,6 +775,10 @@ export default function AdminPage() {
 
   async function batchCodeAction(batchId, action) {
     if (codeBusy) return;
+    if (action === "delete" && !isRootStaff) {
+      setCodeResult({ type: "error", message: "仅主账号可删除后台数据" });
+      return;
+    }
     setCodeBusy(action + batchId);
     setCodeResult(null);
     try {
@@ -1046,6 +1063,11 @@ export default function AdminPage() {
 
   async function executeBatch(action) {
     if (batchBusy) return;
+    if (action === "delete" && !isRootStaff) {
+      setBatchResult({ type: "error", message: "仅主账号可删除订单" });
+      setBatchConfirm(null);
+      return;
+    }
     if (selectedIds.size === 0) {
       setBatchResult({ type: "error", message: "请先勾选订单" });
       return;
@@ -1085,6 +1107,11 @@ export default function AdminPage() {
 
   async function deleteOrder() {
     if (!activeOrder || deleting) return;
+    if (!isRootStaff) {
+      setSaveResult({ type: "error", message: "仅主账号可删除订单" });
+      setConfirmDelete(false);
+      return;
+    }
     setDeleting(true);
     setSaveResult(null);
     try {
@@ -1209,6 +1236,7 @@ export default function AdminPage() {
 
       <main className="admin-main">
         <div className="admin-tabs">
+          <button type="button" className={`admin-tab-btn${tab === "overview" ? " active" : ""}`} onClick={() => setTab("overview")}>状态总览</button>
           <button type="button" className={`admin-tab-btn${tab === "orders" ? " active" : ""}`} onClick={() => setTab("orders")}>
             订单管理{Number(overview?.pendingOrders || 0) > 0 && <em className="admin-tab-badge">{overview.pendingOrders}</em>}
           </button>
@@ -1230,7 +1258,45 @@ export default function AdminPage() {
           </button>
         )}
 
-        {tab === "users" ? (
+        {tab === "overview" ? (
+          <div className="admin-overview-page">
+            <div className="admin-overview-card">
+              <div className="admin-overview-head">
+                <span><BarChart3 size={13} />状态总览</span>
+                {overviewLoading && <LoaderCircle size={12} className="spin-icon" />}
+              </div>
+              <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("orders")}>
+                <span>待处理订单</span>
+                <b>{overview?.pendingOrders ?? 0}</b>
+              </button>
+              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("withdrawals")}>
+                <span>待审核提现</span>
+                <b>{overview?.pendingWithdrawals ?? 0}</b>
+              </button>
+              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("codes")}>
+                <span>可用兑换码</span>
+                <b>{overview?.activeCodes ?? 0}</b>
+              </button>
+              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("mail")}>
+                <span>失败邮件</span>
+                <b>{overview?.failedMails ?? 0}</b>
+              </button>
+              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("users")}>
+                <span>注册用户</span>
+                <b>{overview?.usersTotal ?? 0}</b>
+              </button>
+              <div className="admin-overview-mini">
+                <span>今日订单</span>
+                <b>{overview?.todayOrders ?? 0}</b>
+              </div>
+              <div className="admin-overview-latest">
+                <span>最新订单</span>
+                <b>{overview?.latestOrderId || "暂无"}</b>
+                {overview?.latestOrderService && <small>{overview.latestOrderService}</small>}
+              </div>
+            </div>
+          </div>
+        ) : tab === "users" ? (
           <div className="admin-users-pane">
             {/* All registered users */}
             <div className="admin-userlist">
@@ -1275,12 +1341,14 @@ export default function AdminPage() {
                         title={u.banned ? "解除封禁" : "封禁账户"}
                         onClick={() => setConfirmUserAction({ email: u.email, action: u.banned ? "unban" : "ban" })}
                       >{u.banned ? "解禁" : "封禁"}</button>
-                      <button
-                        type="button"
-                        className="admin-userlist-action delete"
-                        title="删除账户"
-                        onClick={() => setConfirmUserAction({ email: u.email, action: "delete" })}
-                      ><Trash2 size={11} /></button>
+                      {isRootStaff && (
+                        <button
+                          type="button"
+                          className="admin-userlist-action delete"
+                          title="删除账户"
+                          onClick={() => setConfirmUserAction({ email: u.email, action: "delete" })}
+                        ><Trash2 size={11} /></button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1589,7 +1657,9 @@ export default function AdminPage() {
                   <span>{c.usedBy || c.usedOrderId || "--"}</span>
                   <div>
                     <button type="button" disabled={c.status !== "active"} onClick={() => codeAction(c.code, "void")}>作废</button>
-                    <button type="button" className="danger" onClick={() => codeAction(c.code, "delete")}><Trash2 size={11} />删除</button>
+                    {isRootStaff && (
+                      <button type="button" className="danger" onClick={() => codeAction(c.code, "delete")}><Trash2 size={11} />删除</button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1841,46 +1911,7 @@ export default function AdminPage() {
             </div>
           </div>
         ) : (
-        <div className="admin-orders-layout">
-          <aside className="admin-overview-column" aria-label="关键状态总览">
-            <div className="admin-overview-card">
-              <div className="admin-overview-head">
-                <span><BarChart3 size={13} />状态总览</span>
-                {overviewLoading && <LoaderCircle size={12} className="spin-icon" />}
-              </div>
-              <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("orders")}>
-                <span>待处理订单</span>
-                <b>{overview?.pendingOrders ?? 0}</b>
-              </button>
-              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("withdrawals")}>
-                <span>待审核提现</span>
-                <b>{overview?.pendingWithdrawals ?? 0}</b>
-              </button>
-              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("codes")}>
-                <span>可用兑换码</span>
-                <b>{overview?.activeCodes ?? 0}</b>
-              </button>
-              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("mail")}>
-                <span>失败邮件</span>
-                <b>{overview?.failedMails ?? 0}</b>
-              </button>
-              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("users")}>
-                <span>注册用户</span>
-                <b>{overview?.usersTotal ?? 0}</b>
-              </button>
-              <div className="admin-overview-mini">
-                <span>今日订单</span>
-                <b>{overview?.todayOrders ?? 0}</b>
-              </div>
-              <div className="admin-overview-latest">
-                <span>最新订单</span>
-                <b>{overview?.latestOrderId || "暂无"}</b>
-                {overview?.latestOrderService && <small>{overview.latestOrderService}</small>}
-              </div>
-            </div>
-          </aside>
-
-          <div className="admin-orders-workspace">
+        <>
         <div className="admin-toolbar">
           <form
             className="admin-search"
@@ -1933,14 +1964,16 @@ export default function AdminPage() {
               >
                 <AlertTriangle size={12} />标记无效
               </button>
-              <button
-                type="button"
-                className="admin-batch-action delete"
-                disabled={batchBusy || selectedIds.size === 0}
-                onClick={() => setBatchConfirm("delete")}
-              >
-                <Trash2 size={12} />删除
-              </button>
+              {isRootStaff && (
+                <button
+                  type="button"
+                  className="admin-batch-action delete"
+                  disabled={batchBusy || selectedIds.size === 0}
+                  onClick={() => setBatchConfirm("delete")}
+                >
+                  <Trash2 size={12} />删除
+                </button>
+              )}
             </>
           )}
         </div>
@@ -2019,8 +2052,7 @@ export default function AdminPage() {
             })}
           </div>
         )}
-          </div>
-        </div>
+        </>
         )}
       </main>
 
@@ -2176,6 +2208,7 @@ export default function AdminPage() {
               </div>
 
               {/* Danger zone - delete order */}
+              {isRootStaff && (
               <div className="admin-danger-zone">
                 {!confirmDelete ? (
                   <button
@@ -2201,6 +2234,7 @@ export default function AdminPage() {
                   </div>
                 )}
               </div>
+              )}
             </div>
           </div>
         </div>
@@ -2418,7 +2452,9 @@ export default function AdminPage() {
               <div className="admin-code-batch-actions">
                 <button type="button" onClick={() => copyText((activeCodeBatch.codes || []).map((c) => c.code).join("\n"))}><Copy size={12} />复制全部</button>
                 <button type="button" onClick={() => batchCodeAction(activeCodeBatch.id, "void")} disabled={!!codeBusy}><AlertTriangle size={12} />全部作废</button>
-                <button type="button" className="danger" onClick={() => batchCodeAction(activeCodeBatch.id, "delete")} disabled={!!codeBusy}><Trash2 size={12} />删除批次</button>
+                {isRootStaff && (
+                  <button type="button" className="danger" onClick={() => batchCodeAction(activeCodeBatch.id, "delete")} disabled={!!codeBusy}><Trash2 size={12} />删除批次</button>
+                )}
               </div>
               <div className="admin-code-chip-grid">
                 {(activeCodeBatch.codes || []).map((c) => (
@@ -2441,7 +2477,9 @@ export default function AdminPage() {
                       }}
                     >发</button>
                     <button type="button" disabled={c.status !== "active" || !!codeBusy} onClick={() => codeActionV2(c.code, "void")}>废</button>
-                    <button type="button" className="danger" disabled={!!codeBusy} onClick={() => codeActionV2(c.code, "delete")}>删</button>
+                    {isRootStaff && (
+                      <button type="button" className="danger" disabled={!!codeBusy} onClick={() => codeActionV2(c.code, "delete")}>删</button>
+                    )}
                   </div>
                 ))}
               </div>

@@ -1,7 +1,7 @@
 import {
   getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
-  pushAdminActionLog, formatBeijingTime, clean,
+  pushAdminActionLog, formatBeijingTime, clean, isRootAdminSession,
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
 
@@ -10,10 +10,14 @@ const SITE_DOMAIN = process.env.SITE_DOMAIN || "liumeiti.vip";
 const SITE_URL = process.env.SITE_URL || `https://${SITE_DOMAIN}`;
 const SUPPORT_CONTACT = process.env.SUPPORT_CONTACT || "请通过 QQ 2802632995 / WhatsApp +1 4315093334 / Telegram @MaoyangSupport 联系在线客服";
 
-function adminOk(request) {
+function adminSession(request) {
   const token = getCookieFromRequest(request, "lm_admin");
   const session = verifySession(token);
-  return session && session.role === "admin";
+  return session && session.role === "admin" ? session : null;
+}
+
+function adminOk(request) {
+  return Boolean(adminSession(request));
 }
 
 function subscriptionLinks(username) {
@@ -195,7 +199,9 @@ export async function PATCH(request, { params }) {
 // DELETE /api/admin/orders/:orderId — soft-delete (tombstone in storage,
 // filtered from query/account/admin lists; stays out permanently).
 export async function DELETE(request, { params }) {
-  if (!adminOk(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const session = adminSession(request);
+  if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!isRootAdminSession(session)) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const actor = adminActorFromRequest(request);
 
   const { orderId } = await params;
