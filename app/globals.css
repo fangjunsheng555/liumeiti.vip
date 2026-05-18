@@ -6200,6 +6200,60 @@ button { cursor: pointer; border: none; background: transparent; }
   box-shadow: 0 8px 20px rgba(15, 118, 110, 0.3);
 }
 .admin-save-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.admin-pdf-export-row {
+  display: grid;
+  padding-top: 2px;
+}
+.admin-pdf-export-row button {
+  height: 40px;
+  border-radius: 11px;
+  border: 1px solid rgba(15, 118, 110, 0.22);
+  background: #f0fdfa;
+  color: #0f766e;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 900;
+}
+.admin-pdf-note-form {
+  display: grid;
+  gap: 8px;
+}
+.admin-pdf-note-form label {
+  display: grid;
+  gap: 5px;
+}
+.admin-pdf-note-form label > span {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 900;
+}
+.admin-pdf-note-form textarea {
+  width: 100%;
+  min-height: 92px;
+  max-height: 160px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: #f8fafc;
+  color: var(--primary);
+  padding: 10px;
+  font-size: 16px;
+  line-height: 1.55;
+  outline: none;
+  resize: vertical;
+}
+.admin-pdf-note-form textarea:focus {
+  border-color: rgba(20, 184, 166, 0.58);
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.1);
+  background: #fff;
+}
+.admin-pdf-note-form small {
+  color: var(--muted);
+  font-size: 10.5px;
+  text-align: right;
+}
 
 @media (max-width: 560px) {
   .admin-summary-grid { grid-template-columns: 1fr; }
@@ -7938,6 +7992,20 @@ button { cursor: pointer; border: none; background: transparent; }
   border-radius: 10px;
   background: #fff;
   border: 1px solid rgba(148, 163, 184, 0.22);
+  text-align: left;
+}
+.admin-code-form .admin-code-history-item {
+  height: auto;
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 8px;
+  align-items: center;
+  justify-content: stretch;
+  padding: 9px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: #fff;
+  color: var(--primary);
   text-align: left;
 }
 .admin-code-history-item span {

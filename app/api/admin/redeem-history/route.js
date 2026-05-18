@@ -42,6 +42,7 @@ function normalizeHistoryCode(code, orderMap) {
     usedAt: code.usedAt || "",
     usedAtBeijing: code.usedAtBeijing || "",
     usedIp: clean(code.usedIp || order?.clientIp || "", 80),
+    usedUserAgent: clean(code.usedUserAgent || order?.userAgent || "", 500),
     batchId: clean(code.batchId || "", 100),
     remark: clean(code.remark || "", 180),
     order: order ? {

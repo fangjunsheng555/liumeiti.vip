@@ -4,7 +4,7 @@ import {
   setUser, addBalanceTx, pushAdminBalanceLog, makeId, roundMoney,
   validateServiceRedeemCode, consumeServiceRedeemCode, restoreServiceRedeemCode,
   checkRedeemRateLimit, recordRedeemRateFailure, clearRedeemRateLimit, redeemRateLimitMessage,
-  clientIpFromRequest,
+  clientIpFromRequest, clientUserAgentFromRequest,
 } from "../_utils.js";
 
 const ORDERS_KEY = "liumeiti:orders";
@@ -412,6 +412,7 @@ export async function POST(request) {
 
   const now = new Date();
   const clientIp = clientIpFromRequest(request);
+  const userAgent = clientUserAgentFromRequest(request);
 
   // Generate subscription links per item using the orderId (one shared link
   // for all rocket items in the cart — a future change can suffix `-{i}` if
@@ -429,6 +430,7 @@ export async function POST(request) {
     createdAt: now.toISOString(),
     createdAtBeijing: formatBeijingTime(now),
     clientIp,
+    userAgent,
     items,
     itemCount: items.length,
     subtotal,
@@ -491,7 +493,7 @@ export async function POST(request) {
 
   let consumedServiceCode = null;
   if (paymentMethod === "redeem") {
-    consumedServiceCode = await consumeServiceRedeemCode(redeemCode, email, order.orderId, { ip: clientIp });
+    consumedServiceCode = await consumeServiceRedeemCode(redeemCode, email, order.orderId, { ip: clientIp, userAgent });
     if (!consumedServiceCode.ok) {
       await recordRedeemRateFailure(redeemGuard);
       return Response.json({ ok: false, error: consumedServiceCode.error || "redeem_code_failed" }, { status: 400 });

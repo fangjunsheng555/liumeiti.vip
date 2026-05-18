@@ -562,6 +562,10 @@ export function clientIpFromRequest(request) {
   return clean(forwarded.split(",")[0] || request?.headers?.get("x-real-ip") || "unknown", 80) || "unknown";
 }
 
+export function clientUserAgentFromRequest(request) {
+  return clean(request?.headers?.get("user-agent") || "", 500);
+}
+
 function clientGuardFingerprint(request) {
   const ip = clientIpFromRequest(request);
   const ua = clean(request?.headers?.get("user-agent") || "unknown", 160);
@@ -1355,6 +1359,7 @@ export async function redeemCodeForUser(email, codeValue, meta = {}) {
     status: "used",
     usedBy: lower,
     usedIp: clean(meta.ip || "", 80),
+    usedUserAgent: clean(meta.userAgent || "", 500),
     usedAt: now.toISOString(),
     usedAtBeijing: formatBeijingTime(now),
   };
@@ -1402,6 +1407,7 @@ export async function consumeServiceRedeemCode(codeValue, email, orderId, meta =
     usedBy: clean(email, 200),
     usedOrderId: clean(orderId, 80),
     usedIp: clean(meta.ip || "", 80),
+    usedUserAgent: clean(meta.userAgent || "", 500),
     usedAt: now.toISOString(),
     usedAtBeijing: formatBeijingTime(now),
   };
@@ -1418,6 +1424,7 @@ export async function restoreServiceRedeemCode(codeValue, orderId) {
   delete next.usedBy;
   delete next.usedOrderId;
   delete next.usedIp;
+  delete next.usedUserAgent;
   delete next.usedAt;
   delete next.usedAtBeijing;
   return setJsonKey(redeemCodeKey(code), next);

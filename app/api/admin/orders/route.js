@@ -66,6 +66,8 @@ function normalizeOrder(order) {
     paidCurrency: order.paidCurrency || (order.paymentMethod === "usdt" ? "USDT" : "CNY"),
     email: order.email || "",
     contact: order.contact || "",
+    clientIp: order.clientIp || "",
+    userAgent: order.userAgent || "",
     remark: order.remark || "",
     staffNotes: order.staffNotes || "",
     staffAudit: Array.isArray(order.staffAudit) ? order.staffAudit : [],
