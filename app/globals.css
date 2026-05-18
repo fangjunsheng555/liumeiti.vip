@@ -6254,11 +6254,29 @@ button { cursor: pointer; border: none; background: transparent; }
   font-size: 10.5px;
   text-align: right;
 }
+.admin-pdf-note-mask {
+  height: var(--admin-visual-height, 100dvh);
+  top: var(--admin-visual-top, 0);
+  bottom: auto;
+}
 
 @media (max-width: 560px) {
   .admin-summary-grid { grid-template-columns: 1fr; }
   .admin-summary-grid > div.span-2 { grid-column: span 1; }
   .admin-actions { grid-template-columns: 1fr; }
+  .admin-pdf-note-mask {
+    place-items: end center;
+    padding: 0 8px max(8px, env(safe-area-inset-bottom));
+    overflow: hidden;
+  }
+  .admin-pdf-note-modal {
+    max-height: min(430px, calc(var(--admin-visual-height, 100dvh) - 12px));
+    border-radius: 14px 14px 0 0;
+  }
+  .admin-pdf-note-form textarea {
+    min-height: 68px;
+    max-height: min(130px, 24dvh);
+  }
 }
 @media (min-width: 821px) {
   .admin-modal-mask { place-items: center; }

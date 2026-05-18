@@ -136,6 +136,12 @@ function exportRedeemHistoryPdfLegacy(record) {
           font-size: 12px;
           font-weight: 800;
         }
+        .brand .site {
+          margin-top: 3px;
+          color: #64748b;
+          font-size: 10.5px;
+          font-weight: 700;
+        }
         .doc-meta {
           min-width: 196px;
           text-align: right;
@@ -317,6 +323,7 @@ function exportRedeemHistoryPdfLegacy(record) {
             <div class="brand">
               <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
               <div class="name">冒央会社 · Maoyang Taiwan Inc</div>
+              <div class="site">https://liumeiti.vip</div>
             </div>
             <div class="doc-meta">
               凭证编号
@@ -885,6 +892,8 @@ function orderPdfRows(order) {
     .filter(Boolean);
   const buyerRemark = pdfText(order?.remark, 500);
   if (buyerRemark) rows.push({ label: "买家备注", value: buyerRemark });
+  const staffNotes = pdfText(order?.staffNotes, 800);
+  if (staffNotes) rows.push({ label: "客服备注", value: staffNotes });
   return rows;
 }
 
@@ -1247,6 +1256,29 @@ export default function AdminPage() {
     }
     return () => { document.title = original; };
   }, [newOrderAlert]);
+
+  useEffect(() => {
+    if (!pdfExportModal || typeof window === "undefined" || typeof document === "undefined") return;
+    const root = document.documentElement;
+    const viewport = window.visualViewport;
+    function syncViewport() {
+      const height = viewport?.height || window.innerHeight;
+      const top = viewport?.offsetTop || 0;
+      root.style.setProperty("--admin-visual-height", `${height}px`);
+      root.style.setProperty("--admin-visual-top", `${top}px`);
+    }
+    syncViewport();
+    viewport?.addEventListener("resize", syncViewport);
+    viewport?.addEventListener("scroll", syncViewport);
+    window.addEventListener("resize", syncViewport);
+    return () => {
+      viewport?.removeEventListener("resize", syncViewport);
+      viewport?.removeEventListener("scroll", syncViewport);
+      window.removeEventListener("resize", syncViewport);
+      root.style.removeProperty("--admin-visual-height");
+      root.style.removeProperty("--admin-visual-top");
+    };
+  }, [pdfExportModal]);
 
   async function executeUserAction() {
     if (!confirmUserAction || userActionBusy) return;
@@ -3263,7 +3295,7 @@ export default function AdminPage() {
       )}
 
       {pdfExportModal && (
-        <div className="admin-modal-mask" onClick={() => setPdfExportModal(null)}>
+        <div className="admin-modal-mask admin-pdf-note-mask" onClick={() => setPdfExportModal(null)}>
           <div className="admin-modal admin-compact-modal admin-pdf-note-modal" onClick={(e) => e.stopPropagation()}>
             <div className="admin-modal-head">
               <div>
