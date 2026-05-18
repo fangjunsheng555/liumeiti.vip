@@ -51,6 +51,7 @@ function normalizeHistoryCode(code, orderMap) {
       remark: clean(order.remark || "", 500),
       serviceLabel: clean(order.serviceLabel || "", 200),
       createdAtBeijing: order.createdAtBeijing || "",
+      completedAtBeijing: order.completedAtBeijing || "",
       paymentMethod: order.paymentMethod || "",
       inputs: orderInputs(order),
     } : null,

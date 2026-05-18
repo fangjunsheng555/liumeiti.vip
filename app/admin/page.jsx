@@ -62,41 +62,88 @@ function exportRedeemHistoryPdf(record) {
       <meta charset="utf-8" />
       <title>兑换记录 ${escapeHtml(record.code)}</title>
       <style>
-        @page { size: A4; margin: 18mm; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Arial, sans-serif; color: #0f172a; margin: 0; background: #fff; }
-        .head { text-align: center; padding-bottom: 18px; border-bottom: 1px solid #dbeafe; margin-bottom: 18px; }
-        .head img { width: 128px; height: auto; object-fit: contain; }
-        h1 { font-size: 20px; margin: 12px 0 4px; }
-        .sub { color: #64748b; font-size: 12px; }
-        .card { border: 1px solid #dbeafe; border-radius: 14px; padding: 14px; margin-bottom: 14px; background: #f8fafc; }
-        .grid { display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; font-size: 13px; }
-        .grid span { color: #64748b; font-weight: 700; }
-        .grid b { word-break: break-all; }
-        table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        td { border: 1px solid #e2e8f0; padding: 9px 10px; vertical-align: top; word-break: break-all; }
-        td:first-child { width: 130px; color: #64748b; font-weight: 700; background: #f8fafc; }
-        .foot { margin-top: 18px; font-size: 11px; color: #94a3b8; text-align: center; }
+        @page { size: A4; margin: 22mm 24mm; }
+        * { box-sizing: border-box; }
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+          color: #0f172a;
+          margin: 0;
+          background: #fff;
+        }
+        .sheet {
+          max-width: 720px;
+          margin: 0 auto;
+          padding: 0 12px;
+        }
+        .head {
+          text-align: center;
+          padding: 8px 0 22px;
+          border-bottom: 2px solid #ccfbf1;
+          margin-bottom: 22px;
+        }
+        .head img {
+          width: 190px;
+          max-height: 86px;
+          height: auto;
+          object-fit: contain;
+          display: block;
+          margin: 0 auto 12px;
+        }
+        h1 { font-size: 22px; margin: 0 0 7px; letter-spacing: 0; color: #0f172a; }
+        .sub { color: #0f766e; font-size: 12px; font-weight: 700; }
+        .section-title {
+          margin: 0 0 10px;
+          font-size: 14px;
+          color: #0f172a;
+          font-weight: 800;
+        }
+        .card {
+          border: 1px solid #d8efe9;
+          border-radius: 18px;
+          padding: 18px 20px;
+          margin-bottom: 16px;
+          background: linear-gradient(180deg, #ffffff 0%, #f8fffd 100%);
+          box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+        }
+        .grid { display: grid; grid-template-columns: 128px 1fr; gap: 11px 16px; font-size: 13px; }
+        .grid span { color: #64748b; font-weight: 800; }
+        .grid b { color: #102033; word-break: break-all; font-weight: 800; }
+        table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; overflow: hidden; border: 1px solid #d8efe9; border-radius: 13px; }
+        td { border-bottom: 1px solid #e2e8f0; padding: 11px 13px; vertical-align: top; word-break: break-all; line-height: 1.55; }
+        tr:last-child td { border-bottom: 0; }
+        td:first-child { width: 138px; color: #64748b; font-weight: 800; background: #f8fafc; }
+        .foot {
+          margin-top: 24px;
+          padding-top: 13px;
+          border-top: 1px solid #e2e8f0;
+          font-size: 11px;
+          color: #64748b;
+          text-align: center;
+        }
       </style>
     </head>
     <body>
-      <div class="head">
-        <img src="${logoUrl}" alt="logo" />
-        <h1>兑换码兑换记录</h1>
-        <div class="sub">冒央会社 · Maoyang Taiwan Inc</div>
-      </div>
-      <div class="card grid">
-        <span>兑换码</span><b>${escapeHtml(record.code)}</b>
-        <span>类型</span><b>${escapeHtml(record.typeLabel)} · ${escapeHtml(record.valueLabel)}</b>
-        <span>订单号</span><b>${escapeHtml(record.usedOrderId || "无订单")}</b>
-        <span>兑换用户</span><b>${escapeHtml(record.usedBy || "未记录")}</b>
-        <span>兑换时间</span><b>${escapeHtml(record.usedAtBeijing || record.usedAt || "未记录")}</b>
-        <span>用户 IP</span><b>${escapeHtml(record.usedIp || "未记录")}</b>
-      </div>
-      <div class="card">
-        <h1 style="font-size:16px;margin:0 0 10px;">用户订单输入内容</h1>
-        <table>${inputs}</table>
-      </div>
-      <div class="foot">由 liuMeiTi.vip 后台生成</div>
+      <main class="sheet">
+        <div class="head">
+          <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
+          <h1>兑换码兑换记录</h1>
+          <div class="sub">冒央会社 · Maoyang Taiwan Inc</div>
+        </div>
+        <section class="card grid">
+          <span>兑换码</span><b>${escapeHtml(record.code)}</b>
+          <span>类型</span><b>${escapeHtml(record.typeLabel)} · ${escapeHtml(record.valueLabel)}</b>
+          <span>订单号</span><b>${escapeHtml(record.usedOrderId || "无订单")}</b>
+          <span>兑换用户</span><b>${escapeHtml(record.usedBy || "未记录")}</b>
+          <span>兑换时间</span><b>${escapeHtml(record.usedAtBeijing || record.usedAt || "未记录")}</b>
+          <span>订单完成时间</span><b>${escapeHtml(record.order?.completedAtBeijing || "未完成或无订单")}</b>
+          <span>用户 IP</span><b>${escapeHtml(record.usedIp || "未记录")}</b>
+        </section>
+        <section class="card">
+          <div class="section-title">用户订单输入内容</div>
+          <table>${inputs}</table>
+        </section>
+        <div class="foot">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
+      </main>
       <script>
         window.addEventListener("load", function () {
           setTimeout(function () { window.print(); }, 250);
@@ -201,6 +248,7 @@ export default function AdminPage() {
   const [staffBusy, setStaffBusy] = useState("");
   const [staffResult, setStaffResult] = useState(null);
   const [mailLogs, setMailLogs] = useState([]);
+  const [mailSearch, setMailSearch] = useState("");
   const [mailForm, setMailForm] = useState({ to: "", subject: "客服服务通知", content: "" });
   const [mailLoading, setMailLoading] = useState(false);
   const [mailBusy, setMailBusy] = useState(false);
@@ -1319,6 +1367,11 @@ export default function AdminPage() {
     return <div className="admin-loading"><LoaderCircle size={28} className="spin-icon" /></div>;
   }
 
+  const mailSearchText = mailSearch.trim().toLowerCase();
+  const visibleMailLogs = mailSearchText
+    ? mailLogs.filter((item) => String(item.to || "").toLowerCase().includes(mailSearchText))
+    : mailLogs;
+
   // ── Dashboard ──
   return (
     <div className="admin-page">
@@ -1688,11 +1741,9 @@ export default function AdminPage() {
                       >
                         <span>
                           <strong>{item.code}</strong>
-                          <small>{item.typeLabel} · {item.usedAtBeijing || item.usedAt || "未记录时间"}</small>
                         </span>
                         <span>
-                          <b>{item.valueLabel}</b>
-                          <em>{item.usedBy || item.usedOrderId || "未记录用户"}</em>
+                          <b>{item.usedBy || item.order?.email || "未记录邮箱"}</b>
                         </span>
                       </button>
                     ))}
@@ -1848,7 +1899,7 @@ export default function AdminPage() {
 
             <div className="admin-mail-log">
               <div className="admin-userlist-head">
-                <h3>发信记录 <em>{mailLogs.length}</em></h3>
+                <h3>发信记录 <em>{visibleMailLogs.length}{mailSearchText ? ` / ${mailLogs.length}` : ""}</em></h3>
                 <div className="admin-inline-actions">
                   {isRootStaff && (
                     <>
@@ -1862,7 +1913,7 @@ export default function AdminPage() {
                       >{mailBatchMode ? "取消" : "批量"}</button>
                       {mailBatchMode && (
                         <>
-                          <button type="button" className="admin-filter-btn" onClick={() => setSelectedMailIds(new Set(mailLogs.map((item) => item.id).filter(Boolean)))}>全选</button>
+                          <button type="button" className="admin-filter-btn" onClick={() => setSelectedMailIds(new Set(visibleMailLogs.map((item) => item.id).filter(Boolean)))}>全选</button>
                           <button type="button" className="admin-filter-btn danger" onClick={deleteSelectedMailLogs} disabled={mailDeleteBusy || selectedMailIds.size === 0}>
                             {mailDeleteBusy ? "删除中" : `删除 ${selectedMailIds.size}`}
                           </button>
@@ -1875,10 +1926,23 @@ export default function AdminPage() {
                   </button>
                 </div>
               </div>
+              <div className="admin-mail-search">
+                <Search size={13} />
+                <input
+                  value={mailSearch}
+                  onChange={(e) => setMailSearch(e.target.value)}
+                  placeholder="按收件邮箱搜索"
+                  inputMode="email"
+                  autoComplete="off"
+                />
+                {mailSearch && (
+                  <button type="button" onClick={() => setMailSearch("")}>清空</button>
+                )}
+              </div>
               <div className="admin-mail-log-list">
-                {mailLogs.length === 0 ? (
+                {visibleMailLogs.length === 0 ? (
                   <div className="admin-userlist-empty">{mailLoading ? "加载中..." : "暂无发信记录"}</div>
-                ) : mailLogs.map((item) => {
+                ) : visibleMailLogs.map((item) => {
                   const selected = selectedMailIds.has(item.id);
                   const ok = item.ok !== false;
                   return (
@@ -2623,8 +2687,8 @@ export default function AdminPage() {
                 <div><span>对应订单号</span><b>{activeRedeemHistory.usedOrderId || "无订单"}</b></div>
                 <div><span>兑换用户</span><b>{activeRedeemHistory.usedBy || "未记录"}</b></div>
                 <div><span>兑换时间</span><b>{activeRedeemHistory.usedAtBeijing || activeRedeemHistory.usedAt || "未记录"}</b></div>
+                <div><span>订单完成时间</span><b>{activeRedeemHistory.order?.completedAtBeijing || "未完成或无订单"}</b></div>
                 <div><span>用户 IP</span><b>{activeRedeemHistory.usedIp || "未记录"}</b></div>
-                <div><span>批次</span><b>{activeRedeemHistory.batchId || "--"}</b></div>
               </div>
               <div className="admin-mail-detail-content">
                 <span>用户订单输入内容</span>
