@@ -37,7 +37,7 @@ function copyText(text) {
 
 export default function AdminPage() {
   const [authed, setAuthed] = useState(null); // null=loading, false=login, true=ok
-  const [loginName, setLoginName] = useState("admin");
+  const [loginName, setLoginName] = useState("");
   const [password, setPassword] = useState("");
   const [currentStaff, setCurrentStaff] = useState(null);
   const [loginError, setLoginError] = useState("");
@@ -1189,13 +1189,14 @@ export default function AdminPage() {
           <h1>工作后台</h1>
           <p>请输入管理员密码</p>
           {loginError && <div className="admin-alert error">{loginError}</div>}
-          <form onSubmit={doLogin}>
+          <form onSubmit={doLogin} autoComplete="off">
             <input
               type="text"
+              name="lm-admin-account"
               value={loginName}
               onChange={(e) => setLoginName(e.target.value)}
               placeholder="工作人员账号"
-              autoComplete="username"
+              autoComplete="off"
               required
             />
             <input
@@ -1254,7 +1255,7 @@ export default function AdminPage() {
           <button type="button" className="admin-new-order-alert" onClick={openNewOrderNotice}>
             <BellRing size={14} />
             <b>新订单 +{newOrderAlert.count}</b>
-            <span>{newOrderAlert.orderId || "点击查看最新订单"}</span>
+            <span>{newOrderAlert.service || "点击查看最新订单"}</span>
           </button>
         )}
 
@@ -1291,7 +1292,7 @@ export default function AdminPage() {
               </div>
               <div className="admin-overview-latest">
                 <span>最新订单</span>
-                <b>{overview?.latestOrderId || "暂无"}</b>
+                <b>{overview?.latestOrderEmail || "暂无"}</b>
                 {overview?.latestOrderService && <small>{overview.latestOrderService}</small>}
               </div>
             </div>

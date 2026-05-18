@@ -849,7 +849,8 @@ export function envAdminUsername() {
 }
 
 export async function verifyAdminLogin(username, password) {
-  const inputUsername = clean(username || envAdminUsername(), 60);
+  const inputUsername = clean(username, 60);
+  if (!inputUsername) return { ok: false, error: "invalid_credentials" };
   const envUsername = envAdminUsername();
   if (process.env.ADMIN_PASSWORD && inputUsername.toLowerCase() === envUsername.toLowerCase() && checkAdminPassword(password)) {
     return { ok: true, staff: { id: 1, username: envUsername, root: true } };

@@ -3,7 +3,7 @@ import { verifyAdminLogin, signSession, setCookieValue } from "../../_utils.js";
 export async function POST(request) {
   let body = {};
   try { body = await request.json(); } catch (e) {}
-  const username = String(body.username || "admin");
+  const username = String(body.username || "");
   const password = String(body.password || "");
 
   const login = await verifyAdminLogin(username, password);
