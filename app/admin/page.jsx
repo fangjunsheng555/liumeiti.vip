@@ -337,8 +337,14 @@ function exportRedeemHistoryPdfLegacy(record) {
         .voucher-note { margin-top: 7px; font-size: 11.5px; line-height: 1.4; }
         .foot { margin-top: 12px; padding-top: 8px; font-size: 9.5px; }
         @media print {
-          body { background: #fff !important; }
-          .sheet { background: #fff !important; box-shadow: none; }
+          body { background: #fff !important; width: 210mm; min-height: 297mm; overflow: hidden; }
+          .sheet {
+            background: #fff !important;
+            box-shadow: none;
+            transform: scale(0.7);
+            transform-origin: top center;
+            margin: 8mm auto 0;
+          }
           .watermark { color: rgba(15, 118, 110, 0.035); }
         }
       </style>
@@ -798,8 +804,14 @@ function openVoucherPdf({
         .voucher-note { margin-top: 7px; font-size: 11.5px; line-height: 1.4; }
         .foot { margin-top: 12px; padding-top: 8px; font-size: 9.5px; }
         @media print {
-          body { background: #fff !important; }
-          .sheet { background: #fff !important; box-shadow: none; }
+          body { background: #fff !important; width: 210mm; min-height: 297mm; overflow: hidden; }
+          .sheet {
+            background: #fff !important;
+            box-shadow: none;
+            transform: scale(0.7);
+            transform-origin: top center;
+            margin: 8mm auto 0;
+          }
           .watermark { color: rgba(15, 118, 110, 0.035); }
         }
       </style>
