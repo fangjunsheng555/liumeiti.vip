@@ -557,9 +557,13 @@ export function normalizeRedeemCode(value) {
 const REDEEM_GUARD_LIMIT = 5;
 const REDEEM_GUARD_WINDOW_SECONDS = 5 * 60;
 
-function clientGuardFingerprint(request) {
+export function clientIpFromRequest(request) {
   const forwarded = request?.headers?.get("x-forwarded-for") || "";
-  const ip = clean(forwarded.split(",")[0] || request?.headers?.get("x-real-ip") || "unknown", 80);
+  return clean(forwarded.split(",")[0] || request?.headers?.get("x-real-ip") || "unknown", 80) || "unknown";
+}
+
+function clientGuardFingerprint(request) {
+  const ip = clientIpFromRequest(request);
   const ua = clean(request?.headers?.get("user-agent") || "unknown", 160);
   const secret = process.env.AUTH_SECRET || process.env.ADMIN_PASSWORD || "liumeiti";
   return createHmac("sha256", secret).update(`${ip}|${ua}`).digest("hex").slice(0, 32);
@@ -1332,7 +1336,7 @@ export async function deleteRedeemBatch(batchId, actor = null) {
   } catch (e) { return { ok: false, error: "delete_failed" }; }
 }
 
-export async function redeemCodeForUser(email, codeValue) {
+export async function redeemCodeForUser(email, codeValue, meta = {}) {
   const lower = String(email || "").trim().toLowerCase();
   const code = normalizeRedeemCode(codeValue);
   const item = await getJsonKey(redeemCodeKey(code));
@@ -1350,6 +1354,7 @@ export async function redeemCodeForUser(email, codeValue) {
     ...item,
     status: "used",
     usedBy: lower,
+    usedIp: clean(meta.ip || "", 80),
     usedAt: now.toISOString(),
     usedAtBeijing: formatBeijingTime(now),
   };
@@ -1385,7 +1390,7 @@ export async function validateServiceRedeemCode(codeValue, orderServices) {
   return { ok: true, code, item: { ...item, type: "service", services: serviceSummaries(codeServices) } };
 }
 
-export async function consumeServiceRedeemCode(codeValue, email, orderId) {
+export async function consumeServiceRedeemCode(codeValue, email, orderId, meta = {}) {
   const code = normalizeRedeemCode(codeValue);
   const item = await getJsonKey(redeemCodeKey(code));
   if (!item || item.status !== "active" || redeemCodeType(item) !== "service") return { ok: false, error: "code_unavailable" };
@@ -1396,6 +1401,7 @@ export async function consumeServiceRedeemCode(codeValue, email, orderId) {
     status: "used",
     usedBy: clean(email, 200),
     usedOrderId: clean(orderId, 80),
+    usedIp: clean(meta.ip || "", 80),
     usedAt: now.toISOString(),
     usedAtBeijing: formatBeijingTime(now),
   };
@@ -1411,6 +1417,7 @@ export async function restoreServiceRedeemCode(codeValue, orderId) {
   const next = { ...item, status: "active" };
   delete next.usedBy;
   delete next.usedOrderId;
+  delete next.usedIp;
   delete next.usedAt;
   delete next.usedAtBeijing;
   return setJsonKey(redeemCodeKey(code), next);

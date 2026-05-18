@@ -7,7 +7,7 @@ import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
   CheckCircle2, Clock, Inbox, X, AlertTriangle, Trash2,
-  Gift, CreditCard, Plus, UserPlus, Mail, BellRing, BarChart3,
+  Gift, CreditCard, Plus, UserPlus, Mail, BellRing, BarChart3, Download, FileText,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -33,6 +33,82 @@ function copyText(text) {
   if (navigator.clipboard && window.isSecureContext) {
     navigator.clipboard.writeText(text).catch(() => {});
   }
+}
+
+function escapeHtml(value) {
+  return String(value || "").replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[ch]));
+}
+
+function exportRedeemHistoryPdf(record) {
+  if (typeof window === "undefined" || !record) return;
+  const logoUrl = `${window.location.origin}/email-logo.png`;
+  const inputs = Array.isArray(record.order?.inputs) && record.order.inputs.length
+    ? record.order.inputs.map((item) => `
+      <tr>
+        <td>${escapeHtml(item.label)}</td>
+        <td>${escapeHtml(item.value)}</td>
+      </tr>
+    `).join("")
+    : `<tr><td>用户输入</td><td>无额外输入</td></tr>`;
+  const html = `<!doctype html>
+  <html>
+    <head>
+      <meta charset="utf-8" />
+      <title>兑换记录 ${escapeHtml(record.code)}</title>
+      <style>
+        @page { size: A4; margin: 18mm; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Arial, sans-serif; color: #0f172a; margin: 0; background: #fff; }
+        .head { text-align: center; padding-bottom: 18px; border-bottom: 1px solid #dbeafe; margin-bottom: 18px; }
+        .head img { width: 128px; height: auto; object-fit: contain; }
+        h1 { font-size: 20px; margin: 12px 0 4px; }
+        .sub { color: #64748b; font-size: 12px; }
+        .card { border: 1px solid #dbeafe; border-radius: 14px; padding: 14px; margin-bottom: 14px; background: #f8fafc; }
+        .grid { display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; font-size: 13px; }
+        .grid span { color: #64748b; font-weight: 700; }
+        .grid b { word-break: break-all; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        td { border: 1px solid #e2e8f0; padding: 9px 10px; vertical-align: top; word-break: break-all; }
+        td:first-child { width: 130px; color: #64748b; font-weight: 700; background: #f8fafc; }
+        .foot { margin-top: 18px; font-size: 11px; color: #94a3b8; text-align: center; }
+      </style>
+    </head>
+    <body>
+      <div class="head">
+        <img src="${logoUrl}" alt="logo" />
+        <h1>兑换码兑换记录</h1>
+        <div class="sub">冒央会社 · Maoyang Taiwan Inc</div>
+      </div>
+      <div class="card grid">
+        <span>兑换码</span><b>${escapeHtml(record.code)}</b>
+        <span>类型</span><b>${escapeHtml(record.typeLabel)} · ${escapeHtml(record.valueLabel)}</b>
+        <span>订单号</span><b>${escapeHtml(record.usedOrderId || "无订单")}</b>
+        <span>兑换用户</span><b>${escapeHtml(record.usedBy || "未记录")}</b>
+        <span>兑换时间</span><b>${escapeHtml(record.usedAtBeijing || record.usedAt || "未记录")}</b>
+        <span>用户 IP</span><b>${escapeHtml(record.usedIp || "未记录")}</b>
+      </div>
+      <div class="card">
+        <h1 style="font-size:16px;margin:0 0 10px;">用户订单输入内容</h1>
+        <table>${inputs}</table>
+      </div>
+      <div class="foot">由 liuMeiTi.vip 后台生成</div>
+      <script>
+        window.addEventListener("load", function () {
+          setTimeout(function () { window.print(); }, 250);
+        });
+      </script>
+    </body>
+  </html>`;
+  const win = window.open("", "_blank", "width=820,height=900");
+  if (!win) return;
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
 }
 
 export default function AdminPage() {
@@ -112,6 +188,10 @@ export default function AdminPage() {
   const [codeBusy, setCodeBusy] = useState("");
   const [codeResult, setCodeResult] = useState(null);
   const [activeCodeBatch, setActiveCodeBatch] = useState(null);
+  const [redeemHistory, setRedeemHistory] = useState([]);
+  const [redeemHistoryQuery, setRedeemHistoryQuery] = useState("");
+  const [redeemHistoryLoading, setRedeemHistoryLoading] = useState(false);
+  const [activeRedeemHistory, setActiveRedeemHistory] = useState(null);
   const [sendCodeModal, setSendCodeModal] = useState(null); // { code, type, label } | null
   const [sendCodeEmail, setSendCodeEmail] = useState("");
   const [sendCodeBusy, setSendCodeBusy] = useState(false);
@@ -261,6 +341,20 @@ export default function AdminPage() {
     }
   }, []);
 
+  const loadRedeemHistory = useCallback(async (q = "") => {
+    setRedeemHistoryLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (q) params.set("q", q);
+      const res = await fetch("/api/admin/redeem-history?" + params.toString(), { credentials: "same-origin" });
+      if (res.status === 401) { setAuthed(false); return; }
+      const data = await res.json();
+      if (data.ok) setRedeemHistory(data.history || []);
+    } catch (e) {} finally {
+      setRedeemHistoryLoading(false);
+    }
+  }, []);
+
   const loadStaff = useCallback(async () => {
     try {
       const res = await fetch("/api/admin/staff", { credentials: "same-origin" });
@@ -309,13 +403,16 @@ export default function AdminPage() {
     if (tab === "users") loadAllUsers(userListQuery);
     if (tab === "balance") loadGlobalLog(logQuery, logFilter, logSource);
     if (tab === "withdrawals") loadWithdrawals();
-    if (tab === "codes") loadCodes();
+    if (tab === "codes") {
+      loadCodes();
+      loadRedeemHistory(redeemHistoryQuery);
+    }
     if (tab === "mail") loadMailLogs();
     if (tab === "staff") {
       if (isRootStaff) loadStaff();
       else if (currentStaff) setTab("orders");
     }
-  }, [authed, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes, loadMailLogs, loadStaff, logFilter, logSource, isRootStaff, currentStaff?.id]);
+  }, [authed, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes, loadRedeemHistory, loadMailLogs, loadStaff, logFilter, logSource, isRootStaff, currentStaff?.id]);
 
   useEffect(() => {
     if (!authed) return;
@@ -1543,12 +1640,66 @@ export default function AdminPage() {
           </div>
         ) : tab === "codes" ? (
           <div className="admin-codes-pane">
-            <form className="admin-code-form" onSubmit={createCode}>
-              <div className="admin-card-title"><Gift size={15} />生成兑换码</div>
+            <form
+              className="admin-code-form"
+              onSubmit={(e) => {
+                if (codeType === "history") {
+                  e.preventDefault();
+                  loadRedeemHistory(redeemHistoryQuery);
+                } else {
+                  createCode(e);
+                }
+              }}
+            >
+              <div className="admin-card-title">
+                {codeType === "history" ? <FileText size={15} /> : <Gift size={15} />}
+                {codeType === "history" ? "兑换历史" : "生成兑换码"}
+              </div>
               <div className="admin-code-type-toggle">
                 <button type="button" className={codeType === "service" ? "active" : ""} onClick={() => setCodeType("service")}>服务码</button>
                 <button type="button" className={codeType === "balance" ? "active" : ""} onClick={() => setCodeType("balance")}>余额码</button>
+                <button type="button" className={codeType === "history" ? "active" : ""} onClick={() => { setCodeType("history"); loadRedeemHistory(redeemHistoryQuery); }}>兑换历史</button>
               </div>
+              {codeType === "history" ? (
+                <div className="admin-code-history-panel">
+                  <div className="admin-code-history-search">
+                    <Search size={13} />
+                    <input
+                      value={redeemHistoryQuery}
+                      onChange={(e) => setRedeemHistoryQuery(e.target.value)}
+                      placeholder="搜索兑换码 / 邮箱 / 订单号 / IP"
+                      autoComplete="off"
+                    />
+                    <button type="submit" disabled={redeemHistoryLoading}>
+                      {redeemHistoryLoading ? <LoaderCircle size={11} className="spin-icon" /> : "搜索"}
+                    </button>
+                  </div>
+                  <div className="admin-code-history-list">
+                    {redeemHistoryLoading ? (
+                      <div className="admin-userlist-empty">加载中...</div>
+                    ) : redeemHistory.length === 0 ? (
+                      <div className="admin-userlist-empty">暂无兑换历史</div>
+                    ) : redeemHistory.map((item) => (
+                      <button
+                        key={item.code}
+                        type="button"
+                        className="admin-code-history-item"
+                        onClick={() => setActiveRedeemHistory(item)}
+                      >
+                        <span>
+                          <strong>{item.code}</strong>
+                          <small>{item.typeLabel} · {item.usedAtBeijing || item.usedAt || "未记录时间"}</small>
+                        </span>
+                        <span>
+                          <b>{item.valueLabel}</b>
+                          <em>{item.usedBy || item.usedOrderId || "未记录用户"}</em>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <>
               <div className="admin-code-inline-fields">
                 <label>
                   <span>数量</span>
@@ -1636,8 +1787,12 @@ export default function AdminPage() {
                 {codeBusy === "create" ? <LoaderCircle size={12} className="spin-icon" /> : <Gift size={12} />}
                 {codeBusy === "create" ? "生成中" : "生成兑换码"}
               </button>
+                </>
+              )}
             </form>
-            {codeResult && <div className={`admin-alert ${codeResult.type}`}>{codeResult.message}</div>}
+            {codeResult && codeType !== "history" && <div className={`admin-alert ${codeResult.type}`}>{codeResult.message}</div>}
+            {codeType !== "history" && (
+              <>
             <div className="admin-code-batch-list">
               {codeBatches.length === 0 ? (
                 <div className="admin-userlist-empty">{codesLoading ? "加载中..." : "暂无兑换码批次"}</div>
@@ -1677,6 +1832,8 @@ export default function AdminPage() {
                 </div>
               ))}
             </div>
+              </>
+            )}
           </div>
         ) : tab === "mail" ? (
           <div className="admin-mail-pane">
@@ -2444,6 +2601,49 @@ export default function AdminPage() {
                     <div className="admin-tx-item-amount">{tx.amount > 0 ? "+" : ""}¥{Math.abs(tx.amount).toFixed(2)}</div>
                   </div>
                 ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeRedeemHistory && (
+        <div className="admin-modal-mask" onClick={() => setActiveRedeemHistory(null)}>
+          <div className="admin-modal admin-compact-modal admin-redeem-history-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="admin-modal-head">
+              <div>
+                <div className="admin-modal-id">{activeRedeemHistory.code}</div>
+                <div className="admin-modal-status status-received">{activeRedeemHistory.typeLabel} · {activeRedeemHistory.valueLabel}</div>
+              </div>
+              <button type="button" className="admin-modal-close" onClick={() => setActiveRedeemHistory(null)}><X size={16} /></button>
+            </div>
+            <div className="admin-modal-body">
+              <div className="admin-mail-detail-grid">
+                <div><span>兑换码</span><b>{activeRedeemHistory.code}</b></div>
+                <div><span>对应订单号</span><b>{activeRedeemHistory.usedOrderId || "无订单"}</b></div>
+                <div><span>兑换用户</span><b>{activeRedeemHistory.usedBy || "未记录"}</b></div>
+                <div><span>兑换时间</span><b>{activeRedeemHistory.usedAtBeijing || activeRedeemHistory.usedAt || "未记录"}</b></div>
+                <div><span>用户 IP</span><b>{activeRedeemHistory.usedIp || "未记录"}</b></div>
+                <div><span>批次</span><b>{activeRedeemHistory.batchId || "--"}</b></div>
+              </div>
+              <div className="admin-mail-detail-content">
+                <span>用户订单输入内容</span>
+                {activeRedeemHistory.order?.inputs?.length ? (
+                  <div className="admin-redeem-input-list">
+                    {activeRedeemHistory.order.inputs.map((item, index) => (
+                      <div key={`${item.label}-${index}`}>
+                        <strong>{item.label}</strong>
+                        <p>{item.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p>无额外输入内容</p>
+                )}
+              </div>
+              <div className="admin-mail-detail-actions">
+                <button type="button" onClick={() => copyText(activeRedeemHistory.code)}><Copy size={12} />复制兑换码</button>
+                <button type="button" onClick={() => exportRedeemHistoryPdf(activeRedeemHistory)}><Download size={12} />导出 PDF</button>
               </div>
             </div>
           </div>

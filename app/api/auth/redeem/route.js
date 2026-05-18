@@ -1,5 +1,5 @@
 import {
-  getCookieFromRequest, verifySession, clean, redeemCodeForUser,
+  getCookieFromRequest, verifySession, clean, redeemCodeForUser, clientIpFromRequest,
   checkRedeemRateLimit, recordRedeemRateFailure, clearRedeemRateLimit, redeemRateLimitMessage,
 } from "../../_utils.js";
 
@@ -27,7 +27,7 @@ export async function POST(request) {
 
   let body = {};
   try { body = await request.json(); } catch (e) {}
-  const result = await redeemCodeForUser(session.email, body.code);
+  const result = await redeemCodeForUser(session.email, body.code, { ip: clientIpFromRequest(request) });
   if (!result.ok) {
     await recordRedeemRateFailure(guard);
     const code = clean(result.error, 80);
