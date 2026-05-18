@@ -323,7 +323,7 @@ function exportRedeemHistoryPdfLegacy(record) {
             <div class="brand">
               <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
               <div class="name">冒央会社 · Maoyang Taiwan Inc</div>
-              <div class="site">网址:https;//liumeiti.vip</div>
+              <div class="site">网址:https://liumeiti.vip</div>
             </div>
             <div class="doc-meta">
               凭证编号
@@ -756,7 +756,7 @@ function openVoucherPdf({
             <div class="brand">
               <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
               <div class="name">冒央会社 · Maoyang Taiwan Inc</div>
-              <div class="site">网址:https;//liumeiti.vip</div>
+              <div class="site">网址:https://liumeiti.vip</div>
             </div>
             <div class="doc-meta">
               凭证编号
