@@ -323,7 +323,7 @@ function exportRedeemHistoryPdfLegacy(record) {
             <div class="brand">
               <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
               <div class="name">冒央会社 · Maoyang Taiwan Inc</div>
-              <div class="site">https://liumeiti.vip</div>
+              <div class="site">网址:https;//liumeiti.vip</div>
             </div>
             <div class="doc-meta">
               凭证编号
@@ -756,11 +756,9 @@ function openVoucherPdf({
             <div class="brand">
               <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
               <div class="name">冒央会社 · Maoyang Taiwan Inc</div>
-              <div class="site">https://liumeiti.vip</div>
+              <div class="site">网址:https;//liumeiti.vip</div>
             </div>
             <div class="doc-meta">
-              官方网站
-              <b class="url">https://liumeiti.vip</b>
               凭证编号
               <b>${escapeHtml(voucherNo)}</b>
               生成时间
@@ -795,7 +793,7 @@ function openVoucherPdf({
             ${noteHtml}
           </section>
 
-          <div class="foot">https://liumeiti.vip · Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
+          <div class="foot">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
         </div>
       </main>
       <script>
