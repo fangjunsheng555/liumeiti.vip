@@ -35,14 +35,22 @@ export async function GET(request) {
       createdAtBeijing: order.createdAtBeijing || "",
       email: order.email || "",
       serviceLabel: order.serviceLabel || "",
+      finalAmount: Number(order.finalAmount || (order.paidCurrency === "CNY" ? order.paidAmount : 0) || 0),
     }))
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
   const latestOrder = orders[0] || null;
   const todayKey = beijingDateKey();
+  const revenueOrders = orders.filter((order) => order.status !== "invalid");
+  const totalRevenue = revenueOrders.reduce((sum, order) => sum + Number(order.finalAmount || 0), 0);
+  const todayRevenue = revenueOrders
+    .filter((order) => orderBeijingDateKey(order) === todayKey)
+    .reduce((sum, order) => sum + Number(order.finalAmount || 0), 0);
 
   const overview = {
     ordersTotal: orders.length,
     todayOrders: orders.filter((order) => orderBeijingDateKey(order) === todayKey).length,
+    todayRevenue: Math.round(todayRevenue * 100) / 100,
+    totalRevenue: Math.round(totalRevenue * 100) / 100,
     pendingOrders: orders.filter((order) => order.status === "received").length,
     completedOrders: orders.filter((order) => order.status === "completed").length,
     invalidOrders: orders.filter((order) => order.status === "invalid").length,

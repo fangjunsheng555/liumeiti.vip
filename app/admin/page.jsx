@@ -1290,6 +1290,18 @@ export default function AdminPage() {
                 <span>今日订单</span>
                 <b>{overview?.todayOrders ?? 0}</b>
               </div>
+              <div className="admin-overview-mini money">
+                <span>今日营收</span>
+                <b>¥{Number(overview?.todayRevenue || 0).toFixed(2)}</b>
+              </div>
+              <div className="admin-overview-mini">
+                <span>累计订单</span>
+                <b>{overview?.ordersTotal ?? 0}</b>
+              </div>
+              <div className="admin-overview-mini money">
+                <span>累计营收</span>
+                <b>¥{Number(overview?.totalRevenue || 0).toFixed(2)}</b>
+              </div>
               <div className="admin-overview-latest">
                 <span>最新订单</span>
                 <b>{overview?.latestOrderEmail || "暂无"}</b>
@@ -1534,8 +1546,8 @@ export default function AdminPage() {
             <form className="admin-code-form" onSubmit={createCode}>
               <div className="admin-card-title"><Gift size={15} />生成兑换码</div>
               <div className="admin-code-type-toggle">
-                <button type="button" className={codeType === "balance" ? "active" : ""} onClick={() => setCodeType("balance")}>余额码</button>
                 <button type="button" className={codeType === "service" ? "active" : ""} onClick={() => setCodeType("service")}>服务码</button>
+                <button type="button" className={codeType === "balance" ? "active" : ""} onClick={() => setCodeType("balance")}>余额码</button>
               </div>
               <div className="admin-code-inline-fields">
                 <label>
@@ -2111,12 +2123,14 @@ export default function AdminPage() {
               <section className="admin-modal-section">
                 <h3>商品配置 · {editForm.items.length} 件</h3>
                 {editForm.items.map((it, idx) => {
-                  const isStaffFill = it.service !== "spotify" && it.service !== "rocket"; // netflix/disney/max
+                  const isRocket = it.service === "rocket";
+                  const isSpotify = it.service === "spotify";
+                  const isStaffFill = !isSpotify && !isRocket; // netflix/disney/max
                   return (
                     <div key={idx} className="admin-item-card">
                       <div className="admin-item-head">
                         <strong>{idx + 1}. {it.label}</strong>
-                        <span className="admin-item-tag">{isStaffFill ? "客服填写账号密码" : "可修改买家输入"}</span>
+                        <span className="admin-item-tag">{isStaffFill ? "客服填写账号密码" : isRocket ? "无需填写用户名" : "可修改买家输入"}</span>
                       </div>
                       {isStaffFill ? (
                         <>
@@ -2143,16 +2157,18 @@ export default function AdminPage() {
                             </div>
                           </label>
                         </>
+                      ) : isRocket ? (
+                        <div className="admin-item-note">机场节点已按订单自动生成订阅信息，无需修改用户名。</div>
                       ) : (
                         <>
                           <label className="admin-field">
-                            <span>{it.service === "rocket" ? "用户名(可改)" : "账号(可改)"}</span>
+                            <span>账号(可改)</span>
                             <input
                               value={it.account}
                               onChange={(e) => updateItem(idx, "account", e.target.value)}
                             />
                           </label>
-                          {it.service === "spotify" && (
+                          {isSpotify && (
                             <label className="admin-field">
                               <span>密码(可改)</span>
                               <div className="admin-pwd-wrap">
