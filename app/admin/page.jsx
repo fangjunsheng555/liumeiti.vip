@@ -103,7 +103,7 @@ export default function AdminPage() {
   const [codes, setCodes] = useState([]);
   const [codeBatches, setCodeBatches] = useState([]);
   const [codesLoading, setCodesLoading] = useState(false);
-  const [codeType, setCodeType] = useState("balance");
+  const [codeType, setCodeType] = useState("service");
   const [codeAmount, setCodeAmount] = useState("");
   const [codeQuantity, setCodeQuantity] = useState("1");
   const [codeRemark, setCodeRemark] = useState("");
@@ -2130,7 +2130,9 @@ export default function AdminPage() {
                     <div key={idx} className="admin-item-card">
                       <div className="admin-item-head">
                         <strong>{idx + 1}. {it.label}</strong>
-                        <span className="admin-item-tag">{isStaffFill ? "客服填写账号密码" : isRocket ? "无需填写用户名" : "可修改买家输入"}</span>
+                        {!isRocket && (
+                          <span className="admin-item-tag">{isStaffFill ? "客服填写账号密码" : "可修改买家输入"}</span>
+                        )}
                       </div>
                       {isStaffFill ? (
                         <>
@@ -2157,9 +2159,7 @@ export default function AdminPage() {
                             </div>
                           </label>
                         </>
-                      ) : isRocket ? (
-                        <div className="admin-item-note">机场节点已按订单自动生成订阅信息，无需修改用户名。</div>
-                      ) : (
+                      ) : isRocket ? null : (
                         <>
                           <label className="admin-field">
                             <span>账号(可改)</span>
