@@ -48,6 +48,17 @@ function escapeHtml(value) {
 function exportRedeemHistoryPdf(record) {
   if (typeof window === "undefined" || !record) return;
   const logoUrl = `${window.location.origin}/email-logo.png`;
+  const generatedAt = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(new Date()).replace(/\//g, "-");
+  const voucherNo = `RV-${String(record.code || "").slice(0, 24)}`;
   const inputs = Array.isArray(record.order?.inputs) && record.order.inputs.length
     ? record.order.inputs.map((item) => `
       <tr>
@@ -62,92 +73,348 @@ function exportRedeemHistoryPdf(record) {
       <meta charset="utf-8" />
       <title>兑换记录 ${escapeHtml(record.code)}</title>
       <style>
-        @page { size: A4; margin: 22mm 24mm; }
+        @page { size: A4; margin: 0; }
         * { box-sizing: border-box; }
         body {
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
           color: #0f172a;
           margin: 0;
-          background: #fff;
+          background: #eef8f6;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
         }
         .sheet {
-          max-width: 720px;
+          width: 210mm;
+          min-height: 297mm;
           margin: 0 auto;
-          padding: 0 12px;
+          padding: 20mm 22mm 17mm;
+          background:
+            radial-gradient(circle at 100% 0%, rgba(20, 184, 166, 0.16), transparent 34%),
+            linear-gradient(180deg, #ffffff 0%, #fbfffe 100%);
+          position: relative;
+          overflow: hidden;
         }
-        .head {
-          text-align: center;
-          padding: 8px 0 22px;
-          border-bottom: 2px solid #ccfbf1;
-          margin-bottom: 22px;
+        .sheet:before {
+          content: "";
+          position: absolute;
+          inset: 12mm;
+          border: 1px solid #b7e7df;
+          border-radius: 22px;
+          pointer-events: none;
         }
-        .head img {
-          width: 190px;
-          max-height: 86px;
+        .watermark {
+          position: absolute;
+          right: -12mm;
+          top: 83mm;
+          font-size: 68px;
+          font-weight: 900;
+          letter-spacing: 0;
+          color: rgba(15, 118, 110, 0.045);
+          transform: rotate(-90deg);
+          transform-origin: center;
+          white-space: nowrap;
+        }
+        .content { position: relative; z-index: 1; }
+        .topbar {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 24px;
+          padding-bottom: 18px;
+          border-bottom: 2px solid #0f766e;
+        }
+        .brand img {
+          width: 206px;
+          max-height: 82px;
           height: auto;
           object-fit: contain;
           display: block;
-          margin: 0 auto 12px;
         }
-        h1 { font-size: 22px; margin: 0 0 7px; letter-spacing: 0; color: #0f172a; }
-        .sub { color: #0f766e; font-size: 12px; font-weight: 700; }
-        .section-title {
-          margin: 0 0 10px;
-          font-size: 14px;
-          color: #0f172a;
+        .brand .name {
+          margin-top: 7px;
+          color: #0f766e;
+          font-size: 12px;
           font-weight: 800;
         }
-        .card {
-          border: 1px solid #d8efe9;
-          border-radius: 18px;
-          padding: 18px 20px;
-          margin-bottom: 16px;
-          background: linear-gradient(180deg, #ffffff 0%, #f8fffd 100%);
-          box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
+        .doc-meta {
+          min-width: 196px;
+          text-align: right;
+          color: #475569;
+          font-size: 11px;
+          line-height: 1.8;
         }
-        .grid { display: grid; grid-template-columns: 128px 1fr; gap: 11px 16px; font-size: 13px; }
-        .grid span { color: #64748b; font-weight: 800; }
-        .grid b { color: #102033; word-break: break-all; font-weight: 800; }
-        table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; overflow: hidden; border: 1px solid #d8efe9; border-radius: 13px; }
-        td { border-bottom: 1px solid #e2e8f0; padding: 11px 13px; vertical-align: top; word-break: break-all; line-height: 1.55; }
+        .doc-meta b {
+          display: block;
+          color: #0f172a;
+          font-size: 12px;
+          word-break: break-all;
+        }
+        .hero {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 18px;
+          align-items: center;
+          padding: 22px 0 18px;
+        }
+        .eyebrow {
+          color: #0f766e;
+          font-size: 12px;
+          font-weight: 900;
+          letter-spacing: 0.16em;
+          text-transform: uppercase;
+        }
+        h1 {
+          font-size: 30px;
+          margin: 7px 0 8px;
+          letter-spacing: 0;
+          color: #0f172a;
+          line-height: 1.15;
+        }
+        .hero p {
+          margin: 0;
+          color: #64748b;
+          font-size: 13px;
+          line-height: 1.7;
+        }
+        .stamp {
+          width: 86px;
+          height: 86px;
+          border: 3px solid #0f766e;
+          border-radius: 50%;
+          display: grid;
+          place-items: center;
+          color: #0f766e;
+          font-size: 17px;
+          font-weight: 900;
+          transform: rotate(-12deg);
+          background: rgba(240, 253, 250, 0.75);
+        }
+        .code-card {
+          border-radius: 20px;
+          padding: 18px 20px;
+          margin-bottom: 14px;
+          background: linear-gradient(135deg, #0f172a 0%, #134e4a 100%);
+          color: #fff;
+          box-shadow: 0 18px 34px rgba(15, 23, 42, 0.16);
+        }
+        .code-card span {
+          display: block;
+          color: #a7f3d0;
+          font-size: 11px;
+          font-weight: 900;
+          letter-spacing: 0.14em;
+          text-transform: uppercase;
+        }
+        .code-card b {
+          display: block;
+          margin-top: 9px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 28px;
+          letter-spacing: 0.06em;
+          word-break: break-all;
+        }
+        .section-title {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin: 0 0 12px;
+          font-size: 14px;
+          color: #0f172a;
+          font-weight: 900;
+        }
+        .section-title:before {
+          content: "";
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: #14b8a6;
+        }
+        .card {
+          border: 1px solid #d6ebe7;
+          border-radius: 18px;
+          padding: 17px 18px;
+          margin-bottom: 16px;
+          background: rgba(255, 255, 255, 0.92);
+          box-shadow: 0 12px 28px rgba(15, 23, 42, 0.055);
+        }
+        .grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 10px;
+        }
+        .field {
+          min-height: 58px;
+          padding: 10px 12px;
+          border-radius: 13px;
+          background: #f8fafc;
+          border: 1px solid #e2e8f0;
+        }
+        .field.span-2 { grid-column: 1 / -1; }
+        .field span {
+          display: block;
+          margin-bottom: 5px;
+          color: #64748b;
+          font-size: 10.5px;
+          font-weight: 900;
+        }
+        .field b {
+          display: block;
+          color: #102033;
+          font-size: 13px;
+          line-height: 1.45;
+          word-break: break-all;
+        }
+        .summary {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 10px;
+          margin-bottom: 16px;
+        }
+        .summary .field {
+          min-height: 66px;
+          background: #f0fdfa;
+          border-color: #b7e7df;
+        }
+        table {
+          width: 100%;
+          border-collapse: separate;
+          border-spacing: 0;
+          font-size: 13px;
+          overflow: hidden;
+          border: 1px solid #d8efe9;
+          border-radius: 14px;
+          background: #fff;
+        }
+        td {
+          border-bottom: 1px solid #e2e8f0;
+          padding: 12px 14px;
+          vertical-align: top;
+          word-break: break-all;
+          line-height: 1.6;
+        }
         tr:last-child td { border-bottom: 0; }
-        td:first-child { width: 138px; color: #64748b; font-weight: 800; background: #f8fafc; }
+        td:first-child { width: 150px; color: #64748b; font-weight: 900; background: #f8fafc; }
+        .notice {
+          margin: 14px 0 0;
+          padding: 12px 14px;
+          border-radius: 14px;
+          background: #f8fafc;
+          color: #64748b;
+          font-size: 11.5px;
+          line-height: 1.7;
+          border: 1px dashed #cbd5e1;
+        }
         .foot {
-          margin-top: 24px;
-          padding-top: 13px;
+          margin-top: 22px;
+          padding-top: 14px;
           border-top: 1px solid #e2e8f0;
           font-size: 11px;
           color: #64748b;
           text-align: center;
         }
+        @media print {
+          body { background: #fff; }
+          .sheet { box-shadow: none; }
+        }
       </style>
     </head>
     <body>
       <main class="sheet">
-        <div class="head">
-          <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
-          <h1>兑换码兑换记录</h1>
-          <div class="sub">冒央会社 · Maoyang Taiwan Inc</div>
+        <div class="watermark">MAOYANG TAIWAN INC</div>
+        <div class="content">
+          <header class="topbar">
+            <div class="brand">
+              <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
+              <div class="name">冒央会社 · Maoyang Taiwan Inc</div>
+            </div>
+            <div class="doc-meta">
+              凭证编号
+              <b>${escapeHtml(voucherNo)}</b>
+              生成时间
+              <b>${escapeHtml(generatedAt)}</b>
+            </div>
+          </header>
+
+          <section class="hero">
+            <div>
+              <div class="eyebrow">Redeem Certificate</div>
+              <h1>兑换码兑换凭证</h1>
+              <p>用于核对兑换码状态、订单信息、兑换时间与用户提交内容。</p>
+            </div>
+            <div class="stamp">已兑换</div>
+          </section>
+
+          <section class="code-card">
+            <span>Redeem Code</span>
+            <b>${escapeHtml(record.code)}</b>
+          </section>
+
+          <section class="summary">
+            <div class="field">
+              <span>兑换类型</span>
+              <b>${escapeHtml(record.typeLabel)}</b>
+            </div>
+            <div class="field">
+              <span>兑换内容</span>
+              <b>${escapeHtml(record.valueLabel)}</b>
+            </div>
+            <div class="field">
+              <span>对应订单</span>
+              <b>${escapeHtml(record.usedOrderId || "无订单")}</b>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="section-title">兑换信息</div>
+            <div class="grid">
+              <div class="field">
+                <span>兑换用户</span>
+                <b>${escapeHtml(record.usedBy || "未记录")}</b>
+              </div>
+              <div class="field">
+                <span>用户 IP</span>
+                <b>${escapeHtml(record.usedIp || "未记录")}</b>
+              </div>
+              <div class="field">
+                <span>兑换时间</span>
+                <b>${escapeHtml(record.usedAtBeijing || record.usedAt || "未记录")}</b>
+              </div>
+              <div class="field">
+                <span>订单完成时间</span>
+                <b>${escapeHtml(record.order?.completedAtBeijing || "未完成或无订单")}</b>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="section-title">用户订单输入内容</div>
+            <table>${inputs}</table>
+            <div class="notice">本凭证由冒央会社后台根据兑换记录生成，仅用于内部核对与售后服务归档。</div>
+          </section>
+
+          <div class="foot">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
         </div>
-        <section class="card grid">
-          <span>兑换码</span><b>${escapeHtml(record.code)}</b>
-          <span>类型</span><b>${escapeHtml(record.typeLabel)} · ${escapeHtml(record.valueLabel)}</b>
-          <span>订单号</span><b>${escapeHtml(record.usedOrderId || "无订单")}</b>
-          <span>兑换用户</span><b>${escapeHtml(record.usedBy || "未记录")}</b>
-          <span>兑换时间</span><b>${escapeHtml(record.usedAtBeijing || record.usedAt || "未记录")}</b>
-          <span>订单完成时间</span><b>${escapeHtml(record.order?.completedAtBeijing || "未完成或无订单")}</b>
-          <span>用户 IP</span><b>${escapeHtml(record.usedIp || "未记录")}</b>
-        </section>
-        <section class="card">
-          <div class="section-title">用户订单输入内容</div>
-          <table>${inputs}</table>
-        </section>
-        <div class="foot">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
       </main>
       <script>
-        window.addEventListener("load", function () {
-          setTimeout(function () { window.print(); }, 250);
-        });
+        function printWhenReady() {
+          var images = Array.prototype.slice.call(document.images || []);
+          var pending = images.filter(function (img) { return !img.complete; });
+          if (!pending.length) {
+            setTimeout(function () { window.print(); }, 350);
+            return;
+          }
+          var left = pending.length;
+          pending.forEach(function (img) {
+            function done() {
+              left -= 1;
+              if (left <= 0) setTimeout(function () { window.print(); }, 350);
+            }
+            img.addEventListener("load", done, { once: true });
+            img.addEventListener("error", done, { once: true });
+          });
+          setTimeout(function () { window.print(); }, 1800);
+        }
+        window.addEventListener("load", printWhenReady);
       </script>
     </body>
   </html>`;
