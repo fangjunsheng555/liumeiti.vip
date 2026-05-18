@@ -79,18 +79,14 @@ function exportRedeemHistoryPdfLegacy(record) {
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
           color: #0f172a;
           margin: 0;
-          background: #eef8f6;
-          -webkit-print-color-adjust: exact;
-          print-color-adjust: exact;
+          background: #fff;
         }
         .sheet {
           width: 210mm;
           min-height: 297mm;
           margin: 0 auto;
           padding: 20mm 22mm 17mm;
-          background:
-            radial-gradient(circle at 100% 0%, rgba(20, 184, 166, 0.16), transparent 34%),
-            linear-gradient(180deg, #ffffff 0%, #fbfffe 100%);
+          background: #fff;
           position: relative;
           overflow: hidden;
         }
@@ -310,8 +306,9 @@ function exportRedeemHistoryPdfLegacy(record) {
           text-align: center;
         }
         @media print {
-          body { background: #fff; }
-          .sheet { box-shadow: none; }
+          body { background: #fff !important; }
+          .sheet { background: #fff !important; box-shadow: none; }
+          .watermark { color: rgba(15, 118, 110, 0.035); }
         }
       </style>
     </head>
@@ -500,18 +497,14 @@ function openVoucherPdf({
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
           color: #0f172a;
           margin: 0;
-          background: #eef8f6;
-          -webkit-print-color-adjust: exact;
-          print-color-adjust: exact;
+          background: #fff;
         }
         .sheet {
           width: 210mm;
           min-height: 297mm;
           margin: 0 auto;
           padding: 20mm 22mm 17mm;
-          background:
-            radial-gradient(circle at 100% 0%, rgba(20, 184, 166, 0.16), transparent 34%),
-            linear-gradient(180deg, #ffffff 0%, #fbfffe 100%);
+          background: #fff;
           position: relative;
           overflow: hidden;
         }
@@ -743,8 +736,9 @@ function openVoucherPdf({
           text-align: center;
         }
         @media print {
-          body { background: #fff; }
-          .sheet { box-shadow: none; }
+          body { background: #fff !important; }
+          .sheet { background: #fff !important; box-shadow: none; }
+          .watermark { color: rgba(15, 118, 110, 0.035); }
         }
       </style>
     </head>
