@@ -15,6 +15,20 @@ function orderBeijingDateKey(order) {
   return match ? match[0] : "";
 }
 
+function orderServiceAmount(order) {
+  const itemsTotal = Array.isArray(order.items)
+    ? order.items.reduce((sum, item) => sum + Number(item?.amount || 0), 0)
+    : 0;
+  return Number(order.subtotal || itemsTotal || order.originalAmount || order.bundleFinalAmount || 0);
+}
+
+function orderRevenueAmount(order) {
+  if (order.paymentMethod === "redeem" || order.paidCurrency === "CODE") {
+    return orderServiceAmount(order);
+  }
+  return Number(order.finalAmount || (order.paidCurrency === "CNY" ? order.paidAmount : 0) || 0);
+}
+
 export async function GET(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
@@ -35,16 +49,16 @@ export async function GET(request) {
       createdAtBeijing: order.createdAtBeijing || "",
       email: order.email || "",
       serviceLabel: order.serviceLabel || "",
-      finalAmount: Number(order.finalAmount || (order.paidCurrency === "CNY" ? order.paidAmount : 0) || 0),
+      revenueAmount: orderRevenueAmount(order),
     }))
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
   const latestOrder = orders[0] || null;
   const todayKey = beijingDateKey();
   const revenueOrders = orders.filter((order) => order.status !== "invalid");
-  const totalRevenue = revenueOrders.reduce((sum, order) => sum + Number(order.finalAmount || 0), 0);
+  const totalRevenue = revenueOrders.reduce((sum, order) => sum + Number(order.revenueAmount || 0), 0);
   const todayRevenue = revenueOrders
     .filter((order) => orderBeijingDateKey(order) === todayKey)
-    .reduce((sum, order) => sum + Number(order.finalAmount || 0), 0);
+    .reduce((sum, order) => sum + Number(order.revenueAmount || 0), 0);
 
   const overview = {
     ordersTotal: orders.length,
