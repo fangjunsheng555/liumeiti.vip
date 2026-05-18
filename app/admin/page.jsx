@@ -557,6 +557,12 @@ function openVoucherPdf({
           font-size: 12px;
           font-weight: 800;
         }
+        .brand .site {
+          margin-top: 3px;
+          color: #64748b;
+          font-size: 10.5px;
+          font-weight: 700;
+        }
         .doc-meta {
           min-width: 196px;
           text-align: right;
@@ -569,6 +575,10 @@ function openVoucherPdf({
           color: #0f172a;
           font-size: 12px;
           word-break: break-all;
+        }
+        .doc-meta .url {
+          color: #0f766e;
+          font-size: 11px;
         }
         .hero {
           display: grid;
@@ -746,8 +756,11 @@ function openVoucherPdf({
             <div class="brand">
               <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
               <div class="name">冒央会社 · Maoyang Taiwan Inc</div>
+              <div class="site">https://liumeiti.vip</div>
             </div>
             <div class="doc-meta">
+              官方网站
+              <b class="url">https://liumeiti.vip</b>
               凭证编号
               <b>${escapeHtml(voucherNo)}</b>
               生成时间
@@ -782,7 +795,7 @@ function openVoucherPdf({
             ${noteHtml}
           </section>
 
-          <div class="foot">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
+          <div class="foot">https://liumeiti.vip · Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
         </div>
       </main>
       <script>
@@ -3310,10 +3323,13 @@ export default function AdminPage() {
                 <textarea
                   value={pdfExportModal.note}
                   onChange={(e) => setPdfExportModal({ ...pdfExportModal, note: e.target.value.slice(0, 180) })}
+                  onFocus={(e) => {
+                    const el = e.currentTarget;
+                    setTimeout(() => el.scrollIntoView({ block: "center", behavior: "smooth" }), 80);
+                  }}
                   placeholder="例如：客户补发凭证 / 售后核对使用"
                   rows={3}
                   maxLength={180}
-                  autoFocus
                 />
               </label>
               <small>{String(pdfExportModal.note || "").length}/180</small>

@@ -6258,6 +6258,11 @@ button { cursor: pointer; border: none; background: transparent; }
   height: var(--admin-visual-height, 100dvh);
   top: var(--admin-visual-top, 0);
   bottom: auto;
+  z-index: 120;
+  align-items: end;
+}
+.admin-pdf-note-modal {
+  z-index: 121;
 }
 
 @media (max-width: 560px) {
@@ -6268,10 +6273,14 @@ button { cursor: pointer; border: none; background: transparent; }
     place-items: end center;
     padding: 0 8px max(8px, env(safe-area-inset-bottom));
     overflow: hidden;
+    align-items: end;
   }
   .admin-pdf-note-modal {
-    max-height: min(430px, calc(var(--admin-visual-height, 100dvh) - 12px));
+    max-height: min(430px, calc(var(--admin-visual-height, 100dvh) - 16px));
     border-radius: 14px 14px 0 0;
+  }
+  .admin-pdf-note-modal .admin-modal-body {
+    overflow-y: auto;
   }
   .admin-pdf-note-form textarea {
     min-height: 68px;
