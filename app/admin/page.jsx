@@ -305,6 +305,37 @@ function exportRedeemHistoryPdfLegacy(record) {
           color: #64748b;
           text-align: center;
         }
+        .sheet { padding: 14mm 17mm 12mm; }
+        .sheet:before { inset: 8mm; border-radius: 18px; }
+        .watermark { top: 76mm; font-size: 54px; }
+        .topbar { gap: 16px; padding-bottom: 11px; }
+        .brand img { width: 166px; max-height: 60px; }
+        .brand .name { margin-top: 5px; font-size: 11px; }
+        .brand .site { margin-top: 2px; font-size: 9.5px; }
+        .doc-meta { min-width: 160px; font-size: 9.5px; line-height: 1.5; }
+        .doc-meta b { font-size: 10.5px; }
+        .hero { gap: 12px; padding: 13px 0 11px; }
+        .eyebrow { font-size: 10.5px; }
+        h1 { font-size: 24px; margin: 4px 0 5px; }
+        .hero p { font-size: 11.5px; line-height: 1.45; }
+        .stamp { width: 64px; height: 64px; border-width: 2px; font-size: 13.5px; }
+        .code-card { border-radius: 16px; padding: 12px 15px; margin-bottom: 9px; box-shadow: 0 8px 18px rgba(15, 23, 42, 0.1); }
+        .code-card span { font-size: 9.5px; }
+        .code-card b { margin-top: 5px; font-size: 22px; }
+        .section-title { gap: 6px; margin-bottom: 7px; font-size: 12.5px; }
+        .section-title:before { width: 7px; height: 7px; }
+        .card { border-radius: 13px; padding: 11px 12px; margin-bottom: 9px; box-shadow: 0 4px 10px rgba(15, 23, 42, 0.035); }
+        .grid { gap: 7px; }
+        .field { min-height: 44px; padding: 7px 9px; border-radius: 9px; }
+        .field span { margin-bottom: 3px; font-size: 9.5px; }
+        .field b { font-size: 11.5px; line-height: 1.28; }
+        .summary { gap: 7px; margin-bottom: 9px; }
+        .summary .field { min-height: 50px; }
+        table { font-size: 11.5px; border-radius: 10px; }
+        td { padding: 7px 9px; line-height: 1.42; }
+        td:first-child { width: 122px; }
+        .voucher-note { margin-top: 7px; font-size: 11.5px; line-height: 1.4; }
+        .foot { margin-top: 12px; padding-top: 8px; font-size: 9.5px; }
         @media print {
           body { background: #fff !important; }
           .sheet { background: #fff !important; box-shadow: none; }
@@ -735,6 +766,37 @@ function openVoucherPdf({
           color: #64748b;
           text-align: center;
         }
+        .sheet { padding: 14mm 17mm 12mm; }
+        .sheet:before { inset: 8mm; border-radius: 18px; }
+        .watermark { top: 76mm; font-size: 54px; }
+        .topbar { gap: 16px; padding-bottom: 11px; }
+        .brand img { width: 166px; max-height: 60px; }
+        .brand .name { margin-top: 5px; font-size: 11px; }
+        .brand .site { margin-top: 2px; font-size: 9.5px; }
+        .doc-meta { min-width: 160px; font-size: 9.5px; line-height: 1.5; }
+        .doc-meta b { font-size: 10.5px; }
+        .hero { gap: 12px; padding: 13px 0 11px; }
+        .eyebrow { font-size: 10.5px; }
+        h1 { font-size: 24px; margin: 4px 0 5px; }
+        .hero p { font-size: 11.5px; line-height: 1.45; }
+        .stamp { width: 64px; height: 64px; border-width: 2px; font-size: 13.5px; }
+        .code-card { border-radius: 16px; padding: 12px 15px; margin-bottom: 9px; box-shadow: 0 8px 18px rgba(15, 23, 42, 0.1); }
+        .code-card span { font-size: 9.5px; }
+        .code-card b { margin-top: 5px; font-size: 22px; }
+        .section-title { gap: 6px; margin-bottom: 7px; font-size: 12.5px; }
+        .section-title:before { width: 7px; height: 7px; }
+        .card { border-radius: 13px; padding: 11px 12px; margin-bottom: 9px; box-shadow: 0 4px 10px rgba(15, 23, 42, 0.035); }
+        .grid { gap: 7px; }
+        .field { min-height: 44px; padding: 7px 9px; border-radius: 9px; }
+        .field span { margin-bottom: 3px; font-size: 9.5px; }
+        .field b { font-size: 11.5px; line-height: 1.28; }
+        .summary { gap: 7px; margin-bottom: 9px; }
+        .summary .field { min-height: 50px; }
+        table { font-size: 11.5px; border-radius: 10px; }
+        td { padding: 7px 9px; line-height: 1.42; }
+        td:first-child { width: 122px; }
+        .voucher-note { margin-top: 7px; font-size: 11.5px; line-height: 1.4; }
+        .foot { margin-top: 12px; padding-top: 8px; font-size: 9.5px; }
         @media print {
           body { background: #fff !important; }
           .sheet { background: #fff !important; box-shadow: none; }
