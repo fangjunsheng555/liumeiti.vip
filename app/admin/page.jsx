@@ -452,6 +452,12 @@ function openVoucherPdf({
   const logoUrl = `${window.location.origin}/email-logo.png`;
   const generatedAt = pdfGeneratedAt();
   const noteText = String(note || "").trim().slice(0, 180);
+  const safeTableRows = tableRows
+    .map((item) => ({
+      label: pdfText(item?.label, 160),
+      value: pdfText(item?.value, 1600),
+    }))
+    .filter((item) => item.label && item.value);
   const summaryHtml = summaryFields.map((item) => `
     <div class="field">
       <span>${escapeHtml(item.label)}</span>
@@ -464,19 +470,16 @@ function openVoucherPdf({
       <b>${escapeHtml(item.value || "未记录")}</b>
     </div>
   `).join("");
-  const tableHtml = tableRows.length
-    ? tableRows.map((item) => `
+  const tableHtml = safeTableRows.length
+    ? safeTableRows.map((item) => `
       <tr>
         <td>${escapeHtml(item.label)}</td>
-        <td>${escapeHtml(item.value || "未记录")}</td>
+        <td>${escapeHtml(item.value)}</td>
       </tr>
     `).join("")
     : `<tr><td>记录内容</td><td>无额外内容</td></tr>`;
   const noteHtml = noteText ? `
-    <section class="card note-card">
-      <div class="section-title">凭证备注</div>
-      <div class="note-text">${escapeHtml(noteText)}</div>
-    </section>
+    <div class="voucher-note">*凭证备注：${escapeHtml(noteText)}</div>
   ` : "";
   const html = `<!doctype html>
   <html>
@@ -686,17 +689,6 @@ function openVoucherPdf({
           background: #f0fdfa;
           border-color: #b7e7df;
         }
-        .note-card {
-          border-color: #99f6e4;
-          background: linear-gradient(180deg, #f0fdfa 0%, #ffffff 100%);
-        }
-        .note-text {
-          color: #102033;
-          font-size: 13px;
-          line-height: 1.7;
-          font-weight: 700;
-          word-break: break-word;
-        }
         table {
           width: 100%;
           border-collapse: separate;
@@ -717,6 +709,14 @@ function openVoucherPdf({
         tr:last-child td { border-bottom: 0; }
         td:first-child { width: 150px; color: #64748b; font-weight: 900; background: #f8fafc; }
         td:last-child { white-space: pre-wrap; }
+        .voucher-note {
+          margin-top: 11px;
+          color: #b91c1c;
+          font-size: 13px;
+          line-height: 1.65;
+          font-weight: 900;
+          word-break: break-word;
+        }
         .foot {
           margin-top: 22px;
           padding-top: 14px;
@@ -763,7 +763,6 @@ function openVoucherPdf({
           </section>
 
           <section class="summary">${summaryHtml}</section>
-          ${noteHtml}
 
           <section class="card">
             <div class="section-title">${escapeHtml(detailTitle)}</div>
@@ -773,6 +772,7 @@ function openVoucherPdf({
           <section class="card">
             <div class="section-title">${escapeHtml(tableTitle)}</div>
             <table>${tableHtml}</table>
+            ${noteHtml}
           </section>
 
           <div class="foot">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
@@ -853,25 +853,38 @@ function paidLabel(order) {
   return `¥${order?.paidAmount || 0}`;
 }
 
+function pdfText(value, limit = 1000) {
+  const text = String(value ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, " ")
+    .trim();
+  return text ? text.slice(0, limit) : "";
+}
+
 function orderPdfRows(order) {
-  const rows = (Array.isArray(order?.items) ? order.items : []).map((item, index) => {
+  const rows = (Array.isArray(order?.items) ? order.items : [])
+    .map((item, index) => {
     const parts = [
-      item.cycle ? `周期: ${item.cycle}` : "",
+      pdfText(item.cycle, 80) ? `周期: ${pdfText(item.cycle, 80)}` : "",
       Number(item.amount || 0) ? `金额: ¥${Number(item.amount || 0).toFixed(2)}` : "",
-      item.account ? `用户账号: ${item.account}` : "",
-      item.password ? `用户密码: ${item.password}` : "",
-      item.staffAccount ? `开通账号: ${item.staffAccount}` : "",
-      item.staffPassword ? `开通密码: ${item.staffPassword}` : "",
-      item.subscriptionLinks?.shadowrocket ? `Shadowrocket: ${item.subscriptionLinks.shadowrocket}` : "",
-      item.subscriptionLinks?.clash ? `Clash: ${item.subscriptionLinks.clash}` : "",
+      pdfText(item.account, 200) ? `用户账号: ${pdfText(item.account, 200)}` : "",
+      pdfText(item.password, 200) ? `用户密码: ${pdfText(item.password, 200)}` : "",
+      pdfText(item.staffAccount, 200) ? `开通账号: ${pdfText(item.staffAccount, 200)}` : "",
+      pdfText(item.staffPassword, 200) ? `开通密码: ${pdfText(item.staffPassword, 200)}` : "",
+      pdfText(item.subscriptionLinks?.shadowrocket, 500) ? `Shadowrocket: ${pdfText(item.subscriptionLinks.shadowrocket, 500)}` : "",
+      pdfText(item.subscriptionLinks?.clash, 500) ? `Clash: ${pdfText(item.subscriptionLinks.clash, 500)}` : "",
     ].filter(Boolean);
+    const label = pdfText(item.label, 120) || `商品 ${index + 1}`;
+    if (!parts.length) return null;
     return {
-      label: `${index + 1}. ${item.label || "商品"}`,
-      value: parts.join("\n") || "无额外配置",
+      label: `${index + 1}. ${label}`,
+      value: parts.join("\n"),
     };
-  });
-  if (order?.remark) rows.push({ label: "买家备注", value: order.remark });
-  if (order?.staffNotes) rows.push({ label: "客服备注", value: order.staffNotes });
+  })
+    .filter(Boolean);
+  const buyerRemark = pdfText(order?.remark, 500);
+  if (buyerRemark) rows.push({ label: "买家备注", value: buyerRemark });
   return rows;
 }
 
@@ -898,7 +911,6 @@ function exportOrderPdf(order, note = "") {
       { label: "下单时间", value: order.createdAtBeijing || "未记录" },
       { label: "完成时间", value: order.completedAtBeijing || "未完成" },
       { label: "支付方式", value: paymentLabel(order) },
-      { label: "件数", value: `${order.itemCount || 0} 件` },
       { label: "用户 IP", value: order.clientIp || "未记录" },
       { label: "用户浏览器 UA", value: order.userAgent || "未记录", wide: true },
     ],
@@ -3255,16 +3267,14 @@ export default function AdminPage() {
           <div className="admin-modal admin-compact-modal admin-pdf-note-modal" onClick={(e) => e.stopPropagation()}>
             <div className="admin-modal-head">
               <div>
-                <div className="admin-modal-id">PDF 导出备注</div>
-                <div className="admin-modal-status status-received">
-                  {pdfExportModal.type === "order" ? "订单详情凭证" : "兑换码兑换凭证"}
-                </div>
+                <div className="admin-modal-id">导出 PDF</div>
+                <div className="admin-modal-status status-received">可添加一句备注</div>
               </div>
               <button type="button" className="admin-modal-close" onClick={() => setPdfExportModal(null)}><X size={16} /></button>
             </div>
             <form className="admin-modal-body admin-pdf-note-form" onSubmit={submitPdfExport}>
               <label>
-                <span>备注，可留空</span>
+                <span>备注内容，可留空</span>
                 <textarea
                   value={pdfExportModal.note}
                   onChange={(e) => setPdfExportModal({ ...pdfExportModal, note: e.target.value.slice(0, 180) })}
