@@ -225,6 +225,7 @@ export default function CheckoutPage() {
 
   // Contact field is required only when cart includes products with needsContact (Spotify)
   const contactRequired = cartItems.some((p) => p.key === "spotify");
+  const checkoutReady = hydrated && !redeemMode.loading && draftReady;
 
   function validateForm() {
     if (cartCount === 0) return "购物车为空,请先选购商品";
@@ -332,8 +333,30 @@ export default function CheckoutPage() {
     }
   }
 
+  if (!checkoutReady && step !== "done") {
+    return (
+      <div className="checkout-page">
+        <header className="checkout-header">
+          <Link href="/" className="checkout-back">
+            <ArrowLeft size={16} />
+            <img src="/logo.png" alt="冒央会社" className="checkout-logo" />
+          </Link>
+          <div className="checkout-secure">
+            <Lock size={13} />
+            安全结算
+          </div>
+        </header>
+        <div className="checkout-empty checkout-loading-state">
+          <LoaderCircle size={46} className="checkout-empty-icon spin-icon" />
+          <h2>正在恢复订单</h2>
+          <p>正在核对购物车、兑换码与未完成订单内容</p>
+        </div>
+      </div>
+    );
+  }
+
   // Empty cart state
-  if (hydrated && !redeemMode.loading && cartCount === 0 && step !== "done") {
+  if (checkoutReady && cartCount === 0 && step !== "done") {
     return (
       <div className="checkout-page">
         <header className="checkout-header">
@@ -700,7 +723,7 @@ export default function CheckoutPage() {
                   </div>
                 </div>}
 
-                <button type="submit" className="primary-btn primary-btn-lg checkout-submit-btn">
+                <button type="submit" className="primary-btn primary-btn-lg checkout-submit-btn" disabled={cartCount === 0 || submitting}>
                   {serviceRedeemActive ? "确认兑换并提交订单" : `前往支付 · ${paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}`}
                   <ArrowRight size={15} />
                 </button>
@@ -713,7 +736,7 @@ export default function CheckoutPage() {
                 <small>{serviceRedeemActive ? "服务兑换码" : paymentMethod === "usdt" ? "USDT-TRC20" : "支付宝"}</small>
                 <b>{serviceRedeemActive ? "免支付" : paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}</b>
               </div>
-              <button type="submit" className="primary-btn checkout-mobile-cta-btn">
+              <button type="submit" className="primary-btn checkout-mobile-cta-btn" disabled={cartCount === 0 || submitting}>
                 {serviceRedeemActive ? "提交兑换" : "前往支付"}
                 <ArrowRight size={15} />
               </button>

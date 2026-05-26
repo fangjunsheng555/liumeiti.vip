@@ -57,10 +57,36 @@ const SITE_CONTENT = {
   heroTitleHighlight: "·流媒体服务",
   heroDesc: "一站式流媒体平台 · 全年无休售后 · 使用问题包解决",
   heroStats: [
-    { num: "500k+", label: "累计用户", icon: Users },
-    { num: "1M+", label: "服务案例", icon: TrendingUp },
-    { num: "Top 3", label: "行业排名", icon: Award },
-    { num: "2020至今", label: "专注服务", icon: Clock },
+    { num: "1000+/日", label: "多平台成交", icon: TrendingUp },
+    { num: "1分钟内", label: "首次响应", icon: Clock },
+    { num: "100%", label: "售后完成", icon: BadgeCheck },
+    { num: "2020至今", label: "稳定运营", icon: Award },
+  ],
+  assuranceCards: [
+    {
+      title: "订单核验",
+      desc: "每笔订单由工作人员核对服务、地区与填写信息，减少开错、漏开与沟通成本。",
+      meta: "提交后进入人工处理队列",
+      icon: BadgeCheck,
+    },
+    {
+      title: "售后闭环",
+      desc: "账号异常、节点问题、兑换码问题均可回到订单或客服入口继续跟进，处理结果可追溯。",
+      meta: "问题不甩给用户自行解决",
+      icon: Headphones,
+    },
+    {
+      title: "退款规则",
+      desc: "账号原因导致无法使用时支持 7 天内退款，客服会先协助排查并给出明确处理结果。",
+      meta: "规则透明，减少扯皮",
+      icon: RefreshCw,
+    },
+    {
+      title: "支付保护",
+      desc: "支持支付宝担保支付与 USDT 支付，订单、邮件与后台记录同步留存，便于后续核查。",
+      meta: "支付与订单链路完整",
+      icon: Lock,
+    },
   ],
   layoutCards: [
     ["选择/兑换服务", "Spotify / Netflix / Disney+ / Hbomax / 机场节点"],
@@ -106,6 +132,32 @@ const SITE_CONTENT = {
   supportHours: "在线时间：北京时间 09:00 – 23:00",
   footerRecord: "地址：台湾新北市板桥区远东路1号3-218",
   footerNote: "Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved",
+  footerGroups: [
+    {
+      title: "服务产品",
+      links: [
+        ["流媒体会员", "#products"],
+        ["兑换码兑换", "#redeem"],
+        ["下单流程", "#layout"],
+      ],
+    },
+    {
+      title: "订单支持",
+      links: [
+        ["订单查询", "#order-query"],
+        ["常见问题", "#faq"],
+        ["联系客服", "#contact"],
+      ],
+    },
+    {
+      title: "服务政策",
+      links: [
+        ["退款保障", "#assurance"],
+        ["支付保护", "#assurance"],
+        ["售后闭环", "#assurance"],
+      ],
+    },
+  ],
   trustStrip: [
     { icon: Zap, title: "极速开通", desc: "提交后极速处理" },
     { icon: ShieldCheck, title: "7 天退款", desc: "账号原因全额退" },
@@ -730,6 +782,32 @@ export default function Page() {
           </div>
         </section>
 
+        {/* ── Service Assurance ── */}
+        <section id="assurance" className="section container assurance-section">
+          <div className="section-head simple-head assurance-head">
+            <div>
+              <div className="section-kicker">Service Assurance</div>
+              <h2 className="section-title">服务保障体系</h2>
+            </div>
+            <div className="section-note section-note-acc">
+              <ShieldCheck size={13} />
+              订单、支付、售后三段式保障
+            </div>
+          </div>
+          <div className="assurance-grid">
+            {SITE_CONTENT.assuranceCards.map(({ title, desc, meta, icon: Icon }) => (
+              <article key={title} className="glass-card assurance-card">
+                <div className="assurance-card-icon"><Icon size={18} /></div>
+                <div>
+                  <h3>{title}</h3>
+                  <p>{desc}</p>
+                  <span>{meta}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+
         {/* ── Products ── */}
         <section id="products" className="section container">
           <div className="section-head simple-head">
@@ -1113,12 +1191,25 @@ export default function Page() {
       {/* ── Footer ── */}
       <footer className="site-footer">
         <div className="container footer-inner">
-          <div>
+          <div className="footer-company">
             <div className="footer-brand">{SITE_CONTENT.brandCn} · {SITE_CONTENT.brandEn}</div>
             <div className="footer-sub">{SITE_CONTENT.domain} · joinvip.vip</div>
+            <div className="footer-company-note">专注流媒体会员服务、订单协助与售后保障</div>
           </div>
-          <div className="footer-pill">{SITE_CONTENT.footerRecord}</div>
-          <div className="footer-pill">{SITE_CONTENT.footerNote}</div>
+          <div className="footer-links-grid">
+            {SITE_CONTENT.footerGroups.map((group) => (
+              <div key={group.title} className="footer-link-group">
+                <h3>{group.title}</h3>
+                {group.links.map(([label, href]) => (
+                  <a key={label} href={href}>{label}</a>
+                ))}
+              </div>
+            ))}
+          </div>
+          <div className="footer-legal">
+            <div className="footer-pill">{SITE_CONTENT.footerRecord}</div>
+            <div className="footer-pill">{SITE_CONTENT.footerNote}</div>
+          </div>
         </div>
       </footer>
 
