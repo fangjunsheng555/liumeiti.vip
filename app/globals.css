@@ -2333,7 +2333,7 @@ button { cursor: pointer; border: none; background: transparent; }
 }
 .hero-stats-band {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   border-radius: 22px;
   background: rgba(255, 255, 255, 0.78);
   border: 1px solid var(--line);
@@ -2343,13 +2343,13 @@ button { cursor: pointer; border: none; background: transparent; }
 }
 .hero-stats-band .stat-item {
   flex: unset;
-  padding: 22px 18px;
+  padding: 20px 12px;
   border-right: 1px solid var(--line);
   border-bottom: none;
 }
 .hero-stats-band .stat-item:last-child { border-right: none; }
-.hero-stats-band .stat-num { font-size: 22px; }
-.hero-stats-band .stat-label { font-size: 12px; }
+.hero-stats-band .stat-num { font-size: 21px; }
+.hero-stats-band .stat-label { font-size: 11.5px; }
 
 /* ── Section note accent variant ── */
 .section-note-acc {
@@ -3785,29 +3785,30 @@ button { cursor: pointer; border: none; background: transparent; }
   .hero-services-meta small { font-size: 11px; }
   .hero-services-price { font-size: 16px; }
 
-  /* Mobile stats band — 4 items in one row, compact */
+  /* Mobile stats band — 5 items in one row, compact */
   .hero-stats-band-wrap { margin-top: 0; padding-bottom: 4px; }
   .hero-stats-band {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     border-radius: 14px;
   }
   .hero-stats-band .stat-item {
-    padding: 9px 4px;
+    padding: 8px 2px;
     border-right: 1px solid var(--line);
     border-bottom: none;
     min-width: 0;
   }
   .hero-stats-band .stat-item:last-child { border-right: none; }
   .hero-stats-band .stat-num {
-    font-size: 13px;
+    font-size: 11.5px;
     letter-spacing: -.02em;
     white-space: nowrap;
   }
   .hero-stats-band .stat-label {
-    font-size: 10px;
-    white-space: nowrap;
+    font-size: 8.5px;
+    line-height: 1.15;
+    white-space: normal;
   }
-  .hero-stats-band .stat-icon { width: 12px; height: 12px; margin-bottom: 1px; }
+  .hero-stats-band .stat-icon { width: 11px; height: 11px; margin-bottom: 1px; }
 
   .contact-hours-line { font-size: 12px; padding: 8px 13px; }
 
@@ -5557,10 +5558,10 @@ button { cursor: pointer; border: none; background: transparent; }
   /* Stats band tighter */
   .hero-stats-band-wrap { padding-bottom: 4px; }
   .hero-stats-band { border-radius: 14px; }
-  .hero-stats-band .stat-item { padding: 10px 6px; }
-  .hero-stats-band .stat-num { font-size: 14px; }
-  .hero-stats-band .stat-label { font-size: 10px; }
-  .hero-stats-band .stat-icon { width: 14px; height: 14px; }
+  .hero-stats-band .stat-item { padding: 8px 2px; }
+  .hero-stats-band .stat-num { font-size: 11.5px; }
+  .hero-stats-band .stat-label { font-size: 8.5px; line-height: 1.15; white-space: normal; }
+  .hero-stats-band .stat-icon { width: 11px; height: 11px; }
 
   /* Trust strip — 4 items one row, hide descriptions on mobile */
   .trust-strip-section { padding-bottom: 4px; }
@@ -5724,8 +5725,8 @@ button { cursor: pointer; border: none; background: transparent; }
   .product-name { font-size: 17px; }
   .price-now { font-size: 19px; }
   .hero-services-meta strong { font-size: 12.5px; }
-  .hero-stats-band .stat-num { font-size: 12px; }
-  .hero-stats-band .stat-label { font-size: 9.5px; }
+  .hero-stats-band .stat-num { font-size: 10.5px; }
+  .hero-stats-band .stat-label { font-size: 8px; }
   .trust-strip-title { font-size: 10.5px; }
   .trust-strip-icon { width: 24px; height: 24px; }
 }

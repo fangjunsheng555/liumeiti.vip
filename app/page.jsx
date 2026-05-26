@@ -57,10 +57,11 @@ const SITE_CONTENT = {
   heroTitleHighlight: "·流媒体服务",
   heroDesc: "一站式流媒体平台 · 全年无休售后 · 使用问题包解决",
   heroStats: [
-    { num: "1000+/日", label: "多平台成交", icon: TrendingUp },
-    { num: "1分钟内", label: "首次响应", icon: Clock },
-    { num: "100%", label: "售后完成", icon: BadgeCheck },
-    { num: "2020至今", label: "稳定运营", icon: Award },
+    { num: "968单", label: "今日已处理订单", icon: TrendingUp },
+    { num: "<1分钟", label: "平均响应时间", icon: Clock },
+    { num: "100%", label: "售后完成率", icon: BadgeCheck },
+    { num: "8单", label: "当前排队数量", icon: Users },
+    { num: "近6年", label: "服务运行年限", icon: Award },
   ],
   assuranceCards: [
     {
@@ -782,32 +783,6 @@ export default function Page() {
           </div>
         </section>
 
-        {/* ── Service Assurance ── */}
-        <section id="assurance" className="section container assurance-section">
-          <div className="section-head simple-head assurance-head">
-            <div>
-              <div className="section-kicker">Service Assurance</div>
-              <h2 className="section-title">服务保障体系</h2>
-            </div>
-            <div className="section-note section-note-acc">
-              <ShieldCheck size={13} />
-              订单、支付、售后三段式保障
-            </div>
-          </div>
-          <div className="assurance-grid">
-            {SITE_CONTENT.assuranceCards.map(({ title, desc, meta, icon: Icon }) => (
-              <article key={title} className="glass-card assurance-card">
-                <div className="assurance-card-icon"><Icon size={18} /></div>
-                <div>
-                  <h3>{title}</h3>
-                  <p>{desc}</p>
-                  <span>{meta}</span>
-                </div>
-              </article>
-            ))}
-          </div>
-        </section>
-
         {/* ── Products ── */}
         <section id="products" className="section container">
           <div className="section-head simple-head">
@@ -1079,6 +1054,32 @@ export default function Page() {
             )}
               </div>
             </div>
+          </div>
+        </section>
+
+        {/* ── Service Assurance ── */}
+        <section id="assurance" className="section container assurance-section">
+          <div className="section-head simple-head assurance-head">
+            <div>
+              <div className="section-kicker">Service Assurance</div>
+              <h2 className="section-title">服务保障体系</h2>
+            </div>
+            <div className="section-note section-note-acc">
+              <ShieldCheck size={13} />
+              订单、支付、售后三段式保障
+            </div>
+          </div>
+          <div className="assurance-grid">
+            {SITE_CONTENT.assuranceCards.map(({ title, desc, meta, icon: Icon }) => (
+              <article key={title} className="glass-card assurance-card">
+                <div className="assurance-card-icon"><Icon size={18} /></div>
+                <div>
+                  <h3>{title}</h3>
+                  <p>{desc}</p>
+                  <span>{meta}</span>
+                </div>
+              </article>
+            ))}
           </div>
         </section>
 
