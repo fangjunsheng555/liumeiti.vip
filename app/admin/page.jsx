@@ -1748,6 +1748,7 @@ export default function AdminPage() {
       const data = await res.json();
       if (data.ok) {
         setCodes(data.codes || []);
+        setCodeBatches(data.batches || []);
         setCodeResult({ type: "success", message: action === "delete" ? "兑换码已删除" : "兑换码已作废" });
       } else {
         setCodeResult({ type: "error", message: data.error || "操作失败" });
@@ -1813,6 +1814,7 @@ export default function AdminPage() {
         else {
           const refreshed = (data.batches || []).find((batch) => batch.id === batchId);
           if (refreshed) setActiveCodeBatch(refreshed);
+          else setActiveCodeBatch(null);
         }
         setCodeResult({ type: "success", message: action === "delete" ? "批次已删除" : "批次内可用兑换码已作废" });
       } else {
@@ -2748,7 +2750,7 @@ export default function AdminPage() {
                   </span>
                   <span>
                     <b>{batch.type === "service" ? (batch.services || []).map((s) => s.label).join(" + ") : `¥${Number(batch.amount || 0).toFixed(2)}`}</b>
-                    <em>可用 {batch.counts?.active || 0} · 已用 {batch.counts?.used || 0} · 作废 {batch.counts?.void || 0}</em>
+                    <em>可用 {batch.counts?.active || 0} · 作废 {batch.counts?.void || 0}</em>
                   </span>
                 </button>
               ))}
@@ -3658,7 +3660,7 @@ export default function AdminPage() {
               <div className="admin-code-batch-summary">
                 <span>{activeCodeBatch.remark || "无备注"}</span>
                 <b>{activeCodeBatch.type === "service" ? (activeCodeBatch.services || []).map((s) => s.label).join(" + ") : `¥${Number(activeCodeBatch.amount || 0).toFixed(2)}`}</b>
-                <small>可用 {activeCodeBatch.counts?.active || 0} · 已用 {activeCodeBatch.counts?.used || 0} · 作废 {activeCodeBatch.counts?.void || 0} · 生成 #{activeCodeBatch.createdByStaffId || 1}</small>
+                <small>可用 {activeCodeBatch.counts?.active || 0} · 作废 {activeCodeBatch.counts?.void || 0} · 生成 #{activeCodeBatch.createdByStaffId || 1}</small>
               </div>
               <div className="admin-code-batch-actions">
                 <button type="button" onClick={() => copyText((activeCodeBatch.codes || []).map((c) => c.code).join("\n"))}><Copy size={12} />复制全部</button>

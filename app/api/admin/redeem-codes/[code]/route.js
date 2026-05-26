@@ -1,6 +1,6 @@
 import {
   adminSessionFromRequest, adminActorFromSession, isRootAdminSession,
-  updateRedeemCodeStatus, deleteRedeemCode, listRedeemCodes, listRedeemCodeBatches, clean,
+  updateRedeemCodeStatus, deleteRedeemCode, listManageableRedeemCodesAndBatches, clean,
 } from "../../../_utils.js";
 
 export async function PATCH(request, { params }) {
@@ -9,7 +9,7 @@ export async function PATCH(request, { params }) {
   const { code } = await params;
   const result = await updateRedeemCodeStatus(code, "void", adminActorFromSession(session));
   if (!result.ok) return Response.json({ ok: false, error: clean(result.error, 80) }, { status: 400 });
-  const [codes, batches] = await Promise.all([listRedeemCodes(), listRedeemCodeBatches()]);
+  const { codes, batches } = await listManageableRedeemCodesAndBatches();
   return Response.json({ ok: true, code: result.code, codes, batches });
 }
 
@@ -20,6 +20,6 @@ export async function DELETE(request, { params }) {
   const { code } = await params;
   const result = await deleteRedeemCode(code, adminActorFromSession(session));
   if (!result.ok) return Response.json({ ok: false, error: clean(result.error, 80) }, { status: 400 });
-  const [codes, batches] = await Promise.all([listRedeemCodes(), listRedeemCodeBatches()]);
+  const { codes, batches } = await listManageableRedeemCodesAndBatches();
   return Response.json({ ok: true, codes, batches });
 }

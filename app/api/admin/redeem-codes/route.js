@@ -1,12 +1,12 @@
 import {
   adminSessionFromRequest, adminActorFromSession,
-  createRedeemCodes, listRedeemCodes, listRedeemCodeBatches, clean,
+  createRedeemCodes, listManageableRedeemCodesAndBatches, clean,
 } from "../../_utils.js";
 
 export async function GET(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  const [codes, batches] = await Promise.all([listRedeemCodes(), listRedeemCodeBatches()]);
+  const { codes, batches } = await listManageableRedeemCodesAndBatches();
   return Response.json({ ok: true, codes, batches });
 }
 
@@ -24,6 +24,6 @@ export async function POST(request) {
     customCode: body.customCode,
   }, adminActorFromSession(session));
   if (!result.ok) return Response.json({ ok: false, error: clean(result.error, 80) }, { status: 400 });
-  const [codes, batches] = await Promise.all([listRedeemCodes(), listRedeemCodeBatches()]);
+  const { codes, batches } = await listManageableRedeemCodesAndBatches();
   return Response.json({ ok: true, code: result.code, generatedCodes: result.codes, batch: result.batch, codes, batches });
 }

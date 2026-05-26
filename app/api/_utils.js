@@ -1201,6 +1201,29 @@ export async function listRedeemCodeBatches() {
   return normalized;
 }
 
+export async function listManageableRedeemCodesAndBatches() {
+  const [codes, batches] = await Promise.all([listRedeemCodes(), listRedeemCodeBatches()]);
+  const manageableCodes = codes.filter((item) => (item.status || "active") !== "used");
+  const manageableBatches = batches
+    .map((batch) => {
+      const visibleCodes = (Array.isArray(batch.codes) ? batch.codes : [])
+        .filter((item) => item && (item.status || "active") !== "used");
+      const counts = visibleCodes.reduce((acc, item) => {
+        const status = item.status || "active";
+        acc[status] = (acc[status] || 0) + 1;
+        return acc;
+      }, { active: 0, void: 0, used: 0 });
+      return {
+        ...batch,
+        codes: visibleCodes,
+        quantity: visibleCodes.length,
+        counts,
+      };
+    })
+    .filter((batch) => (batch.codes || []).length > 0);
+  return { codes: manageableCodes, batches: manageableBatches };
+}
+
 export async function getRedeemCodePublic(codeValue) {
   const code = normalizeRedeemCode(codeValue);
   if (!code) return { ok: false, error: "code_not_found" };
@@ -1249,6 +1272,7 @@ export async function updateRedeemCodeStatus(codeValue, status, actor = null) {
 export async function deleteRedeemCode(codeValue, actor = null) {
   const code = normalizeRedeemCode(codeValue);
   const item = await getJsonKey(redeemCodeKey(code));
+  if (item?.status === "used") return { ok: false, error: "code_already_used" };
   const r = redisConfig();
   if (!r) return { ok: false, error: "storage_failed" };
   try {
@@ -1313,10 +1337,20 @@ export async function deleteRedeemBatch(batchId, actor = null) {
   const batch = await getJsonKey(redeemBatchKey(id));
   if (!batch) return { ok: false, error: "batch_not_found" };
   const codes = Array.isArray(batch.codes) ? batch.codes : [];
+  const codeItems = await Promise.all(codes.map(async (code) => ({
+    code,
+    item: await getJsonKey(redeemCodeKey(code)),
+  })));
+  const deletableCodes = codeItems
+    .filter(({ item }) => !item || (item.status || "active") !== "used")
+    .map(({ code }) => code);
+  const preservedCodes = codeItems
+    .filter(({ item }) => item && (item.status || "active") === "used")
+    .map(({ code }) => code);
   const r = redisConfig();
   if (!r) return { ok: false, error: "storage_failed" };
   const commands = [
-    ...codes.flatMap((code) => [
+    ...deletableCodes.flatMap((code) => [
       ["DEL", redeemCodeKey(code)],
       ["LREM", REDEEM_LIST_KEY, "0", code],
     ]),
@@ -1334,7 +1368,13 @@ export async function deleteRedeemBatch(batchId, actor = null) {
       action: "redeem_batch_delete",
       actor: actorInfo,
       target: "redeem-batch:" + id,
-      detail: { total: codes.length, type: redeemCodeType(batch), amount: batch.amount || 0 },
+      detail: {
+        total: codes.length,
+        deleted: deletableCodes.length,
+        preservedUsed: preservedCodes.length,
+        type: redeemCodeType(batch),
+        amount: batch.amount || 0,
+      },
     });
     return { ok: res.ok };
   } catch (e) { return { ok: false, error: "delete_failed" }; }
