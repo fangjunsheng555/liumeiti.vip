@@ -332,23 +332,35 @@ function processedOrderCount(parts) {
   return Math.min(1500, Math.floor(target * (elapsedWeight / fullDayWeight)));
 }
 
-function queueCount(parts) {
+function queueCount(parts, processed) {
   const seed = daySeed(parts);
   const slot = Math.floor((parts.hour * 60 + parts.minute) / 5);
   const peak = operationWeight(parts.hour);
-  const base = peak >= 1.3 ? 12 : peak >= 0.9 ? 7 : peak >= 0.5 ? 4 : 1;
-  const spread = peak >= 1.3 ? 18 : peak >= 0.9 ? 10 : peak >= 0.5 ? 7 : 4;
   const wave = seededUnit(seed + slot * 31 + 701);
-  return Math.max(0, Math.min(32, Math.round(base + wave * spread)));
+  const target = dailyOrderTarget(seed);
+  const processedRatio = processed / Math.max(1, target);
+  if (processed < 40) return 0;
+  if (peak < 0.5) return processed < 220 ? 0 : (wave > 0.82 ? 1 : 0);
+  if (processed < 90) return wave > 0.88 ? 1 : 0;
+  if (processed < 180 && peak < 1) return wave > 0.72 ? 1 : 0;
+
+  const demand = peak * Math.min(1, processedRatio * 1.25);
+  const cap = demand < 0.16 ? 2 : demand < 0.32 ? 5 : demand < 0.55 ? 9 : (peak >= 1.3 ? 20 : 13);
+  const floor = peak >= 1.3 && processed > 320 ? 3 : peak >= 0.9 && processed > 260 ? 1 : 0;
+  const value = Math.round(floor + wave * cap);
+  if (processed < 180) return Math.min(value, 2);
+  if (processed < 320) return Math.min(value, 5);
+  return Math.max(0, Math.min(32, value));
 }
 
 function buildOperationMetrics(date = new Date()) {
   const parts = beijingParts(date);
+  const processed = processedOrderCount(parts);
   return {
-    processedToday: `${processedOrderCount(parts).toLocaleString("zh-CN")}单`,
+    processedToday: `${processed.toLocaleString("zh-CN")}单`,
     averageResponse: "<1分钟",
     completionRate: "100%",
-    queueCount: `${queueCount(parts)}单`,
+    queueCount: `${queueCount(parts, processed)}单`,
     serviceYears: "近6年",
   };
 }
@@ -1172,11 +1184,13 @@ export default function Page() {
           <div className="assurance-grid">
             {SITE_CONTENT.assuranceCards.map(({ title, desc, meta, icon: Icon }) => (
               <article key={title} className="glass-card assurance-card">
-                <div className="assurance-card-icon"><Icon size={18} /></div>
                 <div>
-                  <h3>{title}</h3>
+                  <div className="assurance-card-title">
+                    <span className="assurance-card-icon"><Icon size={18} /></span>
+                    <h3>{title}</h3>
+                  </div>
                   <p>{desc}</p>
-                  <span>{meta}</span>
+                  <em>{meta}</em>
                 </div>
               </article>
             ))}

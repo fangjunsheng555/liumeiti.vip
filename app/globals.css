@@ -8434,17 +8434,20 @@ button { cursor: pointer; border: none; background: transparent; }
   gap: 14px;
 }
 .assurance-card {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 12px;
   padding: 18px;
   border-radius: 18px;
   background:
     linear-gradient(180deg, rgba(255,255,255,.94), rgba(248,253,252,.9));
   border: 1px solid rgba(15, 118, 110, 0.1);
 }
+.assurance-card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
 .assurance-card-icon {
-  display: grid;
+  display: inline-grid;
   place-items: center;
   width: 36px;
   height: 36px;
@@ -8452,6 +8455,7 @@ button { cursor: pointer; border: none; background: transparent; }
   background: #ecfdf5;
   color: #0f766e;
   border: 1px solid rgba(20, 184, 166, .22);
+  flex: 0 0 auto;
 }
 .assurance-card h3 {
   font-size: 15px;
@@ -8460,15 +8464,16 @@ button { cursor: pointer; border: none; background: transparent; }
   letter-spacing: -.02em;
 }
 .assurance-card p {
-  margin-top: 7px;
+  margin-top: 10px;
   font-size: 12px;
   line-height: 1.65;
   color: #475569;
 }
-.assurance-card span {
+.assurance-card em {
   display: inline-flex;
   margin-top: 10px;
   font-size: 11px;
+  font-style: normal;
   font-weight: 800;
   color: #0f766e;
 }
@@ -8550,10 +8555,11 @@ button { cursor: pointer; border: none; background: transparent; }
     gap: 9px;
   }
   .assurance-card {
-    grid-template-columns: 1fr;
-    gap: 8px;
     padding: 12px;
     border-radius: 14px;
+  }
+  .assurance-card-title {
+    gap: 8px;
   }
   .assurance-card-icon {
     width: 28px;
@@ -8564,11 +8570,11 @@ button { cursor: pointer; border: none; background: transparent; }
     font-size: 13px;
   }
   .assurance-card p {
-    margin-top: 5px;
+    margin-top: 7px;
     font-size: 10.5px;
     line-height: 1.55;
   }
-  .assurance-card span {
+  .assurance-card em {
     margin-top: 7px;
     font-size: 10px;
   }
