@@ -8260,6 +8260,13 @@ button { cursor: pointer; border: none; background: transparent; }
   display: none;
 }
 
+@media (min-width: 1024px) {
+  .hero-single {
+    width: 100%;
+    max-width: none;
+  }
+}
+
 @media (max-width: 820px) {
   .site-header {
     background: #fff;
