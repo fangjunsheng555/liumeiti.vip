@@ -57,11 +57,11 @@ const SITE_CONTENT = {
   heroTitleHighlight: "·流媒体服务",
   heroDesc: "一站式流媒体平台 · 全年无休售后 · 使用问题包解决",
   heroStats: [
-    { num: "968单", label: "今日已处理订单", icon: TrendingUp },
-    { num: "<1分钟", label: "平均响应时间", icon: Clock },
-    { num: "100%", label: "售后完成率", icon: BadgeCheck },
-    { num: "8单", label: "当前排队数量", icon: Users },
-    { num: "近6年", label: "服务运行年限", icon: Award },
+    { metric: "processedToday", num: "968单", label: "今日已处理订单", icon: TrendingUp },
+    { metric: "averageResponse", num: "<1分钟", label: "平均响应时间", icon: Clock },
+    { metric: "completionRate", num: "100%", label: "售后完成率", icon: BadgeCheck },
+    { metric: "queueCount", num: "8单", label: "当前排队数量", icon: Users },
+    { metric: "serviceYears", num: "近6年", label: "服务运行年限", icon: Award },
   ],
   assuranceCards: [
     {
@@ -244,6 +244,15 @@ function LiveOrderTicker() {
 
 const TESTIMONIALS_PER_PAGE = 4;
 const TESTIMONIALS_INTERVAL_MS = 5500;
+const OPERATION_SLOT_MINUTES = 10;
+const OPERATION_SLOTS_PER_DAY = 24 * 60 / OPERATION_SLOT_MINUTES;
+const OPERATION_INITIAL_METRICS = {
+  processedToday: "968单",
+  averageResponse: "<1分钟",
+  completionRate: "100%",
+  queueCount: "8单",
+  serviceYears: "近6年",
+};
 
 const PRODUCT_PROMOS = {
   spotify:  { badge: "热销 No.1", badgeIcon: Flame, originalPrice: 298, monthly: "≈¥10.7/月", soldThisMonth: 1328 },
@@ -259,6 +268,89 @@ function orderTime(order) {
   if (order.createdAtBeijing) return order.createdAtBeijing;
   if (!order.createdAt) return "";
   return new Date(order.createdAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }) + " 北京时间";
+}
+
+function seededUnit(seed) {
+  let t = seed + 0x6D2B79F5;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+function beijingParts(date = new Date()) {
+  const beijing = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+  return {
+    year: beijing.getUTCFullYear(),
+    month: beijing.getUTCMonth() + 1,
+    day: beijing.getUTCDate(),
+    hour: beijing.getUTCHours(),
+    minute: beijing.getUTCMinutes(),
+  };
+}
+
+function daySeed(parts) {
+  return parts.year * 10000 + parts.month * 100 + parts.day;
+}
+
+function operationWeight(hour) {
+  if (hour >= 0 && hour < 6) return 0.16;
+  if (hour >= 6 && hour < 8) return 0.55;
+  if (hour >= 8 && hour < 11) return 1.32;
+  if (hour >= 11 && hour < 14) return 0.82;
+  if (hour >= 14 && hour < 17) return 0.96;
+  if (hour >= 17 && hour < 21) return 1.42;
+  if (hour >= 21 && hour < 23) return 0.78;
+  return 0.28;
+}
+
+function slotWeight(slot, seed) {
+  const hour = Math.floor((slot * OPERATION_SLOT_MINUTES) / 60);
+  const jitter = 0.74 + seededUnit(seed + slot * 17) * 0.52;
+  return operationWeight(hour) * jitter;
+}
+
+function dailyOrderTarget(seed) {
+  return Math.min(1500, Math.floor(1080 + seededUnit(seed + 91) * 390));
+}
+
+function processedOrderCount(parts) {
+  const seed = daySeed(parts);
+  const target = dailyOrderTarget(seed);
+  const currentSlot = Math.min(
+    OPERATION_SLOTS_PER_DAY - 1,
+    Math.floor((parts.hour * 60 + parts.minute) / OPERATION_SLOT_MINUTES)
+  );
+  const slotProgress = (parts.minute % OPERATION_SLOT_MINUTES) / OPERATION_SLOT_MINUTES;
+  let fullDayWeight = 0;
+  let elapsedWeight = 0;
+  for (let slot = 0; slot < OPERATION_SLOTS_PER_DAY; slot += 1) {
+    const weight = slotWeight(slot, seed);
+    fullDayWeight += weight;
+    if (slot < currentSlot) elapsedWeight += weight;
+    if (slot === currentSlot) elapsedWeight += weight * slotProgress;
+  }
+  return Math.min(1500, Math.floor(target * (elapsedWeight / fullDayWeight)));
+}
+
+function queueCount(parts) {
+  const seed = daySeed(parts);
+  const slot = Math.floor((parts.hour * 60 + parts.minute) / 5);
+  const peak = operationWeight(parts.hour);
+  const base = peak >= 1.3 ? 12 : peak >= 0.9 ? 7 : peak >= 0.5 ? 4 : 1;
+  const spread = peak >= 1.3 ? 18 : peak >= 0.9 ? 10 : peak >= 0.5 ? 7 : 4;
+  const wave = seededUnit(seed + slot * 31 + 701);
+  return Math.max(0, Math.min(32, Math.round(base + wave * spread)));
+}
+
+function buildOperationMetrics(date = new Date()) {
+  const parts = beijingParts(date);
+  return {
+    processedToday: `${processedOrderCount(parts).toLocaleString("zh-CN")}单`,
+    averageResponse: "<1分钟",
+    completionRate: "100%",
+    queueCount: `${queueCount(parts)}单`,
+    serviceYears: "近6年",
+  };
 }
 
 function paymentLabel(order) {
@@ -328,8 +420,16 @@ export default function Page() {
   const [redeemBusy, setRedeemBusy] = useState(false);
   const [redeemStatus, setRedeemStatus] = useState(null);
   const [testimonialsStart, setTestimonialsStart] = useState(0);
+  const [operationMetrics, setOperationMetrics] = useState(OPERATION_INITIAL_METRICS);
 
   const { cart, toggleCart: toggleCartStore, removeFromCart } = useCart();
+
+  useEffect(() => {
+    const update = () => setOperationMetrics(buildOperationMetrics());
+    update();
+    const timer = setInterval(update, 30000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Cycle through testimonials, advancing TESTIMONIALS_PER_PAGE at each tick
   useEffect(() => {
@@ -759,10 +859,10 @@ export default function Page() {
         {/* ── Hero Stats Band ── */}
         <section className="container hero-stats-band-wrap">
           <div className="hero-stats-band">
-            {SITE_CONTENT.heroStats.map(({ num, label, icon: Icon }) => (
+            {SITE_CONTENT.heroStats.map(({ metric, num, label, icon: Icon }) => (
               <div key={label} className="stat-item">
                 <Icon size={18} className="stat-icon" />
-                <div className="stat-num">{num}</div>
+                <div className="stat-num">{metric ? operationMetrics[metric] || num : num}</div>
                 <div className="stat-label">{label}</div>
               </div>
             ))}
