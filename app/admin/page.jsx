@@ -2247,6 +2247,7 @@ export default function AdminPage() {
               onChange={(e) => setLoginName(e.target.value)}
               placeholder="工作人员账号"
               autoComplete="off"
+              autoFocus
               required
             />
             <input
@@ -2254,7 +2255,6 @@ export default function AdminPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="管理员密码"
-              autoFocus
               required
             />
             <button type="submit" disabled={loggingIn || !password}>
@@ -2717,7 +2717,11 @@ export default function AdminPage() {
                         >
                           <img src={p.image} alt="" />
                           <span>{p.title}</span>
+                          <em className="admin-code-service-plan-tag">
+                            {selectedPlan ? `${selectedPlan.label} ¥${selectedPlan.amount}/${selectedPlan.unit || "年"}` : "选择规格"}
+                          </em>
                           <select
+                            className="admin-code-service-native-select"
                             value={selectedPlanId}
                             onChange={(e) => setCodeRocketPlan(e.target.value)}
                             aria-label="选择机场节点规格"
