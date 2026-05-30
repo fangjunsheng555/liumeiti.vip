@@ -22,7 +22,7 @@ const ROCKET_PLANS = {
   pro: { id: "pro", label: "高级套餐", amount: 198 },
   luxury: { id: "luxury", label: "豪华套餐", amount: 398 },
   unlimited: { id: "unlimited", label: "无限套餐", amount: 698 },
-  trial: { id: "trial", label: "5元10GB测试", amount: 5, requiresLogin: true, onePerUser: true },
+  trial: { id: "trial", label: "5元10GB测试", amount: 5, cycle: "次", requiresLogin: true, onePerUser: true },
 };
 const DEFAULT_ROCKET_PLAN = "basic";
 
@@ -329,6 +329,7 @@ export async function POST(request) {
     if (product.needsContact) needsContact = true;
     let amount = product.amount;
     let label = product.label;
+    let cycle = product.cycle;
     let rocketPlan = "";
     let rocketPlanLabel = "";
     if (service === "rocket") {
@@ -336,12 +337,13 @@ export async function POST(request) {
       rocketPlan = plan.id;
       rocketPlanLabel = plan.label;
       amount = plan.amount;
+      cycle = plan.cycle || product.cycle;
       label = `${product.label} · ${plan.label}`;
     }
     const item = {
       service,
       label,
-      cycle: product.cycle,
+      cycle,
       amount,
       account: product.needsAccountPassword ? account : "",
       password: product.needsAccountPassword ? password : "",

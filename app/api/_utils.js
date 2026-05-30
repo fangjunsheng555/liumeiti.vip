@@ -530,7 +530,7 @@ export const ROCKET_PLANS = {
   pro: { id: "pro", label: "高级套餐", amount: 198, desc: "100 GB/月真实流量" },
   luxury: { id: "luxury", label: "豪华套餐", amount: 398, desc: "200 GB/月真实流量" },
   unlimited: { id: "unlimited", label: "无限套餐", amount: 698, desc: "无限流量" },
-  trial: { id: "trial", label: "5元10GB测试", amount: 5, desc: "10 GB测试流量", requiresLogin: true, onePerUser: true },
+  trial: { id: "trial", label: "5元10GB测试", amount: 5, desc: "10 GB测试流量", unit: "次", cycle: "次", requiresLogin: true, onePerUser: true },
 };
 export const DEFAULT_ROCKET_PLAN = "basic";
 

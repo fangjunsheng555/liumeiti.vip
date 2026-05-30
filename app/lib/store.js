@@ -93,7 +93,7 @@ export const PRODUCTS = [
     highlights: ["真实流量套餐", "高速稳定多节点", "全加密无日志"],
     detailTitle: "大厂机房多线路，真实流量套餐可选，年仅 ¥128 起",
     detailBody:
-      "优选大厂VPS，多线路港日台韩新美英德法等，最高速率可达5Gbps，高峰不拥堵不卡顿，解锁所有主流流媒体/AI软件/社交软件，全加密协议无日志隐私保障，实时维护24×7线路不中断。可选 普通套餐 ¥128/年（50GB/月真实流量）、高级套餐 ¥198/年（100GB/月真实流量）、豪华套餐 ¥398/年（200GB/月真实流量）、无限套餐 ¥698/年（无限流量）。另有 ¥5/10GB 测试套餐，需登录后购买且每个用户限购一次。",
+      "优选大厂VPS，多线路港日台韩新美英德法等，最高速率可达5Gbps，高峰不拥堵不卡顿，解锁所有主流流媒体/AI软件/社交软件，全加密协议无日志隐私保障，实时维护24×7线路不中断。可选 普通套餐 ¥128/年（50GB/月真实流量）、高级套餐 ¥198/年（100GB/月真实流量）、豪华套餐 ¥398/年（200GB/月真实流量）、无限套餐 ¥698/年（无限流量）。另有 ¥5/次 10GB 测试套餐，需登录且每账号限购一次。",
     orderTitle: "机场节点 · 支付宝扫码支付",
     orderBody:
       "请在支付完成后点击付款完成提交订单，系统自动将为你生成订阅链接。",
@@ -106,7 +106,7 @@ export const ROCKET_PLANS = {
   pro: { id: "pro", label: "高级套餐", amount: 198, desc: "100 GB/月真实流量" },
   luxury: { id: "luxury", label: "豪华套餐", amount: 398, desc: "200 GB/月真实流量" },
   unlimited: { id: "unlimited", label: "无限套餐", amount: 698, desc: "无限流量" },
-  trial: { id: "trial", label: "5元10GB测试", amount: 5, desc: "10 GB测试流量", requiresLogin: true, onePerUser: true },
+  trial: { id: "trial", label: "5元10GB测试", amount: 5, desc: "10 GB测试流量", unit: "次", cycle: "次", requiresLogin: true, onePerUser: true },
 };
 export const DEFAULT_ROCKET_PLAN = "basic";
 

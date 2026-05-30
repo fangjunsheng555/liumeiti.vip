@@ -46,6 +46,17 @@ const CHECKOUT_DRAFT_KEY = "liumeiti:checkout-draft:v2";
 const CHECKOUT_PENDING_KEY = "liumeiti:checkout-pending:v1";
 const CHECKOUT_DRAFT_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
 
+function GoogleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="oauth-provider-icon">
+      <path fill="#4285F4" d="M21.6 12.23c0-.74-.07-1.45-.19-2.13H12v4.03h5.38a4.6 4.6 0 0 1-2 3.02v2.51h3.24c1.9-1.75 2.98-4.33 2.98-7.43Z" />
+      <path fill="#34A853" d="M12 22c2.7 0 4.97-.9 6.62-2.34l-3.24-2.51c-.9.6-2.05.95-3.38.95-2.6 0-4.81-1.76-5.6-4.12H3.06v2.59A9.99 9.99 0 0 0 12 22Z" />
+      <path fill="#FBBC05" d="M6.4 13.98A6.01 6.01 0 0 1 6.08 12c0-.69.12-1.35.32-1.98V7.43H3.06A9.99 9.99 0 0 0 2 12c0 1.61.39 3.13 1.06 4.57l3.34-2.59Z" />
+      <path fill="#EA4335" d="M12 5.9c1.47 0 2.79.51 3.83 1.5l2.87-2.87C16.96 2.91 14.7 2 12 2a9.99 9.99 0 0 0-8.94 5.43l3.34 2.59C7.19 7.66 9.4 5.9 12 5.9Z" />
+    </svg>
+  );
+}
+
 export default function CheckoutPage() {
   const router = useRouter();
   const { cart, hydrated, removeFromCart, replaceCart, clearCart } = useCart();
@@ -59,44 +70,77 @@ export default function CheckoutPage() {
   const [orderResults, setOrderResults] = useState([]);
   const [authedUser, setAuthedUser] = useState(null); // {email, balance} | null
   const [hasBoughtRocketTrial, setHasBoughtRocketTrial] = useState(false);
+  const [authModal, setAuthModal] = useState(null); // null | "login" | "register" | "forgot" | "reset"
+  const [authForm, setAuthForm] = useState({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
+  const [authCaptcha, setAuthCaptcha] = useState({ a: 0, b: 0 });
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [authNotice, setAuthNotice] = useState("");
+  const [pendingTrialSelection, setPendingTrialSelection] = useState(false);
   const [redeemMode, setRedeemMode] = useState({ loading: true, code: "", info: null });
   const [draftReady, setDraftReady] = useState(false);
+
+  async function refreshAccountState(isCancelled = () => false) {
+    try {
+      const [balanceRes, meRes] = await Promise.all([
+        fetch("/api/auth/balance", { credentials: "same-origin" }),
+        fetch("/api/auth/me", { credentials: "same-origin" }),
+      ]);
+      const balanceData = balanceRes.ok ? await balanceRes.json() : null;
+      const meData = meRes.ok ? await meRes.json() : null;
+      if (isCancelled()) return { ok: false, boughtTrial: false };
+      if (balanceData && balanceData.ok) {
+        const orders = Array.isArray(meData?.orders) ? meData.orders : [];
+        const boughtTrial = orders.some((order) =>
+          order?.status !== "invalid" &&
+          Array.isArray(order?.items) &&
+          order.items.some((item) =>
+            item.service === "rocket" &&
+            (item.rocketPlan === "trial" || item.label?.includes("5元10GB测试") || Number(item.amount || 0) === 5)
+          )
+        );
+        setAuthedUser({
+          email: balanceData.email,
+          balance: Number(balanceData.balance || 0),
+          coupons: balanceData.coupons || [],
+          orders,
+        });
+        setHasBoughtRocketTrial(boughtTrial);
+        setForm((cur) => cur.email ? cur : { ...cur, email: balanceData.email });
+        return { ok: true, boughtTrial, email: balanceData.email };
+      }
+      setAuthedUser(null);
+      setHasBoughtRocketTrial(false);
+      return { ok: false, boughtTrial: false };
+    } catch (e) {
+      return { ok: false, boughtTrial: false };
+    }
+  }
+
   // Pre-fill email + load balance for logged-in user
   useEffect(() => {
     let cancelled = false;
-    async function loadAccount() {
-      try {
-        const [balanceRes, meRes] = await Promise.all([
-          fetch("/api/auth/balance", { credentials: "same-origin" }),
-          fetch("/api/auth/me", { credentials: "same-origin" }),
-        ]);
-        const balanceData = balanceRes.ok ? await balanceRes.json() : null;
-        const meData = meRes.ok ? await meRes.json() : null;
-        if (cancelled) return;
-        if (balanceData && balanceData.ok) {
-          const orders = Array.isArray(meData?.orders) ? meData.orders : [];
-          const boughtTrial = orders.some((order) =>
-            order?.status !== "invalid" &&
-            Array.isArray(order?.items) &&
-            order.items.some((item) =>
-              item.service === "rocket" &&
-              (item.rocketPlan === "trial" || item.label?.includes("5元10GB测试") || Number(item.amount || 0) === 5)
-            )
-          );
-          setAuthedUser({
-            email: balanceData.email,
-            balance: Number(balanceData.balance || 0),
-            coupons: balanceData.coupons || [],
-            orders,
-          });
-          setHasBoughtRocketTrial(boughtTrial);
-          setForm((cur) => cur.email ? cur : { ...cur, email: balanceData.email });
-        }
-      } catch (e) {}
-    }
-    loadAccount();
+    refreshAccountState(() => cancelled);
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    if (authModal) document.body.style.overflow = "hidden";
+    else document.body.style.overflow = "";
+    return () => { document.body.style.overflow = ""; };
+  }, [authModal]);
+
+  useEffect(() => {
+    if (authModal === "login" || authModal === "register") {
+      setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
+    }
+    if (authModal === null) {
+      setAuthForm({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
+      setAuthError("");
+      setAuthNotice("");
+    }
+  }, [authModal]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -247,6 +291,105 @@ export default function CheckoutPage() {
       },
     }));
     if (status?.type === "error") setStatus(null);
+  }
+
+  function openTrialAuthModal() {
+    setPendingTrialSelection(true);
+    setAuthNotice("5元10GB测试套餐需登录后购买，每账号限购一次");
+    setAuthError("");
+    setAuthModal("login");
+  }
+
+  function handleRocketPlanSelect(plan) {
+    if (!plan) return;
+    if (serviceRedeemActive && serviceRedeemRocketPlan && serviceRedeemRocketPlan !== plan.id) return;
+    if (plan.id === "trial") {
+      if (hasBoughtRocketTrial) {
+        setStatus({ type: "error", message: "每个账号仅可购买一次5元10GB测试套餐" });
+        return;
+      }
+      if (!authedUser) {
+        openTrialAuthModal();
+        return;
+      }
+    }
+    updateProductField("rocket", "plan", plan.id);
+  }
+
+  async function doCheckoutAuth(e) {
+    e.preventDefault();
+    if (authBusy) return;
+    setAuthBusy(true);
+    setAuthError("");
+    setAuthNotice("");
+    try {
+      let endpoint = authModal;
+      let payload;
+      if (authModal === "login" || authModal === "register") {
+        payload = {
+          email: authForm.email.trim(),
+          password: authForm.password,
+          captchaA: authCaptcha.a,
+          captchaB: authCaptcha.b,
+          captchaAnswer: Number(authForm.captchaAnswer),
+        };
+      } else if (authModal === "forgot") {
+        payload = { email: authForm.email.trim() };
+      } else if (authModal === "reset") {
+        payload = {
+          email: authForm.email.trim(),
+          code: authForm.code.trim(),
+          newPassword: authForm.newPassword,
+        };
+      }
+
+      const res = await fetch(`/api/auth/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+
+      if (authModal === "forgot") {
+        setAuthNotice("验证码已发送至邮箱。请查看收件箱(或垃圾邮件)");
+        setAuthModal("reset");
+        setAuthForm((f) => ({ ...f, code: "", newPassword: "" }));
+        return;
+      }
+
+      if (data.ok) {
+        const account = await refreshAccountState();
+        setAuthModal(null);
+        if (pendingTrialSelection) {
+          setPendingTrialSelection(false);
+          if (account.boughtTrial) {
+            setStatus({ type: "error", message: "每个账号仅可购买一次5元10GB测试套餐" });
+          } else {
+            updateProductField("rocket", "plan", "trial");
+            setStatus({ type: "success", message: "已登录，5元10GB测试套餐已选中" });
+          }
+        }
+      } else {
+        const msg = {
+          captcha_failed: "人机验证失败,请重新计算",
+          email_taken: "该邮箱已注册",
+          invalid_email: "邮箱格式错误",
+          password_length: "密码 6-64 位",
+          invalid_credentials: "邮箱或密码错误",
+          invalid_code: "验证码格式错误(6 位数字)",
+          code_invalid_or_expired: "验证码错误或已过期",
+          user_not_found: "该邮箱未注册",
+        }[data.error] || data.error || "操作失败";
+        setAuthError(msg);
+        if (authModal === "login" || authModal === "register") {
+          setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
+        }
+      }
+    } catch (error) {
+      setAuthError("网络错误");
+    } finally {
+      setAuthBusy(false);
+    }
   }
 
   // Contact field is required only when cart includes products with needsContact (Spotify)
@@ -520,12 +663,9 @@ export default function CheckoutPage() {
                       const selected = rocketPlanId === plan.id;
                       const locked = serviceRedeemActive && serviceRedeemRocketPlan && serviceRedeemRocketPlan !== plan.id;
                       const trialAlreadyBought = plan.id === "trial" && hasBoughtRocketTrial;
-                      const meta = [
-                        plan.desc,
-                        plan.requiresLogin ? "需登录" : "",
-                        plan.onePerUser ? "每账号限购一次" : "",
-                        trialAlreadyBought ? "已购买" : "",
-                      ].filter(Boolean).join(" · ");
+                      const meta = plan.id === "trial"
+                        ? [plan.requiresLogin ? "需登录" : "", plan.onePerUser ? "每账号限购一次" : "", trialAlreadyBought ? "已购买" : ""].filter(Boolean).join(" · ")
+                        : plan.desc;
                       return (
                         <label
                           key={plan.id}
@@ -536,7 +676,7 @@ export default function CheckoutPage() {
                             name="rocketPlan"
                             value={plan.id}
                             checked={selected}
-                            onChange={() => updateProductField("rocket", "plan", plan.id)}
+                            onChange={() => handleRocketPlanSelect(plan)}
                             disabled={locked || trialAlreadyBought}
                           />
                           <div className="rocket-plan-info">
@@ -545,7 +685,7 @@ export default function CheckoutPage() {
                           </div>
                           <div className="rocket-plan-price">
                             <b>¥{plan.amount}</b>
-                            <em>/年</em>
+                            <em>/{plan.unit || "年"}</em>
                           </div>
                         </label>
                       );
@@ -864,12 +1004,15 @@ export default function CheckoutPage() {
               <details className="pay-summary-foldable">
                 <summary>查看订单详情({cartCount} 件)</summary>
                 <div className="checkout-cart-summary">
-                  {cartItems.map((p) => (
-                    <div key={p.key} className="checkout-cart-row">
-                      <span>{p.title}</span>
-                      <b>¥{p.amount}</b>
-                    </div>
-                  ))}
+                  {cartItems.map((p) => {
+                    const itemAmount = productItemAmount(p, planMap[p.key]);
+                    return (
+                      <div key={p.key} className="checkout-cart-row">
+                        <span>{p.title}</span>
+                        <b>¥{itemAmount}</b>
+                      </div>
+                    );
+                  })}
                   {discountRate > 0 && (
                     <div className="checkout-cart-row discount">
                       <span>组合优惠 · {bundleDiscountLabel(cartCount)}</span>
@@ -990,6 +1133,166 @@ export default function CheckoutPage() {
           </section>
         )}
       </main>
+
+      {authModal && (
+        <div
+          className="auth-modal-mask"
+          onClick={() => {
+            if (!authBusy) {
+              setAuthModal(null);
+              setPendingTrialSelection(false);
+            }
+          }}
+        >
+          <div className="auth-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="auth-modal-head">
+              {authModal === "login" || authModal === "register" ? (
+                <div className="auth-modal-tabs">
+                  <button type="button" className={`auth-tab${authModal === "login" ? " active" : ""}`} onClick={() => setAuthModal("login")}>登录</button>
+                  <button type="button" className={`auth-tab register-tab${authModal === "register" ? " active" : ""}`} onClick={() => setAuthModal("register")}>
+                    注册
+                    <span className="auth-tab-tip">立减¥8.88</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="auth-modal-title">
+                  {authModal === "forgot" ? "找回密码" : "重置密码"}
+                </div>
+              )}
+              <button
+                type="button"
+                className="auth-close"
+                onClick={() => {
+                  if (!authBusy) {
+                    setAuthModal(null);
+                    setPendingTrialSelection(false);
+                  }
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <form className="auth-form" onSubmit={doCheckoutAuth}>
+              <label className="auth-field">
+                <span>邮箱</span>
+                <input
+                  type="email"
+                  value={authForm.email}
+                  onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                  placeholder="your@email.com"
+                  autoComplete="email"
+                  readOnly={authModal === "reset"}
+                  required
+                />
+              </label>
+
+              {(authModal === "login" || authModal === "register") && (
+                <label className="auth-field">
+                  <span>密码{authModal === "register" && " (6-64 位)"}</span>
+                  <input
+                    type="password"
+                    value={authForm.password}
+                    onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                    placeholder={authModal === "register" ? "设置一个密码" : "登录密码"}
+                    autoComplete={authModal === "register" ? "new-password" : "current-password"}
+                    minLength={6}
+                    required
+                  />
+                </label>
+              )}
+
+              {authModal === "reset" && (
+                <>
+                  <label className="auth-field">
+                    <span>邮箱验证码</span>
+                    <input
+                      value={authForm.code}
+                      onChange={(e) => setAuthForm({ ...authForm, code: e.target.value.replace(/\D/g, "") })}
+                      placeholder="6 位数字验证码"
+                      inputMode="numeric"
+                      required
+                    />
+                  </label>
+                  <label className="auth-field">
+                    <span>新密码</span>
+                    <input
+                      type="password"
+                      value={authForm.newPassword}
+                      onChange={(e) => setAuthForm({ ...authForm, newPassword: e.target.value })}
+                      placeholder="设置新的登录密码"
+                      minLength={6}
+                      required
+                    />
+                  </label>
+                </>
+              )}
+
+              {(authModal === "login" || authModal === "register") && (
+                <label className="auth-field auth-captcha">
+                  <span>人机验证</span>
+                  <div className="auth-captcha-row">
+                    <em>{authCaptcha.a} + {authCaptcha.b} =</em>
+                    <input
+                      value={authForm.captchaAnswer}
+                      onChange={(e) => setAuthForm({ ...authForm, captchaAnswer: e.target.value })}
+                      placeholder="答案"
+                      inputMode="numeric"
+                      required
+                    />
+                    <button
+                      type="button"
+                      className="auth-captcha-refresh"
+                      onClick={() => setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) })}
+                    >
+                      换一题
+                    </button>
+                  </div>
+                </label>
+              )}
+
+              {authNotice && <div className="auth-notice">{authNotice}</div>}
+              {authError && <div className="auth-error">{authError}</div>}
+
+              <button type="submit" className="auth-submit" disabled={authBusy}>
+                {authBusy ? (
+                  <><LoaderCircle size={15} className="spin-icon" />处理中...</>
+                ) : authModal === "login" ? "登录"
+                  : authModal === "register" ? "注册并登录"
+                  : authModal === "forgot" ? "发送邮箱验证码"
+                  : "重置密码并登录"}
+              </button>
+
+              {(authModal === "login" || authModal === "register") && (
+                <div className="auth-divider"><span>或使用</span></div>
+              )}
+
+              {(authModal === "login" || authModal === "register") && (
+                <div className="oauth-login-grid bottom">
+                  <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />Google 登录</a>
+                </div>
+              )}
+
+              <div className="auth-hints">
+                {authModal === "login" && (
+                  <>
+                    <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>忘记密码?</button>
+                    <span className="auth-hint">还没账号? <button type="button" className="auth-switch" onClick={() => setAuthModal("register")}>立即注册</button></span>
+                  </>
+                )}
+                {authModal === "register" && (
+                  <span className="auth-hint">已有账号? <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>去登录</button></span>
+                )}
+                {authModal === "forgot" && (
+                  <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>返回登录</button>
+                )}
+                {authModal === "reset" && (
+                  <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>重新发送验证码</button>
+                )}
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

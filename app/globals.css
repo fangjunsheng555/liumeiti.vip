@@ -8115,6 +8115,19 @@ button { cursor: pointer; border: none; background: transparent; }
   color: #047857;
   border-color: rgba(16, 185, 129, 0.35);
 }
+.admin-code-service-picker button.admin-code-service-parent {
+  grid-column: 1 / -1;
+}
+.admin-code-service-picker button.admin-code-service-parent.open,
+.admin-code-service-picker button.admin-code-service-parent.selected {
+  background: #ecfdf5;
+  border-color: rgba(16, 185, 129, 0.42);
+}
+.admin-code-service-picker button.admin-code-plan-choice {
+  height: auto;
+  min-height: 42px;
+  padding: 7px 9px;
+}
 .admin-code-service-picker img {
   width: 24px;
   height: 24px;
