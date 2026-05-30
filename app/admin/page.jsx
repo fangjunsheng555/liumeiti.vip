@@ -1082,7 +1082,6 @@ export default function AdminPage() {
   const [codeRemark, setCodeRemark] = useState("");
   const [codeCustom, setCodeCustom] = useState("");
   const [codeServices, setCodeServices] = useState([]);
-  const [rocketCodePlansOpen, setRocketCodePlansOpen] = useState(false);
   const [codeBusy, setCodeBusy] = useState("");
   const [codeResult, setCodeResult] = useState(null);
   const [activeCodeBatch, setActiveCodeBatch] = useState(null);
@@ -1702,7 +1701,6 @@ export default function AdminPage() {
         setCodeCustom("");
         if (codeType === "service") {
           setCodeServices([]);
-          setRocketCodePlansOpen(false);
         }
         setCodeResult({ type: "success", message: `已生成 ${data.generatedCodes?.length || 1} 个兑换码` });
       } else {
@@ -1733,6 +1731,17 @@ export default function AdminPage() {
         return [...list.filter((s) => s.key !== "rocket"), target];
       }
       return [...list, target];
+    });
+  }
+
+  function setCodeRocketPlan(planId) {
+    const nextPlan = ROCKET_PLANS[planId] ? planId : "";
+    setCodeServices((current) => {
+      const list = current.map((item) =>
+        typeof item === "string" ? { key: item, plan: "" } : { key: item.key, plan: item.plan || "" }
+      );
+      const withoutRocket = list.filter((item) => item.key !== "rocket");
+      return nextPlan ? [...withoutRocket, { key: "rocket", plan: nextPlan }] : withoutRocket;
     });
   }
 
@@ -2701,41 +2710,27 @@ export default function AdminPage() {
                       });
                       const selectedPlanId = selectedRocket && typeof selectedRocket !== "string" ? selectedRocket.plan : "";
                       const selectedPlan = selectedPlanId ? ROCKET_PLANS[selectedPlanId] : null;
-                      const rows = [(
-                        <button
+                      return [(
+                        <div
                           key="rocket"
-                          type="button"
-                          className={`admin-code-service-parent${selectedPlan ? " selected" : ""}${rocketCodePlansOpen ? " open" : ""}`}
-                          onClick={() => setRocketCodePlansOpen((open) => !open)}
+                          className={`admin-code-service-combo${selectedPlan ? " selected" : ""}`}
                         >
                           <img src={p.image} alt="" />
                           <span>{p.title}</span>
-                          <em className="admin-code-service-plan-tag">
-                            {selectedPlan ? `${selectedPlan.label} ¥${selectedPlan.amount}/${selectedPlan.unit || "年"}` : "点击选择规格"}
-                          </em>
-                        </button>
-                      )];
-                      if (!rocketCodePlansOpen) return rows;
-                      return rows.concat(Object.values(ROCKET_PLANS).map((plan) => {
-                        const selected = codeServices.some((s) => {
-                          const sk = typeof s === "string" ? s : s.key;
-                          const sp = typeof s === "string" ? "" : (s.plan || "");
-                          return sk === "rocket" && sp === plan.id;
-                        });
-                        return (
-                          <button
-                            key={`rocket-${plan.id}`}
-                            type="button"
-                            className={`admin-code-plan-choice${selected ? " selected" : ""}`}
-                            onClick={() => toggleCodeService({ key: "rocket", plan: plan.id })}
+                          <select
+                            value={selectedPlanId}
+                            onChange={(e) => setCodeRocketPlan(e.target.value)}
+                            aria-label="选择机场节点规格"
                           >
-                            <span>{plan.label}</span>
-                            <em className="admin-code-service-plan-tag">
-                              ¥{plan.amount}/{plan.unit || "年"}{plan.desc && plan.id !== "trial" ? ` · ${plan.desc}` : ""}
-                            </em>
-                          </button>
-                        );
-                      }));
+                            <option value="">选择规格</option>
+                            {Object.values(ROCKET_PLANS).map((plan) => (
+                              <option key={plan.id} value={plan.id}>
+                                {plan.label} ¥{plan.amount}/{plan.unit || "年"}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )];
                     }
                     const selected = codeServices.some((s) => (typeof s === "string" ? s : s.key) === p.key);
                     return [(

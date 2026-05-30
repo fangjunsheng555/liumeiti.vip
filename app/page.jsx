@@ -477,9 +477,9 @@ export default function Page() {
     return () => { document.body.style.overflow = ""; };
   }, [authModal]);
 
-  // Refresh captcha when auth modal opens (only for login/register)
+  // Refresh captcha when auth modal opens for registration
   useEffect(() => {
-    if (authModal === "login" || authModal === "register") {
+    if (authModal === "register") {
       setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
     }
     if (authModal && !authError && !authNotice) {
@@ -525,7 +525,12 @@ export default function Page() {
     try {
       let endpoint = authModal;
       let payload;
-      if (authModal === "login" || authModal === "register") {
+      if (authModal === "login") {
+        payload = {
+          email: authForm.email.trim(),
+          password: authForm.password,
+        };
+      } else if (authModal === "register") {
         payload = {
           email: authForm.email.trim(),
           password: authForm.password,
@@ -575,7 +580,7 @@ export default function Page() {
           user_not_found: "该邮箱未注册",
         }[data.error] || data.error || "操作失败";
         setAuthError(msg);
-        if (authModal === "login" || authModal === "register") {
+        if (authModal === "register") {
           setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
         }
       }
@@ -1540,7 +1545,7 @@ export default function Page() {
                 </>
               )}
 
-              {(authModal === "login" || authModal === "register") && (
+              {authModal === "register" && (
                 <label className="auth-field auth-captcha">
                   <span>人机验证</span>
                   <div className="auth-captcha-row">

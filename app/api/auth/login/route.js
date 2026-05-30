@@ -9,15 +9,9 @@ export async function POST(request) {
   try { body = await request.json(); } catch (e) {}
   const email = String(body.email || "").trim().toLowerCase();
   const password = String(body.password || "");
-  const captchaA = Number(body.captchaA);
-  const captchaB = Number(body.captchaB);
-  const captchaAnswer = Number(body.captchaAnswer);
 
   if (!validEmail(email) || !password) {
     return Response.json({ ok: false, error: "invalid_credentials" }, { status: 400 });
-  }
-  if (!Number.isFinite(captchaA) || !Number.isFinite(captchaB) || captchaA + captchaB !== captchaAnswer) {
-    return Response.json({ ok: false, error: "captcha_failed" }, { status: 400 });
   }
 
   const user = await getUser(email);

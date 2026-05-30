@@ -422,7 +422,13 @@ export async function POST(request) {
   const discountRate = bundleDiscountRate(items.length);
   const discountLabel = bundleDiscountLabel(items.length);
   const bundleFinalAmount = Math.round(subtotal * (1 - discountRate));
-  const coupon = userEmail && paymentMethod !== "redeem" ? await consumeBestCoupon(userEmail, orderId, bundleFinalAmount) : { discount: 0 };
+  const rocketTrialAmount = items
+    .filter((item) => item.service === "rocket" && item.rocketPlan === "trial")
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const couponMaxAmount = hasRocketTrial
+    ? Math.max(0, Math.round((bundleFinalAmount - rocketTrialAmount) * 100) / 100)
+    : bundleFinalAmount;
+  const coupon = userEmail && paymentMethod !== "redeem" ? await consumeBestCoupon(userEmail, orderId, couponMaxAmount) : { discount: 0 };
   const couponDiscount = roundMoney(coupon.discount || 0);
   const finalAmount = paymentMethod === "redeem" ? 0 : Math.max(0, Math.round((bundleFinalAmount - couponDiscount) * 100) / 100);
   const finalUsdt = Math.round((finalAmount * USDT_DISCOUNT / USDT_RATE) * 100) / 100;

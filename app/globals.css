@@ -8115,18 +8115,40 @@ button { cursor: pointer; border: none; background: transparent; }
   color: #047857;
   border-color: rgba(16, 185, 129, 0.35);
 }
-.admin-code-service-picker button.admin-code-service-parent {
-  grid-column: 1 / -1;
+.admin-code-service-picker .admin-code-service-combo {
+  height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  justify-content: flex-start;
+  padding: 0 8px;
+  border-radius: 9px;
+  background: #f8fafc;
+  color: var(--primary);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  min-width: 0;
 }
-.admin-code-service-picker button.admin-code-service-parent.open,
-.admin-code-service-picker button.admin-code-service-parent.selected {
+.admin-code-service-picker .admin-code-service-combo.selected {
   background: #ecfdf5;
-  border-color: rgba(16, 185, 129, 0.42);
+  color: #047857;
+  border-color: rgba(16, 185, 129, 0.35);
 }
-.admin-code-service-picker button.admin-code-plan-choice {
-  height: auto;
-  min-height: 42px;
-  padding: 7px 9px;
+.admin-code-service-picker .admin-code-service-combo span {
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.admin-code-service-picker .admin-code-service-combo select {
+  min-width: 0;
+  flex: 1;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid rgba(16, 185, 129, 0.28);
+  background: #fff;
+  color: #047857;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 0 6px;
 }
 .admin-code-service-picker img {
   width: 24px;

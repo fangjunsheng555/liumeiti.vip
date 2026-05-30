@@ -132,7 +132,7 @@ export default function CheckoutPage() {
   }, [authModal]);
 
   useEffect(() => {
-    if (authModal === "login" || authModal === "register") {
+    if (authModal === "register") {
       setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
     }
     if (authModal === null) {
@@ -263,13 +263,16 @@ export default function CheckoutPage() {
   const serviceRedeemRocketPlan = serviceRedeemActive
     ? ((redeemMode.info?.services || []).find((s) => s.key === "rocket")?.plan || "")
     : "";
+  const rocketPlanInfo = getRocketPlan(rocketPlanId);
+  const rocketTrialSelected = cartHasRocket && rocketPlanId === "trial";
+  const couponEligibleCny = rocketTrialSelected
+    ? Math.max(0, Math.round((bundleFinalCny - Number(rocketPlanInfo.amount || 0)) * 100) / 100)
+    : bundleFinalCny;
   const activeCoupon = (authedUser?.coupons || []).find((c) => c.status === "active");
-  const couponDiscount = !serviceRedeemActive && activeCoupon ? Math.min(Number(activeCoupon.amount || 0), bundleFinalCny) : 0;
+  const couponDiscount = !serviceRedeemActive && activeCoupon ? Math.min(Number(activeCoupon.amount || 0), couponEligibleCny) : 0;
   const finalCny = Math.max(0, Math.round((bundleFinalCny - couponDiscount) * 100) / 100);
   const finalUsdt = Math.round((finalCny * 0.9 / USDT_RATE) * 100) / 100;
   const savings = subtotal - bundleFinalCny;
-  const rocketPlanInfo = getRocketPlan(rocketPlanId);
-  const rocketTrialSelected = cartHasRocket && rocketPlanId === "trial";
 
   function handleCopy(value, key) {
     copyText(value);
@@ -325,7 +328,12 @@ export default function CheckoutPage() {
     try {
       let endpoint = authModal;
       let payload;
-      if (authModal === "login" || authModal === "register") {
+      if (authModal === "login") {
+        payload = {
+          email: authForm.email.trim(),
+          password: authForm.password,
+        };
+      } else if (authModal === "register") {
         payload = {
           email: authForm.email.trim(),
           password: authForm.password,
@@ -381,7 +389,7 @@ export default function CheckoutPage() {
           user_not_found: "该邮箱未注册",
         }[data.error] || data.error || "操作失败";
         setAuthError(msg);
-        if (authModal === "login" || authModal === "register") {
+        if (authModal === "register") {
           setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
         }
       }
@@ -1227,7 +1235,7 @@ export default function CheckoutPage() {
                 </>
               )}
 
-              {(authModal === "login" || authModal === "register") && (
+              {authModal === "register" && (
                 <label className="auth-field auth-captcha">
                   <span>人机验证</span>
                   <div className="auth-captcha-row">
@@ -1243,9 +1251,9 @@ export default function CheckoutPage() {
                       type="button"
                       className="auth-captcha-refresh"
                       onClick={() => setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) })}
-                    >
-                      换一题
-                    </button>
+                      title="换一题"
+                      aria-label="换一题"
+                    ><RefreshCw size={14} /></button>
                   </div>
                 </label>
               )}
