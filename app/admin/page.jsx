@@ -2717,9 +2717,6 @@ export default function AdminPage() {
                         >
                           <img src={p.image} alt="" />
                           <span>{p.title}</span>
-                          <em className="admin-code-service-plan-tag">
-                            {selectedPlan ? `${selectedPlan.label} ¥${selectedPlan.amount}/${selectedPlan.unit || "年"}` : "选择规格"}
-                          </em>
                           <select
                             className="admin-code-service-native-select"
                             value={selectedPlanId}
