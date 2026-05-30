@@ -2706,7 +2706,9 @@ export default function AdminPage() {
                           >
                             <img src={p.image} alt="" />
                             <span>{p.title}</span>
-                            <em className="admin-code-service-plan-tag">{plan.label} ¥{plan.amount}</em>
+                            <em className="admin-code-service-plan-tag">
+                              {plan.label} ¥{plan.amount}{plan.desc ? ` · ${plan.desc}` : ""}
+                            </em>
                           </button>
                         );
                       });

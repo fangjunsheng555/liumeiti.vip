@@ -1,7 +1,7 @@
 import { buildOrderEmailHtml, buildOrderEmailText } from "./email-template.js";
 import {
   consumeBestCoupon, restoreCoupon, verifySession, getUser,
-  setUser, addBalanceTx, pushAdminBalanceLog, makeId, roundMoney,
+  setUser, addBalanceTx, pushAdminBalanceLog, makeId, roundMoney, getAllOrders,
   validateServiceRedeemCode, consumeServiceRedeemCode, restoreServiceRedeemCode,
   checkRedeemRateLimit, recordRedeemRateFailure, clearRedeemRateLimit, redeemRateLimitMessage,
   clientIpFromRequest, clientUserAgentFromRequest,
@@ -14,18 +14,30 @@ const PRODUCTS = {
   netflix: { label: "Netflix", amount: 168, cycle: "1年" },
   disney: { label: "Disney+", amount: 108, cycle: "1年" },
   max: { label: "HBO Max", amount: 148, cycle: "1年" },
-  rocket: { label: "机场节点", amount: 98, cycle: "1年", hasPlan: true },
+  rocket: { label: "机场节点", amount: 128, cycle: "1年", hasPlan: true },
 };
 
 const ROCKET_PLANS = {
-  single: { id: "single", label: "单人畅享", amount: 98 },
-  unlimited: { id: "unlimited", label: "无限使用", amount: 188 },
+  basic: { id: "basic", label: "普通套餐", amount: 128 },
+  pro: { id: "pro", label: "高级套餐", amount: 198 },
+  luxury: { id: "luxury", label: "豪华套餐", amount: 398 },
+  unlimited: { id: "unlimited", label: "无限套餐", amount: 698 },
+  trial: { id: "trial", label: "5元10GB测试", amount: 5, requiresLogin: true, onePerUser: true },
 };
-const DEFAULT_ROCKET_PLAN = "single";
+const DEFAULT_ROCKET_PLAN = "basic";
 
 function resolveRocketPlan(value) {
   const id = clean(value, 20);
-  return ROCKET_PLANS[id] ? ROCKET_PLANS[id] : ROCKET_PLANS[DEFAULT_ROCKET_PLAN];
+  const aliases = { single: "basic" };
+  const planId = aliases[id] || id;
+  return ROCKET_PLANS[planId] ? ROCKET_PLANS[planId] : ROCKET_PLANS[DEFAULT_ROCKET_PLAN];
+}
+
+function orderHasRocketTrial(order) {
+  const orderItems = Array.isArray(order?.items) && order.items.length
+    ? order.items
+    : [{ service: order?.service, rocketPlan: order?.rocketPlan }];
+  return orderItems.some((item) => item?.service === "rocket" && item?.rocketPlan === "trial");
 }
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
@@ -375,6 +387,30 @@ export async function POST(request) {
       const session = verifySession(decodeURIComponent(userMatch[1]));
       if (session && session.email) userEmail = session.email;
     } catch (e) {}
+  }
+
+  const hasRocketTrial = items.some((item) => item.service === "rocket" && item.rocketPlan === "trial");
+  if (hasRocketTrial) {
+    if (!userEmail) {
+      return Response.json({
+        ok: false,
+        error: "rocket_trial_requires_login",
+        message: "5元10GB测试套餐需要先登录后购买",
+      }, { status: 401 });
+    }
+    const priorOrders = await getAllOrders();
+    const alreadyBoughtTrial = priorOrders.some((order) =>
+      order?.userEmail === userEmail &&
+      order?.status !== "invalid" &&
+      orderHasRocketTrial(order)
+    );
+    if (alreadyBoughtTrial) {
+      return Response.json({
+        ok: false,
+        error: "rocket_trial_once_per_user",
+        message: "每个账号仅可购买一次5元10GB测试套餐",
+      }, { status: 400 });
+    }
   }
 
   const orderId = "LM" + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();

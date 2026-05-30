@@ -58,19 +58,44 @@ export default function CheckoutPage() {
   const [copiedKey, setCopiedKey] = useState(null);
   const [orderResults, setOrderResults] = useState([]);
   const [authedUser, setAuthedUser] = useState(null); // {email, balance} | null
+  const [hasBoughtRocketTrial, setHasBoughtRocketTrial] = useState(false);
   const [redeemMode, setRedeemMode] = useState({ loading: true, code: "", info: null });
   const [draftReady, setDraftReady] = useState(false);
   // Pre-fill email + load balance for logged-in user
   useEffect(() => {
-    fetch("/api/auth/balance", { credentials: "same-origin" })
-      .then((r) => r.ok ? r.json() : null)
-      .then((d) => {
-        if (d && d.ok) {
-          setAuthedUser({ email: d.email, balance: Number(d.balance || 0), coupons: d.coupons || [] });
-          setForm((cur) => cur.email ? cur : { ...cur, email: d.email });
+    let cancelled = false;
+    async function loadAccount() {
+      try {
+        const [balanceRes, meRes] = await Promise.all([
+          fetch("/api/auth/balance", { credentials: "same-origin" }),
+          fetch("/api/auth/me", { credentials: "same-origin" }),
+        ]);
+        const balanceData = balanceRes.ok ? await balanceRes.json() : null;
+        const meData = meRes.ok ? await meRes.json() : null;
+        if (cancelled) return;
+        if (balanceData && balanceData.ok) {
+          const orders = Array.isArray(meData?.orders) ? meData.orders : [];
+          const boughtTrial = orders.some((order) =>
+            order?.status !== "invalid" &&
+            Array.isArray(order?.items) &&
+            order.items.some((item) =>
+              item.service === "rocket" &&
+              (item.rocketPlan === "trial" || item.label?.includes("5元10GB测试") || Number(item.amount || 0) === 5)
+            )
+          );
+          setAuthedUser({
+            email: balanceData.email,
+            balance: Number(balanceData.balance || 0),
+            coupons: balanceData.coupons || [],
+            orders,
+          });
+          setHasBoughtRocketTrial(boughtTrial);
+          setForm((cur) => cur.email ? cur : { ...cur, email: balanceData.email });
         }
-      })
-      .catch(() => {});
+      } catch (e) {}
+    }
+    loadAccount();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -200,6 +225,7 @@ export default function CheckoutPage() {
   const finalUsdt = Math.round((finalCny * 0.9 / USDT_RATE) * 100) / 100;
   const savings = subtotal - bundleFinalCny;
   const rocketPlanInfo = getRocketPlan(rocketPlanId);
+  const rocketTrialSelected = cartHasRocket && rocketPlanId === "trial";
 
   function handleCopy(value, key) {
     copyText(value);
@@ -234,6 +260,12 @@ export default function CheckoutPage() {
     }
     if (contactRequired && !form.contact.trim()) {
       return "Spotify 订单需要填写联系方式,工作人员会通过此方式联系您";
+    }
+    if (rocketTrialSelected && !authedUser) {
+      return "5元10GB测试套餐需要先登录后购买";
+    }
+    if (rocketTrialSelected && hasBoughtRocketTrial) {
+      return "每个账号仅可购买一次5元10GB测试套餐";
     }
     for (const p of cartItems) {
       const f = form.fields[p.key] || {};
@@ -309,7 +341,13 @@ export default function CheckoutPage() {
         body: JSON.stringify(payload),
       });
       const data = await response.json();
-      if (!data.ok) throw new Error(data.message || data.error || "submit_failed");
+      if (!data.ok) {
+        const errorMessage = {
+          rocket_trial_requires_login: "5元10GB测试套餐需要先登录后购买",
+          rocket_trial_once_per_user: "每个账号仅可购买一次5元10GB测试套餐",
+        }[data.error] || data.message || data.error || "submit_failed";
+        throw new Error(errorMessage);
+      }
 
       setOrderResults([{
         orderId: data.orderId,
@@ -481,10 +519,17 @@ export default function CheckoutPage() {
                     {Object.values(ROCKET_PLANS).map((plan) => {
                       const selected = rocketPlanId === plan.id;
                       const locked = serviceRedeemActive && serviceRedeemRocketPlan && serviceRedeemRocketPlan !== plan.id;
+                      const trialAlreadyBought = plan.id === "trial" && hasBoughtRocketTrial;
+                      const meta = [
+                        plan.desc,
+                        plan.requiresLogin ? "需登录" : "",
+                        plan.onePerUser ? "每账号限购一次" : "",
+                        trialAlreadyBought ? "已购买" : "",
+                      ].filter(Boolean).join(" · ");
                       return (
                         <label
                           key={plan.id}
-                          className={`rocket-plan-option${selected ? " selected" : ""}${locked ? " locked" : ""}`}
+                          className={`rocket-plan-option${selected ? " selected" : ""}${locked || trialAlreadyBought ? " locked" : ""}`}
                         >
                           <input
                             type="radio"
@@ -492,11 +537,11 @@ export default function CheckoutPage() {
                             value={plan.id}
                             checked={selected}
                             onChange={() => updateProductField("rocket", "plan", plan.id)}
-                            disabled={locked}
+                            disabled={locked || trialAlreadyBought}
                           />
                           <div className="rocket-plan-info">
                             <strong>{plan.label}</strong>
-                            <small>{plan.desc}</small>
+                            <small>{meta}</small>
                           </div>
                           <div className="rocket-plan-price">
                             <b>¥{plan.amount}</b>

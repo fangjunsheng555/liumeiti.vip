@@ -522,18 +522,23 @@ export const REDEEM_SERVICE_PRODUCTS = {
   netflix: { label: "Netflix", amount: 168 },
   disney: { label: "Disney+", amount: 108 },
   max: { label: "HBO Max", amount: 148 },
-  rocket: { label: "机场节点", amount: 98, hasPlan: true },
+  rocket: { label: "机场节点", amount: 128, hasPlan: true },
 };
 
 export const ROCKET_PLANS = {
-  single: { id: "single", label: "单人畅享", amount: 98 },
-  unlimited: { id: "unlimited", label: "无限使用", amount: 188 },
+  basic: { id: "basic", label: "普通套餐", amount: 128, desc: "50 GB/月真实流量" },
+  pro: { id: "pro", label: "高级套餐", amount: 198, desc: "100 GB/月真实流量" },
+  luxury: { id: "luxury", label: "豪华套餐", amount: 398, desc: "200 GB/月真实流量" },
+  unlimited: { id: "unlimited", label: "无限套餐", amount: 698, desc: "无限流量" },
+  trial: { id: "trial", label: "5元10GB测试", amount: 5, desc: "10 GB测试流量", requiresLogin: true, onePerUser: true },
 };
-export const DEFAULT_ROCKET_PLAN = "single";
+export const DEFAULT_ROCKET_PLAN = "basic";
 
 function resolveRocketPlanInternal(value) {
   const id = clean(value, 20);
-  return ROCKET_PLANS[id] ? ROCKET_PLANS[id] : ROCKET_PLANS[DEFAULT_ROCKET_PLAN];
+  const aliases = { single: "basic" };
+  const planId = aliases[id] || id;
+  return ROCKET_PLANS[planId] ? ROCKET_PLANS[planId] : ROCKET_PLANS[DEFAULT_ROCKET_PLAN];
 }
 
 function redeemCodeKey(code) { return "liumeiti:redeem-code:" + normalizeRedeemCode(code); }
