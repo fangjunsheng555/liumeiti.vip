@@ -371,7 +371,7 @@ function exportRedeemHistoryPdfLegacy(record) {
             <div>
               <div class="eyebrow">Redeem Certificate</div>
               <h1>兑换码兑换凭证</h1>
-              <p>用于核对兑换码状态、订单信息、兑换时间与用户提交内容。</p>
+              <p>用于核对兑换码状态、订单信息、兑换时间与用户提交内容</p>
             </div>
             <div class="stamp">已兑换</div>
           </section>
@@ -904,7 +904,7 @@ function exportRedeemHistoryPdf(record, note = "") {
     voucherNo: `RV-${String(record.code || "").slice(0, 24)}`,
     eyebrow: "Redeem Certificate",
     title: "兑换码兑换凭证",
-    description: "用于核对兑换码状态、订单信息、兑换时间与用户提交内容。",
+    description: "用于核对兑换码状态、订单信息、兑换时间与用户提交内容",
     stamp: "已兑换",
     mainLabel: "Redeem Code",
     mainValue: record.code || "",
@@ -983,7 +983,7 @@ function exportOrderPdf(order, note = "") {
     voucherNo: `OD-${String(order.orderId || "").slice(0, 24)}`,
     eyebrow: "Order Certificate",
     title: "订单详情凭证",
-    description: "用于核对订单状态、付款信息、用户资料与商品配置。",
+    description: "用于核对订单状态、付款信息、用户资料与商品配置",
     stamp: order.status === "completed" ? "已完成" : order.status === "invalid" ? "无效" : "已收到",
     mainLabel: "Order ID",
     mainValue: order.orderId || "",
@@ -3134,7 +3134,7 @@ export default function AdminPage() {
               <AlertTriangle size={14} />
               确认对选中的 <b>{selectedIds.size}</b> 个订单执行
               <b>{batchConfirm === "delete" ? "删除" : "标记无效"}</b> 操作?
-              {batchConfirm === "delete" && " 删除不可恢复。"}
+              {batchConfirm === "delete" && " 删除不可恢复"}
             </div>
             <div className="admin-batch-confirm-actions">
               <button type="button" onClick={() => setBatchConfirm(null)} disabled={batchBusy}>取消</button>
@@ -3779,9 +3779,9 @@ export default function AdminPage() {
             </h3>
             <p className="admin-confirm-email">{confirmUserAction.email}</p>
             <p className="admin-confirm-text">
-              {confirmUserAction.action === "delete" && "用户记录、余额明细将被永久删除,无法恢复。订单数据保留。"}
-              {confirmUserAction.action === "ban" && "封禁后用户无法登录现有账户。可随时解除。"}
-              {confirmUserAction.action === "unban" && "解除后用户可正常登录使用账户。"}
+              {confirmUserAction.action === "delete" && "用户记录、余额明细将被永久删除,无法恢复。订单数据保留"}
+              {confirmUserAction.action === "ban" && "封禁后用户无法登录现有账户。可随时解除"}
+              {confirmUserAction.action === "unban" && "解除后用户可正常登录使用账户"}
             </p>
             <div className="admin-confirm-actions">
               <button type="button" onClick={() => setConfirmUserAction(null)} disabled={userActionBusy}>取消</button>

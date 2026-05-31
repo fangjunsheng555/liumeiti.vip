@@ -94,8 +94,8 @@ export async function POST(request) {
         ${buildEmailBrandHeader({ brandName: brand, siteDomain, label: "SMTP Test" })}
         <tr><td style="padding:26px 26px 10px;">
           <h2 style="margin:0 0 10px;font-size:21px;font-weight:900;color:#0f172a;letter-spacing:-0.03em;">${brand} · SMTP 测试</h2>
-          <p style="margin:0 0 8px;font-size:14px;line-height:1.75;color:#334155;">这是一封 SMTP 测试邮件。</p>
-          <p style="margin:0;font-size:14px;line-height:1.75;color:#334155;">如果你收到了它,说明 SMTP 配置正常。</p>
+          <p style="margin:0 0 8px;font-size:14px;line-height:1.75;color:#334155;">这是一封 SMTP 测试邮件</p>
+          <p style="margin:0;font-size:14px;line-height:1.75;color:#334155;">如果你收到了它,说明 SMTP 配置正常</p>
           <p style="margin:18px 0 0;font-size:12px;color:#94a3b8;line-height:1.6;">${new Date().toISOString()}</p>
         </td></tr>
         <tr><td style="padding:12px 26px 26px;">

@@ -34,7 +34,7 @@ export async function POST(request) {
       ${buildEmailBrandHeader({ brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, label: "Password Reset" })}
       <tr><td style="padding:30px 32px 14px;">
         <h2 style="margin:0 0 8px;font-size:20px;font-weight:900;color:#0f172a;letter-spacing:-0.02em;">找回密码验证码</h2>
-        <p style="margin:0 0 18px;font-size:13.5px;color:#475569;line-height:1.7;">您正在重置 ${BRAND_NAME} 账号密码。请在 10 分钟内输入下方验证码完成重置。如果不是您本人操作,请忽略此邮件。</p>
+        <p style="margin:0 0 18px;font-size:13.5px;color:#475569;line-height:1.7;">您正在重置 ${BRAND_NAME} 账号密码。请在 10 分钟内输入下方验证码完成重置。如果不是您本人操作,请忽略此邮件</p>
         <div style="margin:0 auto;padding:18px 24px;border-radius:14px;background:#f0fdfa;border:1px solid #a7f3d0;text-align:center;">
           <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:#0f766e;margin-bottom:6px;">验证码</div>
           <div style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:32px;font-weight:900;color:#134e4a;letter-spacing:0.18em;">${code}</div>
@@ -42,13 +42,13 @@ export async function POST(request) {
         </div>
       </td></tr>
       <tr><td style="padding:14px 32px 28px;">
-        <p style="margin:0;font-size:11.5px;color:#94a3b8;line-height:1.6;">本邮件由系统自动发送,请勿直接回复。如非本人操作,请忽略。</p>
+        <p style="margin:0;font-size:11.5px;color:#94a3b8;line-height:1.6;">本邮件由系统自动发送,请勿直接回复。如非本人操作,请忽略</p>
       </td></tr>
     </table>
   </td></tr>
 </table>
 </body></html>`;
-    const text = `${BRAND_NAME} 密码重置\n\n验证码: ${code}\n有效期 10 分钟\n\n如非本人操作,请忽略此邮件。`;
+    const text = `${BRAND_NAME} 密码重置\n\n验证码: ${code}\n有效期 10 分钟\n\n如非本人操作,请忽略此邮件`;
     // Important: await the send so Vercel serverless doesn't kill the
     // function before the SMTP transaction finishes. Fire-and-forget
     // was causing emails to never reach iCloud's queue.

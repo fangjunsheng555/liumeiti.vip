@@ -41,6 +41,7 @@ import {
   getRocketPlan,
   productItemAmount,
 } from "../lib/store";
+import FloatingSupport from "../components/FloatingSupport";
 
 const CHECKOUT_DRAFT_KEY = "liumeiti:checkout-draft:v2";
 const CHECKOUT_PENDING_KEY = "liumeiti:checkout-pending:v1";
@@ -57,9 +58,64 @@ function GoogleIcon() {
   );
 }
 
+function AlipayIcon() {
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden="true" className="payment-brand-svg">
+      <rect x="4" y="4" width="40" height="40" rx="12" fill="#1677ff" />
+      <text x="24" y="31" textAnchor="middle" fontFamily="Arial, sans-serif" fontSize="22" fontWeight="900" fill="#fff">支</text>
+    </svg>
+  );
+}
+
+function UsdtIcon() {
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden="true" className="payment-brand-svg">
+      <rect x="4" y="4" width="40" height="40" rx="12" fill="#26a17b" />
+      <path fill="#fff" d="M13 13.5h22v5.1h-8.1v4.08c5.15.25 9.1 1.28 9.1 2.52 0 1.25-3.95 2.28-9.1 2.53v7.77h-5.8v-7.77c-5.15-.25-9.1-1.28-9.1-2.53 0-1.24 3.95-2.27 9.1-2.52V18.6H13v-5.1Zm11 11.2c-3.85 0-6.98.35-6.98.78 0 .36 2.18.66 5.1.75v-2.52h3.76v2.52c2.92-.09 5.1-.39 5.1-.75 0-.43-3.13-.78-6.98-.78Z" />
+    </svg>
+  );
+}
+
+function BalanceIcon() {
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden="true" className="payment-brand-svg">
+      <rect x="4" y="4" width="40" height="40" rx="12" fill="#0f766e" />
+      <path fill="#fff" d="M13 17.2c0-2.42 1.98-4.4 4.4-4.4h13.2c2.42 0 4.4 1.98 4.4 4.4v1.32H13V17.2Zm0 5.12h22v8.48c0 2.42-1.98 4.4-4.4 4.4H17.4c-2.42 0-4.4-1.98-4.4-4.4v-8.48Zm15.9 3.02a3.2 3.2 0 0 0 0 6.4h3.42v-6.4H28.9Z" />
+      <circle cx="29.1" cy="28.54" r="1.22" fill="#0f766e" />
+    </svg>
+  );
+}
+
+function WechatIcon() {
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden="true" className="payment-brand-svg">
+      <rect x="4" y="4" width="40" height="40" rx="12" fill="#1aad19" />
+      <path fill="#fff" d="M21.4 15.2c-5.25 0-9.4 3.38-9.4 7.55 0 2.38 1.36 4.46 3.54 5.84l-.84 2.82 3.2-1.62c1.08.34 2.26.52 3.5.52 5.25 0 9.4-3.38 9.4-7.56s-4.15-7.55-9.4-7.55Z" />
+      <path fill="#fff" opacity=".78" d="M28.7 23.8c-4.45 0-8.02 2.88-8.02 6.42s3.57 6.42 8.02 6.42c.98 0 1.92-.14 2.8-.4l2.68 1.32-.7-2.2c1.96-1.18 3.24-3.05 3.24-5.14 0-3.54-3.58-6.42-8.02-6.42Z" />
+      <circle cx="18.25" cy="21.22" r="1.22" fill="#1aad19" />
+      <circle cx="24.6" cy="21.22" r="1.22" fill="#1aad19" />
+      <circle cx="26.3" cy="29.25" r="1" fill="#1aad19" />
+      <circle cx="31.18" cy="29.25" r="1" fill="#1aad19" />
+    </svg>
+  );
+}
+
+function CardPayIcon() {
+  return (
+    <svg viewBox="0 0 48 48" aria-hidden="true" className="payment-brand-svg">
+      <rect x="4" y="4" width="40" height="40" rx="12" fill="#475569" />
+      <rect x="11" y="15" width="26" height="18" rx="4.5" fill="#fff" opacity=".96" />
+      <rect x="11" y="19" width="26" height="4" fill="#94a3b8" />
+      <rect x="15" y="27" width="10" height="2.8" rx="1.4" fill="#64748b" />
+      <circle cx="31" cy="28.5" r="2.6" fill="#f59e0b" />
+      <circle cx="34" cy="28.5" r="2.6" fill="#ef4444" opacity=".78" />
+    </svg>
+  );
+}
+
 export default function CheckoutPage() {
   const router = useRouter();
-  const { cart, hydrated, removeFromCart, replaceCart, clearCart } = useCart();
+  const { cart, cartPlans, hydrated, removeFromCart, replaceCart, clearCart, setCartPlan } = useCart();
   const [step, setStep] = useState("form");
   const [form, setForm] = useState(blankCheckoutForm);
   const [paymentMethod, setPaymentMethod] = useState("alipay");
@@ -78,6 +134,7 @@ export default function CheckoutPage() {
   const [authNotice, setAuthNotice] = useState("");
   const [pendingTrialSelection, setPendingTrialSelection] = useState(false);
   const [redeemMode, setRedeemMode] = useState({ loading: true, code: "", info: null });
+  const [urlRocketPlan, setUrlRocketPlan] = useState("");
   const [draftReady, setDraftReady] = useState(false);
 
   async function refreshAccountState(isCancelled = () => false) {
@@ -166,6 +223,7 @@ export default function CheckoutPage() {
         // into the per-product field so checkout totals + submitted item match.
         const rocketEntry = (data.services || []).find((s) => s.key === "rocket");
         if (rocketEntry && rocketEntry.plan) {
+          setCartPlan("rocket", rocketEntry.plan);
           setForm((current) => ({
             ...current,
             fields: {
@@ -188,6 +246,7 @@ export default function CheckoutPage() {
     if (params.get("redeem")) return;
     const rawItems = String(params.get("items") || "");
     if (!rawItems) return;
+    const rocketPlanParam = String(params.get("rocketPlan") || "");
     const valid = new Set(PRODUCTS.map((item) => item.key));
     const seen = new Set();
     const keys = rawItems
@@ -195,6 +254,19 @@ export default function CheckoutPage() {
       .map((item) => item.trim())
       .filter((key) => valid.has(key) && !seen.has(key) && seen.add(key));
     if (keys.length > 0) replaceCart(keys);
+    if (keys.includes("rocket") && ROCKET_PLANS[rocketPlanParam]) {
+      setUrlRocketPlan(rocketPlanParam);
+      setCartPlan("rocket", rocketPlanParam);
+      setForm((current) => ({
+        ...current,
+        fields: {
+          ...(current.fields || {}),
+          rocket: { ...((current.fields || {}).rocket || {}), plan: rocketPlanParam },
+        },
+      }));
+    } else {
+      setUrlRocketPlan("");
+    }
   }, []);
 
   useEffect(() => {
@@ -203,15 +275,26 @@ export default function CheckoutPage() {
       const params = new URLSearchParams(window.location.search);
       const hasRedeem = Boolean(params.get("redeem"));
       const hasItems = Boolean(params.get("items"));
+      const rawItems = String(params.get("items") || "");
+      const rocketPlanParam = String(params.get("rocketPlan") || "");
+      const explicitRocketPlan = ROCKET_PLANS[rocketPlanParam] ? rocketPlanParam : "";
+      const hasRocketInUrl = rawItems.split(",").map((item) => item.trim()).includes("rocket");
       const rawPending = window.localStorage.getItem(CHECKOUT_PENDING_KEY);
       const rawDraft = window.localStorage.getItem(CHECKOUT_DRAFT_KEY);
       const saved = rawPending ? JSON.parse(rawPending) : rawDraft ? JSON.parse(rawDraft) : null;
       if (saved && Date.now() - Number(saved.createdAt || 0) < CHECKOUT_DRAFT_MAX_AGE) {
         if (saved.form && typeof saved.form === "object") {
+          const savedFields = { ...((saved.form && saved.form.fields) || {}) };
+          if (hasRocketInUrl) {
+            const savedRocket = { ...(savedFields.rocket || {}) };
+            if (explicitRocketPlan) savedRocket.plan = explicitRocketPlan;
+            else delete savedRocket.plan;
+            savedFields.rocket = savedRocket;
+          }
           setForm((current) => ({
             ...current,
             ...saved.form,
-            fields: { ...(current.fields || {}), ...((saved.form && saved.form.fields) || {}) },
+            fields: { ...(current.fields || {}), ...savedFields },
           }));
         }
         if (["alipay", "usdt", "balance"].includes(saved.paymentMethod)) {
@@ -222,10 +305,6 @@ export default function CheckoutPage() {
           const keys = saved.cart.filter((key) => valid.has(key));
           if (keys.length > 0) replaceCart(keys);
         }
-        setStatus({
-          type: "info",
-          message: rawPending ? "已恢复上次未完成的订单内容，请核对后重新提交" : "已恢复上次未提交的填写内容",
-        });
       }
     } catch (e) {
       try {
@@ -252,17 +331,21 @@ export default function CheckoutPage() {
   const cartItems = cart.map((key) => PRODUCTS.find((p) => p.key === key)).filter(Boolean);
   const cartCount = cartItems.length;
   const cartHasRocket = cartItems.some((p) => p.key === "rocket");
-  const rocketPlanId = (form.fields?.rocket?.plan && ROCKET_PLANS[form.fields.rocket.plan])
-    ? form.fields.rocket.plan
-    : DEFAULT_ROCKET_PLAN;
-  const planMap = { rocket: rocketPlanId };
-  const subtotal = cartSubtotalCny(cartItems, planMap);
-  const discountRate = bundleDiscountRate(cartCount);
-  const bundleFinalCny = cartFinalCny(cartItems, planMap);
   const serviceRedeemActive = Boolean(redeemMode.info && redeemMode.info.type === "service");
   const serviceRedeemRocketPlan = serviceRedeemActive
     ? ((redeemMode.info?.services || []).find((s) => s.key === "rocket")?.plan || "")
     : "";
+  const rocketPlanId = serviceRedeemRocketPlan || (
+    urlRocketPlan && ROCKET_PLANS[urlRocketPlan]
+      ? urlRocketPlan
+      : form.fields?.rocket?.plan && ROCKET_PLANS[form.fields.rocket.plan]
+      ? form.fields.rocket.plan
+      : (cartPlans?.rocket && ROCKET_PLANS[cartPlans.rocket] ? cartPlans.rocket : DEFAULT_ROCKET_PLAN)
+  );
+  const planMap = { rocket: rocketPlanId };
+  const subtotal = cartSubtotalCny(cartItems, planMap);
+  const discountRate = bundleDiscountRate(cartCount);
+  const bundleFinalCny = cartFinalCny(cartItems, planMap);
   const rocketPlanInfo = getRocketPlan(rocketPlanId);
   const rocketTrialSelected = cartHasRocket && rocketPlanId === "trial";
   const couponEligibleCny = rocketTrialSelected
@@ -316,6 +399,7 @@ export default function CheckoutPage() {
         return;
       }
     }
+    setCartPlan("rocket", plan.id);
     updateProductField("rocket", "plan", plan.id);
   }
 
@@ -410,7 +494,7 @@ export default function CheckoutPage() {
       return "请填写有效的邮箱地址,客服将通过邮箱发送订单与开通信息";
     }
     if (contactRequired && !form.contact.trim()) {
-      return "Spotify 订单需要填写联系方式,工作人员会通过此方式联系您";
+      return "Spotify 订单需要填写联系方式,客服会通过此方式联系您";
     }
     if (rocketTrialSelected && !authedUser) {
       return "5元10GB测试套餐需要先登录后购买";
@@ -463,7 +547,7 @@ export default function CheckoutPage() {
         password: productNeedsAccountPassword(p) ? (f.password || "").trim() : "",
       };
       if (p.key === "rocket") {
-        item.rocketPlan = ROCKET_PLANS[f.plan] ? f.plan : DEFAULT_ROCKET_PLAN;
+        item.rocketPlan = planMap.rocket || DEFAULT_ROCKET_PLAN;
       }
       return item;
     });
@@ -526,7 +610,7 @@ export default function CheckoutPage() {
     return (
       <div className="checkout-page">
         <header className="checkout-header">
-          <Link href="/" className="checkout-back">
+          <Link href="/shop" className="checkout-back">
             <ArrowLeft size={16} />
             <img src="/logo.png" alt="冒央会社" className="checkout-logo" />
           </Link>
@@ -538,8 +622,9 @@ export default function CheckoutPage() {
         <div className="checkout-empty checkout-loading-state">
           <LoaderCircle size={46} className="checkout-empty-icon spin-icon" />
           <h2>正在恢复订单</h2>
-          <p>正在核对购物车、兑换码与未完成订单内容</p>
+          <p>正在恢复未完成订单</p>
         </div>
+        <FloatingSupport />
       </div>
     );
   }
@@ -549,7 +634,7 @@ export default function CheckoutPage() {
     return (
       <div className="checkout-page">
         <header className="checkout-header">
-          <Link href="/" className="checkout-back">
+          <Link href="/shop" className="checkout-back">
             <ArrowLeft size={16} />
             <img src="/logo.png" alt="冒央会社" className="checkout-logo" />
           </Link>
@@ -561,12 +646,13 @@ export default function CheckoutPage() {
         <div className="checkout-empty">
           <ShoppingCart size={64} className="checkout-empty-icon" />
           <h2>购物车为空</h2>
-          <p>还没有选购商品,先回首页看看吧</p>
-          <Link href="/" className="primary-btn primary-btn-lg">
+          <p>先选择需要开通的服务</p>
+          <Link href="/shop" className="primary-btn primary-btn-lg">
             <ArrowLeft size={15} />
-            返回首页选购
+            前往选购
           </Link>
         </div>
+        <FloatingSupport />
       </div>
     );
   }
@@ -574,7 +660,7 @@ export default function CheckoutPage() {
   return (
     <div className="checkout-page">
       <header className="checkout-header">
-        <Link href="/" className="checkout-back">
+        <Link href="/shop" className="checkout-back">
           <ArrowLeft size={16} />
           <img src="/logo.png" alt="冒央会社" className="checkout-logo" />
         </Link>
@@ -624,7 +710,7 @@ export default function CheckoutPage() {
               <section className="checkout-card">
                 <div className="checkout-card-head">
                   <h3>已选商品 <em>{cartCount}</em></h3>
-                  {!serviceRedeemActive && <Link href="/#products" className="text-link">+ 继续选购</Link>}
+                  {!serviceRedeemActive && <Link href="/shop" className="text-link">+ 继续选购</Link>}
                 </div>
                 <div className="cart-items-grid">
                   {cartItems.map((item) => {
@@ -657,51 +743,6 @@ export default function CheckoutPage() {
                 </div>
               </section>
 
-              {/* Rocket plan picker (机场节点 套餐选择) */}
-              {cartHasRocket && (
-                <section className="checkout-card">
-                  <div className="checkout-card-head">
-                    <h3>机场节点 · 套餐选择</h3>
-                    {serviceRedeemActive && serviceRedeemRocketPlan && (
-                      <span className="checkout-card-note">兑换码已锁定套餐</span>
-                    )}
-                  </div>
-                  <div className="rocket-plan-picker">
-                    {Object.values(ROCKET_PLANS).map((plan) => {
-                      const selected = rocketPlanId === plan.id;
-                      const locked = serviceRedeemActive && serviceRedeemRocketPlan && serviceRedeemRocketPlan !== plan.id;
-                      const trialAlreadyBought = plan.id === "trial" && hasBoughtRocketTrial;
-                      const meta = plan.id === "trial"
-                        ? [plan.requiresLogin ? "需登录" : "", plan.onePerUser ? "每账号限购一次" : "", trialAlreadyBought ? "已购买" : ""].filter(Boolean).join(" · ")
-                        : plan.desc;
-                      return (
-                        <label
-                          key={plan.id}
-                          className={`rocket-plan-option${selected ? " selected" : ""}${locked || trialAlreadyBought ? " locked" : ""}`}
-                        >
-                          <input
-                            type="radio"
-                            name="rocketPlan"
-                            value={plan.id}
-                            checked={selected}
-                            onChange={() => handleRocketPlanSelect(plan)}
-                            disabled={locked || trialAlreadyBought}
-                          />
-                          <div className="rocket-plan-info">
-                            <strong>{plan.label}</strong>
-                            <small>{meta}</small>
-                          </div>
-                          <div className="rocket-plan-price">
-                            <b>¥{plan.amount}</b>
-                            <em>/{plan.unit || "年"}</em>
-                          </div>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </section>
-              )}
-
               {/* Per-product extra fields */}
               {cartItems.some((p) => productNeedsAccountPassword(p)) && (
                 <section className="checkout-card">
@@ -725,7 +766,19 @@ export default function CheckoutPage() {
                               />
                             </label>
                             <label className="order-field">
-                              <span>{p.title} · 密码</span>
+                              <span className="order-field-label-row">
+                                <span>{p.title} · 密码</span>
+                                {p.key === "spotify" && (
+                                  <a
+                                    className="order-field-help-link"
+                                    href="https://accounts.spotify.com/en/password-reset"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                  >
+                                    忘记 Spotify 密码？点击找回
+                                  </a>
+                                )}
+                              </span>
                               <div className="password-input-wrap">
                                 <input
                                   type={passwordVisible ? "text" : "password"}
@@ -859,7 +912,7 @@ export default function CheckoutPage() {
                         checked={paymentMethod === "alipay"}
                         onChange={() => setPaymentMethod("alipay")}
                       />
-                      <div className="payment-method-icon alipay">支付宝</div>
+                      <div className="payment-method-icon alipay"><AlipayIcon /></div>
                       <div className="payment-method-detail">
                         <strong>¥{finalCny}</strong>
                         <small>担保支付 · 即时到账</small>
@@ -873,7 +926,7 @@ export default function CheckoutPage() {
                         checked={paymentMethod === "usdt"}
                         onChange={() => setPaymentMethod("usdt")}
                       />
-                      <div className="payment-method-icon usdt">USDT</div>
+                      <div className="payment-method-icon usdt"><UsdtIcon /></div>
                       <div className="payment-method-detail">
                         <strong>{finalUsdt} USDT</strong>
                         <small>9 折优惠 · TRC20</small>
@@ -890,7 +943,7 @@ export default function CheckoutPage() {
                           onChange={() => authedUser.balance >= finalCny && setPaymentMethod("balance")}
                           disabled={authedUser.balance < finalCny}
                         />
-                        <div className="payment-method-icon balance">余额</div>
+                        <div className="payment-method-icon balance"><BalanceIcon /></div>
                         <div className="payment-method-detail">
                           <strong>账户余额支付</strong>
                           <small>余额 ¥{authedUser.balance.toFixed(2)}{authedUser.balance < finalCny ? " · 余额不足" : " · 一键扣款"}</small>
@@ -899,18 +952,18 @@ export default function CheckoutPage() {
                     )}
                     <label className="payment-method-option disabled">
                       <input type="radio" name="paymentMethod" disabled />
-                      <div className="payment-method-icon wechat">微信</div>
+                      <div className="payment-method-icon wechat"><WechatIcon /></div>
                       <div className="payment-method-detail">
                         <strong>微信支付</strong>
-                        <small>支付通道维护中,暂不可用</small>
+                        <small>暂未开放,请选择其他方式</small>
                       </div>
                     </label>
                     <label className="payment-method-option disabled">
                       <input type="radio" name="paymentMethod" disabled />
-                      <div className="payment-method-icon card">CARD</div>
+                      <div className="payment-method-icon card"><CardPayIcon /></div>
                       <div className="payment-method-detail">
                         <strong>Mastercard / Visa</strong>
-                        <small>支付通道维护中,暂不可用</small>
+                        <small>暂未开放,请选择其他方式</small>
                       </div>
                     </label>
                   </div>
@@ -974,7 +1027,7 @@ export default function CheckoutPage() {
                   ? `请使用 TRON (TRC20) 网络转账精确金额 ${finalUsdt} USDT 到下方地址,付款完成后请记得返回本页面点击「付款完成」按钮提交订单`
                   : paymentMethod === "balance"
                   ? `点击下方「确认扣款并提交订单」后,系统将自动从您的账户余额(¥${authedUser?.balance.toFixed(2) || "0.00"})扣除 ¥${finalCny},随后提交订单`
-                  : "请按上方金额完成支付宝付款，付款完成后请记得返回本页面点击「付款完成」按钮,工作人员 10 分钟内处理"}
+                  : "请按上方金额完成支付宝付款，付款完成后返回本页面点击「付款完成」提交订单"}
               </div>
 
               {/* QR 二维码 — 只对支付宝/USDT 显示,余额支付不需要 */}
@@ -1131,16 +1184,18 @@ export default function CheckoutPage() {
             )}
 
             <div className="checkout-done-actions">
-              <Link href="/" className="primary-btn primary-btn-lg">
-                返回首页
+              <Link href="/shop" className="primary-btn primary-btn-lg">
+                继续选购
               </Link>
-              <Link href="/#order-query" className="secondary-btn">
+              <Link href="/service-center#order-query" className="secondary-btn">
                 查询订单状态
               </Link>
             </div>
           </section>
         )}
       </main>
+
+      <FloatingSupport />
 
       {authModal && (
         <div

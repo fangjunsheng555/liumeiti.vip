@@ -14,7 +14,7 @@ function formatMoney(value) { return "¥" + Number(value || 0).toFixed(0); }
 export function buildCompletionEmailHtml({ order, brandName, siteDomain, siteUrl, supportContact }) {
   const items = Array.isArray(order.items) ? order.items : [];
   const isUsdt = order.paymentMethod === "usdt";
-  const orderQueryUrl = `${siteUrl || "https://" + (siteDomain || "")}/?order=${encodeURIComponent(order.orderId)}`;
+  const orderQueryUrl = `${siteUrl || "https://" + (siteDomain || "")}/service-center?order=${encodeURIComponent(order.orderId)}`;
 
   const itemsRows = items.map((it, idx) => {
     // Use staff-filled credentials if present, otherwise buyer's
@@ -74,7 +74,7 @@ export function buildCompletionEmailHtml({ order, brandName, siteDomain, siteUrl
             <span style="font-size:36px;color:#047857;">🎉</span>
           </div>
           <h1 style="margin:0 0 8px;font-size:24px;font-weight:900;letter-spacing:-0.03em;color:#0f172a;">订单已开通</h1>
-          <p style="margin:0;color:#64748b;font-size:14px;line-height:1.6;">您的服务已就绪,请查收下方账号信息<br>有任何问题随时联系在线客服。</p>
+          <p style="margin:0;color:#64748b;font-size:14px;line-height:1.6;">您的服务已就绪,请查收下方账号信息<br>有任何问题随时联系在线客服</p>
         </td></tr>
 
         <tr><td style="padding:18px 32px 0;">
@@ -141,7 +141,7 @@ export function buildCompletionEmailHtml({ order, brandName, siteDomain, siteUrl
 
 export function buildCompletionEmailText({ order, brandName, siteDomain, siteUrl }) {
   const items = Array.isArray(order.items) ? order.items : [];
-  const queryUrl = `${siteUrl || "https://" + (siteDomain || "")}/?order=${encodeURIComponent(order.orderId)}`;
+  const queryUrl = `${siteUrl || "https://" + (siteDomain || "")}/service-center?order=${encodeURIComponent(order.orderId)}`;
   const lines = [
     `${brandName} - 订单已开通 🎉`,
     `===========================`,
@@ -166,6 +166,6 @@ export function buildCompletionEmailText({ order, brandName, siteDomain, siteUrl
   if (order.staffNotes) {
     lines.push(``, `客服备注:`, order.staffNotes);
   }
-  lines.push(``, `如有问题请联系在线客服。`, `查询订单: ${queryUrl}`);
+  lines.push(``, `如有问题请联系在线客服`, `查询订单: ${queryUrl}`);
   return lines.join("\n");
 }

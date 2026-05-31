@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import MobileNav from "../components/MobileNav";
+import FloatingSupport from "../components/FloatingSupport";
 import {
-  ArrowLeft, ArrowRight, CheckCircle2, Clock, Copy,
+  ArrowRight, CheckCircle2, Clock, Copy,
   LoaderCircle, LogOut, Mail, ShoppingBag, X,
   AlertTriangle, Wallet, TrendingDown, TrendingUp,
   User, Edit3, Check,
-  Gift, Send, CreditCard,
+  Gift, Send, CreditCard, RefreshCw,
 } from "lucide-react";
 
 const STATUS_LABEL = { received: "订单已收到", completed: "订单已完成", invalid: "订单无效·未收到付款" };
@@ -15,6 +17,17 @@ const STATUS_LABEL = { received: "订单已收到", completed: "订单已完成"
 function copy(text) {
   if (typeof window === "undefined") return;
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).catch(() => {});
+}
+
+function GoogleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="oauth-provider-icon">
+      <path fill="#4285F4" d="M21.6 12.23c0-.74-.07-1.45-.19-2.13H12v4.03h5.38a4.6 4.6 0 0 1-2 3.02v2.51h3.24c1.9-1.75 2.98-4.33 2.98-7.43Z" />
+      <path fill="#34A853" d="M12 22c2.7 0 4.97-.9 6.62-2.34l-3.24-2.51c-.9.6-2.05.95-3.38.95-2.6 0-4.81-1.76-5.6-4.12H3.06v2.59A9.99 9.99 0 0 0 12 22Z" />
+      <path fill="#FBBC05" d="M6.4 13.98A6.01 6.01 0 0 1 6.08 12c0-.69.12-1.35.32-1.98V7.43H3.06A9.99 9.99 0 0 0 2 12c0 1.61.39 3.13 1.06 4.57l3.34-2.59Z" />
+      <path fill="#EA4335" d="M12 5.9c1.47 0 2.79.51 3.83 1.5l2.87-2.87C16.96 2.91 14.7 2 12 2a9.99 9.99 0 0 0-8.94 5.43l3.34 2.59C7.19 7.66 9.4 5.9 12 5.9Z" />
+    </svg>
+  );
 }
 
 export default function AccountPage() {
@@ -34,6 +47,12 @@ export default function AccountPage() {
   const [moneyModal, setMoneyModal] = useState(null);
   const [moneyBusy, setMoneyBusy] = useState("");
   const [moneyStatus, setMoneyStatus] = useState(null);
+  const [authMode, setAuthMode] = useState("login");
+  const [authForm, setAuthForm] = useState({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
+  const [authCaptcha, setAuthCaptcha] = useState({ a: 0, b: 0 });
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [authNotice, setAuthNotice] = useState("");
 
   async function load() {
     setState((s) => ({ ...s, loading: true }));
@@ -43,7 +62,7 @@ export default function AccountPage() {
         fetch("/api/auth/balance", { credentials: "same-origin" }),
       ]);
       if (meRes.status === 401) {
-        window.location.href = "/?auth=login";
+        setState({ loading: false, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [] });
         return;
       }
       const me = await meRes.json();
@@ -67,9 +86,92 @@ export default function AccountPage() {
 
   useEffect(() => { load(); }, []);
 
+  useEffect(() => {
+    setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
+  }, [authMode]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("auth");
+    if (status === "register") setAuthMode("register");
+    if (status === "oauth_new") setAuthNotice("注册成功,新用户 ¥8.88 优惠券已发放,结算时自动抵扣");
+    if (status === "oauth_ok") setAuthNotice("Google 登录成功");
+    const oauthErrorMap = {
+      google_not_configured: "第三方登录尚未配置,请先使用邮箱登录或注册",
+      invalid_oauth_state: "Google 登录状态已失效，请重新点击 Google 登录",
+      invalid_client: "Google Client ID 或 Client Secret 不匹配，请检查 Vercel 环境变量和 Google Cloud OAuth 客户端",
+      redirect_uri_mismatch: "Google 回调地址不匹配，请在 Google Cloud 中添加 https://liumeiti.vip/api/auth/oauth/google/callback",
+      access_denied: "你取消了 Google 授权",
+      oauth_failed: "Google 登录失败，请稍后重试或检查 OAuth 配置",
+      email_not_verified: "Google 邮箱未验证，暂时无法登录",
+    };
+    if (oauthErrorMap[status]) {
+      setAuthMode("login");
+      setAuthError(oauthErrorMap[status]);
+    }
+  }, []);
+
   async function logout() {
     await fetch("/api/auth/login", { method: "DELETE" });
     window.location.href = "/";
+  }
+
+  async function doAuth(e) {
+    e.preventDefault();
+    if (authBusy) return;
+    setAuthBusy(true);
+    setAuthError("");
+    setAuthNotice("");
+    try {
+      let payload = {};
+      if (authMode === "login") payload = { email: authForm.email.trim(), password: authForm.password };
+      if (authMode === "register") payload = {
+        email: authForm.email.trim(),
+        password: authForm.password,
+        captchaA: authCaptcha.a,
+        captchaB: authCaptcha.b,
+        captchaAnswer: Number(authForm.captchaAnswer),
+      };
+      if (authMode === "forgot") payload = { email: authForm.email.trim() };
+      if (authMode === "reset") payload = {
+        email: authForm.email.trim(),
+        code: authForm.code.trim(),
+        newPassword: authForm.newPassword,
+      };
+      const res = await fetch(`/api/auth/${authMode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (authMode === "forgot") {
+        setAuthNotice("验证码已发送至邮箱。请查看收件箱(或垃圾邮件)");
+        setAuthMode("reset");
+        setAuthForm((f) => ({ ...f, code: "", newPassword: "" }));
+        return;
+      }
+      if (data.ok) {
+        await load();
+        return;
+      }
+      const msg = {
+        captcha_failed: "人机验证失败,请重新计算",
+        email_taken: "该邮箱已注册",
+        invalid_email: "邮箱格式错误",
+        password_length: "密码 6-64 位",
+        invalid_credentials: "邮箱或密码错误",
+        invalid_code: "验证码格式错误(6 位数字)",
+        code_invalid_or_expired: "验证码错误或已过期",
+        user_not_found: "该邮箱未注册",
+      }[data.error] || data.error || "操作失败";
+      setAuthError(msg);
+      if (authMode === "register") setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
+    } catch (error) {
+      setAuthError("网络错误");
+    } finally {
+      setAuthBusy(false);
+    }
   }
 
   function handleCopy(text, key) {
@@ -146,11 +248,101 @@ export default function AccountPage() {
     return <div className="account-loading"><LoaderCircle size={28} className="spin-icon" /></div>;
   }
 
+  if (!state.email) {
+    return (
+      <div className="account-page account-auth-page">
+        <header className="account-header">
+          <Link href="/" className="account-brand-only" aria-label="冒央会社首页">
+            <img src="/logo.png" alt="冒央会社" className="account-logo" />
+          </Link>
+        </header>
+        <main className="account-main">
+          <section className="auth-modal account-auth-card">
+            <div className="auth-modal-head">
+              {authMode === "login" || authMode === "register" ? (
+                <div className="auth-modal-tabs">
+                  <button type="button" className={`auth-tab${authMode === "login" ? " active" : ""}`} onClick={() => setAuthMode("login")}>登录</button>
+                  <button type="button" className={`auth-tab register-tab${authMode === "register" ? " active" : ""}`} onClick={() => setAuthMode("register")}>
+                    注册
+                    <span className="auth-tab-tip">立减¥8.88</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="auth-modal-title">{authMode === "forgot" ? "找回密码" : "重置密码"}</div>
+              )}
+            </div>
+            <form className="auth-form" onSubmit={doAuth}>
+              <label className="auth-field">
+                <span>邮箱</span>
+                <input type="email" value={authForm.email} onChange={(e) => setAuthForm((f) => ({ ...f, email: e.target.value }))} placeholder="example@email.com" required />
+              </label>
+              {(authMode === "login" || authMode === "register") && (
+                <label className="auth-field">
+                  <span>{authMode === "register" ? "密码 (6-64 位)" : "密码"}</span>
+                  <input type="password" value={authForm.password} onChange={(e) => setAuthForm((f) => ({ ...f, password: e.target.value }))} placeholder={authMode === "register" ? "设置一个密码" : "登录密码"} required />
+                </label>
+              )}
+              {authMode === "register" && (
+                <label className="auth-field auth-captcha">
+                  <span>人机验证</span>
+                  <div className="auth-captcha-row">
+                    <div className="auth-captcha-question">{authCaptcha.a} + {authCaptcha.b} =</div>
+                    <input value={authForm.captchaAnswer} onChange={(e) => setAuthForm((f) => ({ ...f, captchaAnswer: e.target.value }))} placeholder="?" inputMode="numeric" required />
+                    <button type="button" className="auth-captcha-refresh" onClick={() => setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) })}>
+                      <RefreshCw size={15} />
+                    </button>
+                  </div>
+                </label>
+              )}
+              {authMode === "reset" && (
+                <>
+                  <label className="auth-field">
+                    <span>验证码</span>
+                    <input value={authForm.code} onChange={(e) => setAuthForm((f) => ({ ...f, code: e.target.value }))} placeholder="6 位验证码" inputMode="numeric" required />
+                  </label>
+                  <label className="auth-field">
+                    <span>新密码</span>
+                    <input type="password" value={authForm.newPassword} onChange={(e) => setAuthForm((f) => ({ ...f, newPassword: e.target.value }))} placeholder="设置新密码" required />
+                  </label>
+                </>
+              )}
+              {authNotice && <div className="auth-notice">{authNotice}</div>}
+              {authError && <div className="auth-error">{authError}</div>}
+              <button type="submit" className="auth-submit" disabled={authBusy}>
+                {authBusy ? <><LoaderCircle size={14} className="spin-icon" />处理中</> : authMode === "register" ? "注册并登录" : authMode === "forgot" ? "发送验证码" : authMode === "reset" ? "重置并登录" : "登录"}
+              </button>
+              {(authMode === "login" || authMode === "register") && (
+                <>
+                  <div className="auth-divider"><span>或使用</span></div>
+                  <div className="oauth-login-grid bottom">
+                    <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />Google 登录</a>
+                  </div>
+                </>
+              )}
+              <div className="auth-hints">
+                {authMode === "login" && (
+                  <>
+                    <button type="button" className="auth-switch" onClick={() => setAuthMode("forgot")}>忘记密码?</button>
+                    <span className="auth-hint">还没账号? <button type="button" className="auth-switch" onClick={() => setAuthMode("register")}>立即注册</button></span>
+                  </>
+                )}
+                {authMode === "register" && <span className="auth-hint">已有账号? <button type="button" className="auth-switch" onClick={() => setAuthMode("login")}>去登录</button></span>}
+                {authMode === "forgot" && <button type="button" className="auth-switch" onClick={() => setAuthMode("login")}>返回登录</button>}
+                {authMode === "reset" && <button type="button" className="auth-switch" onClick={() => setAuthMode("forgot")}>重新发送验证码</button>}
+              </div>
+            </form>
+          </section>
+        </main>
+        <FloatingSupport />
+        <MobileNav />
+      </div>
+    );
+  }
+
   return (
     <div className="account-page">
       <header className="account-header">
-        <Link href="/" className="account-back">
-          <ArrowLeft size={15} />
+        <Link href="/" className="account-brand-only" aria-label="冒央会社首页">
           <img src="/logo.png" alt="冒央会社" className="account-logo" />
         </Link>
         <button type="button" className="account-logout" onClick={logout}>
@@ -289,7 +481,7 @@ export default function AccountPage() {
             <div className="account-tool-head"><Gift size={14} />余额兑换码</div>
             <label className="account-tool-field full">
               <span>兑换码</span>
-              <input value={moneyForm.redeemCode} onChange={(e) => updateMoneyField("redeemCode", e.target.value.toUpperCase())} placeholder="输入工作人员发放的兑换码" autoComplete="off" required />
+              <input value={moneyForm.redeemCode} onChange={(e) => updateMoneyField("redeemCode", e.target.value.toUpperCase())} placeholder="输入余额兑换码" autoComplete="off" required />
             </label>
             <button type="submit" disabled={moneyBusy === "redeem"}>{moneyBusy === "redeem" ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}立即兑换</button>
           </form>
@@ -325,7 +517,7 @@ export default function AccountPage() {
         <section className="account-orders">
           <div className="account-orders-head">
             <div>
-              <div className="section-kicker">My Orders</div>
+              <div className="section-kicker">我的订单</div>
               <h2>我的订单</h2>
             </div>
             <span className="account-orders-count">{state.orders.length} 笔</span>
@@ -335,7 +527,7 @@ export default function AccountPage() {
             <div className="account-empty">
               <ShoppingBag size={36} />
               <p>暂无订单</p>
-              <Link href="/#products" className="account-empty-cta">前往选购</Link>
+              <Link href="/shop" className="account-empty-cta">前往选购</Link>
             </div>
           ) : (
             <div className="account-orders-list">
@@ -526,6 +718,8 @@ export default function AccountPage() {
           </div>
         </div>
       )}
+      <FloatingSupport />
+      <MobileNav />
     </div>
   );
 }

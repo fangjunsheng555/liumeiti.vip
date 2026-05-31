@@ -34,7 +34,7 @@ export function buildRedeemEmailText({ code, type, services, amount, brandName, 
     `兑换码: ${code}`,
     `内容: ${valueText}`,
     ``,
-    `点击下面的链接前往首页兑换 (链接已自动填入兑换码)：`,
+    `点击下面的链接前往服务中心兑换 (链接已自动填入兑换码)：`,
     redeemUrl,
     ``,
     isService
@@ -121,9 +121,9 @@ export function buildRedeemEmailHtml({
             <td style="padding:22px 32px 0;text-align:center;">
               <a href="${escapeHtml(redeemUrl)}"
                  style="display:inline-block;padding:14px 36px;background:linear-gradient(135deg,#0f766e 0%,#134e4a 100%);color:#ffffff;text-decoration:none;font-size:15px;font-weight:800;letter-spacing:0.02em;border-radius:999px;box-shadow:0 6px 18px rgba(15,118,110,0.28);">
-                立即兑换 →
+                 立即兑换 →
               </a>
-              <div style="margin-top:10px;font-size:11.5px;color:#94a3b8;">点击按钮跳转首页兑换区域，兑换码已为您自动填入</div>
+              <div style="margin-top:10px;font-size:11.5px;color:#94a3b8;">点击按钮跳转服务中心兑换区域，兑换码已为您自动填入</div>
             </td>
           </tr>
 
@@ -146,7 +146,7 @@ export function buildRedeemEmailHtml({
             <td style="padding:18px 32px 0;">
               <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:6px;">无法点击按钮？</div>
               <p style="margin:0;font-size:12.5px;color:#475569;line-height:1.65;">
-                请复制下方链接到浏览器打开，或直接访问 <a href="${escapeHtml(siteUrl)}" style="color:#0f766e;font-weight:700;text-decoration:underline;">${escapeHtml(siteDomain)}</a> 在「兑换码兑换」中粘贴兑换码
+                请复制下方链接到浏览器打开，或直接访问 <a href="${escapeHtml(siteUrl)}" style="color:#0f766e;font-weight:700;text-decoration:underline;">${escapeHtml(siteDomain)}</a> 在首页兑换区域中粘贴兑换码
               </p>
               <div style="margin-top:6px;padding:10px 12px;background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:#334155;word-break:break-all;">${escapeHtml(redeemUrl)}</div>
             </td>

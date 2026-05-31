@@ -2,7 +2,7 @@ import './globals.css';
 
 const siteUrl = 'https://liumeiti.vip';
 const siteTitle = '冒央会社-流媒体会员服务';
-const siteDescription = '冒央会社 Maoyang Taiwan Inc，提供 Spotify、Netflix、Disney+、HBO Max、机场节点等流媒体会员服务，支持支付宝担保支付、USDT 支付、订单查询与在线客服售后。';
+const siteDescription = '冒央会社 Maoyang Taiwan Inc，提供 Spotify、Netflix、Disney+、HBO Max、机场节点等流媒体会员服务，支持支付宝担保支付、USDT 支付、订单查询与在线客服售后';
 
 export const metadata = {
   metadataBase: new URL(siteUrl),

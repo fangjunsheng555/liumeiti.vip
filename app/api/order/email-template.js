@@ -29,7 +29,7 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
   const itemCount = items.length;
   const isCart = itemCount > 1;
 
-  const orderQueryUrl = `${siteUrl || "https://" + (siteDomain || "")}/?order=${encodeURIComponent(order.orderId)}`;
+  const orderQueryUrl = `${siteUrl || "https://" + (siteDomain || "")}/service-center?order=${encodeURIComponent(order.orderId)}`;
 
   // Render items rows
   const itemsRows = items.map((it, idx) => {
@@ -256,7 +256,7 @@ export function buildOrderEmailText({ order, brandName, siteDomain, siteUrl, usd
     ? order.items
     : [{ label: order.serviceLabel || "订单", cycle: order.cycle || "1年", amount: order.finalAmount || 0, account: order.account, password: order.password, service: order.service }];
   const isCart = items.length > 1;
-  const queryUrl = `${siteUrl || "https://" + (siteDomain || "")}/?order=${encodeURIComponent(order.orderId)}`;
+  const queryUrl = `${siteUrl || "https://" + (siteDomain || "")}/service-center?order=${encodeURIComponent(order.orderId)}`;
   const lines = [
     `${brandName} - 订单确认`,
     `===========================`,
@@ -290,6 +290,6 @@ export function buildOrderEmailText({ order, brandName, siteDomain, siteUrl, usd
   } else {
     lines.push(`实付: ¥${order.finalAmount}`);
   }
-  lines.push(``, `工作人员将在 10 分钟内处理您的订单。`, `查询订单请访问: ${queryUrl}`);
+  lines.push(``, `工作人员将在 10 分钟内处理您的订单`, `查询订单请访问: ${queryUrl}`);
   return lines.join("\n");
 }

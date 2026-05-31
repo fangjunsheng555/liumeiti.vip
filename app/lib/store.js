@@ -88,15 +88,15 @@ export const PRODUCTS = [
     cycle: "1年",
     needsUsername: true,
     hasPlan: true,
-    price: "¥128 起 / 年",
+    price: "¥128/1年起",
     shortIntro: "大厂机房多线路，最高5Gbps带宽，按月提供真实流量，解锁流媒体/AI/社交软件",
     highlights: ["真实流量套餐", "高速稳定多节点", "全加密无日志"],
     detailTitle: "大厂机房多线路，真实流量套餐可选，年仅 ¥128 起",
     detailBody:
-      "优选大厂VPS，多线路港日台韩新美英德法等，最高速率可达5Gbps，高峰不拥堵不卡顿，解锁所有主流流媒体/AI软件/社交软件，全加密协议无日志隐私保障，实时维护24×7线路不中断。可选 普通套餐 ¥128/年（50GB/月真实流量）、高级套餐 ¥198/年（100GB/月真实流量）、豪华套餐 ¥398/年（200GB/月真实流量）、无限套餐 ¥698/年（无限流量）。另有 ¥5/次 10GB 测试套餐，需登录且每账号限购一次。",
+      "优选大厂VPS，多线路港日台韩新美英德法等，最高速率可达5Gbps，高峰不拥堵不卡顿，解锁所有主流流媒体/AI软件/社交软件，全加密协议无日志隐私保障，实时维护24×7线路不中断。可选 普通套餐 ¥128/年（50GB/月真实流量）、高级套餐 ¥198/年（100GB/月真实流量）、豪华套餐 ¥398/年（200GB/月真实流量）、无限套餐 ¥698/年（无限流量）。另有 ¥5/次 10GB 测试套餐",
     orderTitle: "机场节点 · 支付宝扫码支付",
     orderBody:
-      "请在支付完成后点击付款完成提交订单，系统自动将为你生成订阅链接。",
+      "请在支付完成后点击付款完成提交订单，系统自动将为你生成订阅链接",
     qrImage: "/payment/alipay.jpg",
   },
 ];
@@ -207,6 +207,7 @@ export function subscriptionLinks(username) {
 }
 
 const CART_STORAGE_KEY = "liumeiti:cart:v1";
+const CART_PLAN_STORAGE_KEY = "liumeiti:cart-plans:v1";
 const CART_EVENT = "liumeiti:cart-update";
 
 function loadCart() {
@@ -223,21 +224,59 @@ function loadCart() {
   }
 }
 
-function saveCart(cart) {
+function emitCartUpdate() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(CART_EVENT));
+}
+
+function saveCart(cart, emit = true) {
   try {
     localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
-    window.dispatchEvent(new Event(CART_EVENT));
+    if (emit) emitCartUpdate();
   } catch {}
+}
+
+function loadCartPlans() {
+  if (typeof window === "undefined") return {};
+  try {
+    const stored = localStorage.getItem(CART_PLAN_STORAGE_KEY);
+    if (!stored) return {};
+    const parsed = JSON.parse(stored);
+    if (!parsed || typeof parsed !== "object") return {};
+    const next = {};
+    if (parsed.rocket && ROCKET_PLANS[parsed.rocket]) next.rocket = parsed.rocket;
+    return next;
+  } catch {
+    return {};
+  }
+}
+
+function saveCartPlans(plans, emit = true) {
+  try {
+    localStorage.setItem(CART_PLAN_STORAGE_KEY, JSON.stringify(plans || {}));
+    if (emit) emitCartUpdate();
+  } catch {}
+}
+
+function saveCartBundle(cart, plans) {
+  saveCart(cart, false);
+  saveCartPlans(plans, false);
+  emitCartUpdate();
 }
 
 export function useCart() {
   const [cart, setCartState] = useState([]);
+  const [cartPlans, setCartPlansState] = useState({});
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     setCartState(loadCart());
+    setCartPlansState(loadCartPlans());
     setHydrated(true);
-    const sync = () => setCartState(loadCart());
+    const sync = () => {
+      setCartState(loadCart());
+      setCartPlansState(loadCartPlans());
+    };
     window.addEventListener(CART_EVENT, sync);
     window.addEventListener("storage", sync);
     return () => {
@@ -246,11 +285,20 @@ export function useCart() {
     };
   }, []);
 
-  function addToCart(key) {
+  function setCartPlan(key, planId) {
+    if (key !== "rocket" || !ROCKET_PLANS[planId]) return;
+    const next = { ...loadCartPlans(), [key]: planId };
+    setCartPlansState(next);
+    saveCartPlans(next);
+  }
+
+  function addToCart(key, options = {}) {
     setCartState((current) => {
-      if (current.includes(key)) return current;
-      const next = [...current, key];
-      saveCart(next);
+      const next = current.includes(key) ? current : [...current, key];
+      const nextPlans = { ...loadCartPlans() };
+      if (key === "rocket" && ROCKET_PLANS[options.plan]) nextPlans.rocket = options.plan;
+      setCartPlansState(nextPlans);
+      saveCartBundle(next, nextPlans);
       return next;
     });
   }
@@ -258,15 +306,27 @@ export function useCart() {
   function removeFromCart(key) {
     setCartState((current) => {
       const next = current.filter((k) => k !== key);
-      saveCart(next);
+      const nextPlans = { ...loadCartPlans() };
+      if (key === "rocket") {
+        delete nextPlans.rocket;
+      }
+      setCartPlansState(nextPlans);
+      saveCartBundle(next, nextPlans);
       return next;
     });
   }
 
-  function toggleCart(key) {
+  function toggleCart(key, options = {}) {
     setCartState((current) => {
-      const next = current.includes(key) ? current.filter((k) => k !== key) : [...current, key];
-      saveCart(next);
+      const removing = current.includes(key);
+      const next = removing ? current.filter((k) => k !== key) : [...current, key];
+      const nextPlans = { ...loadCartPlans() };
+      if (key === "rocket") {
+        if (removing) delete nextPlans.rocket;
+        else nextPlans.rocket = ROCKET_PLANS[options.plan] ? options.plan : DEFAULT_ROCKET_PLAN;
+      }
+      setCartPlansState(nextPlans);
+      saveCartBundle(next, nextPlans);
       return next;
     });
   }
@@ -276,14 +336,19 @@ export function useCart() {
     const seen = new Set();
     const next = (Array.isArray(keys) ? keys : [])
       .filter((key) => typeof key === "string" && valid.has(key) && !seen.has(key) && seen.add(key));
+    const currentPlans = loadCartPlans();
+    const nextPlans = {};
+    if (next.includes("rocket") && currentPlans.rocket) nextPlans.rocket = currentPlans.rocket;
     setCartState(next);
-    saveCart(next);
+    setCartPlansState(nextPlans);
+    saveCartBundle(next, nextPlans);
   }
 
   function clearCart() {
     setCartState([]);
-    saveCart([]);
+    setCartPlansState({});
+    saveCartBundle([], {});
   }
 
-  return { cart, hydrated, addToCart, removeFromCart, toggleCart, replaceCart, clearCart };
+  return { cart, cartPlans, hydrated, addToCart, removeFromCart, toggleCart, replaceCart, clearCart, setCartPlan };
 }
