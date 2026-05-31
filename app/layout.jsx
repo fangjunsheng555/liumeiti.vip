@@ -1,4 +1,5 @@
 import './globals.css';
+import ReferralTracker from './components/ReferralTracker';
 
 const siteUrl = 'https://liumeiti.vip';
 const siteTitle = '冒央会社-流媒体会员服务';
@@ -72,7 +73,10 @@ export const viewport = {
 export default function RootLayout({ children }) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body>
+        <ReferralTracker />
+        {children}
+      </body>
     </html>
   );
 }

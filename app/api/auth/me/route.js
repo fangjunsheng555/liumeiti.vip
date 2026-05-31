@@ -1,7 +1,7 @@
 import {
   getCookieFromRequest, verifySession, getAllOrders,
   getUser, setUser, validUsername, generateRandomUsername, clean,
-  publicCoupons,
+  publicCoupons, publicReferral, ensureUserReferralProfile,
 } from "../../_utils.js";
 
 function subscriptionLinks(username) {
@@ -81,6 +81,7 @@ export async function GET(request) {
     user.username = username;
     await setUser(sessionEmail, user);
   }
+  const profile = user ? await ensureUserReferralProfile(sessionEmail, user) : null;
 
   const all = await getAllOrders();
   // Match by user session email (preferred — captures orders where buyer
@@ -96,10 +97,11 @@ export async function GET(request) {
   return Response.json({
     ok: true,
     email: sessionEmail,
-    username: username || "",
-    balance: Number(user?.balance || 0),
-    coupons: publicCoupons(user),
-    banned: !!user?.banned,
+    username: profile?.username || username || "",
+    balance: Number(profile?.balance || 0),
+    coupons: publicCoupons(profile),
+    referral: publicReferral(profile),
+    banned: !!profile?.banned,
     orders: myOrders,
   });
 }

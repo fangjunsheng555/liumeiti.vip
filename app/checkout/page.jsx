@@ -134,6 +134,15 @@ function planMapFromServices(services) {
   return next;
 }
 
+function storedInviteCode() {
+  if (typeof window === "undefined") return "";
+  try {
+    return String(window.localStorage.getItem("lm_invite") || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 24);
+  } catch (e) {
+    return "";
+  }
+}
+
 export default function CheckoutPage() {
   const router = useRouter();
   const { cart, cartPlans, hydrated, removeFromCart, replaceCart, clearCart, setCartPlan } = useCart();
@@ -434,6 +443,7 @@ export default function CheckoutPage() {
           captchaA: authCaptcha.a,
           captchaB: authCaptcha.b,
           captchaAnswer: Number(authForm.captchaAnswer),
+          inviteCode: storedInviteCode(),
         };
       } else if (authModal === "forgot") {
         payload = { email: authForm.email.trim() };
@@ -555,6 +565,7 @@ export default function CheckoutPage() {
         remark: form.remark.trim(),
         paymentMethod,
         redeemCode: serviceRedeemActive ? redeemMode.code : "",
+        inviteCode: storedInviteCode(),
         items,
       };
       if (typeof window !== "undefined") {

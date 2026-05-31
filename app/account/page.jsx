@@ -9,7 +9,7 @@ import {
   LoaderCircle, LogOut, Mail, ShoppingBag, X,
   AlertTriangle, Wallet, TrendingDown, TrendingUp,
   User, Edit3, Check,
-  Gift, Send, CreditCard, RefreshCw,
+  Gift, Send, CreditCard, RefreshCw, Share2, BadgePercent,
 } from "lucide-react";
 
 const STATUS_LABEL = { received: "订单已收到", completed: "订单已完成", invalid: "订单无效·未收到付款" };
@@ -17,6 +17,21 @@ const STATUS_LABEL = { received: "订单已收到", completed: "订单已完成"
 function copy(text) {
   if (typeof window === "undefined") return;
   if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).catch(() => {});
+}
+
+function getStoredInviteCode() {
+  if (typeof window === "undefined") return "";
+  try {
+    return String(window.localStorage.getItem("lm_invite") || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 24);
+  } catch (e) {
+    return "";
+  }
+}
+
+function inviteLink(code) {
+  if (!code) return "";
+  const origin = typeof window !== "undefined" ? window.location.origin : "https://liumeiti.vip";
+  return `${origin}/?invite=${encodeURIComponent(code)}`;
 }
 
 function GoogleIcon() {
@@ -31,7 +46,7 @@ function GoogleIcon() {
 }
 
 export default function AccountPage() {
-  const [state, setState] = useState({ loading: true, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [] });
+  const [state, setState] = useState({ loading: true, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null });
   const [activeOrder, setActiveOrder] = useState(null);
   const [showTxs, setShowTxs] = useState(false);
   const [copiedKey, setCopiedKey] = useState("");
@@ -45,6 +60,7 @@ export default function AccountPage() {
     withdrawAmount: "", alipayAccount: "", realName: "",
   });
   const [moneyModal, setMoneyModal] = useState(null);
+  const [inviteModal, setInviteModal] = useState(false);
   const [moneyBusy, setMoneyBusy] = useState("");
   const [moneyStatus, setMoneyStatus] = useState(null);
   const [authMode, setAuthMode] = useState("login");
@@ -62,7 +78,7 @@ export default function AccountPage() {
         fetch("/api/auth/balance", { credentials: "same-origin" }),
       ]);
       if (meRes.status === 401) {
-        setState({ loading: false, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [] });
+        setState({ loading: false, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null });
         return;
       }
       const me = await meRes.json();
@@ -77,10 +93,11 @@ export default function AccountPage() {
           txs: bal.transactions || [],
           coupons: bal.coupons || me.coupons || [],
           withdrawals: bal.withdrawals || [],
+          referral: me.referral || bal.referral || null,
         });
       }
     } catch (e) {
-      setState({ loading: false, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [] });
+      setState({ loading: false, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null });
     }
   }
 
@@ -132,6 +149,7 @@ export default function AccountPage() {
         captchaA: authCaptcha.a,
         captchaB: authCaptcha.b,
         captchaAnswer: Number(authForm.captchaAnswer),
+        inviteCode: getStoredInviteCode(),
       };
       if (authMode === "forgot") payload = { email: authForm.email.trim() };
       if (authMode === "reset") payload = {
@@ -257,6 +275,14 @@ export default function AccountPage() {
           </Link>
         </header>
         <main className="account-main">
+          <section className="account-invite-poster">
+            <div className="account-invite-poster-icon"><BadgePercent size={20} /></div>
+            <div>
+              <span>邀请返佣活动</span>
+              <strong>注册即可获得专属邀请链接</strong>
+              <p>邀请下单可获得至高 15% 佣金，订单完成后自动计入账户余额</p>
+            </div>
+          </section>
           <section className="auth-modal account-auth-card">
             <div className="auth-modal-head">
               {authMode === "login" || authMode === "register" ? (
@@ -445,6 +471,7 @@ export default function AccountPage() {
             <button type="button" onClick={() => setMoneyModal("transfer")}><Send size={13} />转账</button>
             <button type="button" onClick={() => setMoneyModal("redeem")}><Gift size={13} />兑换</button>
             <button type="button" onClick={() => setMoneyModal("withdraw")}><CreditCard size={13} />提现</button>
+            <button type="button" onClick={() => setInviteModal(true)}><Share2 size={13} />邀请</button>
           </div>
 
           <form
@@ -618,6 +645,58 @@ export default function AccountPage() {
                 {moneyBusy ? "处理中" : moneyModal === "withdraw" ? "提交待审核" : "确认提交"}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {inviteModal && (
+        <div className="account-modal-mask" onClick={() => setInviteModal(false)}>
+          <div className="account-money-modal account-invite-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="account-modal-head">
+              <div>
+                <div className="account-modal-id">邀请返佣</div>
+                <div className="account-modal-status status-completed">最高 15% 佣金</div>
+              </div>
+              <button type="button" className="account-modal-close" onClick={() => setInviteModal(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="account-invite-modal-body">
+              <div className="account-invite-hero">
+                <span><BadgePercent size={15} />专属邀请链接</span>
+                <strong>邀请好友下单，订单完成后自动返佣</strong>
+                <p>佣金会在后台工作人员将订单标记为“已完成”后自动计入你的账户余额，可用于下单或申请提现</p>
+              </div>
+              <div className="account-invite-link-box">
+                <span>你的邀请链接</span>
+                <code>{inviteLink(state.referral?.inviteCode || "") || "正在生成专属链接"}</code>
+                <button
+                  type="button"
+                  disabled={!state.referral?.inviteCode}
+                  onClick={() => handleCopy(inviteLink(state.referral?.inviteCode || ""), "invite-link")}
+                >
+                  {copiedKey === "invite-link" ? "已复制" : <><Copy size={13} />复制链接</>}
+                </button>
+              </div>
+              <div className="account-invite-rule-list">
+                <div>
+                  <b>直接邀请下单</b>
+                  <p>他人通过你的专属链接进入网站并下单，订单完成后，你获得订单实付金额 10% 佣金</p>
+                </div>
+                <div>
+                  <b>一级代理永久绑定</b>
+                  <p>他人通过你的链接注册账号后，会永久成为你的一级代理；该用户以后每次下单完成，你都获得 10% 佣金</p>
+                </div>
+                <div>
+                  <b>二级代理返佣</b>
+                  <p>你的一级代理再邀请新用户下单或注册，该新用户属于你的二级代理；订单完成后，你可获得 5% 二级佣金</p>
+                </div>
+                <div>
+                  <b>结算规则</b>
+                  <p>返佣仅在订单由工作人员审核并标记为已完成后发放，未付款、无效订单、兑换码免支付订单不会产生有效佣金</p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

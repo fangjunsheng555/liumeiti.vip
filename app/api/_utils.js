@@ -743,6 +743,217 @@ export function publicCoupons(user) {
   }));
 }
 
+const INVITE_CODE_PREFIX_KEY = "liumeiti:invite-code:";
+export const REFERRAL_LEVEL_ONE_RATE = 0.10;
+export const REFERRAL_LEVEL_TWO_RATE = 0.05;
+
+function inviteCodeKey(code) {
+  return INVITE_CODE_PREFIX_KEY + normalizeInviteCode(code);
+}
+
+export function normalizeInviteCode(value) {
+  return clean(value, 40).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 24);
+}
+
+export function inviteCodeFromRequest(request) {
+  return normalizeInviteCode(getCookieFromRequest(request, "lm_invite") || "");
+}
+
+async function createUniqueInviteCode() {
+  for (let i = 0; i < 8; i += 1) {
+    const code = "MY" + randomBytes(4).toString("hex").toUpperCase();
+    const existing = await redisCmd(["GET", inviteCodeKey(code)]);
+    if (!existing) return code;
+  }
+  return "MY" + Date.now().toString(36).toUpperCase() + randomBytes(2).toString("hex").toUpperCase();
+}
+
+async function bindInviteCode(email, code) {
+  const normalized = normalizeInviteCode(code);
+  const lower = String(email || "").trim().toLowerCase();
+  if (!validEmail(lower) || !normalized) return false;
+  await redisCmd(["SET", inviteCodeKey(normalized), lower]);
+  return true;
+}
+
+export async function getUserByInviteCode(code) {
+  const normalized = normalizeInviteCode(code);
+  if (!normalized) return null;
+  let email = await redisCmd(["GET", inviteCodeKey(normalized)]);
+  if (validEmail(email)) {
+    const user = await getUser(email);
+    if (user) return { email: String(email).toLowerCase(), user };
+  }
+
+  const emails = await listAllUserEmails();
+  for (const item of emails) {
+    const lower = String(item || "").trim().toLowerCase();
+    const user = await getUser(lower);
+    if (user && normalizeInviteCode(user.inviteCode) === normalized) {
+      await bindInviteCode(lower, normalized);
+      return { email: lower, user };
+    }
+  }
+  return null;
+}
+
+export async function ensureUserReferralProfile(email, currentUser = null) {
+  const lower = String(email || "").trim().toLowerCase();
+  if (!validEmail(lower)) return null;
+  const user = currentUser || await getUser(lower);
+  if (!user) return null;
+  let changed = false;
+  if (!normalizeInviteCode(user.inviteCode)) {
+    user.inviteCode = await createUniqueInviteCode();
+    changed = true;
+  }
+  await bindInviteCode(lower, user.inviteCode);
+  if (changed) await setUser(lower, user);
+  return user;
+}
+
+export async function prepareNewUserReferralProfile(email, user, inviteCode = "") {
+  const lower = String(email || "").trim().toLowerCase();
+  const next = {
+    ...user,
+    inviteCode: normalizeInviteCode(user?.inviteCode) || await createUniqueInviteCode(),
+  };
+  const normalizedInvite = normalizeInviteCode(inviteCode);
+  if (normalizedInvite) {
+    const inviter = await getUserByInviteCode(normalizedInvite);
+    if (inviter && inviter.email !== lower) {
+      const inviterUser = await ensureUserReferralProfile(inviter.email, inviter.user);
+      next.invitedByEmail = inviter.email;
+      next.invitedByCode = inviterUser?.inviteCode || normalizedInvite;
+      next.invitedBy2Email = inviterUser?.invitedByEmail && inviterUser.invitedByEmail !== lower
+        ? inviterUser.invitedByEmail
+        : "";
+      next.invitedAt = new Date().toISOString();
+      next.invitedAtBeijing = formatBeijingTime(new Date());
+    }
+  }
+  await bindInviteCode(lower, next.inviteCode);
+  return next;
+}
+
+export function publicReferral(user) {
+  return {
+    inviteCode: normalizeInviteCode(user?.inviteCode),
+    invitedByEmail: validEmail(user?.invitedByEmail) ? String(user.invitedByEmail).toLowerCase() : "",
+    invitedBy2Email: validEmail(user?.invitedBy2Email) ? String(user.invitedBy2Email).toLowerCase() : "",
+    levelOneRate: REFERRAL_LEVEL_ONE_RATE,
+    levelTwoRate: REFERRAL_LEVEL_TWO_RATE,
+    totalRate: REFERRAL_LEVEL_ONE_RATE + REFERRAL_LEVEL_TWO_RATE,
+  };
+}
+
+export async function resolveReferralForOrder({ userEmail, inviteCode }) {
+  const buyerEmail = String(userEmail || "").trim().toLowerCase();
+  let firstEmail = "";
+  let secondEmail = "";
+  let source = "";
+  let code = "";
+
+  if (validEmail(buyerEmail)) {
+    const buyer = await ensureUserReferralProfile(buyerEmail);
+    if (buyer?.invitedByEmail && buyer.invitedByEmail !== buyerEmail) {
+      firstEmail = String(buyer.invitedByEmail).toLowerCase();
+      secondEmail = buyer.invitedBy2Email ? String(buyer.invitedBy2Email).toLowerCase() : "";
+      code = normalizeInviteCode(buyer.invitedByCode);
+      source = "registered_relation";
+    }
+  }
+
+  if (!firstEmail) {
+    const normalized = normalizeInviteCode(inviteCode);
+    const inviter = normalized ? await getUserByInviteCode(normalized) : null;
+    if (inviter && inviter.email !== buyerEmail) {
+      const inviterUser = await ensureUserReferralProfile(inviter.email, inviter.user);
+      firstEmail = inviter.email;
+      secondEmail = inviterUser?.invitedByEmail ? String(inviterUser.invitedByEmail).toLowerCase() : "";
+      code = inviterUser?.inviteCode || normalized;
+      source = "invite_link";
+    }
+  }
+
+  if (secondEmail === firstEmail || secondEmail === buyerEmail) secondEmail = "";
+  if (!firstEmail) return null;
+  return {
+    source,
+    inviteCode: normalizeInviteCode(code),
+    levelOneEmail: firstEmail,
+    levelOneRate: REFERRAL_LEVEL_ONE_RATE,
+    levelTwoEmail: secondEmail,
+    levelTwoRate: secondEmail ? REFERRAL_LEVEL_TWO_RATE : 0,
+  };
+}
+
+export async function settleOrderReferralCommission(order, actor = null) {
+  if (!order || order.referralCommissionSettledAt) return { ok: true, skipped: "already_settled", entries: order?.referralCommissionEntries || [] };
+  const referral = order.referral || null;
+  const baseAmount = roundMoney(order.finalAmount || 0);
+  if (!referral || baseAmount <= 0) return { ok: true, skipped: "no_referral", entries: [] };
+
+  const now = new Date();
+  const candidates = [
+    { level: 1, email: referral.levelOneEmail, rate: Number(referral.levelOneRate || REFERRAL_LEVEL_ONE_RATE) },
+    { level: 2, email: referral.levelTwoEmail, rate: Number(referral.levelTwoRate || REFERRAL_LEVEL_TWO_RATE) },
+  ].filter((item) => validEmail(item.email) && item.rate > 0);
+
+  const entries = [];
+  for (const item of candidates) {
+    const email = String(item.email).toLowerCase();
+    const existingTxs = await getBalanceTxs(email);
+    const duplicated = existingTxs.some((tx) =>
+      tx?.source === "referral" &&
+      tx?.orderId === order.orderId &&
+      Number(tx?.referralLevel || 0) === item.level
+    );
+    if (duplicated) continue;
+
+    const user = await getUser(email);
+    if (!user || user.banned) continue;
+    const commission = roundMoney(baseAmount * item.rate);
+    if (commission <= 0) continue;
+    const prev = roundMoney(user.balance);
+    const next = roundMoney(prev + commission);
+    user.balance = next;
+    user.referralStats = user.referralStats && typeof user.referralStats === "object" ? user.referralStats : {};
+    user.referralStats.totalCommission = roundMoney(Number(user.referralStats.totalCommission || 0) + commission);
+    user.referralStats.lastCommissionAt = now.toISOString();
+    await setUser(email, user);
+    const tx = {
+      id: makeId("TX"),
+      amount: commission,
+      reason: `邀请返佣 ${order.orderId} · ${item.level === 1 ? "一级10%" : "二级5%"}`,
+      balanceAfter: next,
+      source: "referral",
+      orderId: order.orderId,
+      referralLevel: item.level,
+      commissionRate: item.rate,
+      commissionBase: baseAmount,
+      createdAt: now.toISOString(),
+      createdAtBeijing: formatBeijingTime(now),
+      staffId: Number(actor?.staffId || 1),
+      staffUsername: clean(actor?.staffUsername || "admin", 60),
+    };
+    await addBalanceTx(email, tx);
+    await pushAdminBalanceLog({
+      ...tx,
+      email,
+      balanceBefore: prev,
+      action: "referral_commission",
+      detail: { orderId: order.orderId, level: item.level, rate: item.rate, baseAmount },
+    });
+    entries.push({ email, level: item.level, rate: item.rate, amount: commission, balanceAfter: next });
+  }
+
+  order.referralCommissionSettledAt = now.toISOString();
+  order.referralCommissionSettledAtBeijing = formatBeijingTime(now);
+  order.referralCommissionEntries = entries;
+  return { ok: true, entries };
+}
+
 export async function consumeBestCoupon(email, orderId, maxAmount) {
   const user = await getUser(email);
   if (!user) return { discount: 0 };
@@ -781,7 +992,7 @@ export async function restoreCoupon(email, couponId, orderId) {
   return setUser(email, user);
 }
 
-export async function ensureOAuthUser({ email, provider, providerId, username }) {
+export async function ensureOAuthUser({ email, provider, providerId, username, inviteCode }) {
   const lower = String(email || "").trim().toLowerCase();
   if (!validEmail(lower)) return { ok: false, error: "invalid_email" };
   const now = new Date();
@@ -790,10 +1001,11 @@ export async function ensureOAuthUser({ email, provider, providerId, username })
     if (existing.banned) return { ok: false, error: "account_banned" };
     const social = { ...(existing.social || {}) };
     if (provider && providerId) social[provider] = providerId;
+    const existingWithReferral = await ensureUserReferralProfile(lower, existing);
     const next = {
-      ...existing,
-      username: existing.username || clean(username, 40) || generateRandomUsername(),
-      balance: typeof existing.balance === "number" ? existing.balance : 0,
+      ...existingWithReferral,
+      username: existingWithReferral.username || clean(username, 40) || generateRandomUsername(),
+      balance: typeof existingWithReferral.balance === "number" ? existingWithReferral.balance : 0,
       social,
       updatedAt: now.toISOString(),
     };
@@ -801,14 +1013,14 @@ export async function ensureOAuthUser({ email, provider, providerId, username })
     await registerUserEmail(lower);
     return { ok: true, user: next, isNew: false };
   }
-  const user = attachRegisterCoupon({
+  const user = await prepareNewUserReferralProfile(lower, attachRegisterCoupon({
     email: lower,
     username: clean(username, 40) || generateRandomUsername(),
     balance: 0,
     social: provider && providerId ? { [provider]: providerId } : {},
     createdAt: now.toISOString(),
     createdAtBeijing: formatBeijingTime(now),
-  }, now);
+  }, now), inviteCode);
   const saved = await setUser(lower, user);
   await registerUserEmail(lower);
   if (!saved) return { ok: false, error: "storage_failed" };

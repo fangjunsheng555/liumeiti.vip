@@ -2,6 +2,8 @@ import {
   validEmail, hashPassword, getUser, setUser,
   signSession, setCookieValue, formatBeijingTime,
   generateRandomUsername, registerUserEmail, attachRegisterCoupon,
+  getCookieFromRequest, inviteCodeFromRequest, normalizeInviteCode,
+  prepareNewUserReferralProfile,
 } from "../../_utils.js";
 
 export async function POST(request) {
@@ -29,14 +31,15 @@ export async function POST(request) {
   }
 
   const now = new Date();
-  const user = attachRegisterCoupon({
+  const inviteCode = normalizeInviteCode(body.inviteCode || inviteCodeFromRequest(request) || getCookieFromRequest(request, "lm_invite"));
+  const user = await prepareNewUserReferralProfile(email, attachRegisterCoupon({
     email,
     username: generateRandomUsername(),
     passwordHash: hashPassword(password),
     balance: 0,
     createdAt: now.toISOString(),
     createdAtBeijing: formatBeijingTime(now),
-  }, now);
+  }, now), inviteCode);
   const saved = await setUser(email, user);
   await registerUserEmail(email);
   if (!saved) {

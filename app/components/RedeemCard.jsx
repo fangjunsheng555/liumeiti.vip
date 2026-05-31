@@ -14,6 +14,15 @@ function GoogleIcon() {
   );
 }
 
+function storedInviteCode() {
+  if (typeof window === "undefined") return "";
+  try {
+    return String(window.localStorage.getItem("lm_invite") || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 24);
+  } catch (e) {
+    return "";
+  }
+}
+
 function normalizeRedeemCode(value) {
   return String(value || "").replace(/\s+/g, "").replace(/[＿_—–]/g, "-").toUpperCase();
 }
@@ -138,6 +147,7 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
         captchaA: authCaptcha.a,
         captchaB: authCaptcha.b,
         captchaAnswer: Number(authForm.captchaAnswer),
+        inviteCode: storedInviteCode(),
       };
       if (authModal === "forgot") payload = { email: authForm.email.trim() };
       if (authModal === "reset") payload = {

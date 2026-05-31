@@ -1,6 +1,7 @@
 import {
   getCookieFromRequest, verifySession, getUser, getBalanceTxs,
   publicCoupons, listWithdrawals, WITHDRAWAL_STATUS_LABEL,
+  publicReferral, ensureUserReferralProfile,
 } from "../../_utils.js";
 
 export async function GET(request) {
@@ -9,7 +10,7 @@ export async function GET(request) {
   if (!session || !session.email) {
     return Response.json({ ok: false, error: "not_logged_in" }, { status: 401 });
   }
-  const user = await getUser(session.email);
+  const user = await ensureUserReferralProfile(session.email, await getUser(session.email));
   const balance = Number(user?.balance || 0);
   const txs = await getBalanceTxs(session.email);
   const withdrawals = (await listWithdrawals()).filter((w) => w.userEmail === session.email);
@@ -20,6 +21,7 @@ export async function GET(request) {
     username: user?.username || "",
     balance,
     coupons: publicCoupons(user),
+    referral: publicReferral(user),
     withdrawals,
     transactions: txs.map((tx) => {
       const w = tx.withdrawalId ? withdrawalMap.get(tx.withdrawalId) : null;

@@ -535,7 +535,6 @@ export default function ServiceCenterPage() {
         <div className="container footer-inner">
           <div className="footer-company">
             <div className="footer-brand">冒央会社 · Maoyang Taiwan Inc</div>
-            <div className="footer-sub">liumeiti.vip · joinvip.vip</div>
           </div>
           <div className="footer-legal">
             <div className="footer-pill">地址：台湾新北市板桥区远东路1号3-218</div>

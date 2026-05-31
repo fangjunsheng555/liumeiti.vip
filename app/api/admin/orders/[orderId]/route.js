@@ -2,6 +2,7 @@ import {
   getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
   pushAdminActionLog, formatBeijingTime, clean, isRootAdminSession,
+  settleOrderReferralCommission,
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
 
@@ -172,6 +173,11 @@ export async function PATCH(request, { params }) {
   });
   order.staffAudit = order.staffAudit.slice(0, 30);
 
+  let commissionResult = null;
+  if (newStatus === "completed" && !wasCompleted) {
+    commissionResult = await settleOrderReferralCommission(order, actor);
+  }
+
   // Save back
   const saved = await setOrderAt(index, order);
   if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
@@ -192,6 +198,7 @@ export async function PATCH(request, { params }) {
   return Response.json({
     ok: true, order,
     completion: newStatus === "completed" && !wasCompleted ? { email: emailResult } : null,
+    commission: commissionResult,
     statusChange: newStatus,
   });
 }

@@ -5,6 +5,7 @@ import {
   validateServiceRedeemCode, consumeServiceRedeemCode, restoreServiceRedeemCode,
   checkRedeemRateLimit, recordRedeemRateFailure, clearRedeemRateLimit, redeemRateLimitMessage,
   clientIpFromRequest, clientUserAgentFromRequest,
+  inviteCodeFromRequest, normalizeInviteCode, resolveReferralForOrder,
 } from "../_utils.js";
 
 const ORDERS_KEY = "liumeiti:orders";
@@ -421,6 +422,10 @@ export async function POST(request) {
       if (session && session.email) userEmail = session.email;
     } catch (e) {}
   }
+  const referral = await resolveReferralForOrder({
+    userEmail,
+    inviteCode: normalizeInviteCode(body.inviteCode || inviteCodeFromRequest(request)),
+  });
 
   const hasRocketTrial = items.some((item) => item.service === "rocket" && (item.plan === "trial" || item.rocketPlan === "trial"));
   const orderId = "LM" + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
@@ -479,6 +484,7 @@ export async function POST(request) {
     orderId,
     status: "received",
     userEmail, // links order to logged-in user (for /account regardless of buyer email)
+    referral,
     createdAt: now.toISOString(),
     createdAtBeijing: formatBeijingTime(now),
     clientIp,

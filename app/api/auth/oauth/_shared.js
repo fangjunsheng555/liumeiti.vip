@@ -1,5 +1,5 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { clean, ensureOAuthUser, signSession, setCookieValue } from "../../_utils.js";
+import { clean, ensureOAuthUser, inviteCodeFromRequest, signSession, setCookieValue } from "../../_utils.js";
 
 const STATE_COOKIE = "lm_oauth_state";
 
@@ -117,6 +117,7 @@ export async function finishOAuth(provider, request, code) {
     provider,
     providerId: clean(payload.sub, 180),
     username: clean(payload.name, 40) || email.split("@")[0],
+    inviteCode: inviteCodeFromRequest(request),
   });
   if (!result.ok) {
     const err = new Error(result.error || "oauth_user_failed");
