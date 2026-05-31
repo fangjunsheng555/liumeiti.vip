@@ -32,14 +32,14 @@ const LAYOUT_CARDS = [
 const ASSURANCE_CARDS = [
   {
     title: "稳定开通",
-    desc: "下单资料提交后会按服务类型确认地区、套餐与使用场景，尽量一次开通到位",
-    meta: "减少反复沟通",
+    desc: "六年专业流媒体服务经验，订单提交后人工极速处理",
+    meta: "专业省心",
     icon: BadgeCheck,
   },
   {
     title: "售后协助",
-    desc: "账号、车位或节点遇到异常，可通过订单查询或在线客服继续处理",
-    meta: "进度可查询",
+    desc: "账号、车位或节点遇到异常，请联系我们全能午休7x14在线客服处理",
+    meta: "全程保驾护航",
     icon: Headphones,
   },
   {
@@ -49,8 +49,8 @@ const ASSURANCE_CARDS = [
     icon: RefreshCw,
   },
   {
-    title: "支付记录",
-    desc: "支持支付宝担保支付与 USDT 支付，订单确认邮件会同步发送至下单邮箱",
+    title: "订单记录",
+    desc: "订单除隐私信息外会永久保留，同时订单确认完成邮件会同步发送至下单邮箱",
     meta: "记录可追溯",
     icon: Lock,
   },
