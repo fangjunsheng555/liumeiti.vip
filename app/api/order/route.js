@@ -1,7 +1,7 @@
 import { buildOrderEmailHtml, buildOrderEmailText } from "./email-template.js";
 import {
   consumeBestCoupon, restoreCoupon, verifySession, getUser,
-  setUser, addBalanceTx, pushAdminBalanceLog, makeId, roundMoney, getAllOrders,
+  setUser, addBalanceTx, pushAdminBalanceLog, makeId, roundMoney,
   validateServiceRedeemCode, consumeServiceRedeemCode, restoreServiceRedeemCode,
   checkRedeemRateLimit, recordRedeemRateFailure, clearRedeemRateLimit, redeemRateLimitMessage,
   clientIpFromRequest, clientUserAgentFromRequest,
@@ -10,10 +10,10 @@ import {
 const ORDERS_KEY = "liumeiti:orders";
 
 const PRODUCTS = {
-  spotify: { label: "Spotify", amount: 128, cycle: "1年", needsAccountPassword: true, needsContact: true },
-  netflix: { label: "Netflix", amount: 168, cycle: "1年" },
-  disney: { label: "Disney+", amount: 108, cycle: "1年" },
-  max: { label: "HBO Max", amount: 148, cycle: "1年" },
+  spotify: { label: "Spotify", amount: 128, cycle: "1年", needsAccountPassword: true, needsContact: true, hasPlan: true },
+  netflix: { label: "Netflix", amount: 168, cycle: "1年", hasPlan: true },
+  disney: { label: "Disney+", amount: 108, cycle: "1年", hasPlan: true },
+  max: { label: "HBO Max", amount: 148, cycle: "1年", hasPlan: true },
   rocket: { label: "机场节点", amount: 128, cycle: "1年", hasPlan: true },
 };
 
@@ -22,22 +22,45 @@ const ROCKET_PLANS = {
   pro: { id: "pro", label: "高级套餐", amount: 198 },
   luxury: { id: "luxury", label: "豪华套餐", amount: 398 },
   unlimited: { id: "unlimited", label: "无限套餐", amount: 698 },
-  trial: { id: "trial", label: "5元10GB测试", amount: 5, cycle: "次", requiresLogin: true, onePerUser: true },
+  trial: { id: "trial", label: "5元10GB测试", amount: 5, cycle: "次", requiresLogin: false, onePerUser: false },
 };
-const DEFAULT_ROCKET_PLAN = "basic";
+const PRODUCT_PLANS = {
+  spotify: {
+    member: { id: "member", label: "家庭成员", amount: 128 },
+    individual: { id: "individual", label: "个人订阅", amount: 388 },
+    duo: { id: "duo", label: "双人订阅", amount: 488 },
+    family: { id: "family", label: "家庭套餐", amount: 588 },
+  },
+  netflix: {
+    seat: { id: "seat", label: "单独车位", amount: 168 },
+    full: { id: "full", label: "整号购买", amount: 588 },
+  },
+  disney: {
+    seat: { id: "seat", label: "单独车位", amount: 108 },
+    full: { id: "full", label: "整号购买", amount: 588 },
+  },
+  max: {
+    seat: { id: "seat", label: "单独车位", amount: 148 },
+    full: { id: "full", label: "整号购买", amount: 588 },
+  },
+  rocket: ROCKET_PLANS,
+};
+const DEFAULT_PRODUCT_PLANS = {
+  spotify: "member",
+  netflix: "seat",
+  disney: "seat",
+  max: "seat",
+  rocket: "basic",
+};
+const DEFAULT_ROCKET_PLAN = DEFAULT_PRODUCT_PLANS.rocket;
 
-function resolveRocketPlan(value) {
+function resolveProductPlan(service, value) {
+  const plans = PRODUCT_PLANS[service];
+  if (!plans) return null;
   const id = clean(value, 20);
-  const aliases = { single: "basic" };
-  const planId = aliases[id] || id;
-  return ROCKET_PLANS[planId] ? ROCKET_PLANS[planId] : ROCKET_PLANS[DEFAULT_ROCKET_PLAN];
-}
-
-function orderHasRocketTrial(order) {
-  const orderItems = Array.isArray(order?.items) && order.items.length
-    ? order.items
-    : [{ service: order?.service, rocketPlan: order?.rocketPlan }];
-  return orderItems.some((item) => item?.service === "rocket" && item?.rocketPlan === "trial");
+  const aliases = service === "rocket" ? { single: "basic" } : {};
+  const planId = aliases[id] || id || DEFAULT_PRODUCT_PLANS[service];
+  return plans[planId] ? plans[planId] : plans[DEFAULT_PRODUCT_PLANS[service]];
 }
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
@@ -330,15 +353,21 @@ export async function POST(request) {
     let amount = product.amount;
     let label = product.label;
     let cycle = product.cycle;
+    let plan = "";
+    let planLabel = "";
     let rocketPlan = "";
     let rocketPlanLabel = "";
-    if (service === "rocket") {
-      const plan = resolveRocketPlan(raw.rocketPlan);
-      rocketPlan = plan.id;
-      rocketPlanLabel = plan.label;
-      amount = plan.amount;
-      cycle = plan.cycle || product.cycle;
-      label = `${product.label} · ${plan.label}`;
+    if (product.hasPlan) {
+      const planInfo = resolveProductPlan(service, raw.plan || raw.productPlan || raw.rocketPlan);
+      plan = planInfo.id;
+      planLabel = planInfo.label;
+      amount = planInfo.amount;
+      cycle = planInfo.cycle || product.cycle;
+      label = `${product.label} · ${planInfo.label}`;
+      if (service === "rocket") {
+        rocketPlan = planInfo.id;
+        rocketPlanLabel = planInfo.label;
+      }
     }
     const item = {
       service,
@@ -347,6 +376,8 @@ export async function POST(request) {
       amount,
       account: product.needsAccountPassword ? account : "",
       password: product.needsAccountPassword ? password : "",
+      plan,
+      planLabel,
       rocketPlan,
       rocketPlanLabel,
     };
@@ -370,7 +401,7 @@ export async function POST(request) {
     }
     const checked = await validateServiceRedeemCode(
       redeemCode,
-      items.map((item) => ({ key: item.service, plan: item.rocketPlan || "" })),
+      items.map((item) => ({ key: item.service, plan: item.plan || item.rocketPlan || "" })),
     );
     if (!checked.ok) {
       await recordRedeemRateFailure(redeemGuard);
@@ -391,30 +422,7 @@ export async function POST(request) {
     } catch (e) {}
   }
 
-  const hasRocketTrial = items.some((item) => item.service === "rocket" && item.rocketPlan === "trial");
-  if (hasRocketTrial) {
-    if (!userEmail) {
-      return Response.json({
-        ok: false,
-        error: "rocket_trial_requires_login",
-        message: "5元10GB测试套餐需要先登录后购买",
-      }, { status: 401 });
-    }
-    const priorOrders = await getAllOrders();
-    const alreadyBoughtTrial = priorOrders.some((order) =>
-      order?.userEmail === userEmail &&
-      order?.status !== "invalid" &&
-      orderHasRocketTrial(order)
-    );
-    if (alreadyBoughtTrial) {
-      return Response.json({
-        ok: false,
-        error: "rocket_trial_once_per_user",
-        message: "每个账号仅可购买一次5元10GB测试套餐",
-      }, { status: 400 });
-    }
-  }
-
+  const hasRocketTrial = items.some((item) => item.service === "rocket" && (item.plan === "trial" || item.rocketPlan === "trial"));
   const orderId = "LM" + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
 
   // Compute totals
@@ -423,7 +431,7 @@ export async function POST(request) {
   const discountLabel = bundleDiscountLabel(items.length);
   const bundleFinalAmount = Math.round(subtotal * (1 - discountRate));
   const rocketTrialAmount = items
-    .filter((item) => item.service === "rocket" && item.rocketPlan === "trial")
+    .filter((item) => item.service === "rocket" && (item.plan === "trial" || item.rocketPlan === "trial"))
     .reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const couponMaxAmount = hasRocketTrial
     ? Math.max(0, Math.round((bundleFinalAmount - rocketTrialAmount) * 100) / 100)

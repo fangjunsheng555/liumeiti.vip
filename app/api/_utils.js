@@ -518,10 +518,10 @@ const ADMIN_ACTION_LOG_KEY = "liumeiti:admin:action-log";
 const ADMIN_MAIL_LOG_KEY = "liumeiti:admin:mail-log";
 
 export const REDEEM_SERVICE_PRODUCTS = {
-  spotify: { label: "Spotify", amount: 128 },
-  netflix: { label: "Netflix", amount: 168 },
-  disney: { label: "Disney+", amount: 108 },
-  max: { label: "HBO Max", amount: 148 },
+  spotify: { label: "Spotify", amount: 128, hasPlan: true },
+  netflix: { label: "Netflix", amount: 168, hasPlan: true },
+  disney: { label: "Disney+", amount: 108, hasPlan: true },
+  max: { label: "HBO Max", amount: 148, hasPlan: true },
   rocket: { label: "机场节点", amount: 128, hasPlan: true },
 };
 
@@ -530,15 +530,49 @@ export const ROCKET_PLANS = {
   pro: { id: "pro", label: "高级套餐", amount: 198, desc: "100 GB/月真实流量" },
   luxury: { id: "luxury", label: "豪华套餐", amount: 398, desc: "200 GB/月真实流量" },
   unlimited: { id: "unlimited", label: "无限套餐", amount: 698, desc: "无限流量" },
-  trial: { id: "trial", label: "5元10GB测试", amount: 5, desc: "10 GB测试流量", unit: "次", cycle: "次", requiresLogin: true, onePerUser: true },
+  trial: { id: "trial", label: "5元10GB测试", amount: 5, desc: "10 GB测试流量", unit: "次", cycle: "次", requiresLogin: false, onePerUser: false },
 };
-export const DEFAULT_ROCKET_PLAN = "basic";
+export const PRODUCT_PLANS = {
+  spotify: {
+    member: { id: "member", label: "家庭成员", amount: 128, desc: "加入欧美日高价区家庭计划，成员席位" },
+    individual: { id: "individual", label: "个人订阅", amount: 388, desc: "欧美日高价区个人订阅，独立使用" },
+    duo: { id: "duo", label: "双人订阅", amount: 488, desc: "可邀请 1 个账号免费享用订阅" },
+    family: { id: "family", label: "家庭套餐", amount: 588, desc: "可邀请 5 个账号免费享用订阅" },
+  },
+  netflix: {
+    seat: { id: "seat", label: "单独车位", amount: 168, desc: "4K 杜比独立用户档案，可上锁" },
+    full: { id: "full", label: "整号购买", amount: 588, desc: "最多支持 5 个用户档案/车位" },
+  },
+  disney: {
+    seat: { id: "seat", label: "单独车位", amount: 108, desc: "4K 杜比独立用户档案，互不干扰" },
+    full: { id: "full", label: "整号购买", amount: 588, desc: "最多支持 7 个用户档案/车位" },
+  },
+  max: {
+    seat: { id: "seat", label: "单独车位", amount: 148, desc: "4K 杜比独立用户档案，稳定售后" },
+    full: { id: "full", label: "整号购买", amount: 588, desc: "最多支持 5 个用户档案/车位" },
+  },
+  rocket: ROCKET_PLANS,
+};
+export const DEFAULT_PRODUCT_PLANS = {
+  spotify: "member",
+  netflix: "seat",
+  disney: "seat",
+  max: "seat",
+  rocket: "basic",
+};
+export const DEFAULT_ROCKET_PLAN = DEFAULT_PRODUCT_PLANS.rocket;
 
 function resolveRocketPlanInternal(value) {
+  return resolveProductPlanInternal("rocket", value);
+}
+
+function resolveProductPlanInternal(productKey, value) {
+  const plans = PRODUCT_PLANS[productKey];
+  if (!plans) return null;
   const id = clean(value, 20);
-  const aliases = { single: "basic" };
+  const aliases = productKey === "rocket" ? { single: "basic" } : {};
   const planId = aliases[id] || id;
-  return ROCKET_PLANS[planId] ? ROCKET_PLANS[planId] : ROCKET_PLANS[DEFAULT_ROCKET_PLAN];
+  return plans[planId] ? plans[planId] : plans[DEFAULT_PRODUCT_PLANS[productKey]];
 }
 
 function redeemCodeKey(code) { return "liumeiti:redeem-code:" + normalizeRedeemCode(code); }
@@ -637,7 +671,7 @@ function normalizeRedeemServices(services) {
     let entryPlan = "";
     let dedupKey = key;
     if (product.hasPlan) {
-      entryPlan = resolveRocketPlanInternal(plan).id;
+      entryPlan = resolveProductPlanInternal(key, plan)?.id || "";
       dedupKey = `${key}:${entryPlan}`;
     }
     if (seen.has(dedupKey)) continue;
@@ -651,7 +685,7 @@ function serviceSummaries(items) {
   return normalizeRedeemServices(items).map(({ key, plan }) => {
     const product = REDEEM_SERVICE_PRODUCTS[key];
     if (product.hasPlan) {
-      const planInfo = resolveRocketPlanInternal(plan);
+      const planInfo = resolveProductPlanInternal(key, plan);
       return {
         key,
         label: `${product.label} · ${planInfo.label}`,

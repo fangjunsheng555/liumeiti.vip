@@ -36,9 +36,12 @@ import {
   productNeedsAccountPassword,
   subscriptionLinks,
   blankCheckoutForm,
-  ROCKET_PLANS,
   DEFAULT_ROCKET_PLAN,
   getRocketPlan,
+  getProductPlan,
+  getDefaultProductPlan,
+  hasProductPlans,
+  isProductPlan,
   productItemAmount,
 } from "../lib/store";
 import FloatingSupport from "../components/FloatingSupport";
@@ -113,6 +116,24 @@ function CardPayIcon() {
   );
 }
 
+function planParamFor(params, productKey) {
+  if (!hasProductPlans(productKey)) return "";
+  const raw = String(params.get(`${productKey}Plan`) || (productKey === "rocket" ? params.get("rocketPlan") : "") || "");
+  if (!raw) return "";
+  return isProductPlan(productKey, raw) ? getProductPlan(productKey, raw)?.id || "" : "";
+}
+
+function planMapFromServices(services) {
+  const next = {};
+  (Array.isArray(services) ? services : []).forEach((service) => {
+    const key = service?.key;
+    if (!hasProductPlans(key)) return;
+    const plan = getProductPlan(key, service?.plan);
+    if (plan) next[key] = plan.id;
+  });
+  return next;
+}
+
 export default function CheckoutPage() {
   const router = useRouter();
   const { cart, cartPlans, hydrated, removeFromCart, replaceCart, clearCart, setCartPlan } = useCart();
@@ -125,16 +146,14 @@ export default function CheckoutPage() {
   const [copiedKey, setCopiedKey] = useState(null);
   const [orderResults, setOrderResults] = useState([]);
   const [authedUser, setAuthedUser] = useState(null); // {email, balance} | null
-  const [hasBoughtRocketTrial, setHasBoughtRocketTrial] = useState(false);
   const [authModal, setAuthModal] = useState(null); // null | "login" | "register" | "forgot" | "reset"
   const [authForm, setAuthForm] = useState({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
   const [authCaptcha, setAuthCaptcha] = useState({ a: 0, b: 0 });
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authNotice, setAuthNotice] = useState("");
-  const [pendingTrialSelection, setPendingTrialSelection] = useState(false);
   const [redeemMode, setRedeemMode] = useState({ loading: true, code: "", info: null });
-  const [urlRocketPlan, setUrlRocketPlan] = useState("");
+  const [urlPlans, setUrlPlans] = useState({});
   const [draftReady, setDraftReady] = useState(false);
 
   async function refreshAccountState(isCancelled = () => false) {
@@ -153,7 +172,7 @@ export default function CheckoutPage() {
           Array.isArray(order?.items) &&
           order.items.some((item) =>
             item.service === "rocket" &&
-            (item.rocketPlan === "trial" || item.label?.includes("5元10GB测试") || Number(item.amount || 0) === 5)
+            (item.plan === "trial" || item.rocketPlan === "trial" || item.label?.includes("5元10GB测试") || Number(item.amount || 0) === 5)
           )
         );
         setAuthedUser({
@@ -162,12 +181,10 @@ export default function CheckoutPage() {
           coupons: balanceData.coupons || [],
           orders,
         });
-        setHasBoughtRocketTrial(boughtTrial);
         setForm((cur) => cur.email ? cur : { ...cur, email: balanceData.email });
         return { ok: true, boughtTrial, email: balanceData.email };
       }
       setAuthedUser(null);
-      setHasBoughtRocketTrial(false);
       return { ok: false, boughtTrial: false };
     } catch (e) {
       return { ok: false, boughtTrial: false };
@@ -219,18 +236,16 @@ export default function CheckoutPage() {
         const keys = (data.services || []).map((item) => item.key).filter(Boolean);
         replaceCart(keys);
         setPaymentMethod("redeem");
-        // If the service code includes rocket with a fixed plan, lock that plan
-        // into the per-product field so checkout totals + submitted item match.
-        const rocketEntry = (data.services || []).find((s) => s.key === "rocket");
-        if (rocketEntry && rocketEntry.plan) {
-          setCartPlan("rocket", rocketEntry.plan);
-          setForm((current) => ({
-            ...current,
-            fields: {
-              ...(current.fields || {}),
-              rocket: { ...((current.fields || {}).rocket || {}), plan: rocketEntry.plan },
-            },
-          }));
+        const redeemPlans = planMapFromServices(data.services || []);
+        Object.entries(redeemPlans).forEach(([key, planId]) => setCartPlan(key, planId));
+        if (Object.keys(redeemPlans).length > 0) {
+          setForm((current) => {
+            const nextFields = { ...(current.fields || {}) };
+            Object.entries(redeemPlans).forEach(([key, planId]) => {
+              nextFields[key] = { ...(nextFields[key] || {}), plan: planId };
+            });
+            return { ...current, fields: nextFields };
+          });
         }
         setRedeemMode({ loading: false, code, info: data });
       })
@@ -246,7 +261,6 @@ export default function CheckoutPage() {
     if (params.get("redeem")) return;
     const rawItems = String(params.get("items") || "");
     if (!rawItems) return;
-    const rocketPlanParam = String(params.get("rocketPlan") || "");
     const valid = new Set(PRODUCTS.map((item) => item.key));
     const seen = new Set();
     const keys = rawItems
@@ -254,18 +268,21 @@ export default function CheckoutPage() {
       .map((item) => item.trim())
       .filter((key) => valid.has(key) && !seen.has(key) && seen.add(key));
     if (keys.length > 0) replaceCart(keys);
-    if (keys.includes("rocket") && ROCKET_PLANS[rocketPlanParam]) {
-      setUrlRocketPlan(rocketPlanParam);
-      setCartPlan("rocket", rocketPlanParam);
-      setForm((current) => ({
-        ...current,
-        fields: {
-          ...(current.fields || {}),
-          rocket: { ...((current.fields || {}).rocket || {}), plan: rocketPlanParam },
-        },
-      }));
-    } else {
-      setUrlRocketPlan("");
+    const explicitPlans = {};
+    keys.forEach((key) => {
+      const planId = planParamFor(params, key);
+      if (planId) explicitPlans[key] = planId;
+    });
+    setUrlPlans(explicitPlans);
+    Object.entries(explicitPlans).forEach(([key, planId]) => setCartPlan(key, planId));
+    if (Object.keys(explicitPlans).length > 0) {
+      setForm((current) => {
+        const nextFields = { ...(current.fields || {}) };
+        Object.entries(explicitPlans).forEach(([key, planId]) => {
+          nextFields[key] = { ...(nextFields[key] || {}), plan: planId };
+        });
+        return { ...current, fields: nextFields };
+      });
     }
   }, []);
 
@@ -276,21 +293,25 @@ export default function CheckoutPage() {
       const hasRedeem = Boolean(params.get("redeem"));
       const hasItems = Boolean(params.get("items"));
       const rawItems = String(params.get("items") || "");
-      const rocketPlanParam = String(params.get("rocketPlan") || "");
-      const explicitRocketPlan = ROCKET_PLANS[rocketPlanParam] ? rocketPlanParam : "";
-      const hasRocketInUrl = rawItems.split(",").map((item) => item.trim()).includes("rocket");
+      const urlKeys = rawItems.split(",").map((item) => item.trim()).filter(Boolean);
+      const explicitPlans = {};
+      urlKeys.forEach((key) => {
+        const planId = planParamFor(params, key);
+        if (planId) explicitPlans[key] = planId;
+      });
       const rawPending = window.localStorage.getItem(CHECKOUT_PENDING_KEY);
       const rawDraft = window.localStorage.getItem(CHECKOUT_DRAFT_KEY);
       const saved = rawPending ? JSON.parse(rawPending) : rawDraft ? JSON.parse(rawDraft) : null;
       if (saved && Date.now() - Number(saved.createdAt || 0) < CHECKOUT_DRAFT_MAX_AGE) {
         if (saved.form && typeof saved.form === "object") {
           const savedFields = { ...((saved.form && saved.form.fields) || {}) };
-          if (hasRocketInUrl) {
-            const savedRocket = { ...(savedFields.rocket || {}) };
-            if (explicitRocketPlan) savedRocket.plan = explicitRocketPlan;
-            else delete savedRocket.plan;
-            savedFields.rocket = savedRocket;
-          }
+          urlKeys.forEach((key) => {
+            if (!hasProductPlans(key)) return;
+            const nextField = { ...(savedFields[key] || {}) };
+            if (explicitPlans[key]) nextField.plan = explicitPlans[key];
+            else delete nextField.plan;
+            savedFields[key] = nextField;
+          });
           setForm((current) => ({
             ...current,
             ...saved.form,
@@ -332,20 +353,26 @@ export default function CheckoutPage() {
   const cartCount = cartItems.length;
   const cartHasRocket = cartItems.some((p) => p.key === "rocket");
   const serviceRedeemActive = Boolean(redeemMode.info && redeemMode.info.type === "service");
-  const serviceRedeemRocketPlan = serviceRedeemActive
-    ? ((redeemMode.info?.services || []).find((s) => s.key === "rocket")?.plan || "")
-    : "";
-  const rocketPlanId = serviceRedeemRocketPlan || (
-    urlRocketPlan && ROCKET_PLANS[urlRocketPlan]
-      ? urlRocketPlan
-      : form.fields?.rocket?.plan && ROCKET_PLANS[form.fields.rocket.plan]
-      ? form.fields.rocket.plan
-      : (cartPlans?.rocket && ROCKET_PLANS[cartPlans.rocket] ? cartPlans.rocket : DEFAULT_ROCKET_PLAN)
+  const serviceRedeemPlans = serviceRedeemActive ? planMapFromServices(redeemMode.info?.services || []) : {};
+  const planMap = Object.fromEntries(
+    cartItems
+      .filter((item) => hasProductPlans(item.key))
+      .map((item) => {
+        const plan = getProductPlan(
+          item.key,
+          serviceRedeemPlans[item.key] ||
+            urlPlans[item.key] ||
+            form.fields?.[item.key]?.plan ||
+            cartPlans?.[item.key] ||
+            getDefaultProductPlan(item.key),
+        );
+        return [item.key, plan?.id || getDefaultProductPlan(item.key)];
+      }),
   );
-  const planMap = { rocket: rocketPlanId };
   const subtotal = cartSubtotalCny(cartItems, planMap);
   const discountRate = bundleDiscountRate(cartCount);
   const bundleFinalCny = cartFinalCny(cartItems, planMap);
+  const rocketPlanId = planMap.rocket || DEFAULT_ROCKET_PLAN;
   const rocketPlanInfo = getRocketPlan(rocketPlanId);
   const rocketTrialSelected = cartHasRocket && rocketPlanId === "trial";
   const couponEligibleCny = rocketTrialSelected
@@ -379,26 +406,9 @@ export default function CheckoutPage() {
     if (status?.type === "error") setStatus(null);
   }
 
-  function openTrialAuthModal() {
-    setPendingTrialSelection(true);
-    setAuthNotice("5元10GB测试套餐需登录后购买，每账号限购一次");
-    setAuthError("");
-    setAuthModal("login");
-  }
-
   function handleRocketPlanSelect(plan) {
     if (!plan) return;
-    if (serviceRedeemActive && serviceRedeemRocketPlan && serviceRedeemRocketPlan !== plan.id) return;
-    if (plan.id === "trial") {
-      if (hasBoughtRocketTrial) {
-        setStatus({ type: "error", message: "每个账号仅可购买一次5元10GB测试套餐" });
-        return;
-      }
-      if (!authedUser) {
-        openTrialAuthModal();
-        return;
-      }
-    }
+    if (serviceRedeemActive && serviceRedeemPlans.rocket && serviceRedeemPlans.rocket !== plan.id) return;
     setCartPlan("rocket", plan.id);
     updateProductField("rocket", "plan", plan.id);
   }
@@ -452,15 +462,6 @@ export default function CheckoutPage() {
       if (data.ok) {
         const account = await refreshAccountState();
         setAuthModal(null);
-        if (pendingTrialSelection) {
-          setPendingTrialSelection(false);
-          if (account.boughtTrial) {
-            setStatus({ type: "error", message: "每个账号仅可购买一次5元10GB测试套餐" });
-          } else {
-            updateProductField("rocket", "plan", "trial");
-            setStatus({ type: "success", message: "已登录，5元10GB测试套餐已选中" });
-          }
-        }
       } else {
         const msg = {
           captcha_failed: "人机验证失败,请重新计算",
@@ -495,12 +496,6 @@ export default function CheckoutPage() {
     }
     if (contactRequired && !form.contact.trim()) {
       return "Spotify 订单需要填写联系方式,客服会通过此方式联系您";
-    }
-    if (rocketTrialSelected && !authedUser) {
-      return "5元10GB测试套餐需要先登录后购买";
-    }
-    if (rocketTrialSelected && hasBoughtRocketTrial) {
-      return "每个账号仅可购买一次5元10GB测试套餐";
     }
     for (const p of cartItems) {
       const f = form.fields[p.key] || {};
@@ -546,8 +541,9 @@ export default function CheckoutPage() {
         account: (f.account || "").trim(),
         password: productNeedsAccountPassword(p) ? (f.password || "").trim() : "",
       };
-      if (p.key === "rocket") {
-        item.rocketPlan = planMap.rocket || DEFAULT_ROCKET_PLAN;
+      if (hasProductPlans(p.key)) {
+        item.plan = planMap[p.key] || getDefaultProductPlan(p.key);
+        if (p.key === "rocket") item.rocketPlan = item.plan || DEFAULT_ROCKET_PLAN;
       }
       return item;
     });
@@ -577,10 +573,7 @@ export default function CheckoutPage() {
       });
       const data = await response.json();
       if (!data.ok) {
-        const errorMessage = {
-          rocket_trial_requires_login: "5元10GB测试套餐需要先登录后购买",
-          rocket_trial_once_per_user: "每个账号仅可购买一次5元10GB测试套餐",
-        }[data.error] || data.message || data.error || "submit_failed";
+        const errorMessage = data.message || data.error || "submit_failed";
         throw new Error(errorMessage);
       }
 
@@ -715,7 +708,7 @@ export default function CheckoutPage() {
                 <div className="cart-items-grid">
                   {cartItems.map((item) => {
                     const itemAmount = productItemAmount(item, planMap[item.key]);
-                    const isRocket = item.key === "rocket";
+                    const planInfo = hasProductPlans(item.key) ? getProductPlan(item.key, planMap[item.key]) : null;
                     return (
                       <div key={item.key} className="cart-tile">
                         {!serviceRedeemActive && (
@@ -732,8 +725,8 @@ export default function CheckoutPage() {
                         <img src={item.image} alt={item.title} className="cart-tile-img" />
                         <div className="cart-tile-name">
                           {item.title}
-                          {isRocket && (
-                            <span className="cart-tile-plan-tag">{rocketPlanInfo.label}</span>
+                          {planInfo && (
+                            <span className="cart-tile-plan-tag">{planInfo.label}</span>
                           )}
                         </div>
                         <div className="cart-tile-price">¥{itemAmount}</div>
@@ -1067,9 +1060,10 @@ export default function CheckoutPage() {
                 <div className="checkout-cart-summary">
                   {cartItems.map((p) => {
                     const itemAmount = productItemAmount(p, planMap[p.key]);
+                    const planInfo = hasProductPlans(p.key) ? getProductPlan(p.key, planMap[p.key]) : null;
                     return (
                       <div key={p.key} className="checkout-cart-row">
-                        <span>{p.title}</span>
+                        <span>{planInfo ? `${p.title} · ${planInfo.label}` : p.title}</span>
                         <b>¥{itemAmount}</b>
                       </div>
                     );

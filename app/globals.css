@@ -3057,7 +3057,8 @@ button { cursor: pointer; border: none; background: transparent; }
 }
 
 .product-card-mini .product-card-actions button,
-.product-card-mini .more-service-consult-actions button {
+.product-card-mini .more-service-consult-actions button,
+.product-card-mini .more-service-consult-actions a {
   pointer-events: auto;
 }
 
@@ -5739,11 +5740,12 @@ button { cursor: pointer; border: none; background: transparent; }
 }
 .more-service-consult-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 7px;
   margin-top: auto;
 }
-.more-service-consult-actions button {
+.more-service-consult-actions button,
+.more-service-consult-actions a {
   border: 0;
   border-radius: 12px;
   min-height: 36px;
@@ -5753,8 +5755,14 @@ button { cursor: pointer; border: none; background: transparent; }
   font-size: 11.5px;
   font-weight: 900;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  text-decoration: none;
 }
-.more-service-consult-actions button:last-child {
+.more-service-consult-actions button:last-child,
+.more-service-consult-actions a:last-child {
   background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%);
 }
 .product-badge.product-badge-soon {
@@ -5785,7 +5793,8 @@ button { cursor: pointer; border: none; background: transparent; }
   .more-service-tags { gap: 4px; }
   .more-service-tags span { padding: 3px 6px; font-size: 9.5px; }
   .more-service-consult-actions { gap: 5px; }
-  .more-service-consult-actions button { min-height: 32px; font-size: 10px; border-radius: 10px; }
+  .more-service-consult-actions button,
+  .more-service-consult-actions a { min-height: 32px; font-size: 10px; border-radius: 10px; }
   .product-card-mini { padding: 11px; gap: 8px; }
   .product-card-mini .product-card-top { grid-template-columns: 40px minmax(0, 1fr); gap: 8px; }
   .product-card-mini .product-image { width: 40px; height: 40px; border-radius: 11px; }
@@ -5820,7 +5829,8 @@ button { cursor: pointer; border: none; background: transparent; }
   .more-service-consult-box { padding: 8px; }
   .more-service-consult-box span { font-size: 10px; }
   .more-service-tags span { font-size: 9px; }
-  .more-service-consult-actions button { font-size: 9.5px; }
+  .more-service-consult-actions button,
+  .more-service-consult-actions a { font-size: 9.5px; }
 }
 
 /* Query result row mobile */
@@ -8865,6 +8875,10 @@ button { cursor: pointer; border: none; background: transparent; }
   align-items: center;
   gap: 10px;
   min-width: 0;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 900;
+  line-height: 1.2;
 }
 .assurance-card-icon {
   display: inline-grid;
@@ -10792,7 +10806,8 @@ button { cursor: pointer; border: none; background: transparent; }
   .service-chip-apple-tv i { background: #111827; }
   .service-chip-dazn i { background: #fff !important; color: #111827 !important; border: 1px solid #111827; }
   .service-chip-prime-video i { background: #1d9bf0; }
-  .more-service-consult-actions button {
+  .more-service-consult-actions button,
+  .more-service-consult-actions a {
     background: linear-gradient(135deg, #071627 0%, #0f766e 100%) !important;
   }
 
@@ -11139,45 +11154,73 @@ button { cursor: pointer; border: none; background: transparent; }
   padding-bottom: 12px !important;
 }
 
-.home-layout-grid .info-card,
-.assurance-grid .assurance-card {
+.home-layout-grid .info-card {
   display: grid !important;
-  grid-template-columns: auto minmax(0, 1fr) !important;
+  grid-template-columns: 30px minmax(0, 1fr) !important;
   align-items: start !important;
-  gap: 8px 10px !important;
+  gap: 7px 10px !important;
+}
+
+.home-layout-grid .info-card {
+  position: relative !important;
+  min-height: 100px !important;
+  padding: 12px 13px !important;
+  border-radius: 14px !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 253, 252, 0.94) 100%) !important;
+  border: 1px solid rgba(15, 118, 110, 0.10) !important;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.055) !important;
+  overflow: hidden !important;
+}
+
+.home-layout-grid .info-card::before {
+  content: "" !important;
+  position: absolute !important;
+  left: 0 !important;
+  top: 10px !important;
+  bottom: 10px !important;
+  width: 3px !important;
+  border-radius: 999px !important;
+  background: linear-gradient(180deg, #14b8a6, #0f766e) !important;
+  opacity: 0.8 !important;
 }
 
 .home-layout-grid .info-step {
   position: static !important;
-  width: 30px !important;
-  height: 30px !important;
+  width: 28px !important;
+  height: 28px !important;
   display: grid !important;
   place-items: center !important;
-  border-radius: 10px !important;
+  border-radius: 9px !important;
   background: #ecfdf5 !important;
   color: #0f766e !important;
   border: 1px solid rgba(20, 184, 166, 0.20) !important;
-  font-size: 12px !important;
+  font-size: 11.5px !important;
   letter-spacing: 0 !important;
+  font-weight: 950 !important;
 }
 
 .home-layout-grid .info-icon {
   display: none !important;
 }
 
-.home-layout-grid .info-title,
-.assurance-card-title {
+.home-layout-grid .info-title {
   min-width: 0 !important;
+  min-height: 26px !important;
+  display: flex !important;
+  align-items: center !important;
   font-size: 14px !important;
   line-height: 1.25 !important;
   letter-spacing: 0 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
 }
 
-.home-layout-grid .info-desc,
-.assurance-grid .assurance-card p {
+.home-layout-grid .info-desc {
   grid-column: 1 / -1 !important;
-  font-size: 12px !important;
-  line-height: 1.68 !important;
+  font-size: 11.4px !important;
+  line-height: 1.45 !important;
   color: #475569 !important;
 }
 
@@ -11234,13 +11277,20 @@ button { cursor: pointer; border: none; background: transparent; }
   }
 
   .home-layout-grid .info-card {
-    padding: 12px !important;
-    border-radius: 14px !important;
+    min-height: 92px !important;
+    padding: 10px 11px 10px 12px !important;
+    border-radius: 13px !important;
+    gap: 5px 8px !important;
   }
 
   .home-layout-grid .info-desc {
     font-size: 10.8px !important;
-    line-height: 1.55 !important;
+    line-height: 1.42 !important;
+  }
+
+  .home-layout-grid .info-title {
+    min-height: 25px !important;
+    font-size: 13px !important;
   }
 
   .assurance-grid .assurance-card {

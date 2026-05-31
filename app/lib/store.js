@@ -11,16 +11,17 @@ export const PRODUCTS = [
     key: "spotify",
     image: "/products/spotify.jpg",
     title: "Spotify",
-    subtitle: "欧美日家庭无损播客",
+    subtitle: "欧美日高价区多规格订阅",
     amount: 128,
     cycle: "1年",
-    price: "仅需¥128/年",
-    shortIntro: "无损音质，播客，AIDJ，完整曲库，有声读物，合辑歌单等",
-    highlights: ["功能齐全", "稳定使用", "售后保障"],
-    detailTitle: "欧美日高价区家庭计划，一年仅128元包售后",
+    hasPlan: true,
+    price: "¥128/年起",
+    shortIntro: "欧美日高价区订阅，家庭成员、个人、双人与家庭套餐可选",
+    highlights: ["高价区订阅", "多规格可选", "售后保障"],
+    detailTitle: "欧美日高价区 Spotify 订阅，按需选择成员或套餐",
     detailBody:
-      "支持无损音质，收听播客，离线下载，合辑歌单，有声读物，曲库完整，如需订阅个人/双人/六人家庭请联系在线客服",
-    orderTitle: "Spotify · 支付宝扫码支付 ¥128",
+      "支持无损音质、播客、AIDJ、离线下载、合辑歌单与完整曲库。可选家庭成员席位 ¥128/年、个人订阅 ¥388/年、双人订阅 ¥488/年（可邀请 1 个账号免费享用订阅）、家庭套餐 ¥588/年（可邀请 5 个账号免费享用订阅），均为欧美日高价区订阅并包含售后协助",
+    orderTitle: "Spotify · 多规格年付订阅",
     orderBody:
       "填写联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
     qrImage: "/payment/alipay.jpg",
@@ -29,16 +30,17 @@ export const PRODUCTS = [
     key: "netflix",
     image: "/products/netflix.jpg",
     title: "Netflix",
-    subtitle: "全球可用4K杜比独立车位",
+    subtitle: "全球可用4K杜比车位/整号",
     amount: 168,
     cycle: "1年",
-    price: "仅需¥168/年",
-    shortIntro: "全球可用顶规套餐，4K画质，杜比音效，一人一位可上锁",
-    highlights: ["4K画质", "杜比音效", "售后保障"],
-    detailTitle: "最高级别套餐，独立车位，一年仅168包售后",
+    hasPlan: true,
+    price: "¥168/年起",
+    shortIntro: "最高级别4K杜比套餐，单独车位或整号购买可选",
+    highlights: ["4K杜比", "车位可锁", "整号可选"],
+    detailTitle: "Netflix 最高级别 4K 杜比套餐，车位与整号均可选",
     detailBody:
-      "4K杜比最高级别套餐，高峰不排队不被挤，一人独享一个位置，最高4K画质，支持杜比音效，离线下载，位置可上pin，五人一车一人一位互不干扰，如需购买整号请联系在线客服",
-    orderTitle: "Netflix · 支付宝扫码支付 ¥168",
+      "提供全球可用最高级别 4K 杜比套餐。单独车位 ¥168/年，一人独享一个用户档案，可设置 PIN 锁，高峰不排队不被挤；整号购买 ¥588/年，最多支持 5 个用户档案/车位，适合家庭或多人长期稳定使用",
+    orderTitle: "Netflix · 4K杜比规格选择",
     orderBody:
       "填写联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
     qrImage: "/payment/alipay.jpg",
@@ -47,16 +49,17 @@ export const PRODUCTS = [
     key: "disney",
     image: "/products/disney.jpg",
     title: "Disney+",
-    subtitle: "独立车位全球可用4K杜比套餐",
+    subtitle: "全球可用4K杜比车位/整号",
     amount: 108,
     cycle: "1年",
-    price: "仅需¥108/年",
-    shortIntro: "全球可用4K杜比套餐，一人一位置互不干扰，绝不超售",
-    highlights: ["4K杜比", "位置上锁", "不被挤不排队"],
-    detailTitle: "最高级别套餐，独立车位，一年仅108包售后",
+    hasPlan: true,
+    price: "¥108/年起",
+    shortIntro: "最高级别4K杜比套餐，独立车位与整号可选",
+    highlights: ["4K杜比", "全球可用", "整号可选"],
+    detailTitle: "Disney+ 顶级 4K 杜比套餐，单独车位与整号可选",
     detailBody:
-      "4K画质，杜比音效，离线下载，全球可用不限制地区，顶规4K杜比套餐，绝不超售，高峰不排队不被挤，一人一位置可上锁，用户互不干扰，如需购买整号请联系在线客服",
-    orderTitle: "Disney+ · 支付宝扫码支付 ¥108",
+      "提供全球可用最高级别 4K 杜比套餐。单独车位 ¥108/年，一人一位置互不干扰；整号购买 ¥588/年，最多支持 7 个用户档案/车位，适合家庭共享与长期使用，订单均包含售后保障",
+    orderTitle: "Disney+ · 4K杜比规格选择",
     orderBody:
       "填写联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
     qrImage: "/payment/alipay.jpg",
@@ -65,16 +68,17 @@ export const PRODUCTS = [
     key: "max",
     image: "/products/hbomax.jpg",
     title: "HBO Max",
-    subtitle: "独立车位全球可用4K杜比套餐",
+    subtitle: "全球可用4K杜比车位/整号",
     amount: 148,
     cycle: "1年",
-    price: "仅需¥148/年",
-    shortIntro: "全球可用4K杜比套餐，一人独享一位置互不干扰高峰不排队",
-    highlights: ["4K杜比", "全球可用", "实时售后保障"],
-    detailTitle: "最高级别套餐，独立车位，一年仅148包售后",
+    hasPlan: true,
+    price: "¥148/年起",
+    shortIntro: "最高级别4K杜比套餐，独立车位或整号购买可选",
+    highlights: ["4K杜比", "全球可用", "整号可选"],
+    detailTitle: "HBO Max 最高级别 4K 杜比套餐，车位与整号均可选",
     detailBody:
-      "4K画质，杜比音效，离线下载，全球可用不限制地区，顶规4K杜比套餐，绝不超售，高峰不排队不被挤，一人一位置可上锁，用户互不干扰，如需购买整号请联系在线客服",
-    orderTitle: "HBO Max · 支付宝扫码支付 ¥148",
+      "提供全球可用最高级别 4K 杜比套餐。单独车位 ¥148/年，一人独享一个位置，互不干扰；整号购买 ¥588/年，最多支持 5 个用户档案/车位，适合影迷家庭与多人稳定使用",
+    orderTitle: "HBO Max · 4K杜比规格选择",
     orderBody:
       "填写联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
     qrImage: "/payment/alipay.jpg",
@@ -106,23 +110,77 @@ export const ROCKET_PLANS = {
   pro: { id: "pro", label: "高级套餐", amount: 198, desc: "100 GB/月真实流量" },
   luxury: { id: "luxury", label: "豪华套餐", amount: 398, desc: "200 GB/月真实流量" },
   unlimited: { id: "unlimited", label: "无限套餐", amount: 698, desc: "无限流量" },
-  trial: { id: "trial", label: "5元10GB测试", amount: 5, desc: "10 GB测试流量", unit: "次", cycle: "次", requiresLogin: true, onePerUser: true },
+  trial: { id: "trial", label: "5元10GB测试", amount: 5, desc: "10 GB测试流量", unit: "次", cycle: "次", requiresLogin: false, onePerUser: false },
 };
-export const DEFAULT_ROCKET_PLAN = "basic";
+export const PRODUCT_PLANS = {
+  spotify: {
+    member: { id: "member", label: "家庭成员", amount: 128, desc: "加入欧美日高价区家庭计划，成员席位" },
+    individual: { id: "individual", label: "个人订阅", amount: 388, desc: "欧美日高价区个人订阅，独立使用" },
+    duo: { id: "duo", label: "双人订阅", amount: 488, desc: "可邀请 1 个账号免费享用订阅" },
+    family: { id: "family", label: "家庭套餐", amount: 588, desc: "可邀请 5 个账号免费享用订阅" },
+  },
+  netflix: {
+    seat: { id: "seat", label: "单独车位", amount: 168, desc: "4K 杜比独立用户档案，可上锁" },
+    full: { id: "full", label: "整号购买", amount: 588, desc: "最多支持 5 个用户档案/车位" },
+  },
+  disney: {
+    seat: { id: "seat", label: "单独车位", amount: 108, desc: "4K 杜比独立用户档案，互不干扰" },
+    full: { id: "full", label: "整号购买", amount: 588, desc: "最多支持 7 个用户档案/车位" },
+  },
+  max: {
+    seat: { id: "seat", label: "单独车位", amount: 148, desc: "4K 杜比独立用户档案，稳定售后" },
+    full: { id: "full", label: "整号购买", amount: 588, desc: "最多支持 5 个用户档案/车位" },
+  },
+  rocket: ROCKET_PLANS,
+};
+export const DEFAULT_PRODUCT_PLANS = {
+  spotify: "member",
+  netflix: "seat",
+  disney: "seat",
+  max: "seat",
+  rocket: "basic",
+};
+export const DEFAULT_ROCKET_PLAN = DEFAULT_PRODUCT_PLANS.rocket;
 
 export function getRocketPlan(planId) {
-  const aliases = { single: "basic" };
-  const id = aliases[planId] || planId;
-  return ROCKET_PLANS[id] || ROCKET_PLANS[DEFAULT_ROCKET_PLAN];
+  return getProductPlan("rocket", planId);
 }
 
 export function rocketPlanLabel(planId) {
   return getRocketPlan(planId).label;
 }
 
+export function hasProductPlans(productKey) {
+  return Boolean(PRODUCT_PLANS[productKey]);
+}
+
+export function getDefaultProductPlan(productKey) {
+  return DEFAULT_PRODUCT_PLANS[productKey] || "";
+}
+
+export function isProductPlan(productKey, planId) {
+  const plans = PRODUCT_PLANS[productKey];
+  if (!plans || !planId) return false;
+  const aliases = productKey === "rocket" ? { single: "basic" } : {};
+  const id = aliases[planId] || planId;
+  return Boolean(plans[id]);
+}
+
+export function getProductPlan(productKey, planId) {
+  const plans = PRODUCT_PLANS[productKey];
+  if (!plans) return null;
+  const aliases = productKey === "rocket" ? { single: "basic" } : {};
+  const id = aliases[planId] || planId || getDefaultProductPlan(productKey);
+  return plans[id] || plans[getDefaultProductPlan(productKey)] || Object.values(plans)[0] || null;
+}
+
+export function getProductPlanOptions(productKey) {
+  return Object.values(PRODUCT_PLANS[productKey] || {});
+}
+
 export function productItemAmount(product, plan) {
   if (!product) return 0;
-  if (product.key === "rocket") return getRocketPlan(plan).amount;
+  if (hasProductPlans(product.key)) return getProductPlan(product.key, plan)?.amount || product.amount;
   return product.amount;
 }
 
@@ -244,7 +302,12 @@ function loadCartPlans() {
     const parsed = JSON.parse(stored);
     if (!parsed || typeof parsed !== "object") return {};
     const next = {};
-    if (parsed.rocket && ROCKET_PLANS[parsed.rocket]) next.rocket = parsed.rocket;
+    Object.keys(PRODUCT_PLANS).forEach((key) => {
+      const value = parsed[key];
+      if (!value) return;
+      const plan = getProductPlan(key, value);
+      if (plan && isProductPlan(key, plan.id)) next[key] = plan.id;
+    });
     return next;
   } catch {
     return {};
@@ -286,8 +349,10 @@ export function useCart() {
   }, []);
 
   function setCartPlan(key, planId) {
-    if (key !== "rocket" || !ROCKET_PLANS[planId]) return;
-    const next = { ...loadCartPlans(), [key]: planId };
+    if (!hasProductPlans(key)) return;
+    const plan = getProductPlan(key, planId);
+    if (!plan) return;
+    const next = { ...loadCartPlans(), [key]: plan.id };
     setCartPlansState(next);
     saveCartPlans(next);
   }
@@ -296,7 +361,10 @@ export function useCart() {
     setCartState((current) => {
       const next = current.includes(key) ? current : [...current, key];
       const nextPlans = { ...loadCartPlans() };
-      if (key === "rocket" && ROCKET_PLANS[options.plan]) nextPlans.rocket = options.plan;
+      if (hasProductPlans(key)) {
+        const plan = getProductPlan(key, options.plan || nextPlans[key] || getDefaultProductPlan(key));
+        if (plan) nextPlans[key] = plan.id;
+      }
       setCartPlansState(nextPlans);
       saveCartBundle(next, nextPlans);
       return next;
@@ -307,9 +375,7 @@ export function useCart() {
     setCartState((current) => {
       const next = current.filter((k) => k !== key);
       const nextPlans = { ...loadCartPlans() };
-      if (key === "rocket") {
-        delete nextPlans.rocket;
-      }
+      if (hasProductPlans(key)) delete nextPlans[key];
       setCartPlansState(nextPlans);
       saveCartBundle(next, nextPlans);
       return next;
@@ -321,9 +387,13 @@ export function useCart() {
       const removing = current.includes(key);
       const next = removing ? current.filter((k) => k !== key) : [...current, key];
       const nextPlans = { ...loadCartPlans() };
-      if (key === "rocket") {
-        if (removing) delete nextPlans.rocket;
-        else nextPlans.rocket = ROCKET_PLANS[options.plan] ? options.plan : DEFAULT_ROCKET_PLAN;
+      if (hasProductPlans(key)) {
+        if (removing) {
+          delete nextPlans[key];
+        } else {
+          const plan = getProductPlan(key, options.plan || getDefaultProductPlan(key));
+          if (plan) nextPlans[key] = plan.id;
+        }
       }
       setCartPlansState(nextPlans);
       saveCartBundle(next, nextPlans);
@@ -338,7 +408,11 @@ export function useCart() {
       .filter((key) => typeof key === "string" && valid.has(key) && !seen.has(key) && seen.add(key));
     const currentPlans = loadCartPlans();
     const nextPlans = {};
-    if (next.includes("rocket") && currentPlans.rocket) nextPlans.rocket = currentPlans.rocket;
+    next.forEach((key) => {
+      if (!hasProductPlans(key)) return;
+      const plan = getProductPlan(key, currentPlans[key] || getDefaultProductPlan(key));
+      if (plan) nextPlans[key] = plan.id;
+    });
     setCartState(next);
     setCartPlansState(nextPlans);
     saveCartBundle(next, nextPlans);

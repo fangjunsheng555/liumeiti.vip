@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
-import { PRODUCTS, ROCKET_PLANS, DEFAULT_ROCKET_PLAN } from "../lib/store";
+import { PRODUCTS, getProductPlan, getProductPlanOptions, hasProductPlans } from "../lib/store";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
@@ -1778,22 +1778,22 @@ export default function AdminPage() {
       );
       const matchIdx = list.findIndex((s) => s.key === target.key && (s.plan || "") === (target.plan || ""));
       if (matchIdx >= 0) return list.filter((_, i) => i !== matchIdx);
-      // For rocket, only one plan can be selected at a time per service code
-      if (target.key === "rocket") {
-        return [...list.filter((s) => s.key !== "rocket"), target];
+      if (hasProductPlans(target.key)) {
+        return [...list.filter((s) => s.key !== target.key), target];
       }
       return [...list, target];
     });
   }
 
-  function setCodeRocketPlan(planId) {
-    const nextPlan = ROCKET_PLANS[planId] ? planId : "";
+  function setCodeServicePlan(productKey, planId) {
+    const plan = getProductPlan(productKey, planId);
+    const nextPlan = planId && plan ? plan.id : "";
     setCodeServices((current) => {
       const list = current.map((item) =>
         typeof item === "string" ? { key: item, plan: "" } : { key: item.key, plan: item.plan || "" }
       );
-      const withoutRocket = list.filter((item) => item.key !== "rocket");
-      return nextPlan ? [...withoutRocket, { key: "rocket", plan: nextPlan }] : withoutRocket;
+      const withoutProduct = list.filter((item) => item.key !== productKey);
+      return nextPlan ? [...withoutProduct, { key: productKey, plan: nextPlan }] : withoutProduct;
     });
   }
 
@@ -2022,6 +2022,14 @@ export default function AdminPage() {
     }, 10000);
     return () => clearInterval(timer);
   }, [authed, tab, activeOrder, loadOrders, appliedSearch, filterStatus]);
+
+  useEffect(() => {
+    if (!authed || tab !== "orders" || !newOrderAlert?.orderId) return;
+    setSearchInput("");
+    setAppliedSearch("");
+    setFilterStatus("all");
+    loadOrders("", "all", { silent: true });
+  }, [authed, tab, newOrderAlert?.orderId, loadOrders]);
 
   function openNewOrderNotice() {
     setTab("orders");
@@ -2786,16 +2794,16 @@ export default function AdminPage() {
               ) : (
                 <div className="admin-code-service-picker">
                   {PRODUCTS.flatMap((p) => {
-                    if (p.key === "rocket") {
-                      const selectedRocket = codeServices.find((s) => {
+                    if (hasProductPlans(p.key)) {
+                      const selectedService = codeServices.find((s) => {
                         const sk = typeof s === "string" ? s : s.key;
-                        return sk === "rocket";
+                        return sk === p.key;
                       });
-                      const selectedPlanId = selectedRocket && typeof selectedRocket !== "string" ? selectedRocket.plan : "";
-                      const selectedPlan = selectedPlanId ? ROCKET_PLANS[selectedPlanId] : null;
+                      const selectedPlanId = selectedService && typeof selectedService !== "string" ? selectedService.plan : "";
+                      const selectedPlan = selectedPlanId ? getProductPlan(p.key, selectedPlanId) : null;
                       return [(
                         <div
-                          key="rocket"
+                          key={p.key}
                           className={`admin-code-service-combo${selectedPlan ? " selected" : ""}`}
                         >
                           <img src={p.image} alt="" />
@@ -2803,11 +2811,11 @@ export default function AdminPage() {
                           <select
                             className="admin-code-service-native-select"
                             value={selectedPlanId}
-                            onChange={(e) => setCodeRocketPlan(e.target.value)}
-                            aria-label="选择机场节点规格"
+                            onChange={(e) => setCodeServicePlan(p.key, e.target.value)}
+                            aria-label={`选择${p.title}规格`}
                           >
                             <option value="">选择规格</option>
-                            {Object.values(ROCKET_PLANS).map((plan) => (
+                            {getProductPlanOptions(p.key).map((plan) => (
                               <option key={plan.id} value={plan.id}>
                                 {plan.label} ¥{plan.amount}/{plan.unit || "年"}
                               </option>
