@@ -34,6 +34,23 @@ function inviteLink(code) {
   return `${origin}/?invite=${encodeURIComponent(code)}`;
 }
 
+function maskOrderId(orderId) {
+  const value = String(orderId || "").trim().toUpperCase();
+  if (!value) return "";
+  if (value.length <= 8) return value.replace(/^(.{2}).+(.{2})$/, "$1****$2");
+  const start = Math.max(2, Math.floor((value.length - 6) / 2));
+  return value.slice(0, start) + "******" + value.slice(start + 6);
+}
+
+function displayTxReason(tx) {
+  if (tx?.source === "referral" && tx.orderId) {
+    return `邀请返佣 ${maskOrderId(tx.orderId)} · ${Number(tx.referralLevel || 1) === 2 ? "二级5%" : "一级10%"}`;
+  }
+  const reason = String(tx?.reason || "");
+  const orderId = String(tx?.orderId || "").trim();
+  return orderId ? reason.replace(orderId, maskOrderId(orderId)) : reason;
+}
+
 function GoogleIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" className="oauth-provider-icon">
@@ -46,7 +63,7 @@ function GoogleIcon() {
 }
 
 export default function AccountPage() {
-  const [state, setState] = useState({ loading: true, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null });
+  const [state, setState] = useState({ loading: true, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
   const [activeOrder, setActiveOrder] = useState(null);
   const [showTxs, setShowTxs] = useState(false);
   const [copiedKey, setCopiedKey] = useState("");
@@ -61,6 +78,8 @@ export default function AccountPage() {
   });
   const [moneyModal, setMoneyModal] = useState(null);
   const [inviteModal, setInviteModal] = useState(false);
+  const [downlineModal, setDownlineModal] = useState(false);
+  const [activityModal, setActivityModal] = useState(false);
   const [moneyBusy, setMoneyBusy] = useState("");
   const [moneyStatus, setMoneyStatus] = useState(null);
   const [authMode, setAuthMode] = useState("login");
@@ -78,7 +97,7 @@ export default function AccountPage() {
         fetch("/api/auth/balance", { credentials: "same-origin" }),
       ]);
       if (meRes.status === 401) {
-        setState({ loading: false, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null });
+        setState({ loading: false, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
         return;
       }
       const me = await meRes.json();
@@ -94,10 +113,11 @@ export default function AccountPage() {
           coupons: bal.coupons || me.coupons || [],
           withdrawals: bal.withdrawals || [],
           referral: me.referral || bal.referral || null,
+          referralDownlines: me.referralDownlines || [],
         });
       }
     } catch (e) {
-      setState({ loading: false, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null });
+      setState({ loading: false, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
     }
   }
 
@@ -275,14 +295,14 @@ export default function AccountPage() {
           </Link>
         </header>
         <main className="account-main">
-          <section className="account-invite-poster">
+          <button type="button" className="account-invite-poster" onClick={() => setActivityModal(true)}>
             <div className="account-invite-poster-icon"><BadgePercent size={20} /></div>
             <div>
               <span>邀请返佣活动</span>
               <strong>注册即可获得专属邀请链接</strong>
               <p>邀请下单可获得至高 15% 佣金，订单完成后自动计入账户余额</p>
             </div>
-          </section>
+          </button>
           <section className="auth-modal account-auth-card">
             <div className="auth-modal-head">
               {authMode === "login" || authMode === "register" ? (
@@ -359,11 +379,41 @@ export default function AccountPage() {
             </form>
           </section>
         </main>
+        {activityModal && (
+          <div className="account-modal-mask" onClick={() => setActivityModal(false)}>
+            <div className="account-money-modal account-activity-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="account-modal-head">
+                <div>
+                  <div className="account-modal-id">邀请返佣活动</div>
+                  <div className="account-modal-status status-completed">最高 15% 佣金</div>
+                </div>
+                <button type="button" className="account-modal-close" onClick={() => setActivityModal(false)}>
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="account-invite-modal-body">
+                <div className="account-invite-hero">
+                  <span><BadgePercent size={15} />注册即开通专属邀请</span>
+                  <strong>邀请好友下单，订单完成后自动返佣</strong>
+                  <p>每位注册用户都会获得专属邀请链接，复制分享后即可追踪邀请关系与返佣</p>
+                </div>
+                <div className="account-invite-rule-list">
+                  <div><b>直接下单返佣</b><p>好友通过你的链接访问并完成下单，订单由工作人员标记为已完成后，你获得实付金额 10% 佣金</p></div>
+                  <div><b>一级代理绑定</b><p>好友通过你的链接注册后，将永久成为你的一级代理，该用户后续订单完成都会给你 10% 返佣</p></div>
+                  <div><b>二级代理奖励</b><p>一级代理继续邀请新用户后，该新用户属于你的二级代理，订单完成后你可获得 5% 二级返佣</p></div>
+                  <div><b>余额自动入账</b><p>有效佣金自动计入账户余额，可用于下单抵扣，也可在个人中心申请提现</p></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         <FloatingSupport />
         <MobileNav />
       </div>
     );
   }
+
+  const activeCoupon = state.coupons.find((c) => c.status === "active");
 
   return (
     <div className="account-page">
@@ -436,7 +486,7 @@ export default function AccountPage() {
                       {tx.amount > 0 ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
                     </div>
                     <div className="account-tx-info">
-                      <strong>{tx.reason}</strong>
+                      <strong>{displayTxReason(tx)}</strong>
                       <small>{tx.createdAtBeijing}{tx.statusLabel ? ` · ${tx.statusLabel}` : ""}</small>
                     </div>
                     <div className="account-tx-amount">
@@ -455,23 +505,17 @@ export default function AccountPage() {
 
         <section className="account-money-tools">
           {moneyStatus && <div className={`account-tool-alert ${moneyStatus.type}`}>{moneyStatus.message}</div>}
-          <div className="account-coupon-strip">
-            <Gift size={14} />
-            <div>
-              <strong>付款自动抵扣</strong>
-              <span>
-                {state.coupons.find((c) => c.status === "active")
-                  ? `可用优惠券 ¥${Number(state.coupons.find((c) => c.status === "active").amount || 0).toFixed(2)}`
-                  : "暂无可用优惠券"}
-              </span>
-            </div>
-          </div>
-
           <div className="account-tool-buttons">
             <button type="button" onClick={() => setMoneyModal("transfer")}><Send size={13} />转账</button>
-            <button type="button" onClick={() => setMoneyModal("redeem")}><Gift size={13} />兑换</button>
+            <button type="button" onClick={() => setDownlineModal(true)}><Users size={13} />下级</button>
             <button type="button" onClick={() => setMoneyModal("withdraw")}><CreditCard size={13} />提现</button>
             <button type="button" onClick={() => setInviteModal(true)}><Share2 size={13} />邀请</button>
+          </div>
+
+          <div className="account-coupon-strip">
+            <Gift size={13} />
+            <strong>{activeCoupon ? `可用优惠券 ¥${Number(activeCoupon.amount || 0).toFixed(2)}` : "暂无可用优惠券"}</strong>
+            <span>付款自动抵扣</span>
           </div>
 
           <form
@@ -649,6 +693,41 @@ export default function AccountPage() {
         </div>
       )}
 
+      {downlineModal && (
+        <div className="account-modal-mask" onClick={() => setDownlineModal(false)}>
+          <div className="account-money-modal account-downline-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="account-modal-head">
+              <div>
+                <div className="account-modal-id">我的下级</div>
+                <div className="account-modal-status status-received">{state.referralDownlines.length} 位邀请用户</div>
+              </div>
+              <button type="button" className="account-modal-close" onClick={() => setDownlineModal(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="account-downline-list">
+              {state.referralDownlines.length === 0 ? (
+                <div className="account-downline-empty">
+                  <Users size={18} />
+                  <strong>暂无下级用户</strong>
+                  <span>复制邀请链接分享给好友，好友注册或下单后会在这里显示</span>
+                </div>
+              ) : (
+                state.referralDownlines.map((item, index) => (
+                  <div key={`${item.email}-${index}`} className="account-downline-item">
+                    <div>
+                      <strong>{item.email}</strong>
+                      {item.joinedAtBeijing && <small>{item.joinedAtBeijing}</small>}
+                    </div>
+                    <em>{item.levelLabel}</em>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {inviteModal && (
         <div className="account-modal-mask" onClick={() => setInviteModal(false)}>
           <div className="account-money-modal account-invite-modal" onClick={(e) => e.stopPropagation()}>
@@ -665,7 +744,7 @@ export default function AccountPage() {
               <div className="account-invite-hero">
                 <span><BadgePercent size={15} />专属邀请链接</span>
                 <strong>邀请好友下单，订单完成后自动返佣</strong>
-                <p>佣金会在后台工作人员将订单标记为“已完成”后自动计入你的账户余额，可用于下单或申请提现</p>
+                <p>佣金会在有效订单完成后自动计入你的账户余额，可用于下单或申请提现</p>
               </div>
               <div className="account-invite-link-box">
                 <span>你的邀请链接</span>
@@ -693,7 +772,7 @@ export default function AccountPage() {
                 </div>
                 <div>
                   <b>结算规则</b>
-                  <p>返佣仅在订单由工作人员审核并标记为已完成后发放，未付款、无效订单、兑换码免支付订单不会产生有效佣金</p>
+                  <p>返佣仅有效订单并完成后发放，未付款、无效订单、兑换码免支付订单不会产生有效佣金</p>
                 </div>
               </div>
             </div>

@@ -1,7 +1,7 @@
 import {
   getCookieFromRequest, verifySession, getAllOrders,
   getUser, setUser, validUsername, generateRandomUsername, clean,
-  publicCoupons, publicReferral, ensureUserReferralProfile,
+  publicCoupons, publicReferral, ensureUserReferralProfile, listAllUserEmails,
 } from "../../_utils.js";
 
 function subscriptionLinks(username) {
@@ -65,6 +65,40 @@ function publicOrder(order) {
   };
 }
 
+function maskEmail(email) {
+  const value = String(email || "").trim().toLowerCase();
+  const [local, domain = ""] = value.split("@");
+  if (!local || !domain) return value ? value.slice(0, 2) + "***" : "";
+  const localMask = local.length <= 2 ? local[0] + "***" : local.slice(0, 2) + "***" + local.slice(-1);
+  const parts = domain.split(".");
+  const domainMain = parts.shift() || "";
+  const domainMask = domainMain.length <= 2 ? domainMain[0] + "***" : domainMain.slice(0, 2) + "***" + domainMain.slice(-1);
+  return `${localMask}@${domainMask}${parts.length ? "." + parts.join(".") : ""}`;
+}
+
+async function publicReferralDownlines(email) {
+  const lower = String(email || "").trim().toLowerCase();
+  const emails = await listAllUserEmails();
+  const rows = [];
+  for (const item of emails) {
+    const targetEmail = String(item || "").trim().toLowerCase();
+    if (!targetEmail || targetEmail === lower) continue;
+    const user = await getUser(targetEmail);
+    if (!user) continue;
+    const first = String(user.invitedByEmail || "").trim().toLowerCase();
+    const second = String(user.invitedBy2Email || "").trim().toLowerCase();
+    if (first === lower || second === lower) {
+      rows.push({
+        email: maskEmail(targetEmail),
+        level: first === lower ? 1 : 2,
+        levelLabel: first === lower ? "一级代理" : "二级代理",
+        joinedAtBeijing: user.createdAtBeijing || user.invitedAtBeijing || "",
+      });
+    }
+  }
+  return rows.sort((a, b) => a.level - b.level || String(b.joinedAtBeijing).localeCompare(String(a.joinedAtBeijing)));
+}
+
 export async function GET(request) {
   const token = getCookieFromRequest(request, "lm_user");
   const session = verifySession(token);
@@ -101,6 +135,7 @@ export async function GET(request) {
     balance: Number(profile?.balance || 0),
     coupons: publicCoupons(profile),
     referral: publicReferral(profile),
+    referralDownlines: await publicReferralDownlines(sessionEmail),
     banned: !!profile?.banned,
     orders: myOrders,
   });

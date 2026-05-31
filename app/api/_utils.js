@@ -847,6 +847,14 @@ export function publicReferral(user) {
   };
 }
 
+export function maskReferralOrderId(orderId) {
+  const value = clean(orderId, 80).toUpperCase();
+  if (!value) return "";
+  if (value.length <= 8) return value.replace(/^(.{2}).+(.{2})$/, "$1****$2");
+  const start = Math.max(2, Math.floor((value.length - 6) / 2));
+  return value.slice(0, start) + "******" + value.slice(start + 6);
+}
+
 export async function resolveReferralForOrder({ userEmail, inviteCode }) {
   const buyerEmail = String(userEmail || "").trim().toLowerCase();
   let firstEmail = "";
@@ -925,7 +933,7 @@ export async function settleOrderReferralCommission(order, actor = null) {
     const tx = {
       id: makeId("TX"),
       amount: commission,
-      reason: `邀请返佣 ${order.orderId} · ${item.level === 1 ? "一级10%" : "二级5%"}`,
+      reason: `邀请返佣 ${maskReferralOrderId(order.orderId)} · ${item.level === 1 ? "一级10%" : "二级5%"}`,
       balanceAfter: next,
       source: "referral",
       orderId: order.orderId,
