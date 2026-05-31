@@ -510,7 +510,7 @@ export default function AccountPage() {
               <span>支付宝账号</span>
               <input value={moneyForm.alipayAccount} onChange={(e) => updateMoneyField("alipayAccount", e.target.value)} placeholder="手机号 / 邮箱 / 支付宝账号" required />
             </label>
-            <button type="submit" disabled={moneyBusy === "withdraw"}>{moneyBusy === "withdraw" ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}提交待审核</button>
+            <button type="submit" disabled={moneyBusy === "withdraw"}>{moneyBusy === "withdraw" ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}确认提现</button>
           </form>
         </section>
 
