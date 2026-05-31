@@ -8399,6 +8399,9 @@ button { cursor: pointer; border: none; background: transparent; }
   max-height: 430px;
   overflow-y: auto;
 }
+.admin-code-history-actions {
+  justify-content: flex-start;
+}
 .admin-code-history-item {
   width: 100%;
   display: grid;
@@ -8424,6 +8427,19 @@ button { cursor: pointer; border: none; background: transparent; }
   background: #fff;
   color: var(--primary);
   text-align: left;
+}
+.admin-code-history-item.batch-mode {
+  grid-template-columns: auto minmax(0, 0.8fr) minmax(0, 1.2fr);
+}
+.admin-code-history-item.selected {
+  background: #ecfeff;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(15, 118, 110, 0.18);
+}
+.admin-code-history-item.selected .admin-order-checkbox {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 .admin-code-history-item span {
   min-width: 0;
@@ -11254,6 +11270,18 @@ button { cursor: pointer; border: none; background: transparent; }
 
   body:has(.cart-bar) .mobile-bottom-nav {
     display: grid !important;
+  }
+
+  body:has(.modal-mask) .mobile-bottom-nav,
+  body:has(.auth-modal-mask) .mobile-bottom-nav,
+  body:has(.account-modal-mask) .mobile-bottom-nav {
+    display: none !important;
+  }
+
+  .modal-mask,
+  .auth-modal-mask,
+  .account-modal-mask {
+    z-index: 140 !important;
   }
 
   .site-footer {

@@ -217,12 +217,20 @@ function HomeTestimonials() {
 
 export default function Page() {
   const [metrics, setMetrics] = useState(OPERATION_INITIAL_METRICS);
+  const [authUser, setAuthUser] = useState(null);
 
   useEffect(() => {
     const update = () => setMetrics(buildOperationMetrics());
     update();
     const timer = setInterval(update, 30000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/auth/me", { credentials: "same-origin", cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => setAuthUser(data.ok ? data : false))
+      .catch(() => setAuthUser(false));
   }, []);
 
   useEffect(() => {
@@ -282,9 +290,9 @@ export default function Page() {
             <Link href="/shop" className="hero-pair-btn primary">
               <Zap size={16} />立即开通
             </Link>
-            <Link href="/account?auth=login" className="hero-pair-btn secondary with-auth-tip">
-              <Users size={16} />登录 / 注册
-              <span className="hero-auth-tip">新用户注册立减 ¥8.88</span>
+            <Link href={authUser ? "/account" : "/account?auth=login"} className={`hero-pair-btn secondary${authUser ? "" : " with-auth-tip"}`}>
+              <Users size={16} />{authUser ? "个人中心" : "登录 / 注册"}
+              {!authUser && <span className="hero-auth-tip">新用户注册立减 ¥8.88</span>}
             </Link>
             <Link href="/service-center#order-query" className="home-query-btn">
               <ShoppingBag size={16} />订单查询

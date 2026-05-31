@@ -1300,6 +1300,44 @@ export async function deleteRedeemCode(codeValue, actor = null) {
   } catch (e) { return { ok: false, error: "delete_failed" }; }
 }
 
+export async function deleteRedeemHistoryEntries(codes, actor = null) {
+  const codeSet = new Set((Array.isArray(codes) ? codes : [])
+    .map((code) => normalizeRedeemCode(code))
+    .filter(Boolean));
+  if (codeSet.size === 0) return { ok: false, error: "no_codes" };
+  const actorInfo = actor ? adminActorFromSession(actor) : null;
+  const now = new Date();
+  const removed = [];
+  for (const code of codeSet) {
+    const item = await getJsonKey(redeemCodeKey(code));
+    if (!item || item.status !== "used" || item.historyDeleted) continue;
+    const next = {
+      ...item,
+      historyDeleted: true,
+      historyDeletedAt: now.toISOString(),
+      historyDeletedAtBeijing: formatBeijingTime(now),
+    };
+    if (actorInfo) {
+      next.historyDeletedByStaffId = actorInfo.staffId;
+      next.historyDeletedByStaffUsername = actorInfo.staffUsername;
+    }
+    const saved = await setJsonKey(redeemCodeKey(code), next);
+    if (saved) removed.push(code);
+  }
+  if (removed.length === 0) return { ok: false, error: "not_found" };
+  await pushAdminActionLog({
+    action: "redeem_history_delete",
+    actor: actorInfo,
+    target: "redeem-history:" + removed.length,
+    detail: { codes: removed, deletedCount: removed.length },
+  });
+  return {
+    ok: true,
+    deletedCount: removed.length,
+    notFound: Array.from(codeSet).filter((code) => !removed.includes(code)),
+  };
+}
+
 export async function updateRedeemBatchStatus(batchId, status, actor = null) {
   const id = clean(batchId, 80);
   const batch = await getJsonKey(redeemBatchKey(id));

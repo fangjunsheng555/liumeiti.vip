@@ -34,7 +34,7 @@ export function buildRedeemEmailText({ code, type, services, amount, brandName, 
     `兑换码: ${code}`,
     `内容: ${valueText}`,
     ``,
-    `点击下面的链接前往服务中心兑换 (链接已自动填入兑换码)：`,
+    `点击下面的链接前往首页兑换区域 (链接已自动填入兑换码)：`,
     redeemUrl,
     ``,
     isService
@@ -123,7 +123,7 @@ export function buildRedeemEmailHtml({
                  style="display:inline-block;padding:14px 36px;background:linear-gradient(135deg,#0f766e 0%,#134e4a 100%);color:#ffffff;text-decoration:none;font-size:15px;font-weight:800;letter-spacing:0.02em;border-radius:999px;box-shadow:0 6px 18px rgba(15,118,110,0.28);">
                  立即兑换 →
               </a>
-              <div style="margin-top:10px;font-size:11.5px;color:#94a3b8;">点击按钮跳转服务中心兑换区域，兑换码已为您自动填入</div>
+              <div style="margin-top:10px;font-size:11.5px;color:#94a3b8;">点击按钮跳转首页兑换区域，兑换码已为您自动填入</div>
             </td>
           </tr>
 

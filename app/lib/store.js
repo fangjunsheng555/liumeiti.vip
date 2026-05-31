@@ -88,7 +88,7 @@ export const PRODUCTS = [
     cycle: "1年",
     needsUsername: true,
     hasPlan: true,
-    price: "¥128/1年起",
+    price: "¥128/年起",
     shortIntro: "大厂机房多线路，最高5Gbps带宽，按月提供真实流量，解锁流媒体/AI/社交软件",
     highlights: ["真实流量套餐", "高速稳定多节点", "全加密无日志"],
     detailTitle: "大厂机房多线路，真实流量套餐可选，年仅 ¥128 起",

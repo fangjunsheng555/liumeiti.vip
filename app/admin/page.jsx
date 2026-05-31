@@ -1088,6 +1088,9 @@ export default function AdminPage() {
   const [redeemHistory, setRedeemHistory] = useState([]);
   const [redeemHistoryQuery, setRedeemHistoryQuery] = useState("");
   const [redeemHistoryLoading, setRedeemHistoryLoading] = useState(false);
+  const [redeemHistoryBatchMode, setRedeemHistoryBatchMode] = useState(false);
+  const [selectedRedeemHistoryCodes, setSelectedRedeemHistoryCodes] = useState(new Set());
+  const [redeemHistoryDeleteBusy, setRedeemHistoryDeleteBusy] = useState(false);
   const [activeRedeemHistory, setActiveRedeemHistory] = useState(null);
   const [pdfExportModal, setPdfExportModal] = useState(null); // { type: "redeem" | "order", record, note }
   const [sendCodeModal, setSendCodeModal] = useState(null); // { code, type, label } | null
@@ -1248,7 +1251,13 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/redeem-history?" + params.toString(), { credentials: "same-origin" });
       if (res.status === 401) { setAuthed(false); return; }
       const data = await res.json();
-      if (data.ok) setRedeemHistory(data.history || []);
+      if (data.ok) {
+        if (data.currentStaff) setCurrentStaff(data.currentStaff);
+        const nextHistory = data.history || [];
+        setRedeemHistory(nextHistory);
+        const visibleCodes = new Set(nextHistory.map((item) => item.code));
+        setSelectedRedeemHistoryCodes((current) => new Set(Array.from(current).filter((code) => visibleCodes.has(code))));
+      }
     } catch (e) {} finally {
       setRedeemHistoryLoading(false);
     }
@@ -1665,6 +1674,49 @@ export default function AdminPage() {
       setMailResult({ type: "error", message: "网络错误" });
     } finally {
       setMailDeleteBusy(false);
+    }
+  }
+
+  function toggleRedeemHistorySelect(code) {
+    setSelectedRedeemHistoryCodes((current) => {
+      const next = new Set(current);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+  }
+
+  function selectAllRedeemHistory() {
+    setSelectedRedeemHistoryCodes(new Set(redeemHistory.map((item) => item.code).filter(Boolean)));
+  }
+
+  async function deleteSelectedRedeemHistory() {
+    if (!isRootStaff || redeemHistoryDeleteBusy || selectedRedeemHistoryCodes.size === 0) return;
+    if (typeof window !== "undefined" && !window.confirm(`确认删除 ${selectedRedeemHistoryCodes.size} 条兑换历史？`)) return;
+    setRedeemHistoryDeleteBusy(true);
+    setCodeResult(null);
+    try {
+      const codesToDelete = Array.from(selectedRedeemHistoryCodes);
+      const res = await fetch("/api/admin/redeem-history", {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ codes: codesToDelete }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setSelectedRedeemHistoryCodes(new Set());
+        setRedeemHistoryBatchMode(false);
+        if (activeRedeemHistory && codesToDelete.includes(activeRedeemHistory.code)) setActiveRedeemHistory(null);
+        setCodeResult({ type: "success", message: `已删除 ${data.deletedCount || codesToDelete.length} 条兑换历史` });
+        await loadRedeemHistory(redeemHistoryQuery);
+      } else {
+        setCodeResult({ type: "error", message: data.error === "forbidden" ? "仅主账号可批量删除兑换历史" : (data.error || "删除失败") });
+      }
+    } catch (e) {
+      setCodeResult({ type: "error", message: "网络错误" });
+    } finally {
+      setRedeemHistoryDeleteBusy(false);
     }
   }
 
@@ -2632,26 +2684,57 @@ export default function AdminPage() {
                       {redeemHistoryLoading ? <LoaderCircle size={11} className="spin-icon" /> : "搜索"}
                     </button>
                   </div>
+                  {isRootStaff && (
+                    <div className="admin-inline-actions admin-code-history-actions">
+                      <button
+                        type="button"
+                        className={`admin-filter-btn${redeemHistoryBatchMode ? " active" : ""}`}
+                        onClick={() => {
+                          setRedeemHistoryBatchMode((value) => !value);
+                          setSelectedRedeemHistoryCodes(new Set());
+                        }}
+                      >
+                        {redeemHistoryBatchMode ? "退出批量" : "批量删除"}
+                      </button>
+                      {redeemHistoryBatchMode && (
+                        <>
+                          <button type="button" className="admin-filter-btn" onClick={selectAllRedeemHistory} disabled={redeemHistory.length === 0}>全选</button>
+                          <button type="button" className="admin-filter-btn" onClick={() => setSelectedRedeemHistoryCodes(new Set())} disabled={selectedRedeemHistoryCodes.size === 0}>清除</button>
+                          <button type="button" className="admin-filter-btn danger" onClick={deleteSelectedRedeemHistory} disabled={redeemHistoryDeleteBusy || selectedRedeemHistoryCodes.size === 0}>
+                            {redeemHistoryDeleteBusy ? "删除中" : `删除 ${selectedRedeemHistoryCodes.size}`}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
                   <div className="admin-code-history-list">
                     {redeemHistoryLoading ? (
                       <div className="admin-userlist-empty">加载中...</div>
                     ) : redeemHistory.length === 0 ? (
                       <div className="admin-userlist-empty">暂无兑换历史</div>
-                    ) : redeemHistory.map((item) => (
-                      <button
-                        key={item.code}
-                        type="button"
-                        className="admin-code-history-item"
-                        onClick={() => setActiveRedeemHistory(item)}
-                      >
-                        <span>
-                          <strong>{item.code}</strong>
-                        </span>
-                        <span>
-                          <b>{item.usedBy || item.order?.email || "未记录邮箱"}</b>
-                        </span>
-                      </button>
-                    ))}
+                    ) : redeemHistory.map((item) => {
+                      const selected = selectedRedeemHistoryCodes.has(item.code);
+                      return (
+                        <button
+                          key={item.code}
+                          type="button"
+                          className={`admin-code-history-item${redeemHistoryBatchMode ? " batch-mode" : ""}${selected ? " selected" : ""}`}
+                          onClick={() => redeemHistoryBatchMode ? toggleRedeemHistorySelect(item.code) : setActiveRedeemHistory(item)}
+                        >
+                          {redeemHistoryBatchMode && (
+                            <span className="admin-order-checkbox">
+                              {selected && <CheckCircle2 size={11} />}
+                            </span>
+                          )}
+                          <span>
+                            <strong>{item.code}</strong>
+                          </span>
+                          <span>
+                            <b>{item.usedBy || item.order?.email || "未记录邮箱"}</b>
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               ) : (

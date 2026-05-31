@@ -1,5 +1,6 @@
 import {
-  adminSessionFromRequest, listRedeemCodes, getAllOrders, clean,
+  adminSessionFromRequest, adminActorFromSession, isRootAdminSession,
+  listRedeemCodes, getAllOrders, deleteRedeemHistoryEntries, clean,
 } from "../../_utils.js";
 
 function serviceLabel(code) {
@@ -68,7 +69,7 @@ export async function GET(request) {
   const [codes, orders] = await Promise.all([listRedeemCodes(), getAllOrders()]);
   const orderMap = new Map(orders.map((order) => [clean(order.orderId || "", 100), order]));
   let history = codes
-    .filter((code) => code && code.status === "used")
+    .filter((code) => code && code.status === "used" && !code.historyDeleted)
     .map((code) => normalizeHistoryCode(code, orderMap))
     .sort((a, b) => String(b.usedAt || "").localeCompare(String(a.usedAt || "")));
 
@@ -90,5 +91,22 @@ export async function GET(request) {
     ok: true,
     total: history.length,
     history: history.slice(0, 200),
+    currentStaff: {
+      id: Number(session.staffId || 1),
+      username: session.staffUsername || "admin",
+      root: isRootAdminSession(session),
+    },
   });
+}
+
+export async function DELETE(request) {
+  const session = adminSessionFromRequest(request);
+  if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!isRootAdminSession(session)) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  let body = {};
+  try { body = await request.json(); } catch (e) {}
+  const codes = Array.isArray(body.codes) ? body.codes.map((code) => clean(code, 80)).filter(Boolean) : [];
+  const result = await deleteRedeemHistoryEntries(codes, adminActorFromSession(session));
+  if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: 400 });
+  return Response.json(result);
 }
