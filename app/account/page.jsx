@@ -8,7 +8,7 @@ import {
   ArrowRight, CheckCircle2, Clock, Copy,
   LoaderCircle, LogOut, Mail, ShoppingBag, X,
   AlertTriangle, Wallet, TrendingDown, TrendingUp,
-  User, Edit3, Check,
+  User, Users, Edit3, Check,
   Gift, Send, CreditCard, RefreshCw, Share2, BadgePercent,
 } from "lucide-react";
 
@@ -395,12 +395,12 @@ export default function AccountPage() {
                 <div className="account-invite-hero">
                   <span><BadgePercent size={15} />注册即开通专属邀请</span>
                   <strong>邀请好友下单，订单完成后自动返佣</strong>
-                  <p>每位注册用户都会获得专属邀请链接，复制分享后即可追踪邀请关系与返佣</p>
+                  <p>每位注册用户都会获得专属邀请链接，复制分享后即可查看邀请用户与返佣记录</p>
                 </div>
                 <div className="account-invite-rule-list">
-                  <div><b>直接下单返佣</b><p>好友通过你的链接访问并完成下单，订单由工作人员标记为已完成后，你获得实付金额 10% 佣金</p></div>
-                  <div><b>一级代理绑定</b><p>好友通过你的链接注册后，将永久成为你的一级代理，该用户后续订单完成都会给你 10% 返佣</p></div>
-                  <div><b>二级代理奖励</b><p>一级代理继续邀请新用户后，该新用户属于你的二级代理，订单完成后你可获得 5% 二级返佣</p></div>
+                  <div><b>直接下单返佣</b><p>好友通过你的链接访问并完成有效订单后，你可获得实付金额 10% 佣金</p></div>
+                  <div><b>一级代理绑定</b><p>好友通过你的链接注册后，将永久成为你的一级代理；该用户后续有效订单完成后，你可获得 10% 返佣</p></div>
+                  <div><b>二级代理奖励</b><p>一级代理继续邀请新用户注册或下单，该新用户属于你的二级代理；其有效订单完成后，你可获得 5% 二级返佣</p></div>
                   <div><b>余额自动入账</b><p>有效佣金自动计入账户余额，可用于下单抵扣，也可在个人中心申请提现</p></div>
                 </div>
               </div>
@@ -744,7 +744,7 @@ export default function AccountPage() {
               <div className="account-invite-hero">
                 <span><BadgePercent size={15} />专属邀请链接</span>
                 <strong>邀请好友下单，订单完成后自动返佣</strong>
-                <p>佣金会在有效订单完成后自动计入你的账户余额，可用于下单或申请提现</p>
+                <p>佣金会在有效订单完成后自动计入账户余额，可用于下单或申请提现</p>
               </div>
               <div className="account-invite-link-box">
                 <span>你的邀请链接</span>
@@ -760,19 +760,19 @@ export default function AccountPage() {
               <div className="account-invite-rule-list">
                 <div>
                   <b>直接邀请下单</b>
-                  <p>他人通过你的专属链接进入网站并下单，订单完成后，你获得订单实付金额 10% 佣金</p>
+                  <p>他人通过你的专属链接进入网站并完成有效订单后，你获得订单实付金额 10% 佣金</p>
                 </div>
                 <div>
                   <b>一级代理永久绑定</b>
-                  <p>他人通过你的链接注册账号后，会永久成为你的一级代理；该用户以后每次下单完成，你都获得 10% 佣金</p>
+                  <p>他人通过你的链接注册账号后，会永久成为你的一级代理；该用户以后每次有效订单完成后，你都获得 10% 佣金</p>
                 </div>
                 <div>
                   <b>二级代理返佣</b>
-                  <p>你的一级代理再邀请新用户下单或注册，该新用户属于你的二级代理；订单完成后，你可获得 5% 二级佣金</p>
+                  <p>你的一级代理再邀请新用户下单或注册，该新用户属于你的二级代理；有效订单完成后，你可获得 5% 二级佣金</p>
                 </div>
                 <div>
                   <b>结算规则</b>
-                  <p>返佣仅有效订单并完成后发放，未付款、无效订单、兑换码免支付订单不会产生有效佣金</p>
+                  <p>返佣仅在有效订单完成后发放，未付款、异常订单、兑换码免支付订单不会产生有效佣金</p>
                 </div>
               </div>
             </div>
