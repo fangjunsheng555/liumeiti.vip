@@ -4,6 +4,7 @@ import ReferralTracker from './components/ReferralTracker';
 const siteUrl = 'https://liumeiti.vip';
 const siteTitle = '冒央会社-流媒体会员服务';
 const siteDescription = '冒央会社 Maoyang Taiwan Inc，提供 Spotify、Netflix、Disney+、HBO Max、机场节点等流媒体会员服务，支持支付宝担保支付、USDT 支付、订单查询与在线客服售后';
+const socialDescription = '我发现一家性价比与服务很好的流媒体会员平台，邀请你也试试，Spotify、Netflix、Disney+、HBO Max 与机场节点服务，一站下单，售后在线';
 
 export const metadata = {
   metadataBase: new URL(siteUrl),
@@ -46,7 +47,7 @@ export const metadata = {
     url: '/',
     siteName: '冒央会社',
     title: siteTitle,
-    description: siteDescription,
+    description: socialDescription,
     images: [
       {
         url: '/og-image.png',
@@ -59,7 +60,7 @@ export const metadata = {
   twitter: {
     card: 'summary_large_image',
     title: siteTitle,
-    description: siteDescription,
+    description: socialDescription,
     images: ['/og-image.png'],
   },
 };

@@ -933,7 +933,7 @@ export async function settleOrderReferralCommission(order, actor = null) {
     const tx = {
       id: makeId("TX"),
       amount: commission,
-      reason: `邀请返佣 ${maskReferralOrderId(order.orderId)} · ${item.level === 1 ? "一级10%" : "二级5%"}`,
+      reason: `合伙人收益 ${maskReferralOrderId(order.orderId)} · ${item.level === 1 ? "一级10%" : "二级5%"}`,
       balanceAfter: next,
       source: "referral",
       orderId: order.orderId,

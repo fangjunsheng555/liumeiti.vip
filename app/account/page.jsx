@@ -44,7 +44,7 @@ function maskOrderId(orderId) {
 
 function displayTxReason(tx) {
   if (tx?.source === "referral" && tx.orderId) {
-    return `邀请返佣 ${maskOrderId(tx.orderId)} · ${Number(tx.referralLevel || 1) === 2 ? "二级5%" : "一级10%"}`;
+    return `合伙人收益 ${maskOrderId(tx.orderId)} · ${Number(tx.referralLevel || 1) === 2 ? "二级5%" : "一级10%"}`;
   }
   const reason = String(tx?.reason || "");
   const orderId = String(tx?.orderId || "").trim();
@@ -298,9 +298,9 @@ export default function AccountPage() {
           <button type="button" className="account-invite-poster" onClick={() => setActivityModal(true)}>
             <div className="account-invite-poster-icon"><BadgePercent size={20} /></div>
             <div>
-              <span>邀请返佣活动</span>
+              <span>合伙人计划</span>
               <strong>注册即可获得专属邀请链接</strong>
-              <p>邀请下单可获得至高 15% 佣金，订单完成后自动计入账户余额</p>
+              <p>分享稳定好用的流媒体服务，一次推荐可持续获得长期收益</p>
             </div>
           </button>
           <section className="auth-modal account-auth-card">
@@ -384,7 +384,7 @@ export default function AccountPage() {
             <div className="account-money-modal account-activity-modal" onClick={(e) => e.stopPropagation()}>
               <div className="account-modal-head">
                 <div>
-                  <div className="account-modal-id">邀请返佣活动</div>
+                  <div className="account-modal-id">合伙人计划</div>
                   <div className="account-modal-status status-completed">最高 15% 佣金</div>
                 </div>
                 <button type="button" className="account-modal-close" onClick={() => setActivityModal(false)}>
@@ -393,15 +393,15 @@ export default function AccountPage() {
               </div>
               <div className="account-invite-modal-body">
                 <div className="account-invite-hero">
-                  <span><BadgePercent size={15} />注册即开通专属邀请</span>
-                  <strong>邀请好友下单，订单完成后自动返佣</strong>
-                  <p>每位注册用户都会获得专属邀请链接，复制分享后即可查看邀请用户与返佣记录</p>
+                  <span><BadgePercent size={15} />注册即可获得专属邀请链接</span>
+                  <strong>优质服务更好推广，一次分享长期收益</strong>
+                  <p>把高性价比会员与稳定售后分享给朋友或社群，好友完成有效订单后，收益会自动计入账户余额</p>
                 </div>
                 <div className="account-invite-rule-list">
-                  <div><b>直接下单返佣</b><p>好友通过你的链接访问并完成有效订单后，你可获得实付金额 10% 佣金</p></div>
-                  <div><b>一级代理绑定</b><p>好友通过你的链接注册后，将永久成为你的一级代理；该用户后续有效订单完成后，你可获得 10% 返佣</p></div>
-                  <div><b>二级代理奖励</b><p>一级代理继续邀请新用户注册或下单，该新用户属于你的二级代理；其有效订单完成后，你可获得 5% 二级返佣</p></div>
-                  <div><b>余额自动入账</b><p>有效佣金自动计入账户余额，可用于下单抵扣，也可在个人中心申请提现</p></div>
+                  <div><b>服务好推广</b><p>主流会员、节点服务与售后协助一站完成，朋友更容易理解也更愿意复购</p></div>
+                  <div><b>分享成交收益</b><p>好友通过你的链接下单并完成服务后，你可获得实付金额 10% 佣金</p></div>
+                  <div><b>长期客户收益</b><p>好友通过你的链接注册后，会成为你的一级用户，后续有效订单也会持续带来 10% 收益</p></div>
+                  <div><b>团队扩散奖励</b><p>一级用户继续邀请新用户后，你也可获得二级用户有效订单 5% 奖励，分享越久积累越多</p></div>
                 </div>
               </div>
             </div>
@@ -686,7 +686,7 @@ export default function AccountPage() {
               {moneyStatus && <div className={`account-tool-alert ${moneyStatus.type}`}>{moneyStatus.message}</div>}
               <button type="submit" disabled={!!moneyBusy} className="account-money-submit">
                 {moneyBusy ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}
-                {moneyBusy ? "处理中" : moneyModal === "withdraw" ? "提交待审核" : "确认提交"}
+                {moneyBusy ? "处理中" : moneyModal === "withdraw" ? "确认提现" : "确认提交"}
               </button>
             </form>
           </div>
@@ -733,7 +733,7 @@ export default function AccountPage() {
           <div className="account-money-modal account-invite-modal" onClick={(e) => e.stopPropagation()}>
             <div className="account-modal-head">
               <div>
-                <div className="account-modal-id">邀请返佣</div>
+                <div className="account-modal-id">合伙人计划</div>
                 <div className="account-modal-status status-completed">最高 15% 佣金</div>
               </div>
               <button type="button" className="account-modal-close" onClick={() => setInviteModal(false)}>
@@ -743,8 +743,8 @@ export default function AccountPage() {
             <div className="account-invite-modal-body">
               <div className="account-invite-hero">
                 <span><BadgePercent size={15} />专属邀请链接</span>
-                <strong>邀请好友下单，订单完成后自动返佣</strong>
-                <p>佣金会在有效订单完成后自动计入账户余额，可用于下单或申请提现</p>
+                <strong>一次分享，长期收益</strong>
+                <p>把稳定好用的流媒体服务分享出去，有效订单完成后，合伙人收益会自动计入账户余额</p>
               </div>
               <div className="account-invite-link-box">
                 <span>你的邀请链接</span>
@@ -759,20 +759,20 @@ export default function AccountPage() {
               </div>
               <div className="account-invite-rule-list">
                 <div>
-                  <b>直接邀请下单</b>
+                  <b>直接分享成交</b>
                   <p>他人通过你的专属链接进入网站并完成有效订单后，你获得订单实付金额 10% 佣金</p>
                 </div>
                 <div>
-                  <b>一级代理永久绑定</b>
-                  <p>他人通过你的链接注册账号后，会永久成为你的一级代理；该用户以后每次有效订单完成后，你都获得 10% 佣金</p>
+                  <b>一级用户长期绑定</b>
+                  <p>他人通过你的链接注册账号后，会成为你的一级用户；该用户以后每次有效订单完成后，你都获得 10% 佣金</p>
                 </div>
                 <div>
-                  <b>二级代理返佣</b>
-                  <p>你的一级代理再邀请新用户下单或注册，该新用户属于你的二级代理；有效订单完成后，你可获得 5% 二级佣金</p>
+                  <b>二级用户奖励</b>
+                  <p>你的一级用户继续邀请新用户注册或下单，该新用户属于你的二级用户；有效订单完成后，你可获得 5% 二级佣金</p>
                 </div>
                 <div>
-                  <b>结算规则</b>
-                  <p>返佣仅在有效订单完成后发放，未付款、异常订单、兑换码免支付订单不会产生有效佣金</p>
+                  <b>收益规则</b>
+                  <p>收益仅在有效订单完成后发放，未付款、异常订单、兑换码免支付订单不会产生有效佣金</p>
                 </div>
               </div>
             </div>
