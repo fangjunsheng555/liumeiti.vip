@@ -1,7 +1,7 @@
 const siteUrl = "https://www.liumeiti.vip";
 const inviteTitle = "账户中心与合伙人计划";
 const inviteDescription = "登录冒央会社账户，查看订单、余额、优惠券、提现与合伙人邀请记录。";
-const inviteImage = `${siteUrl}/icon-512.png?v=20260601`;
+const inviteImage = `${siteUrl}/logo-mark.png?v=20260602`;
 
 export const metadata = {
   title: inviteTitle,
@@ -23,8 +23,8 @@ export const metadata = {
     images: [
       {
         url: inviteImage,
-        width: 512,
-        height: 512,
+        width: 384,
+        height: 384,
         type: "image/png",
         alt: "冒央会社",
       },

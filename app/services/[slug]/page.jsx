@@ -25,9 +25,9 @@ export async function generateMetadata({ params }) {
       url: `/services/${service.slug}`,
       images: [
         {
-          url: "https://www.liumeiti.vip/icon-512.png?v=20260601",
-          width: 512,
-          height: 512,
+          url: "https://www.liumeiti.vip/logo-mark.png?v=20260602",
+          width: 384,
+          height: 384,
           type: "image/png",
           alt: "冒央会社",
         },
@@ -37,7 +37,7 @@ export async function generateMetadata({ params }) {
       card: "summary",
       title: `${title} | 冒央会社`,
       description: service.description,
-      images: ["https://www.liumeiti.vip/icon-512.png?v=20260601"],
+      images: ["https://www.liumeiti.vip/logo-mark.png?v=20260602"],
     },
   };
 }

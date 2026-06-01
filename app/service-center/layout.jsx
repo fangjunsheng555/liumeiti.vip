@@ -6,13 +6,13 @@ export const metadata = {
     title: "服务中心 | 冒央会社",
     description: "订单查询、售后支持、服务保障与客服联系方式。",
     url: "/service-center",
-    images: [{ url: "/icon-512.png?v=20260601", width: 512, height: 512, type: "image/png", alt: "冒央会社" }],
+    images: [{ url: "/logo-mark.png?v=20260602", width: 384, height: 384, type: "image/png", alt: "冒央会社" }],
   },
   twitter: {
     card: "summary",
     title: "服务中心 | 冒央会社",
     description: "安全查询订单状态并联系冒央会社客服。",
-    images: ["/icon-512.png?v=20260601"],
+    images: ["/logo-mark.png?v=20260602"],
   },
 };
 

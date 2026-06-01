@@ -9761,6 +9761,31 @@ button { cursor: pointer; border: none; background: transparent; }
   font-size: 13px;
   font-weight: 900;
 }
+.account-tx-modal {
+  width: min(520px, calc(100vw - 18px));
+}
+.account-tx-modal-body {
+  padding: 12px;
+  max-height: min(62vh, 520px);
+  overflow-y: auto;
+  background: linear-gradient(180deg, #ffffff 0%, #fff7ed 100%);
+}
+.account-tx-modal .account-tx-list {
+  gap: 8px;
+  margin-top: 0;
+}
+.account-tx-modal .account-tx-item {
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(245, 158, 11, 0.18);
+}
+.account-tx-modal .account-tx-empty,
+.account-tx-modal .account-tx-note {
+  background: rgba(255, 255, 255, 0.82);
+}
+.account-tx-modal .account-tx-note {
+  display: flex;
+  line-height: 1.5;
+}
 .account-invite-modal-body {
   display: grid;
   gap: 10px;

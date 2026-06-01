@@ -21,13 +21,13 @@ export const metadata = {
     title: "企业资质与服务保障 | 冒央会社",
     description: "台湾注册实体，清晰展示服务承诺、售后保障、隐私保护、退款规则与数据保留说明",
     url: "/legal",
-    images: [{ url: "https://www.liumeiti.vip/icon-512.png?v=20260601", width: 512, height: 512, type: "image/png", alt: "冒央会社" }],
+    images: [{ url: "https://www.liumeiti.vip/logo-mark.png?v=20260602", width: 384, height: 384, type: "image/png", alt: "冒央会社" }],
   },
   twitter: {
     card: "summary",
     title: "企业资质与服务保障 | 冒央会社",
     description: "查看冒央会社企业信息、服务条款、隐私政策、退款规则与数据保留说明",
-    images: ["https://www.liumeiti.vip/icon-512.png?v=20260601"],
+    images: ["https://www.liumeiti.vip/logo-mark.png?v=20260602"],
   },
 };
 
