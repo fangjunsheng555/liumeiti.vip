@@ -1,5 +1,6 @@
 import {
-  adminSessionFromRequest, adminActorFromSession, getWithdrawalDetail, updateWithdrawalStatus, clean,
+  adminSessionFromRequest, adminActorFromSession, adminPermissionProfile,
+  getWithdrawalDetail, updateWithdrawalStatus, clean,
 } from "../../../_utils.js";
 
 export async function GET(request, { params }) {
@@ -14,6 +15,7 @@ export async function GET(request, { params }) {
 export async function PATCH(request, { params }) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!adminPermissionProfile(session).canReviewWithdrawals) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const { id } = await params;
   let body = {};
   try { body = await request.json(); } catch (e) {}

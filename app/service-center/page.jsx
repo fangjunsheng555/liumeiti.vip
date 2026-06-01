@@ -144,6 +144,8 @@ export default function ServiceCenterPage() {
   const [redeemBusy, setRedeemBusy] = useState(false);
   const [redeemStatus, setRedeemStatus] = useState(null);
   const [queryInput, setQueryInput] = useState("");
+  const [queryCode, setQueryCode] = useState("");
+  const [queryVerification, setQueryVerification] = useState(null);
   const [queryStatus, setQueryStatus] = useState(null);
   const [queryLoading, setQueryLoading] = useState(false);
   const [queryResults, setQueryResults] = useState([]);
@@ -183,6 +185,13 @@ export default function ServiceCenterPage() {
     if (order && order.length > 4) {
       setQueryInput(order);
       setTimeout(() => runQuery(order), 100);
+    }
+    if (process.env.NODE_ENV !== "production" && params.get("verifyPreview") === "1") {
+      const previewQuery = params.get("query") || "LMTEST123456";
+      setQueryInput(previewQuery);
+      setQueryVerification({ query: previewQuery, emailHint: "ma****@example.com" });
+      setQueryCode("");
+      setQueryStatus({ type: "info", message: "验证码已发送至 ma****@example.com，请输入 6 位验证码继续查询" });
     }
   }, []);
 
@@ -312,7 +321,7 @@ export default function ServiceCenterPage() {
     }
   }
 
-  async function runQuery(query) {
+  async function runQuery(query, code = "") {
     const value = String(query || "").trim();
     if (!value) {
       setQueryStatus({ type: "error", message: "请输入完整订单号或下单邮箱" });
@@ -320,22 +329,35 @@ export default function ServiceCenterPage() {
       return;
     }
     setQueryLoading(true);
-    setQueryStatus({ type: "info", message: "正在查询订单..." });
+    setQueryStatus({ type: "info", message: code ? "正在核验验证码..." : "正在发送邮箱验证码..." });
     try {
       const response = await fetch("/api/order-query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: value }),
+        body: JSON.stringify({ query: value, code }),
       });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "query_failed");
       if (!data.configured) {
         setQueryResults([]);
-        setQueryStatus({ type: "error", message: "订单存储尚未连接，请联系在线客服查询" });
+        setQueryStatus({ type: "error", message: "订单查询暂时不可用，请联系在线客服查询" });
+        return;
+      }
+      if (data.verificationRequired) {
+        setQueryResults([]);
+        setQueryDetailOrder(null);
+        setQueryVerification({ query: value, emailHint: data.emailHint || "下单邮箱" });
+        setQueryCode("");
+        setQueryStatus({
+          type: "info",
+          message: `验证码已发送至 ${data.emailHint || "下单邮箱"}，请输入 6 位验证码继续查询`,
+        });
         return;
       }
       const orders = data.orders || [];
       setQueryResults(orders);
+      setQueryVerification(null);
+      setQueryCode("");
       const orderIdMatch = orders.find((o) => o.matchType === "orderId");
       if (orderIdMatch) setQueryDetailOrder(orderIdMatch);
       setQueryStatus({
@@ -344,9 +366,17 @@ export default function ServiceCenterPage() {
           ? orderIdMatch ? "已通过订单号查询到订单" : `已找到 ${orders.length} 条订单,点击查看详情`
           : "未查询到订单,请核对订单号或邮箱",
       });
-    } catch {
+    } catch (error) {
       setQueryResults([]);
-      setQueryStatus({ type: "error", message: "查询失败，请稍后再试或联系在线客服" });
+      const message = String(error?.message || "");
+      setQueryStatus({
+        type: "error",
+        message: message === "code_invalid_or_expired"
+          ? "验证码错误或已过期，请重新获取"
+          : message === "invalid_query"
+          ? "请输入完整订单号或下单邮箱"
+          : "查询失败，请稍后再试或联系在线客服",
+      });
     } finally {
       setQueryLoading(false);
     }
@@ -354,7 +384,9 @@ export default function ServiceCenterPage() {
 
   function submitQuery(event) {
     event.preventDefault();
-    runQuery(queryInput);
+    const sameQuery = queryVerification?.query && queryVerification.query === queryInput.trim();
+    if (sameQuery && queryCode.trim()) runQuery(queryInput, queryCode.trim());
+    else runQuery(queryInput);
   }
 
   function handleCopy(value, key) {
@@ -416,22 +448,56 @@ export default function ServiceCenterPage() {
                 </div>
               </div>
               <div className="order-query-panel">
-                <form className="order-query-form" onSubmit={submitQuery}>
+                <form className={`order-query-form ${queryVerification ? "is-verifying" : ""}`} onSubmit={submitQuery}>
                   <label className="order-query-field">
                     <span>完整订单号 / 下单邮箱</span>
                     <input
                       value={queryInput}
-                      onChange={(e) => setQueryInput(e.target.value)}
+                      onChange={(e) => {
+                        setQueryInput(e.target.value);
+                        if (queryVerification && e.target.value.trim() !== queryVerification.query) {
+                          setQueryVerification(null);
+                          setQueryCode("");
+                        }
+                      }}
                       placeholder="输入完整订单号或下单时填写的邮箱"
                       autoComplete="off"
                     />
                   </label>
-                  <button type="submit" className="primary-btn" disabled={queryLoading}>
-                    {queryLoading ? <LoaderCircle size={15} className="spin-icon" /> : <Search size={16} />}
-                    查询订单
-                  </button>
+                  {queryVerification && (
+                    <div className="order-query-verification">
+                      <div className="order-query-verify-copy">
+                        <span><Lock size={14} /> 邮箱核验</span>
+                        <strong>验证码已发送至 {queryVerification.emailHint || "下单邮箱"}</strong>
+                        <small>输入 6 位数字后查看订单详情</small>
+                      </div>
+                      <label className="order-query-code-input">
+                        <span>验证码</span>
+                        <input
+                          value={queryCode}
+                          onChange={(e) => setQueryCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                          placeholder="000000"
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          aria-label="邮箱验证码"
+                        />
+                      </label>
+                      <button type="submit" className="primary-btn order-query-verify-btn" disabled={queryLoading}>
+                        {queryLoading ? <LoaderCircle size={15} className="spin-icon" /> : <Search size={16} />}
+                        验证查询
+                      </button>
+                    </div>
+                  )}
+                  {!queryVerification && (
+                    <button type="submit" className="primary-btn" disabled={queryLoading}>
+                      {queryLoading ? <LoaderCircle size={15} className="spin-icon" /> : <Search size={16} />}
+                      查询订单
+                    </button>
+                  )}
                 </form>
-                {queryStatus && <div className={`query-status ${queryStatus.type}`}>{queryStatus.message}</div>}
+                {queryStatus && (!queryVerification || queryStatus.type !== "info") && (
+                  <div className={`query-status ${queryStatus.type}`}>{queryStatus.message}</div>
+                )}
                 {queryResults.length > 0 && (
                   <div className="query-results-compact">
                     {queryResults.map((order) => (

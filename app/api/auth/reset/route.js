@@ -2,6 +2,7 @@ import {
   validEmail, getUser, setUser, hashPassword,
   getResetCode, deleteResetCode,
   signSession, setCookieValue,
+  checkRateLimit, rateLimitResponse,
 } from "../../_utils.js";
 
 export async function POST(request) {
@@ -14,6 +15,13 @@ export async function POST(request) {
   if (!validEmail(email)) {
     return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
   }
+  const guard = await checkRateLimit(request, {
+    namespace: "auth:reset",
+    limit: 8,
+    windowSec: 15 * 60,
+    identity: email,
+  });
+  if (!guard.ok) return rateLimitResponse(guard, "重置尝试过多，请稍后再试");
   if (!/^\d{6}$/.test(code)) {
     return Response.json({ ok: false, error: "invalid_code" }, { status: 400 });
   }

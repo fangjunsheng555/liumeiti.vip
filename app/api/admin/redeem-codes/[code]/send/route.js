@@ -27,7 +27,7 @@ export async function POST(request, { params }) {
   if (info.status !== "active") return Response.json({ ok: false, error: "code_unavailable" }, { status: 400 });
 
   const brandName = process.env.BRAND_NAME || "冒央会社";
-  const siteDomain = process.env.SITE_DOMAIN || "liumeiti.vip";
+  const siteDomain = process.env.SITE_DOMAIN || "www.liumeiti.vip";
   const siteUrl = process.env.SITE_URL || `https://${siteDomain}`;
   const supportContact = process.env.SUPPORT_CONTACT || "请通过 QQ 2802632995 / WhatsApp +1 4315093334 / Telegram @MaoyangSupport 联系在线客服";
   const redeemUrl = `${siteUrl.replace(/\/+$/, "")}/?redeem=${encodeURIComponent(info.code)}#redeem`;

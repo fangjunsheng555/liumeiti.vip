@@ -143,12 +143,19 @@ function storedInviteCode() {
   }
 }
 
+function randomPaymentAdjustment() {
+  const cents = 1 + Math.floor(Math.random() * 49);
+  const sign = Math.random() < 0.5 ? -1 : 1;
+  return Math.round(sign * cents) / 100;
+}
+
 export default function CheckoutPage() {
   const router = useRouter();
   const { cart, cartPlans, hydrated, removeFromCart, replaceCart, clearCart, setCartPlan } = useCart();
   const [step, setStep] = useState("form");
   const [form, setForm] = useState(blankCheckoutForm);
   const [paymentMethod, setPaymentMethod] = useState("alipay");
+  const [paymentAdjustment, setPaymentAdjustment] = useState(0);
   const [status, setStatus] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [passwordVisible, setPasswordVisible] = useState(false);
@@ -390,6 +397,7 @@ export default function CheckoutPage() {
   const activeCoupon = (authedUser?.coupons || []).find((c) => c.status === "active");
   const couponDiscount = !serviceRedeemActive && activeCoupon ? Math.min(Number(activeCoupon.amount || 0), couponEligibleCny) : 0;
   const finalCny = Math.max(0, Math.round((bundleFinalCny - couponDiscount) * 100) / 100);
+  const alipayPayableCny = Math.max(0.01, Math.round((finalCny + paymentAdjustment) * 100) / 100);
   const finalUsdt = Math.round((finalCny * 0.9 / USDT_RATE) * 100) / 100;
   const savings = subtotal - bundleFinalCny;
 
@@ -528,6 +536,7 @@ export default function CheckoutPage() {
       submitOrders();
       return;
     }
+    setPaymentAdjustment(paymentMethod === "alipay" && finalCny > 0 ? randomPaymentAdjustment() : 0);
     setStep("pay");
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -564,6 +573,7 @@ export default function CheckoutPage() {
         contact: form.contact.trim(),
         remark: form.remark.trim(),
         paymentMethod,
+        paymentAdjustment: paymentMethod === "alipay" ? paymentAdjustment : 0,
         redeemCode: serviceRedeemActive ? redeemMode.code : "",
         inviteCode: storedInviteCode(),
         items,
@@ -751,7 +761,7 @@ export default function CheckoutPage() {
               {cartItems.some((p) => productNeedsAccountPassword(p)) && (
                 <section className="checkout-card">
                   <div className="checkout-card-head">
-                    <h3>商品配置</h3>
+                    <h3>开通信息</h3>
                   </div>
                   <div className="checkout-product-fields">
                     {cartItems.map((p) => {
@@ -1020,6 +1030,11 @@ export default function CheckoutPage() {
                     <b>{finalUsdt} <em>USDT</em></b>
                     <small>¥{finalCny}(支付宝应付)× 0.9 ÷ {USDT_RATE}</small>
                   </>
+                ) : paymentMethod === "alipay" ? (
+                  <>
+                    <b>¥{alipayPayableCny.toFixed(2)}</b>
+                    <small>付款核对尾差 {paymentAdjustment > 0 ? "+" : ""}¥{paymentAdjustment.toFixed(2)}，商品金额 ¥{finalCny.toFixed(2)}</small>
+                  </>
                 ) : (
                   <b>¥{finalCny}</b>
                 )}
@@ -1030,8 +1045,8 @@ export default function CheckoutPage() {
                 {paymentMethod === "usdt"
                   ? `请使用 TRON (TRC20) 网络转账精确金额 ${finalUsdt} USDT 到下方地址,付款完成后请记得返回本页面点击「付款完成」按钮提交订单`
                   : paymentMethod === "balance"
-                  ? `点击下方「确认扣款并提交订单」后,系统将自动从您的账户余额(¥${authedUser?.balance.toFixed(2) || "0.00"})扣除 ¥${finalCny},随后提交订单`
-                  : "请按上方金额完成支付宝付款，付款完成后返回本页面点击「付款完成」提交订单"}
+                  ? `点击下方「确认扣款并提交订单」后，将从您的账户余额(¥${authedUser?.balance.toFixed(2) || "0.00"})扣除 ¥${finalCny},随后提交订单`
+                  : "请按上方精确金额完成支付宝付款，尾差用于快速核对订单；付款完成后返回本页面点击「付款完成」提交订单"}
               </div>
 
               {/* QR 二维码 — 只对支付宝/USDT 显示,余额支付不需要 */}

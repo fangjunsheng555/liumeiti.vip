@@ -1,14 +1,14 @@
 import {
   validEmail, getUser, setResetCode, sendSimpleEmail,
+  checkRateLimit, rateLimitResponse, generateNumericCode,
 } from "../../_utils.js";
 import { buildEmailBrandHeader } from "../../email-brand.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
-const SITE_DOMAIN = process.env.SITE_DOMAIN || "liumeiti.vip";
+const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
 
 function generateCode() {
-  // 6-digit numeric code
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return generateNumericCode(6);
 }
 
 export async function POST(request) {
@@ -18,6 +18,13 @@ export async function POST(request) {
   if (!validEmail(email)) {
     return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
   }
+  const guard = await checkRateLimit(request, {
+    namespace: "auth:forgot",
+    limit: 4,
+    windowSec: 15 * 60,
+    identity: email,
+  });
+  if (!guard.ok) return rateLimitResponse(guard, "验证码请求过多，请稍后再试");
 
   const user = await getUser(email);
   // For security, return the same response whether or not the email is registered

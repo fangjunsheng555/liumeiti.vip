@@ -1,6 +1,6 @@
 // Shared backend utilities: redis, password hashing, session signing
 
-import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto";
 
 export const ORDERS_KEY = "liumeiti:orders";
 export const USERS_KEY = "liumeiti:users";
@@ -142,8 +142,17 @@ export function verifyPassword(password, stored) {
 }
 
 // ── Session token signing (HMAC) ──
+function isProductionRuntime() {
+  return process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production";
+}
+
 function authSecret() {
-  return process.env.AUTH_SECRET || "dev-secret-change-me-in-production-please";
+  const secret = process.env.AUTH_SECRET || "";
+  if (secret && secret.length >= 32 && secret !== "dev-secret-change-me-in-production-please") return secret;
+  if (isProductionRuntime()) {
+    throw new Error("AUTH_SECRET must be set to a strong value in production");
+  }
+  return secret || "dev-secret-change-me-in-production-please";
 }
 
 export function signSession(payload) {
@@ -175,11 +184,13 @@ export function getCookieFromRequest(request, name) {
 }
 
 export function setCookieValue(name, value, maxAgeSec = 60 * 60 * 24 * 14) {
-  return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}`;
+  const secure = isProductionRuntime() ? "; Secure" : "";
+  return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure}`;
 }
 
 export function clearCookieValue(name) {
-  return `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+  const secure = isProductionRuntime() ? "; Secure" : "";
+  return `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
 }
 
 export function adminSessionFromRequest(request) {
@@ -190,7 +201,7 @@ export function adminSessionFromRequest(request) {
 
 export function adminActorFromSession(session) {
   return {
-    staffId: Number(session?.staffId || 1),
+    staffId: Number(session?.staffId ?? 1),
     staffUsername: clean(session?.staffUsername || session?.username || "admin", 60),
   };
 }
@@ -203,8 +214,33 @@ export function isRootAdminSession(session) {
   return Number(session?.staffId || 0) === 1;
 }
 
+export function adminRoleFromSession(session) {
+  if (isRootAdminSession(session) || session?.staffRoot) return "owner";
+  const role = clean(session?.staffRole || session?.roleName || "operator", 40).toLowerCase();
+  return role === "support" || role === "finance" ? role : "operator";
+}
+
+export function adminPermissionProfile(session) {
+  const role = adminRoleFromSession(session);
+  const root = role === "owner";
+  return {
+    role,
+    root,
+    canViewOrders: true,
+    canEditOrders: true,
+    canManageUsers: true,
+    canAdjustBalance: root,
+    canManageCodes: root || role === "operator",
+    canReviewWithdrawals: root || role === "finance",
+    canSendMail: root || role === "support" || role === "operator",
+    canManageStaff: root,
+    canDeleteRecords: root,
+  };
+}
+
 export function adminActorLabel(actor) {
-  const id = Number(actor?.staffId || 1);
+  const id = Number(actor?.staffId ?? 1);
+  if (id === 0) return clean(actor?.staffUsername || "system", 60);
   return "工作人员 #" + id;
 }
 
@@ -586,7 +622,7 @@ export function roundMoney(value) {
 }
 
 export function makeId(prefix) {
-  return prefix + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 7).toUpperCase();
+  return prefix + Date.now().toString(36).toUpperCase() + randomBytes(4).toString("hex").toUpperCase();
 }
 
 export function normalizeRedeemCode(value) {
@@ -608,8 +644,82 @@ export function clientUserAgentFromRequest(request) {
 function clientGuardFingerprint(request) {
   const ip = clientIpFromRequest(request);
   const ua = clean(request?.headers?.get("user-agent") || "unknown", 160);
-  const secret = process.env.AUTH_SECRET || process.env.ADMIN_PASSWORD || "liumeiti";
+  const secret = process.env.AUTH_SECRET || process.env.ADMIN_PASSWORD || "liumeiti-rate-limit-local";
   return createHmac("sha256", secret).update(`${ip}|${ua}`).digest("hex").slice(0, 32);
+}
+
+function rateLimitFingerprint(request, identity = "") {
+  const ip = clientIpFromRequest(request);
+  const ua = clean(request?.headers?.get("user-agent") || "unknown", 160);
+  const subject = clean(identity, 200).toLowerCase();
+  const secret = process.env.AUTH_SECRET || process.env.ADMIN_PASSWORD || "liumeiti-rate-limit-local";
+  return createHmac("sha256", secret).update(`${ip}|${ua}|${subject}`).digest("hex").slice(0, 40);
+}
+
+function rateLimitIdentityFingerprint(identity = "") {
+  const subject = clean(identity || "unknown", 500);
+  const secret = process.env.AUTH_SECRET || process.env.ADMIN_PASSWORD || "liumeiti-rate-limit-local";
+  return createHmac("sha256", secret).update(subject).digest("hex").slice(0, 40);
+}
+
+export async function checkRateLimit(request, { namespace, limit = 10, windowSec = 600, identity = "" } = {}) {
+  const r = redisConfig();
+  if (!r) return { ok: true, key: "", count: 0, limit, retryAfter: 0 };
+  const safeNamespace = clean(namespace || "default", 80).replace(/[^a-z0-9:_-]/gi, "");
+  const key = "liumeiti:rate:" + safeNamespace + ":" + rateLimitFingerprint(request, identity);
+  const count = Number(await redisCmd(["INCR", key]) || 0);
+  if (count === 1) await redisCmd(["EXPIRE", key, String(windowSec)]);
+  if (count > limit) {
+    const ttl = Number(await redisCmd(["TTL", key]) || windowSec);
+    return {
+      ok: false,
+      key,
+      count,
+      limit,
+      retryAfter: ttl > 0 ? ttl : windowSec,
+    };
+  }
+  return { ok: true, key, count, limit, retryAfter: 0 };
+}
+
+export async function checkIdentityRateLimit({ namespace, identity, limit = 10, windowSec = 600 } = {}) {
+  const r = redisConfig();
+  if (!r) return { ok: true, key: "", count: 0, limit, retryAfter: 0 };
+  const safeNamespace = clean(namespace || "default", 80).replace(/[^a-z0-9:_-]/gi, "");
+  const key = "liumeiti:rate:" + safeNamespace + ":" + rateLimitIdentityFingerprint(identity);
+  const count = Number(await redisCmd(["INCR", key]) || 0);
+  if (count === 1) await redisCmd(["EXPIRE", key, String(windowSec)]);
+  if (count > limit) {
+    const ttl = Number(await redisCmd(["TTL", key]) || windowSec);
+    return {
+      ok: false,
+      key,
+      count,
+      limit,
+      retryAfter: ttl > 0 ? ttl : windowSec,
+    };
+  }
+  return { ok: true, key, count, limit, retryAfter: 0 };
+}
+
+export function rateLimitResponse(guard, message = "请求过于频繁，请稍后再试") {
+  const retryAfter = Number(guard?.retryAfter || 60);
+  return Response.json({
+    ok: false,
+    error: "too_many_requests",
+    message,
+    retryAfter,
+  }, {
+    status: 429,
+    headers: { "Retry-After": String(retryAfter) },
+  });
+}
+
+export function generateNumericCode(length = 6) {
+  const digits = Math.max(4, Math.min(10, Number(length) || 6));
+  const min = 10 ** (digits - 1);
+  const max = 10 ** digits;
+  return String(randomInt(min, max));
 }
 
 export async function checkRedeemRateLimit(request) {
@@ -1120,7 +1230,7 @@ export async function verifyAdminLogin(username, password) {
   if (!inputUsername) return { ok: false, error: "invalid_credentials" };
   const envUsername = envAdminUsername();
   if (process.env.ADMIN_PASSWORD && inputUsername.toLowerCase() === envUsername.toLowerCase() && checkAdminPassword(password)) {
-    return { ok: true, staff: { id: 1, username: envUsername, root: true } };
+    return { ok: true, staff: { id: 1, username: envUsername, role: "owner", root: true } };
   }
 
   const records = await adminStaffRecords();
@@ -1128,7 +1238,7 @@ export async function verifyAdminLogin(username, password) {
     item && item.active !== false && String(item.username || "").toLowerCase() === inputUsername.toLowerCase()
   );
   if (staff && verifyPassword(password, staff.passwordHash)) {
-    return { ok: true, staff: { id: Number(staff.id), username: staff.username, remark: staff.remark || "", root: false } };
+    return { ok: true, staff: { id: Number(staff.id), username: staff.username, role: staff.role || "operator", remark: staff.remark || "", root: false } };
   }
 
   return { ok: false, error: "invalid_credentials" };
@@ -1140,6 +1250,9 @@ export async function listAdminStaff() {
     {
       id: 1,
       username: envAdminUsername(),
+      role: "owner",
+      roleLabel: "主账号",
+      permissions: adminPermissionProfile({ staffId: 1, staffRoot: true }),
       root: true,
       active: Boolean(process.env.ADMIN_PASSWORD),
       createdAtBeijing: "环境变量主账号",
@@ -1148,6 +1261,9 @@ export async function listAdminStaff() {
     ...records.map((item) => ({
       id: Number(item.id),
       username: item.username || "",
+      role: item.role || "operator",
+      roleLabel: item.role === "support" ? "客服" : item.role === "finance" ? "财务" : "运营",
+      permissions: adminPermissionProfile({ staffId: Number(item.id), staffRole: item.role || "operator" }),
       active: item.active !== false,
       root: false,
       remark: item.remark || "",
@@ -1163,6 +1279,8 @@ export async function listAdminStaff() {
 export async function createAdminStaff(input, actor) {
   const username = clean(input?.username, 60);
   const password = String(input?.password || "");
+  const rawRole = clean(input?.role || "operator", 40).toLowerCase();
+  const role = ["operator", "support", "finance"].includes(rawRole) ? rawRole : "operator";
   const remark = clean(input?.remark, 160);
   if (!/^[A-Za-z0-9_@.-]{3,40}$/.test(username)) return { ok: false, error: "invalid_username" };
   if (password.length < 6 || password.length > 64) return { ok: false, error: "invalid_password" };
@@ -1177,6 +1295,7 @@ export async function createAdminStaff(input, actor) {
   const staff = {
     id: nextId,
     username,
+    role,
     passwordHash: hashPassword(password),
     active: true,
     remark,
@@ -1190,7 +1309,7 @@ export async function createAdminStaff(input, actor) {
     action: "staff_create",
     actor,
     target: "staff:" + nextId,
-    detail: { username },
+    detail: { username, role },
   });
   return { ok: true, staff: { ...staff, passwordHash: undefined } };
 }

@@ -1,10 +1,10 @@
 import './globals.css';
 import ReferralTracker from './components/ReferralTracker';
 
-const siteUrl = 'https://liumeiti.vip';
-const siteTitle = '冒央会社-流媒体会员服务';
-const siteDescription = '冒央会社 Maoyang Taiwan Inc，提供 Spotify、Netflix、Disney+、HBO Max、机场节点等流媒体会员服务，支持支付宝担保支付、USDT 支付、订单查询与在线客服售后';
-const socialDescription = '所有流媒体及配套服务一站搞定，包使用，全年无休在线客服，价格透明，售后稳定';
+const siteUrl = 'https://www.liumeiti.vip';
+const siteTitle = '冒央会社 - 流媒体会员服务';
+const siteDescription = '冒央会社 Maoyang Taiwan Inc，提供 Spotify、Netflix、Disney+、HBO Max、机场节点等流媒体会员服务，支持支付宝担保支付、USDT 支付、订单查询与在线客服售后。';
+const socialDescription = '流媒体会员与配套服务一站选购，价格透明，订单可查，在线客服持续跟进售后。';
 const socialImage = `${siteUrl}/icon-512.png?v=20260601`;
 
 export const metadata = {

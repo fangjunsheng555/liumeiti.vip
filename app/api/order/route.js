@@ -4,8 +4,10 @@ import {
   setUser, addBalanceTx, pushAdminBalanceLog, makeId, roundMoney,
   validateServiceRedeemCode, consumeServiceRedeemCode, restoreServiceRedeemCode,
   checkRedeemRateLimit, recordRedeemRateFailure, clearRedeemRateLimit, redeemRateLimitMessage,
+  checkIdentityRateLimit, checkRateLimit, rateLimitResponse,
   clientIpFromRequest, clientUserAgentFromRequest,
   inviteCodeFromRequest, normalizeInviteCode, resolveReferralForOrder,
+  pushAdminActionLog,
 } from "../_utils.js";
 
 const ORDERS_KEY = "liumeiti:orders";
@@ -65,11 +67,12 @@ function resolveProductPlan(service, value) {
 }
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
-const SITE_DOMAIN = process.env.SITE_DOMAIN || "liumeiti.vip";
+const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
 const SITE_URL = process.env.SITE_URL || `https://${SITE_DOMAIN}`;
 const SUPPORT_CONTACT = process.env.SUPPORT_CONTACT || "请通过 QQ 2802632995 / WhatsApp +1 4315093334 / Telegram @MaoyangSupport 联系在线客服";
 const USDT_DISCOUNT = 0.9;
 const USDT_RATE = 6.85;
+const ORDER_LIMIT_MESSAGE = "订单提交次数较多，请 5 分钟后再试，或联系在线客服协助下单";
 
 function clean(value, limit = 500) {
   return String(value || "").replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, limit);
@@ -99,6 +102,13 @@ function bundleDiscountLabel(itemCount) {
   if (itemCount >= 3) return "3 件起 9 折";
   if (itemCount === 2) return "2 件 9.5 折";
   return "";
+}
+
+function normalizePaymentAdjustment(value) {
+  const amount = Math.round(Number(value || 0) * 100) / 100;
+  if (!Number.isFinite(amount) || amount === 0) return 0;
+  if (Math.abs(amount) < 0.01 || Math.abs(amount) > 0.49) return 0;
+  return amount;
 }
 
 function subscriptionLinks(username) {
@@ -175,7 +185,10 @@ function orderText(order) {
   } else if (isBalance) {
     lines.push(`💰 余额扣款: ¥${order.finalAmount}(已自动从用户余额扣除)`);
   } else {
-    lines.push(`💰 实付: ¥${order.finalAmount}`);
+    if (order.paymentAdjustment) {
+      lines.push(`核对尾差: ${order.paymentAdjustment > 0 ? "+" : ""}¥${order.paymentAdjustment}`);
+    }
+    lines.push(`💰 实付: ¥${order.paidAmount || order.finalAmount}`);
   }
   lines.push("━━ 联系方式 ━━");
   lines.push(`邮箱: ${order.email}`);
@@ -335,6 +348,29 @@ export async function POST(request) {
   if (!validEmail(email)) {
     return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
   }
+  const ipOrderGuard = await checkIdentityRateLimit({
+    namespace: "order:create:ip",
+    identity: clientIpFromRequest(request),
+    limit: 3,
+    windowSec: 5 * 60,
+  });
+  if (!ipOrderGuard.ok) return rateLimitResponse(ipOrderGuard, ORDER_LIMIT_MESSAGE);
+
+  const uaOrderGuard = await checkIdentityRateLimit({
+    namespace: "order:create:ua",
+    identity: clientUserAgentFromRequest(request) || "unknown",
+    limit: 3,
+    windowSec: 5 * 60,
+  });
+  if (!uaOrderGuard.ok) return rateLimitResponse(uaOrderGuard, ORDER_LIMIT_MESSAGE);
+
+  const orderGuard = await checkRateLimit(request, {
+    namespace: "order:create",
+    limit: 12,
+    windowSec: 10 * 60,
+    identity: email,
+  });
+  if (!orderGuard.ok) return rateLimitResponse(orderGuard, ORDER_LIMIT_MESSAGE);
 
   // Validate items first to determine if contact is required (Spotify only)
   const items = [];
@@ -428,7 +464,7 @@ export async function POST(request) {
   });
 
   const hasRocketTrial = items.some((item) => item.service === "rocket" && (item.plan === "trial" || item.rocketPlan === "trial"));
-  const orderId = "LM" + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+  const orderId = makeId("LM");
 
   // Compute totals
   const subtotal = items.reduce((s, i) => s + i.amount, 0);
@@ -445,7 +481,9 @@ export async function POST(request) {
   const couponDiscount = roundMoney(coupon.discount || 0);
   const finalAmount = paymentMethod === "redeem" ? 0 : Math.max(0, Math.round((bundleFinalAmount - couponDiscount) * 100) / 100);
   const finalUsdt = Math.round((finalAmount * USDT_DISCOUNT / USDT_RATE) * 100) / 100;
-  const paidAmount = paymentMethod === "usdt" ? finalUsdt : finalAmount;
+  const paymentAdjustment = paymentMethod === "alipay" && finalAmount > 0 ? normalizePaymentAdjustment(body.paymentAdjustment) : 0;
+  const payableAmount = paymentMethod === "alipay" ? roundMoney(Math.max(0.01, finalAmount + paymentAdjustment)) : finalAmount;
+  const paidAmount = paymentMethod === "usdt" ? finalUsdt : paymentMethod === "alipay" ? payableAmount : finalAmount;
   const paidCurrency = paymentMethod === "usdt" ? "USDT" : paymentMethod === "redeem" ? "CODE" : "CNY";
 
   // Balance payment requires logged-in user with sufficient balance
@@ -500,6 +538,8 @@ export async function POST(request) {
     couponDiscount,
     finalAmount,
     finalUsdt,
+    paymentAdjustment,
+    payableAmount,
     paymentMethod,
     paidAmount,
     paidCurrency,
@@ -576,6 +616,12 @@ export async function POST(request) {
     await refundFailedBalanceOrder(order, userEmail, finalAmount, now);
     return Response.json({ ok: false, error: "storage_failed", orderId: order.orderId, deliveries }, { status: 500 });
   }
+  await pushAdminActionLog({
+    action: "order_create",
+    actor: { staffId: 0, staffUsername: "system" },
+    target: "order:" + order.orderId,
+    detail: { email: order.email, paymentMethod: order.paymentMethod, paidAmount: order.paidAmount, itemCount: order.itemCount },
+  });
 
   const text = orderText(order);
   const tasks = [

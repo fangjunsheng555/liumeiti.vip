@@ -1,5 +1,6 @@
 import {
   adminSessionFromRequest, adminActorFromSession, isRootAdminSession,
+  adminPermissionProfile,
   clean, validEmail, sendSimpleEmail, pushAdminMailLog, getAdminMailLog,
   deleteAdminMailLogEntries, pushAdminActionLog,
 } from "../../_utils.js";
@@ -42,6 +43,7 @@ export async function GET(request) {
 export async function POST(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!adminPermissionProfile(session).canSendMail) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const actor = adminActorFromSession(session);
   let body = {};
   try { body = await request.json(); } catch (e) {}
@@ -67,8 +69,8 @@ export async function POST(request) {
   if (!content) return Response.json({ ok: false, error: "content_required" }, { status: 400 });
 
   const brandName = process.env.BRAND_NAME || "冒央会社";
-  const siteDomain = process.env.SITE_DOMAIN || "liumeiti.vip";
-  const siteUrl = process.env.SITE_URL || "https://liumeiti.vip";
+  const siteDomain = process.env.SITE_DOMAIN || "www.liumeiti.vip";
+  const siteUrl = process.env.SITE_URL || "https://www.liumeiti.vip";
   const mailSubject = subject.includes(brandName) ? subject : `${brandName} · ${subject}`;
   const html = buildCustomerMailHtml({
     subject,

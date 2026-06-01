@@ -1,5 +1,5 @@
 import {
-  adminSessionFromRequest, isRootAdminSession,
+  adminSessionFromRequest, isRootAdminSession, adminPermissionProfile,
   getAllOrders, listWithdrawals, listRedeemCodes, getAdminMailLog, listAllUserEmails,
 } from "../../_utils.js";
 
@@ -108,6 +108,8 @@ export async function GET(request) {
       id: Number(session.staffId || 1),
       username: session.staffUsername || "admin",
       root: isRootAdminSession(session),
+      role: adminPermissionProfile(session).role,
+      permissions: adminPermissionProfile(session),
     },
   });
 }

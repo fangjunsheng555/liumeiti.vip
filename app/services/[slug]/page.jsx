@@ -25,7 +25,7 @@ export async function generateMetadata({ params }) {
       url: `/services/${service.slug}`,
       images: [
         {
-          url: "https://liumeiti.vip/icon-512.png?v=20260601",
+          url: "https://www.liumeiti.vip/icon-512.png?v=20260601",
           width: 512,
           height: 512,
           type: "image/png",
@@ -37,7 +37,7 @@ export async function generateMetadata({ params }) {
       card: "summary",
       title: `${title} | 冒央会社`,
       description: service.description,
-      images: ["https://liumeiti.vip/icon-512.png?v=20260601"],
+      images: ["https://www.liumeiti.vip/icon-512.png?v=20260601"],
     },
   };
 }
@@ -52,7 +52,7 @@ export default async function ServiceLandingPage({ params }) {
       "@context": "https://schema.org",
       "@type": "Product",
       name: service.title,
-      image: `https://liumeiti.vip${service.image}`,
+      image: `https://www.liumeiti.vip${service.image}`,
       description: service.description,
       brand: { "@type": "Brand", name: "冒央会社 Maoyang Taiwan Inc" },
       offers: {
@@ -60,16 +60,16 @@ export default async function ServiceLandingPage({ params }) {
         priceCurrency: "CNY",
         lowPrice: String(service.plans[0]?.[1] || service.price).replace(/[^\d.]/g, "") || "0",
         availability: "https://schema.org/InStock",
-        url: `https://liumeiti.vip/services/${service.slug}`,
+        url: `https://www.liumeiti.vip/services/${service.slug}`,
       },
     },
     {
       "@context": "https://schema.org",
       "@type": "BreadcrumbList",
       itemListElement: [
-        { "@type": "ListItem", position: 1, name: "首页", item: "https://liumeiti.vip/" },
-        { "@type": "ListItem", position: 2, name: "服务产品", item: "https://liumeiti.vip/shop" },
-        { "@type": "ListItem", position: 3, name: service.shortTitle, item: `https://liumeiti.vip/services/${service.slug}` },
+        { "@type": "ListItem", position: 1, name: "首页", item: "https://www.liumeiti.vip/" },
+        { "@type": "ListItem", position: 2, name: "服务产品", item: "https://www.liumeiti.vip/shop" },
+        { "@type": "ListItem", position: 3, name: service.shortTitle, item: `https://www.liumeiti.vip/services/${service.slug}` },
       ],
     },
     {

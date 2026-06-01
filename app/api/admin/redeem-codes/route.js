@@ -1,6 +1,6 @@
 import {
   adminSessionFromRequest, adminActorFromSession,
-  createRedeemCodes, listManageableRedeemCodesAndBatches, clean,
+  adminPermissionProfile, createRedeemCodes, listManageableRedeemCodesAndBatches, clean,
 } from "../../_utils.js";
 
 export async function GET(request) {
@@ -13,6 +13,7 @@ export async function GET(request) {
 export async function POST(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!adminPermissionProfile(session).canManageCodes) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   let body = {};
   try { body = await request.json(); } catch (e) {}
   const result = await createRedeemCodes({

@@ -30,7 +30,7 @@ function getStoredInviteCode() {
 
 function inviteLink(code) {
   if (!code) return "";
-  const origin = typeof window !== "undefined" ? window.location.origin : "https://liumeiti.vip";
+  const origin = typeof window !== "undefined" ? window.location.origin : "https://www.liumeiti.vip";
   return `${origin}/?invite=${encodeURIComponent(code)}`;
 }
 
@@ -135,12 +135,12 @@ export default function AccountPage() {
     if (status === "oauth_new") setAuthNotice("注册成功,新用户 ¥8.88 优惠券已发放,结算时自动抵扣");
     if (status === "oauth_ok") setAuthNotice("Google 登录成功");
     const oauthErrorMap = {
-      google_not_configured: "第三方登录尚未配置,请先使用邮箱登录或注册",
+      google_not_configured: "第三方登录暂不可用,请先使用邮箱登录或注册",
       invalid_oauth_state: "Google 登录状态已失效，请重新点击 Google 登录",
       invalid_client: "Google Client ID 或 Client Secret 不匹配，请检查 Vercel 环境变量和 Google Cloud OAuth 客户端",
-      redirect_uri_mismatch: "Google 回调地址不匹配，请在 Google Cloud 中添加 https://liumeiti.vip/api/auth/oauth/google/callback",
+      redirect_uri_mismatch: "Google 回调地址不匹配，请在 Google Cloud 中添加 https://www.liumeiti.vip/api/auth/oauth/google/callback",
       access_denied: "你取消了 Google 授权",
-      oauth_failed: "Google 登录失败，请稍后重试或检查 OAuth 配置",
+      oauth_failed: "Google 登录失败，请稍后重试或使用邮箱登录",
       email_not_verified: "Google 邮箱未验证，暂时无法登录",
     };
     if (oauthErrorMap[status]) {

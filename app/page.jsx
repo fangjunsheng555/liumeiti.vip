@@ -61,7 +61,7 @@ const TESTIMONIALS = [
   { name: "何*", initial: "何", region: "泉州", service: "Spotify 双人订阅", rating: 5, date: "18小时前", text: "双人套餐很适合我和朋友用，账号邀请说明写得清楚，付款后很快就能用了" },
   { name: "张**", initial: "张", region: "盐城", service: "Netflix 整号", rating: 5, date: "一天前", text: "整号购买后给家里分了几个档案，画质和杜比都正常，省了很多沟通成本" },
   { name: "張*", initial: "張", region: "香港", service: "Disney+", rating: 5, date: "一天前", text: "本来还在犹豫，下单完 10 分钟就能用了，体验很顶。已经推荐给好几个朋友" },
-  { name: "赵***", initial: "赵", region: "绵阳", service: "机场节点 · 无限套餐", rating: 5, date: "两天前", text: "无限套餐适合多设备使用，速度稳定，遇到配置问题客服直接帮我排查好了" },
+  { name: "赵***", initial: "赵", region: "绵阳", service: "机场节点 · 无限套餐", rating: 5, date: "两天前", text: "无限套餐适合多设备使用，速度稳定，遇到使用问题客服直接帮我处理好了" },
   { name: "Yammy***", initial: "Y", region: "伦敦", service: "HBO Max", rating: 5, date: "三天前", text: "第一次买怕被骗，结果非常正规，客服全程指导，账号到现在用了半年都很稳" },
   { name: "孙**", initial: "孙", region: "台州", service: "Spotify 家庭套餐", rating: 5, date: "三天前", text: "家庭套餐邀请名额够用，开通后每个人都能正常听歌，整体流程很顺" },
   { name: "李**", initial: "李", region: "北京", service: "Spotify+Netflix 4K+机场节点", rating: 5, date: "一周前", text: "组合下单还便宜了一些，听歌刷剧科学上网一站搞定，售后也跟上了，下次还来" },
@@ -83,7 +83,7 @@ const TESTIMONIALS = [
   { name: "曹**", initial: "曹", region: "泰州", service: "Spotify 家庭套餐", rating: 5, date: "一个月前", text: "家庭套餐名额够用，客服把邀请和注意事项都写清楚了，体验很省心" },
   { name: "任*", initial: "任", region: "潍坊", service: "HBO Max 整号", rating: 5, date: "一个月前", text: "整号比车位更适合一家人，档案独立，播放没有遇到卡顿" },
   { name: "沈**", initial: "沈", region: "常州", service: "Netflix + Disney+", rating: 5, date: "一个月前", text: "组合购买后两个平台都开通了，订单页面能查进度，售后也能接上" },
-  { name: "Leo***", initial: "L", region: "吉隆坡", service: "机场节点 · 高级套餐", rating: 5, date: "一个月前", text: "节点延迟低，流媒体和 AI 工具都能用，客服给的配置教程很清楚" },
+  { name: "Leo***", initial: "L", region: "吉隆坡", service: "机场节点 · 高级套餐", rating: 5, date: "一个月前", text: "节点延迟低，流媒体和 AI 工具都能用，客服给的使用教程很清楚" },
 ];
 
 const TESTIMONIALS_PER_PAGE = 4;

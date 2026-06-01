@@ -3,6 +3,7 @@ import {
   formatBeijingTime,
   adminSessionFromRequest,
   isRootAdminSession,
+  adminPermissionProfile,
 } from "../../_utils.js";
 
 function subscriptionLinks(username) {
@@ -131,6 +132,8 @@ export async function GET(request) {
       id: Number(session.staffId || 1),
       username: session.staffUsername || "admin",
       root: isRootAdminSession(session),
+      role: adminPermissionProfile(session).role,
+      permissions: adminPermissionProfile(session),
     },
   });
 }

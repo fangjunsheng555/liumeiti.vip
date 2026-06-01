@@ -357,7 +357,7 @@ function exportRedeemHistoryPdfLegacy(record) {
             <div class="brand">
               <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
               <div class="name">冒央会社 · Maoyang Taiwan Inc</div>
-              <div class="site">网址:https://liumeiti.vip</div>
+              <div class="site">网址:https://www.liumeiti.vip</div>
             </div>
             <div class="doc-meta">
               凭证编号
@@ -824,7 +824,7 @@ function openVoucherPdf({
             <div class="brand">
               <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
               <div class="name">冒央会社 · Maoyang Taiwan Inc</div>
-              <div class="site">网址:https://liumeiti.vip</div>
+              <div class="site">网址:https://www.liumeiti.vip</div>
             </div>
             <div class="doc-meta">
               凭证编号
@@ -1098,7 +1098,7 @@ export default function AdminPage() {
   const [sendCodeBusy, setSendCodeBusy] = useState(false);
   const [sendCodeResult, setSendCodeResult] = useState(null);
   const [staffPane, setStaffPane] = useState({ staff: [], actions: [] });
-  const [staffForm, setStaffForm] = useState({ username: "", password: "", remark: "" });
+  const [staffForm, setStaffForm] = useState({ username: "", password: "", role: "operator", remark: "" });
   const [staffBusy, setStaffBusy] = useState("");
   const [staffResult, setStaffResult] = useState(null);
   const [mailLogs, setMailLogs] = useState([]);
@@ -1119,6 +1119,11 @@ export default function AdminPage() {
   const overviewRef = useRef(null);
 
   const isRootStaff = Boolean(currentStaff?.root || Number(currentStaff?.id || 0) === 1);
+  const staffPermissions = currentStaff?.permissions || {};
+  const canReviewWithdrawals = staffPermissions.canReviewWithdrawals ?? true;
+  const canManageCodes = staffPermissions.canManageCodes ?? true;
+  const canSendMail = staffPermissions.canSendMail ?? true;
+  const canAdjustBalance = staffPermissions.canAdjustBalance ?? isRootStaff;
 
   const triggerNewOrderNotice = useCallback((next, previous) => {
     const count = Math.max(1, Number(next.ordersTotal || 0) - Number(previous?.ordersTotal || 0));
@@ -1948,7 +1953,7 @@ export default function AdminPage() {
       const data = await res.json();
       if (data.ok) {
         setStaffPane({ staff: data.staff || [], actions: data.actions || [] });
-        setStaffForm({ username: "", password: "", remark: "" });
+        setStaffForm({ username: "", password: "", role: "operator", remark: "" });
         setStaffResult({ type: "success", message: `已新增工作人员 #${data.created.id}` });
       } else {
         setStaffResult({ type: "error", message: data.error || "新增失败" });
@@ -2369,12 +2374,12 @@ export default function AdminPage() {
             异常订单{Number(overview?.abnormalOrders || 0) > 0 && <em className="admin-tab-badge warn">{overview.abnormalOrders}</em>}
           </button>
           <button type="button" className={`admin-tab-btn${tab === "users" ? " active" : ""}`} onClick={() => setTab("users")}>用户管理</button>
-          <button type="button" className={`admin-tab-btn${tab === "withdrawals" ? " active" : ""}`} onClick={() => setTab("withdrawals")}>
+          {canReviewWithdrawals && <button type="button" className={`admin-tab-btn${tab === "withdrawals" ? " active" : ""}`} onClick={() => setTab("withdrawals")}>
             提现审核{Number(overview?.pendingWithdrawals || 0) > 0 && <em className="admin-tab-badge">{overview.pendingWithdrawals}</em>}
-          </button>
-          <button type="button" className={`admin-tab-btn${tab === "codes" ? " active" : ""}`} onClick={() => setTab("codes")}>兑换码</button>
-          <button type="button" className={`admin-tab-btn${tab === "balance" ? " active" : ""}`} onClick={() => setTab("balance")}>余额变动</button>
-          <button type="button" className={`admin-tab-btn${tab === "mail" ? " active" : ""}`} onClick={() => setTab("mail")}>客服发信</button>
+          </button>}
+          {canManageCodes && <button type="button" className={`admin-tab-btn${tab === "codes" ? " active" : ""}`} onClick={() => setTab("codes")}>兑换码</button>}
+          {canAdjustBalance && <button type="button" className={`admin-tab-btn${tab === "balance" ? " active" : ""}`} onClick={() => setTab("balance")}>余额变动</button>}
+          {canSendMail && <button type="button" className={`admin-tab-btn${tab === "mail" ? " active" : ""}`} onClick={() => setTab("mail")}>客服发信</button>}
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "staff" ? " active" : ""}`} onClick={() => setTab("staff")}>工作人员</button>}
         </div>
 
@@ -3022,6 +3027,15 @@ export default function AdminPage() {
                 autoComplete="new-password"
                 required
               />
+              <select
+                value={staffForm.role}
+                onChange={(e) => setStaffForm({ ...staffForm, role: e.target.value })}
+                aria-label="角色权限"
+              >
+                <option value="operator">运营：订单/兑换码/客服邮件</option>
+                <option value="support">客服：订单/客服邮件</option>
+                <option value="finance">财务：订单/提现审核</option>
+              </select>
               <input
                 value={staffForm.remark}
                 onChange={(e) => setStaffForm({ ...staffForm, remark: e.target.value })}
@@ -3040,7 +3054,7 @@ export default function AdminPage() {
                   <span className="admin-staff-no">#{item.id}</span>
                   <span>
                     <strong>{item.username}</strong>
-                    <small>{item.root ? "环境变量主账号" : (item.remark || "无备注")} · {item.createdAtBeijing || ""}</small>
+                    <small>{item.roleLabel || (item.root ? "主账号" : "运营")} · {item.root ? "环境变量主账号" : (item.remark || "无备注")} · {item.createdAtBeijing || ""}</small>
                   </span>
                   {!item.root && (
                     <button type="button" className="admin-userlist-action delete" onClick={() => deleteStaff(item.id)} disabled={staffBusy === "delete" + item.id}>
@@ -3049,6 +3063,22 @@ export default function AdminPage() {
                   )}
                 </div>
               ))}
+            </div>
+            <div className="admin-action-log-panel">
+              <div className="admin-card-title"><ShieldCheck size={15} />后台操作记录</div>
+              <div className="admin-action-log-list">
+                {staffPane.actions.length === 0 ? (
+                  <div className="admin-action-log-item"><span>暂无操作记录</span></div>
+                ) : staffPane.actions.map((item) => (
+                  <div key={item.id} className="admin-action-log-item">
+                    <div>
+                      <strong>{item.action}</strong>
+                      <small>{item.target || "system"} · {item.createdAtBeijing}</small>
+                    </div>
+                    <span>#{item.staffId} {item.staffUsername}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         ) : tab === "balance" ? (
