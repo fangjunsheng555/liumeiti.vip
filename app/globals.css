@@ -12305,6 +12305,10 @@ body:has(.account-modal-mask) .floating-wrap {
   border-radius: 24px;
 }
 
+.modal-mask.service-order-mask {
+  z-index: 220 !important;
+}
+
 .rocket-picker-modal .modal-head {
   padding: 18px 18px 12px;
 }
