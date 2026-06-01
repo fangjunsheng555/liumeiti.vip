@@ -1,7 +1,7 @@
 {
   "name": "冒央会社",
   "short_name": "冒央会社",
-  "description": "冒央会社流媒体会员服务，支持订单查询与在线客服售后。",
+  "description": "流媒体会员与节点服务一站选购，支持订单查询与在线客服售后。",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

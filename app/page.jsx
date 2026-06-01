@@ -38,9 +38,9 @@ const HERO_STATS = [
 ];
 
 const TRUST_ITEMS = [
-  { icon: ShieldCheck, title: "官方授权", desc: "安全稳定" },
+  { icon: ShieldCheck, title: "稳定渠道", desc: "安全稳定" },
   { icon: Users, title: "专业团队", desc: "7x24在线" },
-  { icon: BadgeCheck, title: "即时响应", desc: "秒级开通" },
+  { icon: BadgeCheck, title: "快速处理", desc: "及时跟进" },
   { icon: Lock, title: "隐私保护", desc: "放心使用" },
 ];
 
@@ -64,73 +64,78 @@ const TESTIMONIALS = [
   { name: "赵***", initial: "赵", region: "绵阳", service: "机场节点 · 无限套餐", rating: 5, date: "两天前", text: "无限套餐适合多设备使用，速度稳定，遇到使用问题客服直接帮我处理好了" },
   { name: "Yammy***", initial: "Y", region: "伦敦", service: "HBO Max", rating: 5, date: "三天前", text: "第一次买怕被骗，结果非常正规，客服全程指导，账号到现在用了半年都很稳" },
   { name: "孙**", initial: "孙", region: "台州", service: "Spotify 家庭套餐", rating: 5, date: "三天前", text: "家庭套餐邀请名额够用，开通后每个人都能正常听歌，整体流程很顺" },
-  { name: "李**", initial: "李", region: "北京", service: "Spotify+Netflix 4K+机场节点", rating: 5, date: "一周前", text: "组合下单还便宜了一些，听歌刷剧科学上网一站搞定，售后也跟上了，下次还来" },
-  { name: "吴***", initial: "吴", region: "柳州", service: "Disney+ 单独车位", rating: 5, date: "一周前", text: "单独车位看动画和电影都稳定，客服发来的说明简单易懂，家里电视一次就登录成功" },
-  { name: "Eric***", initial: "E", region: "悉尼", service: "Netflix + 机场节点", rating: 5, date: "一周前", text: "海外使用也没问题，组合服务一次配齐，后续续费应该还会继续在这里买" },
-  { name: "黄**", initial: "黄", region: "淄博", service: "HBO Max 整号", rating: 5, date: "两周前", text: "整号档案分配很方便，4K 杜比片源播放正常，客服处理问题很有耐心" },
-  { name: "蒋**", initial: "蒋", region: "湖州", service: "Spotify 个人订阅", rating: 5, date: "两周前", text: "个人订阅独立用起来省心，付款后邮件和订单状态都有记录，整体很正规" },
-  { name: "唐*", initial: "唐", region: "遵义", service: "Netflix 单独车位", rating: 5, date: "两周前", text: "车位带 PIN 锁，家里电视和 iPad 都能看，客服处理速度比之前买过的平台快" },
-  { name: "林**", initial: "林", region: "漳州", service: "机场节点 · 普通套餐", rating: 5, date: "三周前", text: "50GB/月够我刷剧和临时办公，订阅链接一键导入，速度比想象中稳" },
-  { name: "韩***", initial: "韩", region: "昆山", service: "Disney+ 4K", rating: 5, date: "三周前", text: "Disney+ 片库正常，4K 画质清楚，遇到登录问题客服很快就帮我解决了" },
-  { name: "冯**", initial: "冯", region: "株洲", service: "HBO Max 单独车位", rating: 5, date: "三周前", text: "HBO 的账号一直很稳，订单完成后还能查到开通信息，比较安心" },
-  { name: "许*", initial: "许", region: "汕头", service: "Spotify 家庭成员", rating: 5, date: "一个月前", text: "价格清楚，邀请流程也讲得明白，家人加入后使用都正常" },
-  { name: "梁**", initial: "梁", region: "中山", service: "Netflix 整号", rating: 5, date: "一个月前", text: "整号档案多，给家里人分开看互不影响，比单独买会员方便很多" },
-  { name: "Kane***", initial: "K", region: "新加坡", service: "机场节点 · 豪华套餐", rating: 5, date: "一个月前", text: "跨区看流媒体速度不错，客服能看懂我的使用场景，推荐的套餐刚好合适" },
-  { name: "马**", initial: "马", region: "呼和浩特", service: "Disney+ 整号", rating: 5, date: "一个月前", text: "整号开通后几个档案都能正常用，邮件通知及时，后续续费也方便" },
-  { name: "彭*", initial: "彭", region: "南昌", service: "Spotify + HBO Max", rating: 5, date: "一个月前", text: "两个服务一起买省了不少，客服统一处理，到账后信息也很完整" },
-  { name: "邓**", initial: "邓", region: "衡阳", service: "机场节点 · 无限套餐", rating: 5, date: "一个月前", text: "设备多所以选无限套餐，晚高峰也能正常看视频，稳定性挺好" },
-  { name: "Nina***", initial: "N", region: "温哥华", service: "Netflix 4K 杜比", rating: 5, date: "一个月前", text: "海外下单也很顺，客服回复快，账号开好后电视端直接能用" },
-  { name: "曹**", initial: "曹", region: "泰州", service: "Spotify 家庭套餐", rating: 5, date: "一个月前", text: "家庭套餐名额够用，客服把邀请和注意事项都写清楚了，体验很省心" },
-  { name: "任*", initial: "任", region: "潍坊", service: "HBO Max 整号", rating: 5, date: "一个月前", text: "整号比车位更适合一家人，档案独立，播放没有遇到卡顿" },
-  { name: "沈**", initial: "沈", region: "常州", service: "Netflix + Disney+", rating: 5, date: "一个月前", text: "组合购买后两个平台都开通了，订单页面能查进度，售后也能接上" },
-  { name: "Leo***", initial: "L", region: "吉隆坡", service: "机场节点 · 高级套餐", rating: 5, date: "一个月前", text: "节点延迟低，流媒体和 AI 工具都能用，客服给的使用教程很清楚" },
+  { name: "李**", initial: "李", region: "北京", service: "Spotify+Netflix 4K+机场节点", rating: 5, date: "4天前", text: "组合下单还便宜了一些，听歌刷剧和节点服务一站搞定，售后也跟上了，下次还来" },
+  { name: "吴***", initial: "吴", region: "柳州", service: "Disney+ 单独车位", rating: 5, date: "4天前", text: "单独车位看动画和电影都稳定，客服发来的说明简单易懂，家里电视一次就登录成功" },
+  { name: "Eric***", initial: "E", region: "悉尼", service: "Netflix + 机场节点", rating: 5, date: "4天前", text: "海外使用也没问题，组合服务一次配齐，后续续费应该还会继续在这里买" },
+  { name: "黄**", initial: "黄", region: "淄博", service: "HBO Max 整号", rating: 5, date: "5天前", text: "整号档案分配很方便，4K 杜比片源播放正常，客服处理问题很有耐心" },
+  { name: "蒋**", initial: "蒋", region: "湖州", service: "Spotify 个人订阅", rating: 5, date: "5天前", text: "个人订阅独立用起来省心，付款后邮件和订单状态都有记录，整体很正规" },
+  { name: "唐*", initial: "唐", region: "遵义", service: "Netflix 单独车位", rating: 5, date: "5天前", text: "车位带 PIN 锁，家里电视和 iPad 都能看，客服处理速度比之前买过的平台快" },
+  { name: "林**", initial: "林", region: "漳州", service: "机场节点 · 普通套餐", rating: 5, date: "5天前", text: "50GB/月够我刷剧和临时办公，订阅链接一键导入，速度比想象中稳" },
+  { name: "韩***", initial: "韩", region: "昆山", service: "Disney+ 4K", rating: 5, date: "6天前", text: "Disney+ 片库正常，4K 画质清楚，遇到登录问题客服很快就帮我解决了" },
+  { name: "冯**", initial: "冯", region: "株洲", service: "HBO Max 单独车位", rating: 5, date: "6天前", text: "HBO 的账号一直很稳，订单完成后还能查到开通信息，比较安心" },
+  { name: "许*", initial: "许", region: "汕头", service: "Spotify 家庭成员", rating: 5, date: "6天前", text: "价格清楚，邀请流程也讲得明白，家人加入后使用都正常" },
+  { name: "梁**", initial: "梁", region: "中山", service: "Netflix 整号", rating: 5, date: "6天前", text: "整号档案多，给家里人分开看互不影响，比单独买会员方便很多" },
+  { name: "Kane***", initial: "K", region: "新加坡", service: "机场节点 · 豪华套餐", rating: 5, date: "6天前", text: "跨区看流媒体速度不错，客服能看懂我的使用场景，推荐的套餐刚好合适" },
+  { name: "马**", initial: "马", region: "呼和浩特", service: "Disney+ 整号", rating: 5, date: "6天前", text: "整号开通后几个档案都能正常用，邮件通知及时，后续续费也方便" },
+  { name: "彭*", initial: "彭", region: "南昌", service: "Spotify + HBO Max", rating: 5, date: "6天前", text: "两个服务一起买省了不少，客服统一处理，到账后信息也很完整" },
+  { name: "邓**", initial: "邓", region: "衡阳", service: "机场节点 · 无限套餐", rating: 5, date: "6天前", text: "设备多所以选无限套餐，晚高峰也能正常看视频，稳定性挺好" },
+  { name: "Nina***", initial: "N", region: "温哥华", service: "Netflix 4K 杜比", rating: 5, date: "6天前", text: "海外下单也很顺，客服回复快，账号开好后电视端直接能用" },
+  { name: "曹**", initial: "曹", region: "泰州", service: "Spotify 家庭套餐", rating: 5, date: "6天前", text: "家庭套餐名额够用，客服把邀请和注意事项都写清楚了，体验很省心" },
+  { name: "任*", initial: "任", region: "潍坊", service: "HBO Max 整号", rating: 5, date: "6天前", text: "整号比车位更适合一家人，档案独立，播放没有遇到卡顿" },
+  { name: "沈**", initial: "沈", region: "常州", service: "Netflix + Disney+", rating: 5, date: "6天前", text: "组合购买后两个平台都开通了，订单页面能查进度，售后也能接上" },
+  { name: "Leo***", initial: "L", region: "吉隆坡", service: "机场节点 · 高级套餐", rating: 5, date: "6天前", text: "节点延迟低，流媒体和 AI 工具都能用，客服给的使用教程很清楚" },
+  { name: "顾**", initial: "顾", region: "无锡", service: "Spotify 家庭套餐", rating: 5, date: "2小时前", text: "家人加入很顺，客服把邀请步骤发得很清楚，邮箱里也能看到订单记录" },
+  { name: "秦*", initial: "秦", region: "桂林", service: "Disney+ 整号", rating: 5, date: "3小时前", text: "整号档案够用，孩子看动画也稳定，价格和周期写得很明白" },
+  { name: "Ray***", initial: "R", region: "多伦多", service: "Netflix + Disney+", rating: 5, date: "4小时前", text: "两项一起买省事很多，海外电视端登录正常，客服回复也及时" },
+  { name: "罗**", initial: "罗", region: "江门", service: "Netflix 整号", rating: 5, date: "5小时前", text: "整号比车位更适合家里用，档案独立，后续续费也可以在订单里查" },
+  { name: "杨***", initial: "杨", region: "大理", service: "机场节点 · 5元测试", rating: 5, date: "6小时前", text: "先买测试套餐试了一下，订阅导入简单，速度稳定后又准备换年付" },
+  { name: "Ari***", initial: "A", region: "曼谷", service: "HBO Max 单独车位", rating: 5, date: "7小时前", text: "单独车位不互相影响，画质稳定，客服说明也没有绕来绕去" },
+  { name: "卢**", initial: "卢", region: "岳阳", service: "Disney+ 4K 杜比", rating: 5, date: "8小时前", text: "下单后邮件很快到，电视端 4K 播放正常，整体比临时找人拼车安心" },
+  { name: "胡*", initial: "胡", region: "金华", service: "Spotify 个人订阅", rating: 5, date: "9小时前", text: "个人订阅独立使用很省心，付款后客服确认快，歌单都正常" },
+  { name: "郭**", initial: "郭", region: "包头", service: "机场节点 · 普通套餐", rating: 5, date: "10小时前", text: "日常刷剧和临时办公够用，线路说明清楚，续费也不麻烦" },
+  { name: "H**", initial: "H", region: "新北", service: "Netflix + Disney+", rating: 5, date: "11小时前", text: "两个平台一起处理，邮件记录完整，有问题直接带订单号沟通很方便" },
+  { name: "苏**", initial: "苏", region: "厦门", service: "Spotify 双人订阅", rating: 5, date: "昨天", text: "双人套餐刚好适合我和朋友，邀请过程顺，客服提醒也很到位" },
+  { name: "叶*", initial: "叶", region: "宁波", service: "HBO Max 整号", rating: 5, date: "昨天", text: "整号开通后全家都能看，档案分开互不影响，价格比单独开划算" },
+  { name: "杜**", initial: "杜", region: "合肥", service: "机场节点 · 高级套餐", rating: 5, date: "昨天", text: "高级套餐流量够用，高峰期看视频也稳，订阅链接说明很清楚" },
+  { name: "钟***", initial: "钟", region: "佛山", service: "Disney+ 单独车位", rating: 5, date: "昨天", text: "单独车位使用简单，账号信息和售后说明都在邮件里，查起来方便" },
+  { name: "魏**", initial: "魏", region: "成都", service: "Netflix 4K 杜比", rating: 5, date: "前天", text: "4K 杜比效果正常，PIN 锁设置好以后家里人用着也不乱" },
+  { name: "姚*", initial: "姚", region: "长沙", service: "Spotify 家庭成员", rating: 5, date: "前天", text: "价格透明，流程比想象中简单，提交后很快就收到确认" },
+  { name: "Mok***", initial: "M", region: "澳门", service: "机场节点 · 无限套餐", rating: 5, date: "前天", text: "多设备长期在线比较适合无限套餐，客服把注意事项一次说清了" },
+  { name: "范**", initial: "范", region: "郑州", service: "HBO Max + Netflix", rating: 5, date: "3天前", text: "组合购买后两个都能用，订单状态和邮件同步，售后沟通不用重复解释" },
+  { name: "宋*", initial: "宋", region: "太原", service: "Disney+ 整号", rating: 5, date: "3天前", text: "家里电视和手机都能看，档案足够，客服处理速度挺稳" },
+  { name: "陆**", initial: "陆", region: "苏州", service: "Spotify 个人订阅", rating: 5, date: "3天前", text: "个人订阅适合自己用，开通信息清楚，后续查订单也方便" },
+  { name: "余***", initial: "余", region: "贵阳", service: "机场节点 · 豪华套餐", rating: 5, date: "4天前", text: "流量给得足，多个设备轮着用也够，速度比之前用的平台稳定" },
 ];
 
 const TESTIMONIALS_PER_PAGE = 4;
 const TESTIMONIALS_INTERVAL_MS = 5500;
 
-const LIVE_ORDERS = [
-  { city: "绍兴", name: "T***", product: "机场节点 · 无限套餐", time: "刚刚" },
-  { city: "洛阳", name: "刘**", product: "Spotify 双人订阅", time: "2 分钟前" },
-  { city: "南通", name: "王*", product: "Netflix 4K 杜比", time: "4 分钟前" },
-  { city: "宜昌", name: "陈**", product: "Disney+ 整号", time: "7 分钟前" },
-  { city: "泉州", name: "何*", product: "Spotify 家庭成员", time: "9 分钟前" },
-  { city: "嘉兴", name: "袁**", product: "HBO Max 单独车位", time: "12 分钟前" },
-  { city: "盐城", name: "张**", product: "Netflix 整号", time: "16 分钟前" },
-  { city: "绵阳", name: "赵***", product: "机场节点 · 高级套餐", time: "19 分钟前" },
-  { city: "柳州", name: "吴**", product: "Disney+ 单独车位", time: "23 分钟前" },
-  { city: "台州", name: "孙**", product: "Spotify 家庭套餐", time: "27 分钟前" },
-  { city: "淄博", name: "黄**", product: "HBO Max 整号", time: "31 分钟前" },
-  { city: "芜湖", name: "周**", product: "Spotify + 机场节点", time: "36 分钟前" },
-  { city: "包头", name: "郭**", product: "机场节点 · 普通套餐", time: "41 分钟前" },
-  { city: "新北", name: "H**", product: "Netflix + Disney+", time: "46 分钟前" },
-  { city: "上海", name: "Mia***", product: "Spotify 个人订阅", time: "52 分钟前" },
-  { city: "悉尼", name: "Eric***", product: "Netflix + 机场节点", time: "58 分钟前" },
-  { city: "湖州", name: "蒋**", product: "Spotify 家庭套餐", time: "1 小时前" },
-  { city: "遵义", name: "唐*", product: "Netflix 单独车位", time: "1 小时前" },
-  { city: "漳州", name: "林**", product: "机场节点 · 普通套餐", time: "1 小时前" },
-  { city: "昆山", name: "韩***", product: "Disney+ 整号", time: "1 小时前" },
-  { city: "株洲", name: "冯**", product: "HBO Max 单独车位", time: "1 小时前" },
-  { city: "汕头", name: "许*", product: "Spotify 双人订阅", time: "1 小时前" },
-  { city: "中山", name: "梁**", product: "Netflix 整号", time: "1 小时前" },
-  { city: "新加坡", name: "Kane***", product: "机场节点 · 豪华套餐", time: "2 小时前" },
-  { city: "呼和浩特", name: "马**", product: "Disney+ 单独车位", time: "2 小时前" },
-  { city: "南昌", name: "彭*", product: "Spotify + HBO Max", time: "2 小时前" },
-  { city: "衡阳", name: "邓**", product: "机场节点 · 无限套餐", time: "2 小时前" },
-  { city: "温哥华", name: "Nina***", product: "Netflix 4K 杜比", time: "2 小时前" },
-  { city: "泰州", name: "曹**", product: "Spotify 家庭成员", time: "2 小时前" },
-  { city: "潍坊", name: "任*", product: "HBO Max 整号", time: "2 小时前" },
-  { city: "常州", name: "沈**", product: "Netflix + Disney+", time: "2 小时前" },
-  { city: "吉隆坡", name: "Leo***", product: "机场节点 · 高级套餐", time: "3 小时前" },
-  { city: "岳阳", name: "卢**", product: "Disney+ 4K 杜比", time: "3 小时前" },
-  { city: "金华", name: "胡*", product: "Spotify 个人订阅", time: "3 小时前" },
-  { city: "江门", name: "罗**", product: "Netflix 整号购买", time: "3 小时前" },
-  { city: "大理", name: "杨***", product: "机场节点 · 5元测试", time: "3 小时前" },
-  { city: "曼谷", name: "Ari***", product: "HBO Max 单独车位", time: "3 小时前" },
-  { city: "无锡", name: "顾**", product: "Spotify 家庭套餐", time: "4 小时前" },
-  { city: "桂林", name: "秦*", product: "Disney+ 整号", time: "4 小时前" },
-  { city: "多伦多", name: "Ray***", product: "Netflix + 机场节点", time: "4 小时前" },
+const LIVE_ORDER_CITIES = [
+  "上海", "北京", "广州", "深圳", "杭州", "南京", "成都", "重庆", "武汉", "西安",
+  "苏州", "天津", "长沙", "郑州", "青岛", "宁波", "厦门", "福州", "无锡", "合肥",
+  "佛山", "东莞", "珠海", "中山", "泉州", "南昌", "贵阳", "昆明", "南宁", "哈尔滨",
+  "沈阳", "大连", "长春", "济南", "太原", "石家庄", "呼和浩特", "乌鲁木齐", "兰州", "西宁",
+  "银川", "海口", "三亚", "香港", "澳门", "台北", "新北", "新加坡", "悉尼", "温哥华",
 ];
+
+const LIVE_ORDER_NAMES = [
+  "陈**", "林*", "王***", "李**", "张*", "刘**", "黄***", "赵**", "吴*", "周**",
+  "徐***", "孙**", "胡*", "朱**", "高***", "何**", "郭*", "马**", "罗***", "梁**",
+  "宋*", "郑**", "谢***", "唐**", "韩*", "曹**", "许***", "邓**", "冯*", "曾**",
+  "彭***", "萧**", "蔡*", "潘**", "田***", "董**", "袁*", "于**", "余***", "叶**",
+  "苏*", "魏**", "姚***", "卢**", "钟*", "严**", "Kane***", "Mia***", "Ray***", "Nina***",
+];
+
+const LIVE_ORDER_PRODUCTS = [
+  "Spotify 家庭成员", "Spotify 个人订阅", "Spotify 双人订阅", "Spotify 家庭套餐",
+  "Netflix 4K 单独车位", "Netflix 整号购买",
+  "Disney+ 单独车位", "Disney+ 整号购买",
+  "HBO Max 单独车位", "HBO Max 整号购买",
+  "机场节点 · 普通套餐", "机场节点 · 高级套餐", "机场节点 · 豪华套餐", "机场节点 · 无限套餐", "机场节点 · 5元10GB测试",
+  "Spotify + Netflix", "Netflix + Disney+", "Spotify + HBO Max", "机场节点 + Netflix", "Spotify + 机场节点",
+];
+
+const LIVE_ORDER_TIMES = ["刚刚", "1 分钟前", "2 分钟前", "3 分钟前", "5 分钟前", "8 分钟前", "12 分钟前", "18 分钟前", "26 分钟前", "36 分钟前"];
 
 function seededUnit(seed) {
   let t = seed + 0x6D2B79F5;
@@ -231,13 +236,23 @@ function buildOperationMetrics(date = new Date()) {
   };
 }
 
+function liveOrderAt(index) {
+  const seed = 20260602 + index * 97;
+  const city = LIVE_ORDER_CITIES[Math.floor(seededUnit(seed + 11) * LIVE_ORDER_CITIES.length) % LIVE_ORDER_CITIES.length];
+  const name = LIVE_ORDER_NAMES[Math.floor(seededUnit(seed + 23) * LIVE_ORDER_NAMES.length) % LIVE_ORDER_NAMES.length];
+  const product = LIVE_ORDER_PRODUCTS[Math.floor(seededUnit(seed + 37) * LIVE_ORDER_PRODUCTS.length) % LIVE_ORDER_PRODUCTS.length];
+  const time = LIVE_ORDER_TIMES[Math.floor(seededUnit(seed + 51) * LIVE_ORDER_TIMES.length) % LIVE_ORDER_TIMES.length];
+  return { city, name, product, time };
+}
+
 function LiveOrderTicker() {
   const [idx, setIdx] = useState(0);
   useEffect(() => {
-    const timer = setInterval(() => setIdx((i) => (i + 1) % LIVE_ORDERS.length), 3200);
+    const cycleLength = LIVE_ORDER_CITIES.length * 3;
+    const timer = setInterval(() => setIdx((i) => (i + 1) % cycleLength), 3200);
     return () => clearInterval(timer);
   }, []);
-  const order = LIVE_ORDERS[idx];
+  const order = liveOrderAt(idx);
   return (
     <div className="home-announcement-row" role="status" aria-live="polite">
       <Megaphone size={15} />

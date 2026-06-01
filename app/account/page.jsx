@@ -65,7 +65,7 @@ function GoogleIcon() {
 export default function AccountPage() {
   const [state, setState] = useState({ loading: true, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
   const [activeOrder, setActiveOrder] = useState(null);
-  const [showTxs, setShowTxs] = useState(false);
+  const [txModal, setTxModal] = useState(false);
   const [copiedKey, setCopiedKey] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -471,36 +471,10 @@ export default function AccountPage() {
           <button
             type="button"
             className="account-balance-toggle"
-            onClick={() => setShowTxs((v) => !v)}
+            onClick={() => setTxModal(true)}
           >
-            {showTxs ? "收起" : "查看"}余额明细 · {state.txs.length} 笔
+            查看余额明细 · {state.txs.length} 笔
           </button>
-          {showTxs && (
-            <div className="account-tx-list">
-              {state.txs.length === 0 ? (
-                <div className="account-tx-empty">暂无余额变动记录</div>
-              ) : (
-                state.txs.map((tx) => (
-                  <div key={tx.id} className={`account-tx-item${tx.amount > 0 ? " positive" : " negative"}`}>
-                    <div className="account-tx-icon">
-                      {tx.amount > 0 ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
-                    </div>
-                    <div className="account-tx-info">
-                      <strong>{displayTxReason(tx)}</strong>
-                      <small>{tx.createdAtBeijing}{tx.statusLabel ? ` · ${tx.statusLabel}` : ""}</small>
-                    </div>
-                    <div className="account-tx-amount">
-                      {tx.amount > 0 ? "+" : ""}¥{Math.abs(tx.amount).toFixed(2)}
-                    </div>
-                  </div>
-                ))
-              )}
-              <div className="account-tx-note">
-                <AlertTriangle size={11} />
-                余额仅用于网站会员服务下单时结算,如需充值请联系客服
-              </div>
-            </div>
-          )}
         </section>
 
         <section className="account-money-tools">
@@ -689,6 +663,48 @@ export default function AccountPage() {
                 {moneyBusy ? "处理中" : moneyModal === "withdraw" ? "确认提现" : "确认提交"}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {txModal && (
+        <div className="account-modal-mask" onClick={() => setTxModal(false)}>
+          <div className="account-money-modal account-tx-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="account-modal-head">
+              <div>
+                <div className="account-modal-id">余额明细</div>
+                <div className="account-modal-status status-received">当前余额 ¥{state.balance.toFixed(2)}</div>
+              </div>
+              <button type="button" className="account-modal-close" onClick={() => setTxModal(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="account-tx-modal-body">
+              <div className="account-tx-list">
+                {state.txs.length === 0 ? (
+                  <div className="account-tx-empty">暂无余额变动记录</div>
+                ) : (
+                  state.txs.map((tx) => (
+                    <div key={tx.id} className={`account-tx-item${tx.amount > 0 ? " positive" : " negative"}`}>
+                      <div className="account-tx-icon">
+                        {tx.amount > 0 ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
+                      </div>
+                      <div className="account-tx-info">
+                        <strong>{displayTxReason(tx)}</strong>
+                        <small>{tx.createdAtBeijing}{tx.statusLabel ? ` · ${tx.statusLabel}` : ""}</small>
+                      </div>
+                      <div className="account-tx-amount">
+                        {tx.amount > 0 ? "+" : ""}¥{Math.abs(tx.amount).toFixed(2)}
+                      </div>
+                    </div>
+                  ))
+                )}
+                <div className="account-tx-note">
+                  <AlertTriangle size={11} />
+                  余额仅用于网站会员服务下单时结算,如需充值请联系客服
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}
