@@ -2,9 +2,10 @@ import {
   getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
   pushAdminActionLog, formatBeijingTime, clean, isRootAdminSession,
-  settleOrderReferralCommission,
+  settleOrderReferralCommission, sendSimpleEmail,
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
+import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "liumeiti.vip";
@@ -188,18 +189,53 @@ export async function PATCH(request, { params }) {
     detail: { status: newStatus || order.status },
   });
 
-  // If transitioning to completed AND not already completed, send completion email.
+  // Send status emails only on a real transition, not on repeated saves.
   // Telegram is NOT pinged for staff changes (only initial new orders).
   let emailResult = null;
   if (newStatus === "completed" && !wasCompleted) {
     emailResult = await sendCompletionEmail(order);
   }
+  let invalidEmailResult = null;
+  if (newStatus === "invalid" && !wasInvalid) {
+    invalidEmailResult = await sendInvalidOrderEmail(order);
+    const noticeAt = new Date();
+    order.invalidEmailNoticeAt = noticeAt.toISOString();
+    order.invalidEmailNoticeAtBeijing = formatBeijingTime(noticeAt);
+    order.invalidEmailNoticeOk = Boolean(invalidEmailResult?.ok);
+    order.invalidEmailNoticeError = invalidEmailResult?.ok ? "" : clean(invalidEmailResult?.reason || invalidEmailResult?.error || "send_failed", 120);
+    await setOrderAt(index, order);
+  }
 
   return Response.json({
     ok: true, order,
     completion: newStatus === "completed" && !wasCompleted ? { email: emailResult } : null,
+    invalidNotice: newStatus === "invalid" && !wasInvalid ? { email: invalidEmailResult } : null,
     commission: commissionResult,
     statusChange: newStatus,
+  });
+}
+
+async function sendInvalidOrderEmail(order) {
+  const html = buildInvalidOrderEmailHtml({
+    order,
+    brandName: BRAND_NAME,
+    siteDomain: SITE_DOMAIN,
+    siteUrl: SITE_URL,
+    supportContact: SUPPORT_CONTACT,
+  });
+  const text = buildInvalidOrderEmailText({
+    order,
+    brandName: BRAND_NAME,
+    siteDomain: SITE_DOMAIN,
+    siteUrl: SITE_URL,
+    supportContact: SUPPORT_CONTACT,
+  });
+  return sendSimpleEmail({
+    to: order.email,
+    subject: `订单 ${order.orderId} 未收到付款，已标记无效 · ${BRAND_NAME}`,
+    text,
+    html,
+    fromName: BRAND_NAME,
   });
 }
 

@@ -25,18 +25,19 @@ export async function generateMetadata({ params }) {
       url: `/services/${service.slug}`,
       images: [
         {
-          url: "/og-image.png",
-          width: 1200,
-          height: 630,
-          alt: `${service.shortTitle} 服务介绍`,
+          url: "https://liumeiti.vip/icon-512.png?v=20260601",
+          width: 512,
+          height: 512,
+          type: "image/png",
+          alt: "冒央会社",
         },
       ],
     },
     twitter: {
-      card: "summary_large_image",
+      card: "summary",
       title: `${title} | 冒央会社`,
       description: service.description,
-      images: ["/og-image.png"],
+      images: ["https://liumeiti.vip/icon-512.png?v=20260601"],
     },
   };
 }

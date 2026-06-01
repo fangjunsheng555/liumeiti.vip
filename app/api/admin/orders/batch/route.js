@@ -2,12 +2,43 @@ import {
   getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
   pushAdminActionLog, formatBeijingTime, isRootAdminSession,
+  clean, sendSimpleEmail,
 } from "../../../_utils.js";
+import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
+
+const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
+const SITE_DOMAIN = process.env.SITE_DOMAIN || "liumeiti.vip";
+const SITE_URL = process.env.SITE_URL || `https://${SITE_DOMAIN}`;
+const SUPPORT_CONTACT = process.env.SUPPORT_CONTACT || "请通过 QQ 2802632995 / WhatsApp +1 4315093334 / Telegram @MaoyangSupport 联系在线客服";
 
 function adminSession(request) {
   const token = getCookieFromRequest(request, "lm_admin");
   const session = verifySession(token);
   return session && session.role === "admin" ? session : null;
+}
+
+async function sendInvalidOrderEmail(order) {
+  const html = buildInvalidOrderEmailHtml({
+    order,
+    brandName: BRAND_NAME,
+    siteDomain: SITE_DOMAIN,
+    siteUrl: SITE_URL,
+    supportContact: SUPPORT_CONTACT,
+  });
+  const text = buildInvalidOrderEmailText({
+    order,
+    brandName: BRAND_NAME,
+    siteDomain: SITE_DOMAIN,
+    siteUrl: SITE_URL,
+    supportContact: SUPPORT_CONTACT,
+  });
+  return sendSimpleEmail({
+    to: order.email,
+    subject: `订单 ${order.orderId} 未收到付款，已标记无效 · ${BRAND_NAME}`,
+    text,
+    html,
+    fromName: BRAND_NAME,
+  });
 }
 
 // POST /api/admin/orders/batch
@@ -72,7 +103,17 @@ export async function POST(request) {
         });
         order.staffAudit = order.staffAudit.slice(0, 30);
         const ok = await setOrderAt(entry.index, order);
-        results.push({ orderId: entry.order.orderId, ok });
+        let invalidEmailResult = null;
+        if (ok) {
+          invalidEmailResult = await sendInvalidOrderEmail(order);
+          const noticeAt = new Date();
+          order.invalidEmailNoticeAt = noticeAt.toISOString();
+          order.invalidEmailNoticeAtBeijing = formatBeijingTime(noticeAt);
+          order.invalidEmailNoticeOk = Boolean(invalidEmailResult?.ok);
+          order.invalidEmailNoticeError = invalidEmailResult?.ok ? "" : clean(invalidEmailResult?.reason || invalidEmailResult?.error || "send_failed", 120);
+          await setOrderAt(entry.index, order);
+        }
+        results.push({ orderId: entry.order.orderId, ok, invalidNotice: invalidEmailResult });
       } else {
         results.push({ orderId: entry.order.orderId, ok: true, alreadyInvalid: true });
       }

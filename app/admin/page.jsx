@@ -2267,7 +2267,9 @@ export default function AdminPage() {
       });
       const data = await res.json();
       if (data.ok) {
-        setSaveResult({ type: "success", message: "已保存" + (data.completion?.email?.ok ? " · 完成邮件已发送" : data.completion ? " · 邮件发送失败" : "") });
+        const completionMessage = data.completion?.email?.ok ? " · 完成邮件已发送" : data.completion ? " · 完成邮件发送失败" : "";
+        const invalidMessage = data.invalidNotice?.email?.ok ? " · 无效通知已发送" : data.invalidNotice ? " · 无效通知发送失败" : "";
+        setSaveResult({ type: "success", message: "已保存" + completionMessage + invalidMessage });
         loadOrders(appliedSearch, filterStatus);
         loadOverview({ silent: true });
         setActiveOrder(data.order);
