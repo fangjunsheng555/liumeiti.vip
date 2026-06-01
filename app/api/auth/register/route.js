@@ -41,10 +41,10 @@ export async function POST(request) {
     createdAtBeijing: formatBeijingTime(now),
   }, now), inviteCode);
   const saved = await setUser(email, user);
-  await registerUserEmail(email);
   if (!saved) {
     return Response.json({ ok: false, error: "storage_failed" }, { status: 500 });
   }
+  await registerUserEmail(email);
 
   const token = signSession({ email, exp: Date.now() + 14 * 24 * 60 * 60 * 1000 });
   return Response.json({ ok: true, email }, {

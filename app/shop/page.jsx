@@ -72,7 +72,7 @@ export default function ShopPage() {
   const [planPickerKey, setPlanPickerKey] = useState(null);
   const [planChoices, setPlanChoices] = useState(DEFAULT_PRODUCT_PLANS);
   const [cartExpanded, setCartExpanded] = useState(false);
-  const [soldTick, setSoldTick] = useState(() => Date.now());
+  const [soldTick, setSoldTick] = useState(0);
   const { cart, cartPlans, addToCart, removeFromCart } = useCart();
 
   const selectedProduct = useMemo(() => PRODUCTS.find((item) => item.key === selectedKey) || null, [selectedKey]);
@@ -200,7 +200,9 @@ export default function ShopPage() {
               const displayAmount = defaultPlan?.amount || item.amount;
               const displayCycle = defaultPlan?.unit || defaultPlan?.cycle || (hasProductPlans(item.key) ? "年起" : item.cycle);
               const saved = Number(promo.originalPrice || 0) - Number(displayAmount || 0);
-              const soldThisMonth = productMonthlySold(item.key, promo.monthlyRange, new Date(soldTick));
+              const soldThisMonth = soldTick
+                ? productMonthlySold(item.key, promo.monthlyRange, new Date(soldTick))
+                : Math.max(18, Math.floor(((promo.monthlyRange?.[0] || 3000) + (promo.monthlyRange?.[1] || 5000)) / 45));
               const added = isInCart(item.key);
               return (
                 <article

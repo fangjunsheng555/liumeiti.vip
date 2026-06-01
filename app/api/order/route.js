@@ -525,28 +525,36 @@ export async function POST(request) {
   // Deduct balance if paying by balance
   if (paymentMethod === "balance" && userEmail) {
     const user = await getUser(userEmail);
-    if (user) {
-      const prev = Number(user.balance || 0);
-      const next = Math.round((prev - finalAmount) * 100) / 100;
-      if (next >= 0) {
-        user.balance = next;
-        await setUser(userEmail, user);
-        const tx = {
-          id: makeId("TX"),
-          amount: -finalAmount,
-          reason: `订单支付 ${order.orderId}`,
-          balanceAfter: next,
-          source: "order",
-          orderId: order.orderId,
-          createdAt: now.toISOString(),
-          createdAtBeijing: formatBeijingTime(now),
-        };
-        await addBalanceTx(userEmail, tx);
-        // Also push to global admin ledger so the dashboard sees user spending.
-        await pushAdminBalanceLog({ ...tx, email: userEmail, balanceBefore: prev });
-        order.paidByBalance = true;
-      }
+    if (!user) {
+      await restoreCoupon(userEmail, coupon.couponId, orderId);
+      return Response.json({ ok: false, error: "user_not_found" }, { status: 404 });
     }
+    const prev = Number(user.balance || 0);
+    const next = Math.round((prev - finalAmount) * 100) / 100;
+    if (next < 0) {
+      await restoreCoupon(userEmail, coupon.couponId, orderId);
+      return Response.json({ ok: false, error: "insufficient_balance", currentBalance: prev, required: finalAmount }, { status: 400 });
+    }
+    user.balance = next;
+    const savedBalance = await setUser(userEmail, user);
+    if (!savedBalance) {
+      await restoreCoupon(userEmail, coupon.couponId, orderId);
+      return Response.json({ ok: false, error: "balance_deduct_failed" }, { status: 500 });
+    }
+    const tx = {
+      id: makeId("TX"),
+      amount: -finalAmount,
+      reason: `订单支付 ${order.orderId}`,
+      balanceAfter: next,
+      source: "order",
+      orderId: order.orderId,
+      createdAt: now.toISOString(),
+      createdAtBeijing: formatBeijingTime(now),
+    };
+    await addBalanceTx(userEmail, tx);
+    // Also push to global admin ledger so the dashboard sees user spending.
+    await pushAdminBalanceLog({ ...tx, email: userEmail, balanceBefore: prev });
+    order.paidByBalance = true;
   }
 
   let consumedServiceCode = null;
@@ -559,11 +567,18 @@ export async function POST(request) {
     await clearRedeemRateLimit(redeemGuard);
   }
 
-  const text = orderText(order);
   const deliveries = [];
+  const stored = await saveOrder(order);
+  deliveries.push({ channel: "storage", ok: Boolean(stored) });
+  if (!stored) {
+    await restoreCoupon(userEmail, coupon.couponId, orderId);
+    if (paymentMethod === "redeem") await restoreServiceRedeemCode(redeemCode, orderId);
+    await refundFailedBalanceOrder(order, userEmail, finalAmount, now);
+    return Response.json({ ok: false, error: "storage_failed", orderId: order.orderId, deliveries }, { status: 500 });
+  }
 
+  const text = orderText(order);
   const tasks = [
-    saveOrder(order).then((stored) => stored !== null && deliveries.push({ channel: "storage", ok: stored })),
     sendTelegram(text)
       .then((sent) => sent !== null && deliveries.push({ channel: "telegram", ok: sent }))
       .catch(() => deliveries.push({ channel: "telegram", ok: false })),
@@ -578,20 +593,6 @@ export async function POST(request) {
       }),
   ];
   await Promise.all(tasks);
-
-  const telegramDelivery = deliveries.find((item) => item.channel === "telegram");
-  if (!telegramDelivery) {
-    await restoreCoupon(userEmail, coupon.couponId, orderId);
-    if (paymentMethod === "redeem") await restoreServiceRedeemCode(redeemCode, orderId);
-    await refundFailedBalanceOrder(order, userEmail, finalAmount, now);
-    return Response.json({ ok: false, error: "telegram_not_configured", orderId: order.orderId, deliveries }, { status: 500 });
-  }
-  if (!telegramDelivery.ok) {
-    await restoreCoupon(userEmail, coupon.couponId, orderId);
-    if (paymentMethod === "redeem") await restoreServiceRedeemCode(redeemCode, orderId);
-    await refundFailedBalanceOrder(order, userEmail, finalAmount, now);
-    return Response.json({ ok: false, error: "telegram_failed", orderId: order.orderId, deliveries }, { status: 502 });
-  }
 
   return Response.json({
     ok: true,

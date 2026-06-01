@@ -1030,8 +1030,8 @@ export async function ensureOAuthUser({ email, provider, providerId, username, i
     createdAtBeijing: formatBeijingTime(now),
   }, now), inviteCode);
   const saved = await setUser(lower, user);
-  await registerUserEmail(lower);
   if (!saved) return { ok: false, error: "storage_failed" };
+  await registerUserEmail(lower);
   return { ok: true, user, isNew: true };
 }
 

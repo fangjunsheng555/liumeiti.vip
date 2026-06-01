@@ -1208,7 +1208,6 @@ export default function CheckoutPage() {
           onClick={() => {
             if (!authBusy) {
               setAuthModal(null);
-              setPendingTrialSelection(false);
             }
           }}
         >
@@ -1233,7 +1232,6 @@ export default function CheckoutPage() {
                 onClick={() => {
                   if (!authBusy) {
                     setAuthModal(null);
-                    setPendingTrialSelection(false);
                   }
                 }}
               >
