@@ -695,7 +695,7 @@ export default function CheckoutPage() {
 
         {serviceRedeemActive && (
           <div className="checkout-alert success">
-            服务兑换码已识别: {(redeemMode.info.services || []).map((item) => item.label).join(" + ")}，填写必要信息后可直接提交,无需支付
+            服务兑换码已识别: {(redeemMode.info.services || []).map((item) => item.label).join(" + ")}，按页面提示填写后可直接提交,无需支付
           </div>
         )}
 
@@ -822,7 +822,7 @@ export default function CheckoutPage() {
                     type="email"
                     value={form.email}
                     onChange={(e) => updateField("email", e.target.value)}
-                    placeholder="用于接收订单信息与日后订单查询"
+                    placeholder="接收订单通知，也可用于后续查询"
                     autoComplete="email"
                     inputMode="email"
                     required
@@ -837,7 +837,7 @@ export default function CheckoutPage() {
                     value={form.contact}
                     onChange={(e) => updateField("contact", e.target.value)}
                     placeholder={contactRequired
-                      ? "Spotify 订单需要,必要时通过此联系您"
+                      ? "Spotify 订单需要,方便客服协助开通"
                       : "可选 — 通常通过邮箱沟通"}
                     autoComplete="tel"
                     required={contactRequired}

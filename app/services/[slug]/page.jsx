@@ -144,7 +144,7 @@ export default async function ServiceLandingPage({ params }) {
             <ShieldCheck size={18} />
             <div>
               <h2>下单与售后说明</h2>
-              <p>选择规格后提交订单，完成支付或使用服务兑换码后，订单信息会同步保存并支持查询</p>
+              <p>选择规格后提交订单，完成支付或使用服务兑换码后，可通过邮箱或订单号查询进度</p>
             </div>
           </div>
           <div className="service-process-steps">
