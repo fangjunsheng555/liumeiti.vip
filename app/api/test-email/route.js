@@ -2,8 +2,13 @@
 // Usage: curl -X POST http://localhost:3000/api/test-email -H "content-type: application/json" -d '{"to":"your@email.com"}'
 
 import { buildEmailBrandHeader } from "../email-brand.js";
+import { adminSessionFromRequest } from "../_utils.js";
 
 export async function POST(request) {
+  const session = adminSessionFromRequest(request);
+  if (!session) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
   let body = {};
   try {
     body = await request.json();
@@ -78,7 +83,7 @@ export async function POST(request) {
   try {
     const from = process.env.SMTP_FROM || process.env.SMTP_USER;
     const brand = process.env.BRAND_NAME || "冒央会社";
-    const siteDomain = process.env.SITE_DOMAIN || "liumeiti.vip";
+    const siteDomain = process.env.SITE_DOMAIN || "www.liumeiti.vip";
     const info = await transporter.sendMail({
       from: `"${brand}" <${from}>`,
       to,

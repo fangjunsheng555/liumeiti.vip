@@ -15,19 +15,19 @@ import { SERVICE_PAGES } from "../services/service-data";
 
 export const metadata = {
   title: "企业资质与服务保障",
-  description: "了解冒央会社 Maoyang Taiwan Inc 的企业信息、服务承诺、售后保障、隐私保护与退款说明",
+  description: "了解冒央会社 Maoyang Taiwan Inc 的企业信息、服务条款、退款规则、隐私政策与数据保留说明",
   alternates: { canonical: "/legal" },
   openGraph: {
     title: "企业资质与服务保障 | 冒央会社",
-    description: "台湾注册实体，清晰展示服务承诺、售后保障、隐私保护与退款说明",
+    description: "台湾注册实体，清晰展示服务承诺、售后保障、隐私保护、退款规则与数据保留说明",
     url: "/legal",
-    images: [{ url: "https://liumeiti.vip/icon-512.png?v=20260601", width: 512, height: 512, type: "image/png", alt: "冒央会社" }],
+    images: [{ url: "https://www.liumeiti.vip/icon-512.png?v=20260601", width: 512, height: 512, type: "image/png", alt: "冒央会社" }],
   },
   twitter: {
     card: "summary",
     title: "企业资质与服务保障 | 冒央会社",
-    description: "查看冒央会社企业信息、服务承诺、隐私保护与退款说明",
-    images: ["https://liumeiti.vip/icon-512.png?v=20260601"],
+    description: "查看冒央会社企业信息、服务条款、隐私政策、退款规则与数据保留说明",
+    images: ["https://www.liumeiti.vip/icon-512.png?v=20260601"],
   },
 };
 
@@ -65,6 +65,20 @@ const POLICY_SECTIONS = [
     tags: ["价格规格清楚", "订单进度可查", "邮件同步通知"],
   },
   {
+    id: "terms",
+    icon: FileText,
+    title: "服务条款",
+    kicker: "Terms of Service",
+    lead: "用户下单即表示已确认所选服务、周期、价格、支付方式及页面提示。不同平台服务可能存在地区、设备、账号状态与平台规则差异",
+    items: [
+      ["服务范围", "我们提供流媒体会员、节点套餐、开通协助、使用指导与售后沟通，不提供违法用途支持，也不鼓励违反平台规则的使用方式"],
+      ["用户责任", "用户需保证提交邮箱、联系方式、账号资料与付款信息真实准确；因资料错误导致延迟或失败的，应配合客服修正"],
+      ["交付标准", "订单状态、开通邮件、服务中心查询结果与客服确认记录共同构成服务交付依据"],
+      ["异常处理", "如平台政策、地区限制、账号安全校验或不可抗力影响服务，我们会优先协助恢复、替换或按退款规则处理"],
+    ],
+    tags: ["下单即确认", "资料准确", "交付可追踪"],
+  },
+  {
     id: "after-sale",
     icon: Headphones,
     title: "售后保障",
@@ -86,6 +100,7 @@ const POLICY_SECTIONS = [
     items: [
       ["资料范围", "可能保存邮箱、联系方式、订单内容、付款方式、IP 与浏览器信息等服务所需资料"],
       ["使用目的", "相关信息只会用于订单交付、售后查询、付款确认与账号安全保护"],
+      ["账号资料", "涉及开通所需的账号或密码资料仅用于对应订单处理；完成或售后结束后将按最小必要原则限制访问与保留"],
       ["保护承诺", "不公开出售用户资料，也不要求用户提供与服务无关的隐私内容"],
     ],
     tags: ["不索取无关资料", "只用于服务需要", "不出售用户资料"],
@@ -97,11 +112,27 @@ const POLICY_SECTIONS = [
     kicker: "Refund Rules",
     lead: "如因账号、车位或节点服务本身原因导致无法正常使用，且经协助后仍无法恢复，可在 7 天内按规则处理退款",
     items: [
-      ["可处理情况", "服务本身异常且无法恢复时，会按订单类型、使用状态与问题原因处理"],
-      ["退款说明", "优先协助恢复使用；确认无法恢复后，再按对应说明进入退款处理"],
+      ["可退款情况", "付款后未能开通、交付内容与订单不一致、服务本身异常且无法恢复，均可申请退款或等值替换"],
+      ["处理流程", "用户需提供订单号、下单邮箱、问题截图或错误提示；客服核验后优先恢复使用，确认无法恢复后进入退款处理"],
+      ["退款金额", "未交付订单原则上按实付金额退回；已交付并部分使用的订单，将结合使用时长、套餐性质、平台成本与问题原因协商处理"],
+      ["到账时间", "支付宝或原支付渠道退款通常 1-5 个工作日完成；USDT 退款需用户提供 TRC20 地址并承担链上转账手续费"],
       ["不适用情况", "资料填写错误、主动变更、滥用、共享给陌生人或违反对应平台规则导致的问题，不属于无条件退款范围"],
     ],
     tags: ["7 天内可处理", "先恢复再退款", "说明清晰可查"],
+  },
+  {
+    id: "retention",
+    icon: LockKeyhole,
+    title: "数据保留说明",
+    kicker: "Data Retention",
+    lead: "我们按订单交付、售后追踪、付款核对与安全保护所需保留数据，并尽量减少不必要的长期保存",
+    items: [
+      ["订单记录", "订单号、邮箱、商品、金额、状态与客服备注会保留用于售后查询、财务核对和争议处理"],
+      ["验证码记录", "订单查询验证码、找回密码验证码等临时验证信息仅短期有效，过期后自动失效"],
+      ["安全记录", "登录、订单提交、管理操作、IP 与浏览器信息仅用于安全校验和异常排查，不会对外公开"],
+      ["删除请求", "用户可联系客服申请更正或删除非必要资料；法律、财务或争议处理必须保留的记录将按必要期限保存"],
+    ],
+    tags: ["最小必要", "临时验证码", "可申请更正"],
   },
 ];
 
@@ -111,8 +142,8 @@ export default function LegalPage() {
     "@type": "Organization",
     name: "Maoyang Taiwan Inc",
     alternateName: "冒央会社",
-    url: "https://liumeiti.vip",
-    logo: "https://liumeiti.vip/logo-transparent.png",
+    url: "https://www.liumeiti.vip",
+    logo: "https://www.liumeiti.vip/logo-transparent.png",
     address: {
       "@type": "PostalAddress",
       addressRegion: "新北市",
@@ -148,7 +179,7 @@ export default function LegalPage() {
           <div className="legal-hero-copy">
             <div className="section-kicker">MAOYANG TAIWAN INC</div>
             <h1>企业资质与服务保障</h1>
-            <p>在这里可以了解冒央会社的企业信息、服务承诺、售后支持、隐私保护与退款说明，下单前看得清楚，用起来更安心</p>
+            <p>企业信息、服务承诺、售后保障、隐私政策与退款规则集中说明，便于下单前确认</p>
             <div className="legal-hero-actions">
               <Link href="#policy-map">查看保障条款</Link>
               <Link href="/service-center#contact">联系客服</Link>

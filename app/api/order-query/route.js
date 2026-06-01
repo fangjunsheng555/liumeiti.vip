@@ -1,26 +1,45 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+import {
+  clean,
+  validEmail,
+  redisCmd,
+  sendSimpleEmail,
+  generateNumericCode,
+  checkRateLimit,
+  rateLimitResponse,
+} from "../_utils.js";
+
 const ORDERS_KEY = "liumeiti:orders";
-
-function clean(value, limit = 200) {
-  return String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, limit);
-}
-
-function redisConfig() {
-  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return { url: url.replace(/\/$/, ""), token };
-}
+const QUERY_CODE_TTL_SECONDS = 10 * 60;
+const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
+const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
 
 function normalizeOrderId(value) {
   return clean(value, 80).replace(/\s+/g, "").toUpperCase();
 }
 
-function normalizeContact(value) {
-  return clean(value, 160).toLowerCase().replace(/[\s\-_:：()（）]/g, "");
-}
-
 function normalizeEmail(value) {
   return clean(value, 200).toLowerCase().trim();
+}
+
+function looksLikeOrderId(value) {
+  return /^LM[A-Z0-9]{8,}$/.test(normalizeOrderId(value));
+}
+
+function queryType(rawQuery) {
+  if (validEmail(rawQuery)) return "email";
+  if (looksLikeOrderId(rawQuery)) return "orderId";
+  return "";
+}
+
+function orderMatches(order, query, type) {
+  if (type === "orderId") return normalizeOrderId(order.orderId) === normalizeOrderId(query);
+  if (type === "email") return normalizeEmail(order.email) === normalizeEmail(query);
+  return false;
+}
+
+function matchType(type) {
+  return type === "orderId" ? "orderId" : type === "email" ? "email" : "";
 }
 
 function subscriptionLinks(username) {
@@ -31,47 +50,10 @@ function subscriptionLinks(username) {
   };
 }
 
-function parseQuery(request, body) {
-  if (request.method === "GET") {
-    const url = new URL(request.url);
-    return clean(url.searchParams.get("query") || url.searchParams.get("q") || "", 160);
-  }
-  return clean(body.query || body.q || "", 160);
-}
-
-function idMatches(order, rawQuery) {
-  const queryId = normalizeOrderId(rawQuery);
-  return !!queryId && normalizeOrderId(order.orderId) === queryId;
-}
-
-function contactMatches(order, rawQuery) {
-  const queryContact = normalizeContact(rawQuery);
-  return !!queryContact && normalizeContact(order.contact) === queryContact;
-}
-
-function emailMatches(order, rawQuery) {
-  const queryEmail = normalizeEmail(rawQuery);
-  if (!queryEmail || !queryEmail.includes("@")) return false;
-  return normalizeEmail(order.email) === queryEmail;
-}
-
-function orderMatches(order, query) {
-  return idMatches(order, query) || emailMatches(order, query) || contactMatches(order, query);
-}
-
-function matchType(order, query) {
-  if (idMatches(order, query)) return "orderId";
-  if (emailMatches(order, query)) return "email";
-  if (contactMatches(order, query)) return "contact";
-  return "";
-}
-
 function publicOrder(order, type) {
-  // Normalize items array (new schema). Backward-compat: synthesize from flat fields.
   let items;
   if (Array.isArray(order.items) && order.items.length > 0) {
     items = order.items.map((it) => {
-      // After staff completes order, prefer staff-filled credentials
       const account = it.staffAccount || it.account || "";
       const password = it.staffPassword || it.password || "";
       const out = {
@@ -83,7 +65,6 @@ function publicOrder(order, type) {
         password,
       };
       if (it.service === "rocket") {
-        // Always derive from orderId (new scheme); fall back to stored links if present
         out.subscriptionLinks = subscriptionLinks(order.orderId) || it.subscriptionLinks;
       } else if (it.subscriptionLinks) {
         out.subscriptionLinks = it.subscriptionLinks;
@@ -91,7 +72,6 @@ function publicOrder(order, type) {
       return out;
     });
   } else {
-    // legacy single-item order
     const it = {
       service: order.service || "",
       label: order.serviceLabel || "",
@@ -100,9 +80,7 @@ function publicOrder(order, type) {
       account: order.account || "",
       password: order.password || "",
     };
-    if (it.service === "rocket") {
-      it.subscriptionLinks = subscriptionLinks(order.orderId);
-    }
+    if (it.service === "rocket") it.subscriptionLinks = subscriptionLinks(order.orderId);
     items = [it];
   }
 
@@ -129,7 +107,6 @@ function publicOrder(order, type) {
     email: order.email || "",
     contact: order.contact || "",
     remark: order.remark || "",
-    // Legacy flat fields (kept for compat)
     service: items[0]?.service || "",
     cycle: items[0]?.cycle || "",
     account: items[0]?.account || "",
@@ -142,7 +119,6 @@ function publicOrder(order, type) {
 }
 
 async function readBody(request) {
-  if (request.method === "GET") return {};
   try {
     return await request.json();
   } catch (error) {
@@ -150,48 +126,169 @@ async function readBody(request) {
   }
 }
 
+async function loadOrders() {
+  const rows = await redisCmd(["LRANGE", ORDERS_KEY, "0", "199"]);
+  if (!Array.isArray(rows)) return null;
+  return rows
+    .map((item) => {
+      try { return JSON.parse(item); } catch (error) { return null; }
+    })
+    .filter((order) => order && !order.deleted);
+}
+
+function verificationKey(email, query) {
+  const digest = createHash("sha256")
+    .update(normalizeEmail(email) + "|" + normalizeOrderId(query || normalizeEmail(query)))
+    .digest("hex");
+  return "liumeiti:order-query-code:" + digest;
+}
+
+function maskEmail(email) {
+  const [name, domain] = normalizeEmail(email).split("@");
+  if (!name || !domain) return "下单邮箱";
+  const head = name.slice(0, 2);
+  const tail = name.length > 4 ? name.slice(-2) : "";
+  return `${head}${"*".repeat(Math.max(2, Math.min(6, name.length - head.length - tail.length)))}${tail}@${domain}`;
+}
+
+function safeEqualCode(a, b) {
+  const left = Buffer.from(String(a || ""));
+  const right = Buffer.from(String(b || ""));
+  if (left.length !== right.length) return false;
+  try { return timingSafeEqual(left, right); } catch (error) { return false; }
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+async function sendQueryCode(email, code, query) {
+  const safeCode = escapeHtml(code);
+  const safeQuery = escapeHtml(query);
+  const html = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',Arial,sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f6fb;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;background:#fff;border-radius:18px;overflow:hidden;border:1px solid #dbe7ef;">
+        <tr><td style="padding:26px 30px 10px;">
+          <h2 style="margin:0 0 8px;font-size:20px;font-weight:900;">订单查询验证码</h2>
+          <p style="margin:0 0 16px;font-size:13px;line-height:1.7;color:#475569;">你正在查询 ${BRAND_NAME} 订单 ${safeQuery}。请输入下方验证码继续查看订单详情。</p>
+          <div style="padding:18px 20px;border-radius:14px;background:#f0fdfa;border:1px solid #99f6e4;text-align:center;">
+            <div style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:32px;font-weight:900;color:#134e4a;letter-spacing:.18em;">${safeCode}</div>
+            <div style="margin-top:6px;font-size:11px;color:#0f766e;">10 分钟内有效</div>
+          </div>
+        </td></tr>
+        <tr><td style="padding:14px 30px 28px;font-size:11.5px;color:#94a3b8;line-height:1.6;">若非本人操作，请忽略本邮件。${escapeHtml(SITE_DOMAIN)}</td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`;
+  const text = `${BRAND_NAME} 订单查询验证码\n\n订单查询: ${query}\n验证码: ${code}\n有效期 10 分钟\n\n若非本人操作，请忽略本邮件。`;
+  return sendSimpleEmail({
+    to: email,
+    subject: `${BRAND_NAME} · 订单查询验证码 ${code}`,
+    text,
+    html,
+  });
+}
+
+async function storeVerificationCode(email, query, code) {
+  const payload = JSON.stringify({ email: normalizeEmail(email), query: clean(query, 160), code, createdAt: new Date().toISOString() });
+  const result = await redisCmd(["SET", verificationKey(email, query), payload, "EX", String(QUERY_CODE_TTL_SECONDS)]);
+  return result === "OK";
+}
+
+async function verifyCode(email, query, code) {
+  const raw = await redisCmd(["GET", verificationKey(email, query)]);
+  if (!raw) return false;
+  let record = null;
+  try { record = JSON.parse(raw); } catch (error) { record = null; }
+  const ok = record && normalizeEmail(record.email) === normalizeEmail(email) && safeEqualCode(record.code, code);
+  if (ok) await redisCmd(["DEL", verificationKey(email, query)]);
+  return ok;
+}
+
 async function handle(request) {
   const body = await readBody(request);
-  const query = parseQuery(request, body);
+  const query = clean(body.query || body.q || "", 160);
+  const code = clean(body.code || body.verificationCode || "", 20).replace(/\s+/g, "");
   const headers = { "Cache-Control": "no-store, max-age=0" };
 
   if (!query) {
     return Response.json({ ok: false, error: "query_required" }, { status: 400, headers });
   }
+  const type = queryType(query);
+  if (!type) {
+    return Response.json({ ok: false, error: "invalid_query" }, { status: 400, headers });
+  }
 
-  const redis = redisConfig();
-  if (!redis) {
+  const orders = await loadOrders();
+  if (orders === null) {
     return Response.json({ ok: true, configured: false, orders: [] }, { headers });
   }
-
-  try {
-    const response = await fetch(redis.url + "/lrange/" + encodeURIComponent(ORDERS_KEY) + "/0/199", {
-      headers: { Authorization: "Bearer " + redis.token },
-    });
-    const data = await response.json();
-    if (!response.ok || data.error) {
-      return Response.json({ ok: false, error: "storage_read_failed" }, { status: 502, headers });
-    }
-
-    const orders = Array.isArray(data.result)
-      ? data.result.map((item) => {
-          try { return JSON.parse(item); } catch (error) { return null; }
-        }).filter(Boolean)
-      : [];
-
-    const matched = orders
-      .filter((order) => orderMatches(order, query))
-      .slice(0, 10)
-      .map((order) => publicOrder(order, matchType(order, query)));
-
-    return Response.json({ ok: true, configured: true, orders: matched }, { headers });
-  } catch (error) {
-    return Response.json({ ok: false, error: "storage_unavailable" }, { status: 502, headers });
+  const matched = orders.filter((order) => orderMatches(order, query, type)).slice(0, 10);
+  if (matched.length === 0) {
+    return Response.json({ ok: true, configured: true, orders: [] }, { headers });
   }
+
+  const recipient = type === "email" ? normalizeEmail(query) : normalizeEmail(matched[0]?.email);
+  if (!validEmail(recipient)) {
+    return Response.json({ ok: false, error: "order_email_missing" }, { status: 400, headers });
+  }
+
+  if (!code) {
+    const guard = await checkRateLimit(request, {
+      namespace: "order-query:send",
+      limit: 5,
+      windowSec: 15 * 60,
+      identity: recipient + "|" + query,
+    });
+    if (!guard.ok) return rateLimitResponse(guard, "订单查询验证码请求过多，请稍后再试");
+
+    const nextCode = generateNumericCode(6);
+    const stored = await storeVerificationCode(recipient, query, nextCode);
+    if (!stored) return Response.json({ ok: false, error: "verification_store_failed" }, { status: 502, headers });
+    const sent = await sendQueryCode(recipient, nextCode, query);
+    if (!sent.ok) {
+      return Response.json({ ok: false, error: "verification_email_failed" }, { status: 502, headers });
+    }
+    return Response.json({
+      ok: true,
+      configured: true,
+      verificationRequired: true,
+      emailHint: maskEmail(recipient),
+      expiresIn: QUERY_CODE_TTL_SECONDS,
+      orders: [],
+    }, { headers });
+  }
+
+  const verifyGuard = await checkRateLimit(request, {
+    namespace: "order-query:verify",
+    limit: 10,
+    windowSec: 15 * 60,
+    identity: recipient + "|" + query,
+  });
+  if (!verifyGuard.ok) return rateLimitResponse(verifyGuard, "验证码校验过于频繁，请稍后再试");
+  if (!/^\d{6}$/.test(code) || !(await verifyCode(recipient, query, code))) {
+    return Response.json({ ok: false, error: "code_invalid_or_expired" }, { status: 400, headers });
+  }
+
+  return Response.json({
+    ok: true,
+    configured: true,
+    verified: true,
+    orders: matched.map((order) => publicOrder(order, matchType(type))),
+  }, { headers });
 }
 
-export async function GET(request) {
-  return handle(request);
+export async function GET() {
+  return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
 }
 
 export async function POST(request) {

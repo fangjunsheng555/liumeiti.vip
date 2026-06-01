@@ -22,7 +22,7 @@ export function buildCustomerMailHtml({ subject, content, brandName, siteDomain,
   const safeBrand = escapeHtml(brandName || "冒央会社");
   const safeSubject = escapeHtml(subject || "客服服务通知");
   const safeSiteDomain = escapeHtml(siteDomain || "liumeiti.vip");
-  const safeSiteUrl = escapeHtml(siteUrl || "https://liumeiti.vip");
+  const safeSiteUrl = escapeHtml(siteUrl || "https://www.liumeiti.vip");
   const staffBadge = staffId ? `#${escapeHtml(staffId)}` : "#1";
   return `<!doctype html>
 <html lang="zh-CN">
@@ -85,6 +85,6 @@ export function buildCustomerMailText({ subject, content, brandName, siteDomain,
     `如仍需协助，可直接回复此邮件或通过网站联系方式联系在线客服，我们会继续为您处理。感谢您选择${brand}`,
     "",
     `工作人员编号 #${staffId || 1}`,
-    `${siteDomain || "liumeiti.vip"} ${siteUrl || "https://liumeiti.vip"}`,
+    `${siteDomain || "www.liumeiti.vip"} ${siteUrl || "https://www.liumeiti.vip"}`,
   ].join("\n");
 }

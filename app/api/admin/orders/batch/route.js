@@ -7,7 +7,7 @@ import {
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
-const SITE_DOMAIN = process.env.SITE_DOMAIN || "liumeiti.vip";
+const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
 const SITE_URL = process.env.SITE_URL || `https://${SITE_DOMAIN}`;
 const SUPPORT_CONTACT = process.env.SUPPORT_CONTACT || "请通过 QQ 2802632995 / WhatsApp +1 4315093334 / Telegram @MaoyangSupport 联系在线客服";
 

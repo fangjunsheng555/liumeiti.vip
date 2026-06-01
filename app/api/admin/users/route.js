@@ -3,17 +3,16 @@ import {
   pushAdminActionLog, getUser, setUser,
   addBalanceTx, getBalanceTxs, pushAdminBalanceLog,
   validEmail, formatBeijingTime, clean,
+  adminSessionFromRequest, adminPermissionProfile,
 } from "../../_utils.js";
 
-function adminOk(request) {
-  const token = getCookieFromRequest(request, "lm_admin");
-  const session = verifySession(token);
-  return session && session.role === "admin";
+function adminSession(request) {
+  return adminSessionFromRequest(request);
 }
 
 // GET /api/admin/users?email=xxx@xxx.com — fetch a user with balance + transactions
 export async function GET(request) {
-  if (!adminOk(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!adminSession(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const url = new URL(request.url);
   const email = String(url.searchParams.get("email") || "").trim().toLowerCase();
   if (!validEmail(email)) {
@@ -39,7 +38,9 @@ export async function GET(request) {
 // POST /api/admin/users — adjust balance
 // body: { email, amount (positive=add, negative=deduct), reason }
 export async function POST(request) {
-  if (!adminOk(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const session = adminSession(request);
+  if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!adminPermissionProfile(session).canAdjustBalance) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const actor = adminActorFromRequest(request);
   let body = {};
   try { body = await request.json(); } catch (e) {}

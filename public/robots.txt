@@ -1,4 +1,8 @@
 User-agent: *
 Allow: /
+Disallow: /api/
+Disallow: /admin
+Disallow: /checkout
+Disallow: /account
 
-Sitemap: https://liumeiti.vip/sitemap.xml
+Sitemap: https://www.liumeiti.vip/sitemap.xml

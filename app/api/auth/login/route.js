@@ -2,6 +2,7 @@ import {
   validEmail, verifyPassword, getUser, setUser,
   signSession, setCookieValue, clearCookieValue,
   registerUserEmail, generateRandomUsername, ensureUserReferralProfile,
+  checkRateLimit, rateLimitResponse,
 } from "../../_utils.js";
 
 export async function POST(request) {
@@ -13,6 +14,13 @@ export async function POST(request) {
   if (!validEmail(email) || !password) {
     return Response.json({ ok: false, error: "invalid_credentials" }, { status: 400 });
   }
+  const guard = await checkRateLimit(request, {
+    namespace: "auth:login",
+    limit: 8,
+    windowSec: 10 * 60,
+    identity: email,
+  });
+  if (!guard.ok) return rateLimitResponse(guard, "登录尝试过多，请稍后再试");
 
   const user = await getUser(email);
   if (!user || !verifyPassword(password, user.passwordHash)) {

@@ -38,7 +38,7 @@ export function buildRedeemEmailText({ code, type, services, amount, brandName, 
     redeemUrl,
     ``,
     isService
-      ? `服务码无需登录，跳转后系统将自动识别并跳转至结算页提交`
+      ? `服务码无需登录，打开链接后页面会识别兑换码并跳转至结算页提交`
       : `余额码需要先登录账号，金额将充入您的账户余额`,
     ``,
     `如有任何问题，请联系在线客服`,
@@ -68,7 +68,7 @@ export function buildRedeemEmailHtml({
     ? "兑换码可直接兑换以下服务，无需支付，点击下方按钮即可一键跳转兑换"
     : "兑换码可为您账户充值以下余额，需登录账号后兑换，金额将直接到账";
   const usageHint = isService
-    ? "点击「立即兑换」按钮跳转后，系统将自动识别并引导您完成订单提交（免支付）"
+    ? "点击「立即兑换」按钮后，页面会识别兑换码并引导您完成订单提交（免支付）"
     : "点击「立即兑换」按钮跳转首页后请先登录，金额将立即到账";
 
   return `<!DOCTYPE html>

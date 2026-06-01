@@ -4,6 +4,7 @@ import {
   generateRandomUsername, registerUserEmail, attachRegisterCoupon,
   getCookieFromRequest, inviteCodeFromRequest, normalizeInviteCode,
   prepareNewUserReferralProfile,
+  checkRateLimit, rateLimitResponse,
 } from "../../_utils.js";
 
 export async function POST(request) {
@@ -18,6 +19,13 @@ export async function POST(request) {
   if (!validEmail(email)) {
     return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
   }
+  const guard = await checkRateLimit(request, {
+    namespace: "auth:register",
+    limit: 5,
+    windowSec: 30 * 60,
+    identity: email,
+  });
+  if (!guard.ok) return rateLimitResponse(guard, "注册请求过多，请稍后再试");
   if (password.length < 6 || password.length > 64) {
     return Response.json({ ok: false, error: "password_length" }, { status: 400 });
   }
