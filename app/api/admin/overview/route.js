@@ -29,6 +29,22 @@ function orderRevenueAmount(order) {
   return Number(order.finalAmount || (order.paidCurrency === "CNY" ? order.paidAmount : 0) || 0);
 }
 
+function minutesSince(value) {
+  const time = new Date(value || "").getTime();
+  if (!Number.isFinite(time)) return 0;
+  return Math.max(0, Math.floor((Date.now() - time) / 60000));
+}
+
+function isAbnormalOrder(order) {
+  const status = order.status || "received";
+  if (status === "invalid") return true;
+  if (status !== "received") return false;
+  const age = minutesSince(order.createdAt);
+  const paymentMethod = order.paymentMethod || "alipay";
+  if ((paymentMethod === "redeem" || paymentMethod === "balance") && age >= 15) return true;
+  return age >= 30;
+}
+
 export async function GET(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
@@ -45,6 +61,7 @@ export async function GET(request) {
     .map((order) => ({
       orderId: order.orderId || "",
       status: order.status || "received",
+      paymentMethod: order.paymentMethod || "alipay",
       createdAt: order.createdAt || "",
       createdAtBeijing: order.createdAtBeijing || "",
       email: order.email || "",
@@ -66,6 +83,7 @@ export async function GET(request) {
     todayRevenue: Math.round(todayRevenue * 100) / 100,
     totalRevenue: Math.round(totalRevenue * 100) / 100,
     pendingOrders: orders.filter((order) => order.status === "received").length,
+    abnormalOrders: orders.filter(isAbnormalOrder).length,
     completedOrders: orders.filter((order) => order.status === "completed").length,
     invalidOrders: orders.filter((order) => order.status === "invalid").length,
     latestOrderId: latestOrder?.orderId || "",

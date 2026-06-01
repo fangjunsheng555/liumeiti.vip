@@ -32,6 +32,7 @@ import {
 } from "../lib/store";
 import MobileNav from "../components/MobileNav";
 import FloatingSupport from "../components/FloatingSupport";
+import { SERVICE_SLUG_BY_KEY } from "../services/service-data";
 
 const PRODUCT_PROMOS = {
   spotify: { badge: "热销 No.1", badgeIcon: Flame, originalPrice: 298, monthlyRange: [5200, 7600] },
@@ -174,6 +175,7 @@ export default function ShopPage() {
           <nav className="desktop-nav">
             <Link href="/#layout">下单流程</Link>
             <Link href="/service-center#order-query">订单查询</Link>
+            <Link href="/legal">企业保障</Link>
             <Link href="/service-center#faq">FAQ</Link>
           </nav>
         </div>
@@ -425,6 +427,12 @@ export default function ShopPage() {
                     <MessageCircleMore size={16} />
                     联系在线客服
                   </Link>
+                  {SERVICE_SLUG_BY_KEY[selectedProduct.key] && (
+                    <Link href={`/services/${SERVICE_SLUG_BY_KEY[selectedProduct.key]}`} className="secondary-btn">
+                      <ArrowRight size={16} />
+                      服务介绍
+                    </Link>
+                  )}
                 </div>
               </div>
             </div>

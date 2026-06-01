@@ -1037,7 +1037,7 @@ export default function AdminPage() {
   const [batchConfirm, setBatchConfirm] = useState(null); // null | "delete" | "invalid"
 
   // User/balance management
-  const [tab, setTab] = useState("overview"); // "overview" | "orders" | "users" | "balance" | "staff"
+  const [tab, setTab] = useState("overview"); // overview | orders | abnormal | users | balance | staff
   const [confirmUserAction, setConfirmUserAction] = useState(null); // { email, action: "ban" | "unban" | "delete" }
   const [userActionBusy, setUserActionBusy] = useState(false);
   const [userInfo, setUserInfo] = useState(null); // {user, transactions}
@@ -2010,15 +2010,15 @@ export default function AdminPage() {
   }, []);
 
   useEffect(() => {
-    loadOrders(appliedSearch, filterStatus);
-  }, [loadOrders, appliedSearch, filterStatus]);
+    loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus);
+  }, [loadOrders, appliedSearch, filterStatus, tab]);
 
   useEffect(() => {
-    if (!authed || tab !== "orders") return;
+    if (!authed || (tab !== "orders" && tab !== "abnormal")) return;
     const timer = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
       if (activeOrder) return;
-      loadOrders(appliedSearch, filterStatus, { silent: true });
+      loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true });
     }, 10000);
     return () => clearInterval(timer);
   }, [authed, tab, activeOrder, loadOrders, appliedSearch, filterStatus]);
@@ -2049,6 +2049,13 @@ export default function AdminPage() {
       setAppliedSearch("");
       setFilterStatus("received");
       loadOrders("", "received", { silent: true });
+      return;
+    }
+    if (target === "abnormal") {
+      setTab("abnormal");
+      setSearchInput("");
+      setAppliedSearch("");
+      loadOrders("", "abnormal", { silent: true });
       return;
     }
     if (target === "withdrawals") {
@@ -2356,6 +2363,9 @@ export default function AdminPage() {
           <button type="button" className={`admin-tab-btn${tab === "orders" ? " active" : ""}`} onClick={() => setTab("orders")}>
             订单管理{Number(overview?.pendingOrders || 0) > 0 && <em className="admin-tab-badge">{overview.pendingOrders}</em>}
           </button>
+          <button type="button" className={`admin-tab-btn${tab === "abnormal" ? " active" : ""}`} onClick={() => setTab("abnormal")}>
+            异常订单{Number(overview?.abnormalOrders || 0) > 0 && <em className="admin-tab-badge warn">{overview.abnormalOrders}</em>}
+          </button>
           <button type="button" className={`admin-tab-btn${tab === "users" ? " active" : ""}`} onClick={() => setTab("users")}>用户管理</button>
           <button type="button" className={`admin-tab-btn${tab === "withdrawals" ? " active" : ""}`} onClick={() => setTab("withdrawals")}>
             提现审核{Number(overview?.pendingWithdrawals || 0) > 0 && <em className="admin-tab-badge">{overview.pendingWithdrawals}</em>}
@@ -2384,6 +2394,10 @@ export default function AdminPage() {
               <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("orders")}>
                 <span>待处理订单</span>
                 <b>{overview?.pendingOrders ?? 0}</b>
+              </button>
+              <button type="button" className="admin-overview-item warn" onClick={() => openOverviewTarget("abnormal")}>
+                <span>异常订单</span>
+                <b>{overview?.abnormalOrders ?? 0}</b>
               </button>
               <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("withdrawals")}>
                 <span>待审核提现</span>
@@ -3164,21 +3178,28 @@ export default function AdminPage() {
             />
             <button type="submit">搜索</button>
           </form>
-          <div className="admin-filter">
-            {[
-              { v: "all", label: "全部" },
-              { v: "received", label: "未完成" },
-              { v: "completed", label: "已完成" },
-              { v: "invalid", label: "无效" },
-            ].map((f) => (
-              <button
-                key={f.v}
-                type="button"
-                className={`admin-filter-btn${filterStatus === f.v ? " active" : ""}`}
-                onClick={() => setFilterStatus(f.v)}
-              >{f.label}</button>
-            ))}
-          </div>
+          {tab === "abnormal" ? (
+            <div className="admin-abnormal-chip">
+              <AlertTriangle size={13} />
+              无效订单与超时未处理订单
+            </div>
+          ) : (
+            <div className="admin-filter">
+              {[
+                { v: "all", label: "全部" },
+                { v: "received", label: "未完成" },
+                { v: "completed", label: "已完成" },
+                { v: "invalid", label: "无效" },
+              ].map((f) => (
+                <button
+                  key={f.v}
+                  type="button"
+                  className={`admin-filter-btn${filterStatus === f.v ? " active" : ""}`}
+                  onClick={() => setFilterStatus(f.v)}
+                >{f.label}</button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Batch operations toolbar */}
@@ -3244,7 +3265,7 @@ export default function AdminPage() {
         {loading ? (
           <div className="admin-loading-inline"><LoaderCircle size={20} className="spin-icon" />加载中</div>
         ) : orders.length === 0 ? (
-          <div className="admin-empty"><Inbox size={36} /><p>暂无订单</p></div>
+          <div className="admin-empty"><Inbox size={36} /><p>{tab === "abnormal" ? "暂无异常订单" : "暂无订单"}</p></div>
         ) : (
           <div className="admin-orders">
             {orders.map((o) => {
@@ -3278,6 +3299,11 @@ export default function AdminPage() {
                       <span className="admin-order-service">{o.serviceLabel}</span>
                       {o.itemCount > 1 && <span className="admin-order-count">{o.itemCount} 件</span>}
                     </div>
+                    {tab === "abnormal" && o.abnormalReason && (
+                      <div className={`admin-order-abnormal ${o.abnormalLevel || ""}`}>
+                        <AlertTriangle size={11} />{o.abnormalReason}
+                      </div>
+                    )}
                     <div className="admin-order-bot">
                       <span className="admin-order-paid">
                         {o.paidCurrency === "CODE" ? "兑换码" : o.paidCurrency === "USDT" ? `${o.paidAmount} USDT` : `¥${o.paidAmount}`}

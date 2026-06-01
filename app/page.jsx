@@ -336,6 +336,7 @@ export default function Page() {
             <Link href="/shop">服务产品</Link>
             <Link href="/#layout">下单流程</Link>
             <Link href="/service-center#order-query">订单查询</Link>
+            <Link href="/legal">企业保障</Link>
             <Link href="/service-center#faq">FAQ</Link>
           </nav>
         </div>
@@ -441,6 +442,14 @@ export default function Page() {
         <div className="container footer-inner">
           <div className="footer-company">
             <div className="footer-brand">冒央会社 · Maoyang Taiwan Inc</div>
+            <div className="footer-links">
+              <Link href="/legal">企业资质与服务保障</Link>
+              <Link href="/services/spotify">Spotify</Link>
+              <Link href="/services/netflix">Netflix</Link>
+              <Link href="/services/disney">Disney+</Link>
+              <Link href="/services/hbo-max">HBO Max</Link>
+              <Link href="/services/airport-node">机场节点</Link>
+            </div>
           </div>
           <div className="footer-legal">
             <div className="footer-pill">地址：台湾新北市板桥区远东路1号3-218</div>
