@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-label="紫藤灰卡通头像">
+  <rect width="160" height="160" rx="42" fill="#f5f3ff"/>
+  <circle cx="80" cy="80" r="51" fill="#fff7ed"/>
+  <path d="M41 73c2-25 18-42 39-44 25-2 43 15 45 45-25-16-56-17-84-1Z" fill="#7c3aed"/>
+  <path d="M48 68c12-6 25-16 36-31" stroke="#6d28d9" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <path d="M58 84c4-5 11-5 15 0M88 84c4-5 11-5 15 0" stroke="#0f172a" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <path d="M69 106c7 5 16 5 23 0" fill="none" stroke="#0f172a" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="49" cy="96" r="8" fill="#ddd6fe"/>
+  <circle cx="111" cy="96" r="8" fill="#ddd6fe"/>
+</svg>
