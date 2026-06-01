@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowRight, BadgeCheck, CheckCircle2, Headphones, ShieldCheck, ShoppingBag } from "lucide-react";
+import { ArrowRight, BadgeCheck, CheckCircle2, ShieldCheck } from "lucide-react";
 import FloatingSupport from "../../components/FloatingSupport";
 import MobileNav from "../../components/MobileNav";
 import { getServiceBySlug, SERVICE_PAGES } from "../service-data";
+import ServiceOrderActions from "../ServiceOrderActions";
 
 export function generateStaticParams() {
   return SERVICE_PAGES.map((item) => ({ slug: item.slug }));
@@ -109,14 +110,7 @@ export default async function ServiceLandingPage({ params }) {
                 <span key={item}><BadgeCheck size={14} />{item}</span>
               ))}
             </div>
-            <div className="service-seo-actions">
-              <Link href={`/checkout?items=${service.key}`} className="primary-btn">
-                <ShoppingBag size={16} />立即下单
-              </Link>
-              <Link href="/service-center#contact" className="secondary-btn">
-                <Headphones size={16} />咨询客服
-              </Link>
-            </div>
+            <ServiceOrderActions service={service} />
           </div>
           <div className="service-seo-visual">
             <img src={service.image} alt={service.title} />
