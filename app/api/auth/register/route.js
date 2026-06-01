@@ -2,6 +2,7 @@ import {
   validEmail, hashPassword, getUser, setUser,
   signSession, setCookieValue, formatBeijingTime,
   generateRandomUsername, registerUserEmail, attachRegisterCoupon,
+  generateRandomUserAvatarId,
   getCookieFromRequest, inviteCodeFromRequest, normalizeInviteCode,
   prepareNewUserReferralProfile,
   checkRateLimit, rateLimitResponse,
@@ -43,6 +44,7 @@ export async function POST(request) {
   const user = await prepareNewUserReferralProfile(email, attachRegisterCoupon({
     email,
     username: generateRandomUsername(),
+    avatarId: generateRandomUserAvatarId(),
     passwordHash: hashPassword(password),
     balance: 0,
     createdAt: now.toISOString(),

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import MobileNav from "../components/MobileNav";
 import FloatingSupport from "../components/FloatingSupport";
+import { DEFAULT_USER_AVATAR_ID, USER_AVATARS, normalizeUserAvatarId, userAvatarPath } from "../lib/avatars";
 import {
   ArrowRight, CheckCircle2, Clock, Copy,
   LoaderCircle, LogOut, Mail, ShoppingBag, X,
@@ -63,9 +64,12 @@ function GoogleIcon() {
 }
 
 export default function AccountPage() {
-  const [state, setState] = useState({ loading: true, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
+  const [state, setState] = useState({ loading: true, email: null, username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
   const [activeOrder, setActiveOrder] = useState(null);
   const [txModal, setTxModal] = useState(false);
+  const [avatarModal, setAvatarModal] = useState(false);
+  const [avatarSaving, setAvatarSaving] = useState("");
+  const [avatarError, setAvatarError] = useState("");
   const [copiedKey, setCopiedKey] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -97,7 +101,7 @@ export default function AccountPage() {
         fetch("/api/auth/balance", { credentials: "same-origin" }),
       ]);
       if (meRes.status === 401) {
-        setState({ loading: false, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
+        setState({ loading: false, email: null, username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
         return;
       }
       const me = await meRes.json();
@@ -107,6 +111,7 @@ export default function AccountPage() {
           loading: false,
           email: me.email,
           username: me.username || "",
+          avatarId: normalizeUserAvatarId(me.avatarId),
           orders: me.orders,
           balance: Number(bal.balance || 0),
           txs: bal.transactions || [],
@@ -117,7 +122,7 @@ export default function AccountPage() {
         });
       }
     } catch (e) {
-      setState({ loading: false, email: null, username: "", orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
+      setState({ loading: false, email: null, username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
     }
   }
 
@@ -413,6 +418,28 @@ export default function AccountPage() {
     );
   }
 
+  async function saveAvatar(avatarId) {
+    if (avatarSaving) return;
+    setAvatarSaving(avatarId);
+    setAvatarError("");
+    try {
+      const res = await fetch("/api/auth/me", {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ avatarId }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.message || "头像保存失败");
+      setState((s) => ({ ...s, avatarId: normalizeUserAvatarId(data.avatarId || avatarId) }));
+      setAvatarModal(false);
+    } catch (e) {
+      setAvatarError(e.message || "头像保存失败，请稍后再试");
+    } finally {
+      setAvatarSaving("");
+    }
+  }
+
   const activeCoupon = state.coupons.find((c) => c.status === "active");
 
   return (
@@ -428,7 +455,10 @@ export default function AccountPage() {
 
       <main className="account-main">
         <section className="account-info-card">
-          <div className="account-avatar">{(state.username || state.email || "?")[0].toUpperCase()}</div>
+          <button type="button" className="account-avatar" onClick={() => setAvatarModal(true)} aria-label="更换头像">
+            <img src={userAvatarPath(state.avatarId)} alt="" className="account-avatar-img" />
+            <span className="account-avatar-edit"><Edit3 size={10} /></span>
+          </button>
           <div className="account-info-text">
             {editingName ? (
               <div className="account-name-edit">
@@ -481,8 +511,8 @@ export default function AccountPage() {
           {moneyStatus && <div className={`account-tool-alert ${moneyStatus.type}`}>{moneyStatus.message}</div>}
           <div className="account-tool-buttons">
             <button type="button" onClick={() => setMoneyModal("transfer")}><Send size={13} />转账</button>
-            <button type="button" onClick={() => setDownlineModal(true)}><Users size={13} />下级</button>
             <button type="button" onClick={() => setMoneyModal("withdraw")}><CreditCard size={13} />提现</button>
+            <button type="button" onClick={() => setDownlineModal(true)}><Users size={13} />下级</button>
             <button type="button" onClick={() => setInviteModal(true)}><Share2 size={13} />邀请</button>
           </div>
 
@@ -704,6 +734,44 @@ export default function AccountPage() {
                   余额仅用于网站会员服务下单时结算,如需充值请联系客服
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {avatarModal && (
+        <div className="account-modal-mask" onClick={() => !avatarSaving && setAvatarModal(false)}>
+          <div className="account-money-modal account-avatar-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="account-modal-head">
+              <div>
+                <div className="account-modal-id">更换头像</div>
+                <div className="account-modal-status status-received">选择一个卡通头像</div>
+              </div>
+              <button type="button" className="account-modal-close" onClick={() => setAvatarModal(false)} disabled={!!avatarSaving}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="account-avatar-modal-body">
+              <div className="account-avatar-grid">
+                {USER_AVATARS.map((avatar) => {
+                  const active = normalizeUserAvatarId(state.avatarId) === avatar.id;
+                  return (
+                    <button
+                      key={avatar.id}
+                      type="button"
+                      className={`account-avatar-choice${active ? " active" : ""}`}
+                      onClick={() => (active ? setAvatarModal(false) : saveAvatar(avatar.id))}
+                      disabled={!!avatarSaving}
+                    >
+                      <img src={userAvatarPath(avatar.id)} alt="" />
+                      <span>{avatar.label}</span>
+                      {active && <em><Check size={11} />当前</em>}
+                      {avatarSaving === avatar.id && <em><LoaderCircle size={11} className="spin-icon" />保存中</em>}
+                    </button>
+                  );
+                })}
+              </div>
+              {avatarError && <div className="account-tool-alert error">{avatarError}</div>}
             </div>
           </div>
         </div>

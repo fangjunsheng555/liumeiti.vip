@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-label="松石绿卡通头像">
+  <rect width="160" height="160" rx="42" fill="#f0fdfa"/>
+  <circle cx="80" cy="81" r="51" fill="#ecfeff"/>
+  <path d="M39 70c6-29 26-45 50-42 23 3 37 20 37 45-13-9-29-14-47-14-16 0-29 4-40 11Z" fill="#14b8a6"/>
+  <path d="M53 58c10 8 27 8 49-1" stroke="#0f766e" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <circle cx="60" cy="84" r="7" fill="#0f172a"/>
+  <circle cx="100" cy="84" r="7" fill="#0f172a"/>
+  <path d="M66 105c8 8 20 8 28 0" fill="none" stroke="#0f172a" stroke-width="7" stroke-linecap="round"/>
+  <path d="M43 96c4 3 8 3 12 0M105 96c4 3 8 3 12 0" stroke="#5eead4" stroke-width="6" stroke-linecap="round"/>
+</svg>

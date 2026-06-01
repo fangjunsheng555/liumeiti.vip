@@ -2,6 +2,7 @@ import {
   validEmail, verifyPassword, getUser, setUser,
   signSession, setCookieValue, clearCookieValue,
   registerUserEmail, generateRandomUsername, ensureUserReferralProfile,
+  generateRandomUserAvatarId, validUserAvatarId,
   checkRateLimit, rateLimitResponse,
 } from "../../_utils.js";
 
@@ -35,6 +36,7 @@ export async function POST(request) {
   let needSave = false;
   const hadInviteCode = Boolean(user.inviteCode);
   if (!user.username) { user.username = generateRandomUsername(); needSave = true; }
+  if (!validUserAvatarId(user.avatarId)) { user.avatarId = generateRandomUserAvatarId(); needSave = true; }
   if (typeof user.balance !== "number") { user.balance = 0; needSave = true; }
   await ensureUserReferralProfile(email, user);
   if (needSave || !hadInviteCode) await setUser(email, user);

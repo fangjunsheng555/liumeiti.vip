@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-label="晴空绿卡通头像">
+  <rect width="160" height="160" rx="42" fill="#e0f2fe"/>
+  <circle cx="80" cy="80" r="51" fill="#fff7ed"/>
+  <path d="M42 64c9-26 32-40 57-30 15 6 24 18 26 35-15-7-29-10-44-10-14 0-27 2-39 5Z" fill="#22c55e"/>
+  <path d="M50 66c11-18 28-26 49-23" fill="none" stroke="#16a34a" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="61" cy="83" r="7" fill="#0f172a"/>
+  <circle cx="101" cy="83" r="7" fill="#0f172a"/>
+  <path d="M68 105c6 5 18 5 24 0" fill="none" stroke="#0f172a" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="49" cy="97" r="8" fill="#fed7aa"/>
+  <circle cx="111" cy="97" r="8" fill="#fed7aa"/>
+</svg>

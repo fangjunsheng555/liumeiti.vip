@@ -1,6 +1,7 @@
 import {
   getCookieFromRequest, verifySession, getAllOrders,
   getUser, setUser, validUsername, generateRandomUsername, clean,
+  generateRandomUserAvatarId, validUserAvatarId,
   publicCoupons, publicReferral, ensureUserReferralProfile, listAllUserEmails,
 } from "../../_utils.js";
 
@@ -110,9 +111,15 @@ export async function GET(request) {
   const user = await getUser(sessionEmail);
   // Backfill username for legacy accounts on the fly
   let username = user?.username;
+  let avatarId = user?.avatarId;
   if (user && !username) {
     username = generateRandomUsername();
     user.username = username;
+    await setUser(sessionEmail, user);
+  }
+  if (user && !validUserAvatarId(avatarId)) {
+    avatarId = generateRandomUserAvatarId();
+    user.avatarId = avatarId;
     await setUser(sessionEmail, user);
   }
   const profile = user ? await ensureUserReferralProfile(sessionEmail, user) : null;
@@ -132,6 +139,7 @@ export async function GET(request) {
     ok: true,
     email: sessionEmail,
     username: profile?.username || username || "",
+    avatarId: validUserAvatarId(profile?.avatarId) ? profile.avatarId : avatarId,
     balance: Number(profile?.balance || 0),
     coupons: publicCoupons(profile),
     referral: publicReferral(profile),
@@ -141,7 +149,7 @@ export async function GET(request) {
   });
 }
 
-// PATCH /api/auth/me  body: { username }
+// PATCH /api/auth/me  body: { username?, avatarId? }
 export async function PATCH(request) {
   const token = getCookieFromRequest(request, "lm_user");
   const session = verifySession(token);
@@ -150,18 +158,32 @@ export async function PATCH(request) {
   }
   let body = {};
   try { body = await request.json(); } catch (e) {}
+  const hasUsername = Object.prototype.hasOwnProperty.call(body, "username");
+  const hasAvatar = Object.prototype.hasOwnProperty.call(body, "avatarId");
+  if (!hasUsername && !hasAvatar) {
+    return Response.json({ ok: false, error: "empty_profile_update" }, { status: 400 });
+  }
   const username = clean(body.username, 40).trim();
-  if (!validUsername(username)) {
+  if (hasUsername && !validUsername(username)) {
     return Response.json({
       ok: false,
       error: "invalid_username",
       message: "用户名 2-20 位,支持中文/字母/数字/下划线",
     }, { status: 400 });
   }
+  const avatarId = clean(body.avatarId, 40).trim();
+  if (hasAvatar && !validUserAvatarId(avatarId)) {
+    return Response.json({
+      ok: false,
+      error: "invalid_avatar",
+      message: "请选择可用头像",
+    }, { status: 400 });
+  }
   const user = await getUser(session.email);
   if (!user) return Response.json({ ok: false, error: "user_not_found" }, { status: 404 });
-  user.username = username;
+  if (hasUsername) user.username = username;
+  if (hasAvatar) user.avatarId = avatarId;
   const saved = await setUser(session.email, user);
   if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
-  return Response.json({ ok: true, username });
+  return Response.json({ ok: true, username: user.username || "", avatarId: user.avatarId || "" });
 }

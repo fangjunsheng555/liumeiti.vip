@@ -1,6 +1,7 @@
 // Shared backend utilities: redis, password hashing, session signing
 
 import { createHmac, randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto";
+import { USER_AVATAR_IDS, isUserAvatarId, normalizeUserAvatarId } from "../lib/avatars.js";
 
 export const ORDERS_KEY = "liumeiti:orders";
 export const USERS_KEY = "liumeiti:users";
@@ -311,6 +312,14 @@ export function generateRandomUsername() {
   const b = nouns[Math.floor(Math.random() * nouns.length)];
   const n = Math.floor(1000 + Math.random() * 9000);
   return `${a}${b}${n}`;
+}
+
+export function generateRandomUserAvatarId() {
+  return USER_AVATAR_IDS[randomInt(0, USER_AVATAR_IDS.length)] || normalizeUserAvatarId("");
+}
+
+export function validUserAvatarId(value) {
+  return isUserAvatarId(value);
 }
 
 export function validUsername(value) {
@@ -1123,6 +1132,7 @@ export async function ensureOAuthUser({ email, provider, providerId, username, i
     const next = {
       ...existingWithReferral,
       username: existingWithReferral.username || clean(username, 40) || generateRandomUsername(),
+      avatarId: validUserAvatarId(existingWithReferral.avatarId) ? existingWithReferral.avatarId : generateRandomUserAvatarId(),
       balance: typeof existingWithReferral.balance === "number" ? existingWithReferral.balance : 0,
       social,
       updatedAt: now.toISOString(),
@@ -1134,6 +1144,7 @@ export async function ensureOAuthUser({ email, provider, providerId, username, i
   const user = await prepareNewUserReferralProfile(lower, attachRegisterCoupon({
     email: lower,
     username: clean(username, 40) || generateRandomUsername(),
+    avatarId: generateRandomUserAvatarId(),
     balance: 0,
     social: provider && providerId ? { [provider]: providerId } : {},
     createdAt: now.toISOString(),
