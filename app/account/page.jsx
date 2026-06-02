@@ -262,8 +262,8 @@ export default function AccountPage() {
         <div className="account-invite-poster-icon account-casetify-poster-icon"><Gift size={20} /></div>
         <div>
           <span>Maoyang X CASETiFY · 至 2026.12.31</span>
-          <strong>消费充值送手机壳</strong>
-          <p>注册用户满 ¥999，或单次充值 ¥1666，可联系客服领取</p>
+          <strong>消费充值送 CASETiFY 手机壳</strong>
+          <p>注册用户消费满 ¥999，或单次充值 ¥1666，可联系客服领取</p>
         </div>
       </button>
     );
@@ -287,7 +287,7 @@ export default function AccountPage() {
             <div className="account-invite-hero account-casetify-hero">
               <span><Gift size={15} />注册用户专享奖励</span>
               <strong>消费充值送 CASETiFY 手机壳</strong>
-              <p>注册用户累计消费满 ¥999，或单次充值 ¥1666，可联系在线客服领取 CASETiFY 官网在售手机壳 1 个，支持定制款</p>
+              <p>注册用户累计消费满 ¥999，或单次充值 ¥1666，可联系在线客服领取 CASETiFY 官网在售任意手机壳 1 个，支持定制款</p>
             </div>
             <div className="account-casetify-intro">
               <strong>关于 CASETiFY 手机壳</strong>
@@ -296,7 +296,7 @@ export default function AccountPage() {
             <div className="account-invite-rule-list account-casetify-rule-list">
               <div>
                 <b>领取条件</b>
-                <p>活动有效期至 2026 年 12 月 31 日，注册用户累计消费满 ¥999，或单次充值 ¥1666，即可申请领取</p>
+                <p>活动有效期至 2026 年 12 月 31 日，注册用户累计消费满 ¥999，或单次充值 ¥1666，即可联系客服免费领取</p>
               </div>
               <div>
                 <b>可选款式</b>
@@ -304,16 +304,16 @@ export default function AccountPage() {
               </div>
               <div>
                 <b>收货范围</b>
-                <p>本活动暂不支持中国大陆地址收货，请确认可提供支持配送的收货地址</p>
+                <p>本活动暂不支持中国大陆地址收货，请确认可提供支持配送的收货地址，活动奖品不支持折现</p>
               </div>
               <div>
                 <b>领取说明</b>
-                <p>领取手机壳后，对应充值金额仅可用于本站消费，不支持退款，确认领取即视为认可活动说明</p>
+                <p>领取奖品后，对应充值金额仅可用于本站消费，不支持退款与提现，确认领取即视为认可活动说明</p>
               </div>
             </div>
             <div className="account-casetify-actions">
               <a href="https://www.casetify.com/" target="_blank" rel="noreferrer">
-                <ExternalLink size={14} />点击查看有什么款式
+                <ExternalLink size={14} />查看有什么款式
               </a>
               <Link href="/service-center#contact" onClick={() => setCasetifyModal(false)}>
                 <Send size={14} />联系在线客服
