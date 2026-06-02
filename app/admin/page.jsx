@@ -1042,6 +1042,8 @@ export default function AdminPage() {
   const [userActionBusy, setUserActionBusy] = useState(false);
   const [userInfo, setUserInfo] = useState(null); // {user, transactions}
   const [userModalOpen, setUserModalOpen] = useState(false);
+  const [userModalTarget, setUserModalTarget] = useState("");
+  const loadUserRequestRef = useRef(0);
   const [userLoading, setUserLoading] = useState(false);
   const [userError, setUserError] = useState("");
   const [balForm, setBalForm] = useState({ amount: "", reason: "" });
@@ -1098,6 +1100,10 @@ export default function AdminPage() {
   const [sendCodeBusy, setSendCodeBusy] = useState(false);
   const [sendCodeResult, setSendCodeResult] = useState(null);
   const [staffPane, setStaffPane] = useState({ staff: [], actions: [] });
+  const [selectedActionIds, setSelectedActionIds] = useState(new Set());
+  const [actionDeleteBusy, setActionDeleteBusy] = useState(false);
+  const [actionDeleteResult, setActionDeleteResult] = useState(null);
+  const [activeStaffAction, setActiveStaffAction] = useState(null);
   const [staffForm, setStaffForm] = useState({ username: "", password: "", role: "operator", remark: "" });
   const [staffBusy, setStaffBusy] = useState("");
   const [staffResult, setStaffResult] = useState(null);
@@ -1120,10 +1126,11 @@ export default function AdminPage() {
 
   const isRootStaff = Boolean(currentStaff?.root || Number(currentStaff?.id || 0) === 1);
   const staffPermissions = currentStaff?.permissions || {};
-  const canReviewWithdrawals = staffPermissions.canReviewWithdrawals ?? true;
-  const canManageCodes = staffPermissions.canManageCodes ?? true;
-  const canSendMail = staffPermissions.canSendMail ?? true;
+  const canReviewWithdrawals = staffPermissions.canReviewWithdrawals ?? isRootStaff;
+  const canManageCodes = staffPermissions.canManageCodes ?? isRootStaff;
+  const canSendMail = staffPermissions.canSendMail ?? isRootStaff;
   const canAdjustBalance = staffPermissions.canAdjustBalance ?? isRootStaff;
+  const canManageUsers = staffPermissions.canManageUsers ?? isRootStaff;
 
   const triggerNewOrderNotice = useCallback((next, previous) => {
     const count = Math.max(1, Number(next.ordersTotal || 0) - Number(previous?.ordersTotal || 0));
@@ -1270,12 +1277,18 @@ export default function AdminPage() {
 
   const loadStaff = useCallback(async () => {
     try {
-      const res = await fetch("/api/admin/staff", { credentials: "same-origin" });
+      const [res, actionRes] = await Promise.all([
+        fetch("/api/admin/staff", { credentials: "same-origin" }),
+        fetch("/api/admin/actions", { credentials: "same-origin" }),
+      ]);
       if (res.status === 401) { setAuthed(false); return; }
       const data = await res.json();
+      const actionData = actionRes.ok ? await actionRes.json() : null;
       if (data.ok) {
         setCurrentStaff({ id: data.currentStaffId, root: data.currentStaffRoot });
-        setStaffPane({ staff: data.staff || [], actions: data.actions || [] });
+        const actions = actionData?.ok ? (actionData.actions || []) : (data.actions || []);
+        setStaffPane({ staff: data.staff || [], actions });
+        setSelectedActionIds((current) => new Set(Array.from(current).filter((id) => actions.some((item) => item.id === id))));
       }
     } catch (e) {}
   }, []);
@@ -1409,28 +1422,45 @@ export default function AdminPage() {
     }
   }
 
+  function closeUserModal() {
+    if (balBusy) return;
+    loadUserRequestRef.current += 1;
+    setUserModalOpen(false);
+    setUserModalTarget("");
+  }
+
   async function loadUser(email) {
     if (!email) return;
+    const nextEmail = email.trim();
+    const requestId = ++loadUserRequestRef.current;
+    setUserModalTarget(nextEmail);
+    setUserModalOpen(true);
+    setUserInfo((current) => current?.user?.email === nextEmail ? current : null);
     setUserLoading(true);
     setUserError("");
     setBalResult(null);
     try {
-      const res = await fetch(`/api/admin/users?email=${encodeURIComponent(email.trim())}`, {
+      const res = await fetch(`/api/admin/users?email=${encodeURIComponent(nextEmail)}`, {
         credentials: "same-origin",
       });
       const data = await res.json();
+      if (requestId !== loadUserRequestRef.current) return;
       if (data.ok) {
         setUserInfo(data);
         setUserModalOpen(true);
       } else {
         setUserInfo(null);
         setUserModalOpen(false);
+        setUserModalTarget("");
         setUserError(data.error === "user_not_found" ? "未找到该邮箱的注册用户" : (data.error || "查询失败"));
       }
     } catch (e) {
+      if (requestId !== loadUserRequestRef.current) return;
+      setUserModalOpen(false);
+      setUserModalTarget("");
       setUserError("网络错误");
     } finally {
-      setUserLoading(false);
+      if (requestId === loadUserRequestRef.current) setUserLoading(false);
     }
   }
 
@@ -1952,7 +1982,7 @@ export default function AdminPage() {
       });
       const data = await res.json();
       if (data.ok) {
-        setStaffPane({ staff: data.staff || [], actions: data.actions || [] });
+        await loadStaff();
         setStaffForm({ username: "", password: "", role: "operator", remark: "" });
         setStaffResult({ type: "success", message: `已新增工作人员 #${data.created.id}` });
       } else {
@@ -1976,7 +2006,7 @@ export default function AdminPage() {
       });
       const data = await res.json();
       if (data.ok) {
-        setStaffPane({ staff: data.staff || [], actions: data.actions || [] });
+        await loadStaff();
         setStaffResult({ type: "success", message: "工作人员已删除" });
       } else {
         setStaffResult({ type: "error", message: data.error || "删除失败" });
@@ -1985,6 +2015,40 @@ export default function AdminPage() {
       setStaffResult({ type: "error", message: "网络错误" });
     } finally {
       setStaffBusy("");
+    }
+  }
+
+  async function deleteSelectedActions() {
+    if (selectedActionIds.size === 0 || actionDeleteBusy) return;
+    if (typeof window !== "undefined" && !window.confirm(`确认删除 ${selectedActionIds.size} 条操作记录？`)) return;
+    setActionDeleteBusy(true);
+    setActionDeleteResult(null);
+    try {
+      const res = await fetch("/api/admin/actions", {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selectedActionIds) }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setStaffPane((current) => ({ ...current, actions: data.actions || [] }));
+        setActiveStaffAction((current) => {
+          if (!current) return null;
+          return {
+            ...current,
+            actions: (data.actions || []).filter((action) => Number(action.staffId || 1) === Number(current.staff?.id || 1)),
+          };
+        });
+        setSelectedActionIds(new Set());
+        setActionDeleteResult({ type: "success", message: `已删除 ${data.deletedCount || 0} 条操作记录` });
+      } else {
+        setActionDeleteResult({ type: "error", message: data.error || "删除失败" });
+      }
+    } catch (e) {
+      setActionDeleteResult({ type: "error", message: "网络错误" });
+    } finally {
+      setActionDeleteBusy(false);
     }
   }
 
@@ -2076,6 +2140,7 @@ export default function AdminPage() {
       return;
     }
     if (target === "users") {
+      if (!canManageUsers) return;
       setTab("users");
     }
   }
@@ -2350,6 +2415,11 @@ export default function AdminPage() {
   const visibleMailLogs = mailSearchText
     ? mailLogs.filter((item) => String(item.to || "").toLowerCase().includes(mailSearchText))
     : mailLogs;
+  const staffActionCounts = new Map();
+  staffPane.actions.forEach((item) => {
+    const id = Number(item.staffId || 1);
+    staffActionCounts.set(id, (staffActionCounts.get(id) || 0) + 1);
+  });
 
   // ── Dashboard ──
   return (
@@ -2373,7 +2443,7 @@ export default function AdminPage() {
           <button type="button" className={`admin-tab-btn${tab === "abnormal" ? " active" : ""}`} onClick={() => setTab("abnormal")}>
             异常订单{Number(overview?.abnormalOrders || 0) > 0 && <em className="admin-tab-badge warn">{overview.abnormalOrders}</em>}
           </button>
-          <button type="button" className={`admin-tab-btn${tab === "users" ? " active" : ""}`} onClick={() => setTab("users")}>用户管理</button>
+          {canManageUsers && <button type="button" className={`admin-tab-btn${tab === "users" ? " active" : ""}`} onClick={() => setTab("users")}>用户管理</button>}
           {canReviewWithdrawals && <button type="button" className={`admin-tab-btn${tab === "withdrawals" ? " active" : ""}`} onClick={() => setTab("withdrawals")}>
             提现审核{Number(overview?.pendingWithdrawals || 0) > 0 && <em className="admin-tab-badge">{overview.pendingWithdrawals}</em>}
           </button>}
@@ -3053,7 +3123,17 @@ export default function AdminPage() {
                 <div key={item.id} className={`admin-staff-item${item.active === false ? " disabled" : ""}`}>
                   <span className="admin-staff-no">#{item.id}</span>
                   <span>
-                    <strong>{item.username}</strong>
+                    <button
+                      type="button"
+                      className="admin-staff-account-btn"
+                      onClick={() => setActiveStaffAction({
+                        staff: item,
+                        actions: staffPane.actions.filter((action) => Number(action.staffId || 1) === Number(item.id)),
+                      })}
+                    >
+                      {item.username}
+                      <em>{staffActionCounts.get(Number(item.id)) || 0} 条记录</em>
+                    </button>
                     <small>{item.roleLabel || (item.root ? "主账号" : "运营")} · {item.root ? "环境变量主账号" : (item.remark || "无备注")} · {item.createdAtBeijing || ""}</small>
                   </span>
                   {!item.root && (
@@ -3065,17 +3145,81 @@ export default function AdminPage() {
               ))}
             </div>
             <div className="admin-action-log-panel">
-              <div className="admin-card-title"><ShieldCheck size={15} />后台操作记录</div>
+              <div className="admin-action-log-head">
+                <div className="admin-card-title"><ShieldCheck size={15} />后台操作记录</div>
+                <div className="admin-action-log-tools">
+                  <button
+                    type="button"
+                    className="admin-filter-btn"
+                    onClick={() => {
+                      const ids = staffPane.actions.map((item) => item.id).filter(Boolean);
+                      setSelectedActionIds((current) => (current.size === ids.length ? new Set() : new Set(ids)));
+                    }}
+                    disabled={staffPane.actions.length === 0 || actionDeleteBusy}
+                  >
+                    {selectedActionIds.size === staffPane.actions.length && staffPane.actions.length > 0 ? "取消全选" : "全选"}
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-filter-btn danger"
+                    onClick={deleteSelectedActions}
+                    disabled={selectedActionIds.size === 0 || actionDeleteBusy}
+                  >
+                    {actionDeleteBusy ? "删除中" : `删除 ${selectedActionIds.size}`}
+                  </button>
+                </div>
+              </div>
+              {actionDeleteResult && <div className={`admin-alert ${actionDeleteResult.type}`}>{actionDeleteResult.message}</div>}
+              <div className="admin-action-staff-summary" aria-label="工作人员操作记录">
+                {staffPane.staff.map((staff) => {
+                  const actions = staffPane.actions.filter((action) => Number(action.staffId || 1) === Number(staff.id));
+                  return (
+                    <button
+                      type="button"
+                      key={staff.id}
+                      className="admin-action-staff-card"
+                      onClick={() => setActiveStaffAction({ staff, actions })}
+                    >
+                      <strong>{staff.username}</strong>
+                      <span>{actions.length} 条记录</span>
+                    </button>
+                  );
+                })}
+              </div>
               <div className="admin-action-log-list">
                 {staffPane.actions.length === 0 ? (
                   <div className="admin-action-log-item"><span>暂无操作记录</span></div>
                 ) : staffPane.actions.map((item) => (
-                  <div key={item.id} className="admin-action-log-item">
-                    <div>
-                      <strong>{item.action}</strong>
-                      <small>{item.target || "system"} · {item.createdAtBeijing}</small>
+                  <div key={item.id} className={`admin-action-log-item${selectedActionIds.has(item.id) ? " selected" : ""}`}>
+                    <label className="admin-action-log-check" aria-label="选择操作记录">
+                      <input
+                        type="checkbox"
+                        checked={selectedActionIds.has(item.id)}
+                        onChange={(e) => {
+                          setSelectedActionIds((current) => {
+                            const next = new Set(current);
+                            if (e.target.checked) next.add(item.id);
+                            else next.delete(item.id);
+                            return next;
+                          });
+                        }}
+                      />
+                    </label>
+                    <div className="admin-action-log-main">
+                      <strong>{item.actionLabel || item.action}</strong>
+                      <small>{item.detailText || item.detail || "已记录一次后台操作"}</small>
+                      <em>{item.target || "system"} · {item.createdAtBeijing}</em>
                     </div>
-                    <span>#{item.staffId} {item.staffUsername}</span>
+                    <button
+                      type="button"
+                      className="admin-action-staff-btn"
+                      onClick={() => setActiveStaffAction({
+                        staff: staffPane.staff.find((staff) => Number(staff.id) === Number(item.staffId)) || { id: item.staffId, username: item.staffUsername },
+                        actions: staffPane.actions.filter((action) => Number(action.staffId || 1) === Number(item.staffId || 1)),
+                      })}
+                    >
+                      #{item.staffId} {item.staffUsername}
+                    </button>
                   </div>
                 ))}
               </div>
@@ -3352,6 +3496,38 @@ export default function AdminPage() {
         </>
         )}
       </main>
+
+      {activeStaffAction && (
+        <div className="admin-modal-mask" onClick={() => setActiveStaffAction(null)}>
+          <div className="admin-modal admin-compact-modal admin-action-detail-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="admin-modal-head">
+              <div>
+                <div className="admin-modal-id">{activeStaffAction.staff?.username || "工作人员"}</div>
+                <div className="admin-modal-status status-received">{activeStaffAction.actions.length} 条操作记录</div>
+              </div>
+              <button type="button" className="admin-modal-close" onClick={() => setActiveStaffAction(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="admin-modal-body">
+              <div className="admin-action-detail-list">
+                {activeStaffAction.actions.length === 0 ? (
+                  <div className="admin-action-detail-empty">暂无操作记录</div>
+                ) : activeStaffAction.actions.map((item) => (
+                  <div key={item.id} className="admin-action-detail-item">
+                    <div>
+                      <strong>{item.actionLabel || item.action}</strong>
+                      <small>{item.createdAtBeijing}</small>
+                    </div>
+                    <p>{item.detailText || item.detail || "已记录一次后台操作"}</p>
+                    <span>{item.target || "system"}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Edit modal */}
       {activeOrder && editForm && (
@@ -3675,17 +3851,24 @@ export default function AdminPage() {
         </div>
       )}
 
-      {userModalOpen && userInfo && (
-        <div className="admin-modal-mask" onClick={() => !balBusy && setUserModalOpen(false)}>
+      {userModalOpen && (userInfo || userLoading) && (
+        <div className="admin-modal-mask" onClick={closeUserModal}>
           <div className="admin-modal admin-compact-modal" onClick={(e) => e.stopPropagation()}>
             <div className="admin-modal-head">
               <div>
-                <div className="admin-modal-id">{userInfo.user.username || "用户详情"}</div>
-                <div className="admin-modal-status status-received">余额 ¥{userInfo.user.balance.toFixed(2)}</div>
+                <div className="admin-modal-id">{userInfo?.user?.username || userModalTarget || "用户详情"}</div>
+                <div className="admin-modal-status status-received">{userInfo ? `余额 ¥${userInfo.user.balance.toFixed(2)}` : "加载中"}</div>
               </div>
-              <button type="button" className="admin-modal-close" onClick={() => setUserModalOpen(false)} disabled={balBusy}><X size={16} /></button>
+              <button type="button" className="admin-modal-close" onClick={closeUserModal} disabled={balBusy}><X size={16} /></button>
             </div>
             <div className="admin-modal-body">
+              {!userInfo ? (
+                <div className="admin-user-modal-loading">
+                  <LoaderCircle size={16} className="spin-icon" />
+                  正在载入用户余额与明细
+                </div>
+              ) : (
+              <>
               <div className="admin-user-card">
                 <div className="admin-user-head">
                   <span className="admin-user-email">{userInfo.user.email}</span>
@@ -3720,6 +3903,8 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
+              </>
+              )}
             </div>
           </div>
         </div>

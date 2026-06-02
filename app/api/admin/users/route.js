@@ -12,7 +12,12 @@ function adminSession(request) {
 
 // GET /api/admin/users?email=xxx@xxx.com — fetch a user with balance + transactions
 export async function GET(request) {
-  if (!adminSession(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const session = adminSession(request);
+  if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const permissions = adminPermissionProfile(session);
+  if (!permissions.canManageUsers && !permissions.canAdjustBalance) {
+    return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  }
   const url = new URL(request.url);
   const email = String(url.searchParams.get("email") || "").trim().toLowerCase();
   if (!validEmail(email)) {

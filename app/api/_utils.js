@@ -4,6 +4,9 @@ import { createHmac, randomBytes, randomInt, scryptSync, timingSafeEqual } from 
 import { USER_AVATAR_IDS, isUserAvatarId, normalizeUserAvatarId } from "../lib/avatars.js";
 
 export const ORDERS_KEY = "liumeiti:orders";
+export const ORDER_INDEX_KEY = ORDERS_KEY + ":index";
+export const ORDER_RECORD_PREFIX = ORDERS_KEY + ":record:";
+export const ORDER_EMAIL_INDEX_PREFIX = ORDERS_KEY + ":email:";
 export const USERS_KEY = "liumeiti:users";
 
 export function clean(value, limit = 500) {
@@ -59,48 +62,188 @@ export async function redisPipeline(commands) {
   } catch (e) { return null; }
 }
 
-// Read all orders (max 200, filtering tombstoned/deleted entries)
+function normalizeOrderIdForStorage(value) {
+  return clean(value, 80).replace(/\s+/g, "").toUpperCase();
+}
+
+function normalizeEmailForStorage(value) {
+  return clean(value, 200).toLowerCase().trim();
+}
+
+function orderRecordKey(orderId) {
+  const id = normalizeOrderIdForStorage(orderId);
+  return id ? ORDER_RECORD_PREFIX + id : "";
+}
+
+function orderEmailIndexKey(email) {
+  const lower = normalizeEmailForStorage(email);
+  return lower ? ORDER_EMAIL_INDEX_PREFIX + lower : "";
+}
+
+function parseOrderJson(value) {
+  if (!value) return null;
+  if (typeof value === "object") return value;
+  try { return JSON.parse(value); } catch (e) { return null; }
+}
+
+function pipelineResults(value) {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.result)) return value.result;
+  return [];
+}
+
+async function getOrderIdsFromIndex(key, start = "0", stop = "-1") {
+  try {
+    const rows = await redisCmd(["LRANGE", key, String(start), String(stop)]);
+    if (!Array.isArray(rows)) return [];
+    const seen = new Set();
+    return rows
+      .map(normalizeOrderIdForStorage)
+      .filter((id) => id && !seen.has(id) && seen.add(id));
+  } catch (e) { return []; }
+}
+
+async function getOrdersByIds(orderIds) {
+  const ids = (Array.isArray(orderIds) ? orderIds : [])
+    .map(normalizeOrderIdForStorage)
+    .filter(Boolean);
+  if (ids.length === 0) return [];
+  const response = await redisPipeline(ids.map((id) => ["GET", orderRecordKey(id)]));
+  const rows = pipelineResults(response);
+  return rows
+    .map((entry, index) => {
+      const raw = entry && typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, "result")
+        ? entry.result
+        : entry;
+      const order = parseOrderJson(raw);
+      return order ? { orderId: ids[index], order } : null;
+    })
+    .filter(Boolean);
+}
+
+async function getLegacyOrderEntries() {
+  const r = redisConfig();
+  if (!r) return [];
+  try {
+    const rows = await redisCmd(["LRANGE", ORDERS_KEY, "0", "-1"]);
+    if (!Array.isArray(rows)) return [];
+    return rows.map((raw, index) => ({ raw, index, order: parseOrderJson(raw) }));
+  } catch (e) { return []; }
+}
+
+export async function saveOrderRecord(order) {
+  const r = redisConfig();
+  if (!r || !order?.orderId) return false;
+  const orderId = normalizeOrderIdForStorage(order.orderId);
+  const commands = [
+    ["SET", orderRecordKey(orderId), JSON.stringify(order)],
+    ["LPUSH", ORDER_INDEX_KEY, orderId],
+  ];
+  const buyerEmailKey = orderEmailIndexKey(order.email);
+  const userEmailKey = orderEmailIndexKey(order.userEmail);
+  if (buyerEmailKey) commands.push(["LPUSH", buyerEmailKey, orderId]);
+  if (userEmailKey && userEmailKey !== buyerEmailKey) commands.push(["LPUSH", userEmailKey, orderId]);
+  try {
+    const result = await redisPipeline(commands);
+    const rows = pipelineResults(result);
+    return rows.length === commands.length && rows.every((item) => !item?.error);
+  } catch (e) { return false; }
+}
+
+export async function getOrderById(orderId) {
+  const id = normalizeOrderIdForStorage(orderId);
+  if (!id) return null;
+  const raw = await redisCmd(["GET", orderRecordKey(id)]);
+  const stored = parseOrderJson(raw);
+  if (stored) return stored.deleted ? null : stored;
+  const legacy = await getLegacyOrderEntries();
+  const found = legacy.find((entry) => normalizeOrderIdForStorage(entry.order?.orderId) === id);
+  return found?.order && !found.order.deleted ? found.order : null;
+}
+
+export async function getOrdersByEmail(email, limit = 50) {
+  const lower = normalizeEmailForStorage(email);
+  if (!validEmail(lower)) return [];
+  const ids = await getOrderIdsFromIndex(orderEmailIndexKey(lower), "0", String(Math.max(0, Number(limit || 50) - 1)));
+  const indexed = (await getOrdersByIds(ids))
+    .map((entry) => entry.order)
+    .filter((order) =>
+      order && !order.deleted &&
+      ((order.email || "").toLowerCase() === lower || (order.userEmail || "").toLowerCase() === lower)
+    );
+  const legacy = (await getAllOrders())
+    .filter((order) => (order.email || "").toLowerCase() === lower || (order.userEmail || "").toLowerCase() === lower)
+    .slice(0, Number(limit || 50));
+  const seen = new Set();
+  return [...indexed, ...legacy]
+    .filter((order) => {
+      const id = normalizeOrderIdForStorage(order?.orderId);
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
+    .slice(0, Number(limit || 50));
+}
+
+// Read all stored orders, filtering tombstoned/deleted entries. New orders use
+// permanent record keys; the legacy capped JSON list is still merged for old data.
 export async function getAllOrders() {
-  const r = redisConfig();
-  if (!r) return [];
-  try {
-    const res = await fetch(r.url + "/lrange/" + encodeURIComponent(ORDERS_KEY) + "/0/199", {
-      headers: { Authorization: "Bearer " + r.token },
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) return [];
-    return Array.isArray(data.result)
-      ? data.result
-          .map((s) => { try { return JSON.parse(s); } catch (e) { return null; } })
-          .filter((o) => o && !o.deleted)
-      : [];
-  } catch (e) { return []; }
+  if (!redisConfig()) return [];
+  const ids = await getOrderIdsFromIndex(ORDER_INDEX_KEY, "0", "-1");
+  const indexed = await getOrdersByIds(ids);
+  const legacy = await getLegacyOrderEntries();
+  const seen = new Set();
+  const merged = [];
+  for (const entry of [...indexed.map((item) => ({ order: item.order })), ...legacy]) {
+    const order = entry.order;
+    const id = normalizeOrderIdForStorage(order?.orderId);
+    if (!order || !id || order.deleted || seen.has(id)) continue;
+    seen.add(id);
+    merged.push(order);
+  }
+  return merged.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
 }
 
-// Read raw entries with their original index (used for delete-by-index that
-// still wants to skip already-deleted tombstones).
+// Read raw entries with update handles. New records update by orderId, while
+// old legacy entries can still be updated by their original list index.
 export async function getAllOrdersWithIndex() {
-  const r = redisConfig();
-  if (!r) return [];
-  try {
-    const res = await fetch(r.url + "/lrange/" + encodeURIComponent(ORDERS_KEY) + "/0/199", {
-      headers: { Authorization: "Bearer " + r.token },
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) return [];
-    if (!Array.isArray(data.result)) return [];
-    return data.result.map((s, i) => {
-      let parsed = null;
-      try { parsed = JSON.parse(s); } catch (e) {}
-      return { index: i, raw: s, order: parsed };
-    });
-  } catch (e) { return []; }
+  if (!redisConfig()) return [];
+  const ids = await getOrderIdsFromIndex(ORDER_INDEX_KEY, "0", "-1");
+  const indexed = (await getOrdersByIds(ids)).map((entry) => ({
+    index: { orderId: entry.orderId, legacyIndex: null },
+    raw: entry.orderId,
+    order: entry.order,
+  }));
+  const legacy = (await getLegacyOrderEntries()).map((entry) => ({
+    index: { orderId: entry.order?.orderId || "", legacyIndex: entry.index },
+    raw: entry.raw,
+    order: entry.order,
+  }));
+  const seen = new Set();
+  return [...indexed, ...legacy].filter((entry) => {
+    const id = normalizeOrderIdForStorage(entry.order?.orderId);
+    if (!entry.order || !id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 }
 
-// Update an order at a specific index (LSET)
+// Update an order at a specific handle. New records update by orderId; legacy
+// records also keep their old list slot in sync while being promoted to a record.
 export async function setOrderAt(index, order) {
   const r = redisConfig();
   if (!r) return false;
+  const handle = typeof index === "object" && index !== null ? index : { legacyIndex: index, orderId: order?.orderId };
+  const orderId = normalizeOrderIdForStorage(handle.orderId || order?.orderId);
+  if (orderId) {
+    const commands = [["SET", orderRecordKey(orderId), JSON.stringify(order)]];
+    if (Number.isInteger(handle.legacyIndex) && handle.legacyIndex >= 0) {
+      commands.push(["LSET", ORDERS_KEY, String(handle.legacyIndex), JSON.stringify(order)]);
+    }
+    const result = await redisPipeline(commands);
+    const rows = pipelineResults(result);
+    return rows.length === commands.length && rows.every((item) => !item?.error);
+  }
   try {
     const res = await fetch(r.url + "/lset/" + encodeURIComponent(ORDERS_KEY) + "/" + index, {
       method: "POST",
@@ -113,7 +256,6 @@ export async function setOrderAt(index, order) {
 
 // Soft-delete: replace the entry at index with a tombstone {deleted:true,orderId}
 // getAllOrders filters these out so they vanish from queries.
-// LTRIM keeps the list capped at 200 newest, so tombstones eventually fall off.
 export async function softDeleteOrderAt(index, orderId, meta = {}) {
   const now = new Date();
   return setOrderAt(index, {
@@ -228,8 +370,8 @@ export function adminPermissionProfile(session) {
     role,
     root,
     canViewOrders: true,
-    canEditOrders: true,
-    canManageUsers: true,
+    canEditOrders: root || role === "operator" || role === "support",
+    canManageUsers: root,
     canAdjustBalance: root,
     canManageCodes: root || role === "operator",
     canReviewWithdrawals: root || role === "finance",
@@ -320,6 +462,39 @@ export function generateRandomUserAvatarId() {
 
 export function validUserAvatarId(value) {
   return isUserAvatarId(value);
+}
+
+export function generatePaymentAdjustment() {
+  const cents = randomInt(1, 50);
+  const sign = randomInt(0, 2) === 0 ? -1 : 1;
+  return roundMoney(sign * cents / 100);
+}
+
+function paymentQuoteSecret() {
+  return process.env.AUTH_SECRET || process.env.ADMIN_PASSWORD || "liumeiti-payment-quote-local";
+}
+
+export function signPaymentQuote(payload) {
+  const data = Buffer.from(JSON.stringify(payload || {})).toString("base64url");
+  const sig = createHmac("sha256", paymentQuoteSecret()).update(data).digest("base64url");
+  return `${data}.${sig}`;
+}
+
+export function verifyPaymentQuote(token) {
+  if (!token || typeof token !== "string") return null;
+  const [data, sig] = token.split(".");
+  if (!data || !sig) return null;
+  const expected = createHmac("sha256", paymentQuoteSecret()).update(data).digest("base64url");
+  try {
+    if (!timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  } catch (e) { return null; }
+  try {
+    const payload = JSON.parse(Buffer.from(data, "base64url").toString("utf-8"));
+    if (payload.exp && Date.now() > Number(payload.exp)) return null;
+    const adjustment = roundMoney(payload.paymentAdjustment);
+    if (Math.abs(adjustment) < 0.01 || Math.abs(adjustment) > 0.49) return null;
+    return { ...payload, paymentAdjustment: adjustment };
+  } catch (e) { return null; }
 }
 
 export function validUsername(value) {
@@ -1373,9 +1548,37 @@ export async function pushAdminActionLog({ action, actor, target, detail }) {
 }
 
 export async function getAdminActionLog() {
-  const rows = await redisCmd(["LRANGE", ADMIN_ACTION_LOG_KEY, "0", "199"]);
+  const rows = await redisCmd(["LRANGE", ADMIN_ACTION_LOG_KEY, "0", "499"]);
   if (!Array.isArray(rows)) return [];
   return rows.map((s) => { try { return JSON.parse(s); } catch (e) { return null; } }).filter(Boolean);
+}
+
+export async function deleteAdminActionLogEntries(ids, actor = null) {
+  const idSet = new Set((Array.isArray(ids) ? ids : [])
+    .map((id) => clean(id, 120))
+    .filter(Boolean));
+  if (idSet.size === 0) return { ok: false, error: "no_ids" };
+  const entries = await getAdminActionLog();
+  const removed = entries.filter((entry) => idSet.has(clean(entry.id, 120)));
+  const remaining = entries.filter((entry) => !idSet.has(clean(entry.id, 120)));
+  if (removed.length === 0) return { ok: false, error: "not_found" };
+  const commands = [
+    ["DEL", ADMIN_ACTION_LOG_KEY],
+    ...remaining.map((entry) => ["RPUSH", ADMIN_ACTION_LOG_KEY, JSON.stringify(entry)]),
+  ];
+  const saved = await redisPipeline(commands);
+  if (!saved) return { ok: false, error: "storage_failed" };
+  await pushAdminActionLog({
+    action: "action_log_delete",
+    actor,
+    target: "action-log:" + removed.length,
+    detail: { ids: Array.from(idSet), deletedCount: removed.length },
+  });
+  return {
+    ok: true,
+    deletedCount: removed.length,
+    notFound: Array.from(idSet).filter((id) => !removed.some((entry) => clean(entry.id, 120) === id)),
+  };
 }
 
 export async function pushAdminMailLog(entry) {

@@ -2,7 +2,7 @@ import {
   getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
   pushAdminActionLog, formatBeijingTime, clean, isRootAdminSession,
-  settleOrderReferralCommission, sendSimpleEmail,
+  settleOrderReferralCommission, sendSimpleEmail, adminPermissionProfile,
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
@@ -89,7 +89,9 @@ async function sendTelegramNotice(text) {
 // PATCH /api/admin/orders/:orderId
 // body: { status, staffNotes, items: [{index, account, password, staffAccount, staffPassword}] }
 export async function PATCH(request, { params }) {
-  if (!adminOk(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const session = adminSession(request);
+  if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!adminPermissionProfile(session).canEditOrders) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const actor = adminActorFromRequest(request);
 
   const { orderId } = await params;

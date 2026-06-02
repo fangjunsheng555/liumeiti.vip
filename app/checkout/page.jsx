@@ -143,12 +143,6 @@ function storedInviteCode() {
   }
 }
 
-function randomPaymentAdjustment() {
-  const cents = 1 + Math.floor(Math.random() * 49);
-  const sign = Math.random() < 0.5 ? -1 : 1;
-  return Math.round(sign * cents) / 100;
-}
-
 export default function CheckoutPage() {
   const router = useRouter();
   const { cart, cartPlans, hydrated, removeFromCart, replaceCart, clearCart, setCartPlan } = useCart();
@@ -156,6 +150,7 @@ export default function CheckoutPage() {
   const [form, setForm] = useState(blankCheckoutForm);
   const [paymentMethod, setPaymentMethod] = useState("alipay");
   const [paymentAdjustment, setPaymentAdjustment] = useState(0);
+  const [paymentQuoteToken, setPaymentQuoteToken] = useState("");
   const [status, setStatus] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [passwordVisible, setPasswordVisible] = useState(false);
@@ -524,7 +519,7 @@ export default function CheckoutPage() {
     return "";
   }
 
-  function goPay(event) {
+  async function goPay(event) {
     event.preventDefault();
     const error = validateForm();
     if (error) {
@@ -536,7 +531,29 @@ export default function CheckoutPage() {
       submitOrders();
       return;
     }
-    setPaymentAdjustment(paymentMethod === "alipay" && finalCny > 0 ? randomPaymentAdjustment() : 0);
+    setPaymentQuoteToken("");
+    setPaymentAdjustment(0);
+    if (paymentMethod === "alipay" && finalCny > 0) {
+      setSubmitting(true);
+      setStatus({ type: "info", message: "正在生成付款金额..." });
+      try {
+        const response = await fetch("/api/order-quote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paymentMethod: "alipay" }),
+        });
+        const quote = await response.json();
+        if (!quote.ok) throw new Error(quote.message || quote.error || "payment_quote_failed");
+        setPaymentAdjustment(Number(quote.paymentAdjustment || 0));
+        setPaymentQuoteToken(String(quote.quoteToken || ""));
+      } catch (quoteError) {
+        setStatus({ type: "error", message: quoteError.message || "付款金额生成失败，请稍后再试" });
+        setSubmitting(false);
+        return;
+      }
+      setSubmitting(false);
+    }
+    setStatus(null);
     setStep("pay");
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -573,7 +590,7 @@ export default function CheckoutPage() {
         contact: form.contact.trim(),
         remark: form.remark.trim(),
         paymentMethod,
-        paymentAdjustment: paymentMethod === "alipay" ? paymentAdjustment : 0,
+        paymentQuoteToken: paymentMethod === "alipay" ? paymentQuoteToken : "",
         redeemCode: serviceRedeemActive ? redeemMode.code : "",
         inviteCode: storedInviteCode(),
         items,
