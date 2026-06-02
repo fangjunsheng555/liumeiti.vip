@@ -159,7 +159,7 @@ export default function CheckoutPage() {
   const [authedUser, setAuthedUser] = useState(null); // {email, balance} | null
   const [authModal, setAuthModal] = useState(null); // null | "login" | "register" | "forgot" | "reset"
   const [authForm, setAuthForm] = useState({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
-  const [authCaptcha, setAuthCaptcha] = useState({ a: 0, b: 0 });
+  const [authCaptcha, setAuthCaptcha] = useState({ token: "", image: "", loading: false, error: "" });
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authNotice, setAuthNotice] = useState("");
@@ -216,10 +216,22 @@ export default function CheckoutPage() {
     return () => { document.body.style.overflow = ""; };
   }, [authModal]);
 
-  useEffect(() => {
-    if (authModal === "register") {
-      setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
+  async function refreshAuthCaptcha(clearAnswer = true) {
+    setAuthCaptcha((cur) => ({ ...cur, loading: true, error: "" }));
+    if (clearAnswer) setAuthForm((f) => ({ ...f, captchaAnswer: "" }));
+    try {
+      const res = await fetch("/api/auth/captcha", { credentials: "same-origin" });
+      const data = await res.json();
+      if (!res.ok || !data.ok || !data.token || !data.image) throw new Error(data.message || "验证码加载失败");
+      setAuthCaptcha({ token: data.token, image: data.image, loading: false, error: "" });
+    } catch {
+      setAuthCaptcha({ token: "", image: "", loading: false, error: "验证码加载失败，请点击刷新" });
     }
+  }
+
+  useEffect(() => {
+    if (authModal === "register") refreshAuthCaptcha(true);
+    else setAuthCaptcha({ token: "", image: "", loading: false, error: "" });
     if (authModal === null) {
       setAuthForm({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
       setAuthError("");
@@ -443,9 +455,8 @@ export default function CheckoutPage() {
         payload = {
           email: authForm.email.trim(),
           password: authForm.password,
-          captchaA: authCaptcha.a,
-          captchaB: authCaptcha.b,
-          captchaAnswer: Number(authForm.captchaAnswer),
+          captchaToken: authCaptcha.token,
+          captchaAnswer: authForm.captchaAnswer.trim(),
           inviteCode: storedInviteCode(),
         };
       } else if (authModal === "forgot") {
@@ -477,7 +488,7 @@ export default function CheckoutPage() {
         setAuthModal(null);
       } else {
         const msg = {
-          captcha_failed: "人机验证失败,请重新计算",
+          captcha_failed: "验证码错误，请重新输入",
           email_taken: "该邮箱已注册",
           invalid_email: "邮箱格式错误",
           password_length: "密码 6-64 位",
@@ -486,10 +497,8 @@ export default function CheckoutPage() {
           code_invalid_or_expired: "验证码错误或已过期",
           user_not_found: "该邮箱未注册",
         }[data.error] || data.error || "操作失败";
+        if (authModal === "register" && data.error === "captcha_failed") refreshAuthCaptcha(true);
         setAuthError(msg);
-        if (authModal === "register") {
-          setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
-        }
       }
     } catch (error) {
       setAuthError("网络错误");
@@ -1327,31 +1336,33 @@ export default function CheckoutPage() {
 
               {authModal === "register" && (
                 <label className="auth-field auth-captcha">
-                  <span>人机验证</span>
+                  <span>验证码</span>
                   <div className="auth-captcha-row">
-                    <em>{authCaptcha.a} + {authCaptcha.b} =</em>
-                    <input
-                      value={authForm.captchaAnswer}
-                      onChange={(e) => setAuthForm({ ...authForm, captchaAnswer: e.target.value })}
-                      placeholder="答案"
-                      inputMode="numeric"
-                      required
-                    />
-                    <button
-                      type="button"
-                      className="auth-captcha-refresh"
-                      onClick={() => setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) })}
-                      title="换一题"
-                      aria-label="换一题"
-                    ><RefreshCw size={14} /></button>
+                    <div className="auth-captcha-control">
+                      <ShieldCheck size={16} />
+                      <input
+                        value={authForm.captchaAnswer}
+                        onChange={(e) => setAuthForm({ ...authForm, captchaAnswer: e.target.value.replace(/\s+/g, "").slice(0, 4) })}
+                        placeholder="验证码"
+                        inputMode="numeric"
+                        autoComplete="off"
+                        maxLength={4}
+                        required
+                      />
+                    </div>
+                    <button type="button" className="auth-captcha-image" onClick={() => refreshAuthCaptcha(true)} disabled={authCaptcha.loading} aria-label="刷新验证码">
+                      {authCaptcha.image && !authCaptcha.loading ? <img src={authCaptcha.image} alt="验证码" /> : <LoaderCircle size={18} className="spin-icon" />}
+                      <span><RefreshCw size={12} /></span>
+                    </button>
                   </div>
+                  {authCaptcha.error && <em className="auth-captcha-error">{authCaptcha.error}</em>}
                 </label>
               )}
 
               {authNotice && <div className="auth-notice">{authNotice}</div>}
               {authError && <div className="auth-error">{authError}</div>}
 
-              <button type="submit" className="auth-submit" disabled={authBusy}>
+              <button type="submit" className="auth-submit" disabled={authBusy || (authModal === "register" && (authCaptcha.loading || !authCaptcha.token))}>
                 {authBusy ? (
                   <><LoaderCircle size={15} className="spin-icon" />处理中...</>
                 ) : authModal === "login" ? "登录"

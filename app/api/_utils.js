@@ -319,6 +319,46 @@ export function verifySession(token) {
   } catch (e) { return null; }
 }
 
+export function generateCaptchaCode(length = 4) {
+  const alphabet = "23456789";
+  let code = "";
+  for (let i = 0; i < length; i++) {
+    code += alphabet[randomInt(0, alphabet.length)];
+  }
+  return code;
+}
+
+function normalizeCaptchaCode(value) {
+  return String(value || "").replace(/\s+/g, "").toUpperCase().slice(0, 12);
+}
+
+function captchaDigest(nonce, code) {
+  return createHmac("sha256", authSecret())
+    .update(`register-captcha|${nonce}|${normalizeCaptchaCode(code)}`)
+    .digest("base64url");
+}
+
+export function signRegisterCaptcha(code, ttlMs = 5 * 60 * 1000) {
+  const nonce = randomBytes(12).toString("base64url");
+  return signSession({
+    type: "register-captcha",
+    nonce,
+    hash: captchaDigest(nonce, code),
+    exp: Date.now() + ttlMs,
+  });
+}
+
+export function verifyRegisterCaptcha(token, answer) {
+  const payload = verifySession(token);
+  if (!payload || payload.type !== "register-captcha" || !payload.nonce || !payload.hash) return false;
+  const expected = captchaDigest(payload.nonce, answer);
+  try {
+    return timingSafeEqual(Buffer.from(payload.hash), Buffer.from(expected));
+  } catch (e) {
+    return false;
+  }
+}
+
 // Cookie helpers
 export function getCookieFromRequest(request, name) {
   const cookieHeader = request.headers.get("cookie") || "";
