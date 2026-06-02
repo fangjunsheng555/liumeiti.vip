@@ -2,7 +2,10 @@ import {
   verifyAdminLogin, signSession, setCookieValue, clearCookieValue,
   checkRateLimit, rateLimitResponse, pushAdminActionLog,
   clientIpFromRequest, clientUserAgentFromRequest,
+  adminPermissionProfile,
 } from "../../_utils.js";
+
+const ADMIN_SESSION_SECONDS = 8 * 60 * 60;
 
 export async function POST(request) {
   let body = {};
@@ -22,22 +25,29 @@ export async function POST(request) {
     return Response.json({ ok: false, error: "invalid_credentials" }, { status: 401 });
   }
 
-  const token = signSession({
+  const sessionPayload = {
     role: "admin",
     staffId: login.staff.id,
     staffUsername: login.staff.username,
     staffRole: login.staff.role || (login.staff.root ? "owner" : "operator"),
     staffRoot: Boolean(login.staff.root),
-    exp: Date.now() + 12 * 60 * 60 * 1000,
-  });
+    exp: Date.now() + ADMIN_SESSION_SECONDS * 1000,
+  };
+  const token = signSession(sessionPayload);
+  const staff = {
+    ...login.staff,
+    role: sessionPayload.staffRole,
+    root: Boolean(login.staff.root),
+    permissions: adminPermissionProfile(sessionPayload),
+  };
   await pushAdminActionLog({
     action: "admin_login",
     actor: { staffId: login.staff.id, staffUsername: login.staff.username },
     target: "staff:" + login.staff.id,
     detail: { ip: clientIpFromRequest(request), userAgent: clientUserAgentFromRequest(request) },
   });
-  return Response.json({ ok: true, staff: login.staff }, {
-    headers: { "Set-Cookie": setCookieValue("lm_admin", token, 12 * 60 * 60) },
+  return Response.json({ ok: true, staff }, {
+    headers: { "Set-Cookie": setCookieValue("lm_admin", token, ADMIN_SESSION_SECONDS) },
   });
 }
 

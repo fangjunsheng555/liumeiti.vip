@@ -13,7 +13,7 @@ import {
 export async function POST(request, { params }) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  if (!adminPermissionProfile(session).canManageCodes) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  if (!adminPermissionProfile(session).canSendRedeemCodes) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const actor = adminActorFromSession(session);
 
   const { code } = await params;

@@ -1165,12 +1165,29 @@ export default function AdminPage() {
   const overviewRef = useRef(null);
 
   const isRootStaff = Boolean(currentStaff?.root || Number(currentStaff?.id || 0) === 1);
-  const staffPermissions = currentStaff?.permissions || {};
-  const canReviewWithdrawals = staffPermissions.canReviewWithdrawals ?? isRootStaff;
-  const canManageCodes = staffPermissions.canManageCodes ?? isRootStaff;
-  const canSendMail = staffPermissions.canSendMail ?? isRootStaff;
-  const canAdjustBalance = staffPermissions.canAdjustBalance ?? isRootStaff;
-  const canManageUsers = staffPermissions.canManageUsers ?? isRootStaff;
+  const staffPermissions = currentStaff?.permissions || null;
+  const permissionsReady = Boolean(staffPermissions) || isRootStaff;
+  const canReviewWithdrawals = permissionsReady ? Boolean(staffPermissions?.canReviewWithdrawals ?? isRootStaff) : false;
+  const canViewCodes = permissionsReady ? Boolean(staffPermissions?.canViewCodes ?? isRootStaff) : false;
+  const canManageCodes = permissionsReady ? Boolean(staffPermissions?.canManageCodes ?? isRootStaff) : false;
+  const canSendRedeemCodes = permissionsReady ? Boolean(staffPermissions?.canSendRedeemCodes ?? isRootStaff) : false;
+  const canSendMail = permissionsReady ? Boolean(staffPermissions?.canSendMail ?? isRootStaff) : false;
+  const canAdjustBalance = permissionsReady ? Boolean(staffPermissions?.canAdjustBalance ?? isRootStaff) : false;
+  const canViewBalanceLog = permissionsReady ? Boolean(staffPermissions?.canViewBalanceLog ?? isRootStaff) : false;
+  const canViewUsers = permissionsReady ? Boolean(staffPermissions?.canViewUsers ?? isRootStaff) : false;
+  const canBanUsers = permissionsReady ? Boolean(staffPermissions?.canBanUsers ?? isRootStaff) : false;
+  const canDeleteUsers = permissionsReady ? Boolean(staffPermissions?.canDeleteUsers ?? isRootStaff) : false;
+  const canDeleteRecords = permissionsReady ? Boolean(staffPermissions?.canDeleteRecords ?? isRootStaff) : false;
+
+  const applyCurrentStaff = useCallback((staff) => {
+    if (!staff) return;
+    setCurrentStaff((current) => ({
+      ...(current || {}),
+      ...staff,
+      role: staff.role || current?.role || (staff.root ? "owner" : "operator"),
+      permissions: staff.permissions || current?.permissions || null,
+    }));
+  }, []);
 
   const triggerNewOrderNotice = useCallback((next, previous) => {
     const count = Math.max(1, Number(next.ordersTotal || 0) - Number(previous?.ordersTotal || 0));
@@ -1218,7 +1235,7 @@ export default function AdminPage() {
       }
       const data = await res.json();
       if (data.ok) {
-        if (data.currentStaff) setCurrentStaff(data.currentStaff);
+        if (data.currentStaff) applyCurrentStaff(data.currentStaff);
         const previous = overviewRef.current;
         const nextOverview = data.overview || null;
         if (
@@ -1238,7 +1255,7 @@ export default function AdminPage() {
     } finally {
       if (!silent) setOverviewLoading(false);
     }
-  }, [triggerNewOrderNotice]);
+  }, [triggerNewOrderNotice, applyCurrentStaff]);
 
   const loadGlobalLog = useCallback(async (q, filter, source) => {
     setLogLoading(true);
@@ -1250,7 +1267,7 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/balance-log?" + params.toString(), { credentials: "same-origin" });
       const data = await res.json();
       if (data.ok) {
-        if (data.currentStaff) setCurrentStaff(data.currentStaff);
+        if (data.currentStaff) applyCurrentStaff(data.currentStaff);
         setGlobalLog({
           entries: data.entries || [],
           total: data.total || 0,
@@ -1263,7 +1280,7 @@ export default function AdminPage() {
     } catch (e) {} finally {
       setLogLoading(false);
     }
-  }, []);
+  }, [applyCurrentStaff]);
 
   const loadWithdrawals = useCallback(async () => {
     setWithdrawalLoading(true);
@@ -1272,13 +1289,13 @@ export default function AdminPage() {
       if (res.status === 401) { setAuthed(false); return; }
       const data = await res.json();
       if (data.ok) {
-        if (data.currentStaff) setCurrentStaff(data.currentStaff);
+        if (data.currentStaff) applyCurrentStaff(data.currentStaff);
         setWithdrawals(data.withdrawals || []);
       }
     } catch (e) {} finally {
       setWithdrawalLoading(false);
     }
-  }, []);
+  }, [applyCurrentStaff]);
 
   const loadCodes = useCallback(async () => {
     setCodesLoading(true);
@@ -1304,7 +1321,7 @@ export default function AdminPage() {
       if (res.status === 401) { setAuthed(false); return; }
       const data = await res.json();
       if (data.ok) {
-        if (data.currentStaff) setCurrentStaff(data.currentStaff);
+        if (data.currentStaff) applyCurrentStaff(data.currentStaff);
         const nextHistory = data.history || [];
         setRedeemHistory(nextHistory);
         const visibleCodes = new Set(nextHistory.map((item) => item.code));
@@ -1313,7 +1330,7 @@ export default function AdminPage() {
     } catch (e) {} finally {
       setRedeemHistoryLoading(false);
     }
-  }, []);
+  }, [applyCurrentStaff]);
 
   const loadStaff = useCallback(async () => {
     try {
@@ -1325,13 +1342,13 @@ export default function AdminPage() {
       const data = await res.json();
       const actionData = actionRes.ok ? await actionRes.json() : null;
       if (data.ok) {
-        setCurrentStaff({ id: data.currentStaffId, root: data.currentStaffRoot });
+        applyCurrentStaff(data.currentStaff || { id: data.currentStaffId, root: data.currentStaffRoot });
         const actions = actionData?.ok ? (actionData.actions || []) : (data.actions || []);
         setStaffPane({ staff: data.staff || [], actions });
         setSelectedActionIds((current) => new Set(Array.from(current).filter((id) => actions.some((item) => item.id === id))));
       }
     } catch (e) {}
-  }, []);
+  }, [applyCurrentStaff]);
 
   const loadMailLogs = useCallback(async () => {
     setMailLoading(true);
@@ -1340,13 +1357,13 @@ export default function AdminPage() {
       if (res.status === 401) { setAuthed(false); return; }
       const data = await res.json();
       if (data.ok) {
-        if (data.currentStaff) setCurrentStaff(data.currentStaff);
+        if (data.currentStaff) applyCurrentStaff(data.currentStaff);
         setMailLogs(data.logs || []);
       }
     } catch (e) {} finally {
       setMailLoading(false);
     }
-  }, []);
+  }, [applyCurrentStaff]);
 
   const loadAllUsers = useCallback(async (q) => {
     setUserListLoading(true);
@@ -1365,25 +1382,52 @@ export default function AdminPage() {
 
   // Load user list when entering users tab; load global log on balance tab
   useEffect(() => {
-    if (!authed) return;
-    if (tab === "users") loadAllUsers(userListQuery);
-    if (tab === "balance") loadGlobalLog(logQuery, logFilter, logSource);
-    if (tab === "withdrawals") loadWithdrawals();
-    if (tab === "codes") {
-      loadCodes();
-      loadRedeemHistory(redeemHistoryQuery);
+    if (!authed || !permissionsReady) return;
+    if (tab === "users") {
+      if (canViewUsers) loadAllUsers(userListQuery);
+      else setTab("orders");
     }
-    if (tab === "mail") loadMailLogs();
+    if (tab === "balance") {
+      if (canViewBalanceLog) loadGlobalLog(logQuery, logFilter, logSource);
+      else setTab("orders");
+    }
+    if (tab === "withdrawals") {
+      if (canReviewWithdrawals) loadWithdrawals();
+      else setTab("orders");
+    }
+    if (tab === "codes") {
+      if (canViewCodes) {
+        loadCodes();
+        if (canManageCodes) loadRedeemHistory(redeemHistoryQuery);
+      } else {
+        setTab("orders");
+      }
+    }
+    if (tab === "mail") {
+      if (canSendMail) loadMailLogs();
+      else setTab("orders");
+    }
     if (tab === "staff") {
       if (isRootStaff) loadStaff();
       else if (currentStaff) setTab("orders");
     }
-  }, [authed, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes, loadRedeemHistory, loadMailLogs, loadStaff, logFilter, logSource, isRootStaff, currentStaff?.id]);
+  }, [
+    authed, permissionsReady, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes,
+    loadRedeemHistory, loadMailLogs, loadStaff, logFilter, logSource, isRootStaff,
+    currentStaff?.id, canViewUsers, canViewBalanceLog, canReviewWithdrawals,
+    canViewCodes, canManageCodes, canSendMail,
+  ]);
 
   useEffect(() => {
     if (!authed) return;
     loadOverview();
   }, [authed, loadOverview]);
+
+  useEffect(() => {
+    if (permissionsReady && !canManageCodes && codeType === "history") {
+      setCodeType("service");
+    }
+  }, [permissionsReady, canManageCodes, codeType]);
 
   useEffect(() => {
     if (!authed) return;
@@ -1431,8 +1475,13 @@ export default function AdminPage() {
     setUserActionBusy(true);
     try {
       const { email, action } = confirmUserAction;
-      if (action === "delete" && !isRootStaff) {
+      if (action === "delete" && !canDeleteUsers) {
         setUserError("仅主账号可删除用户");
+        setConfirmUserAction(null);
+        return;
+      }
+      if ((action === "ban" || action === "unban") && !canBanUsers) {
+        setUserError("当前账号不可封禁或解禁用户");
         setConfirmUserAction(null);
         return;
       }
@@ -1513,6 +1562,10 @@ export default function AdminPage() {
 
   async function adjustBalance(sign) {
     if (!userInfo || balBusy) return;
+    if (!canAdjustBalance) {
+      setBalResult({ type: "error", message: "当前账号不可调整余额" });
+      return;
+    }
     const num = Number(balForm.amount);
     if (!Number.isFinite(num) || num <= 0) {
       setBalResult({ type: "error", message: "请输入正数金额" });
@@ -1611,7 +1664,7 @@ export default function AdminPage() {
   }
 
   async function deleteSelectedWithdrawals() {
-    if (!isRootStaff || withdrawalDeleteBusy || selectedWithdrawalIds.size === 0) return;
+    if (!canDeleteRecords || withdrawalDeleteBusy || selectedWithdrawalIds.size === 0) return;
     if (typeof window !== "undefined" && !window.confirm(`确认删除 ${selectedWithdrawalIds.size} 条提现审核记录？`)) return;
     setWithdrawalDeleteBusy(true);
     setWithdrawalDeleteResult(null);
@@ -1641,7 +1694,7 @@ export default function AdminPage() {
   }
 
   async function deleteSelectedBalanceLogs() {
-    if (!isRootStaff || logDeleteBusy || selectedLogIds.size === 0) return;
+    if (!canDeleteRecords || logDeleteBusy || selectedLogIds.size === 0) return;
     if (typeof window !== "undefined" && !window.confirm(`确认删除 ${selectedLogIds.size} 条余额变动记录？`)) return;
     setLogDeleteBusy(true);
     setLogDeleteResult(null);
@@ -1723,7 +1776,7 @@ export default function AdminPage() {
   }
 
   async function deleteSelectedMailLogs() {
-    if (!isRootStaff || mailDeleteBusy || selectedMailIds.size === 0) return;
+    if (!canDeleteRecords || mailDeleteBusy || selectedMailIds.size === 0) return;
     if (typeof window !== "undefined" && !window.confirm(`确认删除 ${selectedMailIds.size} 条发信记录？`)) return;
     setMailDeleteBusy(true);
     setMailResult(null);
@@ -1766,7 +1819,7 @@ export default function AdminPage() {
   }
 
   async function deleteSelectedRedeemHistory() {
-    if (!isRootStaff || redeemHistoryDeleteBusy || selectedRedeemHistoryCodes.size === 0) return;
+    if (!canManageCodes || !canDeleteRecords || redeemHistoryDeleteBusy || selectedRedeemHistoryCodes.size === 0) return;
     if (typeof window !== "undefined" && !window.confirm(`确认删除 ${selectedRedeemHistoryCodes.size} 条兑换历史？`)) return;
     setRedeemHistoryDeleteBusy(true);
     setCodeResult(null);
@@ -1798,6 +1851,10 @@ export default function AdminPage() {
   async function createCode(e) {
     e.preventDefault();
     if (codeBusy) return;
+    if (!canManageCodes) {
+      setCodeResult({ type: "error", message: "当前账号不可创建兑换码" });
+      return;
+    }
     if (codeType === "service" && codeServices.length === 0) {
       setCodeResult({ type: "error", message: "请至少选择一个服务" });
       return;
@@ -1874,7 +1931,11 @@ export default function AdminPage() {
 
   async function codeAction(code, action) {
     if (codeBusy) return;
-    if (action === "delete" && !isRootStaff) {
+    if (!canManageCodes) {
+      setCodeResult({ type: "error", message: "当前账号不可管理兑换码" });
+      return;
+    }
+    if (action === "delete" && !canDeleteRecords) {
       setCodeResult({ type: "error", message: "仅主账号可删除后台数据" });
       return;
     }
@@ -1902,7 +1963,11 @@ export default function AdminPage() {
 
   async function codeActionV2(code, action) {
     if (codeBusy) return;
-    if (action === "delete" && !isRootStaff) {
+    if (!canManageCodes) {
+      setCodeResult({ type: "error", message: "当前账号不可管理兑换码" });
+      return;
+    }
+    if (action === "delete" && !canDeleteRecords) {
       setCodeResult({ type: "error", message: "仅主账号可删除后台数据" });
       return;
     }
@@ -1935,7 +2000,11 @@ export default function AdminPage() {
 
   async function batchCodeAction(batchId, action) {
     if (codeBusy) return;
-    if (action === "delete" && !isRootStaff) {
+    if (!canManageCodes) {
+      setCodeResult({ type: "error", message: "当前账号不可管理兑换码批次" });
+      return;
+    }
+    if (action === "delete" && !canDeleteRecords) {
       setCodeResult({ type: "error", message: "仅主账号可删除后台数据" });
       return;
     }
@@ -1970,6 +2039,10 @@ export default function AdminPage() {
   async function sendRedeemCodeEmail(e) {
     e.preventDefault();
     if (sendCodeBusy || !sendCodeModal) return;
+    if (!canSendRedeemCodes) {
+      setSendCodeResult({ type: "error", message: "当前账号不可发送兑换码" });
+      return;
+    }
     const email = sendCodeEmail.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       setSendCodeResult({ type: "error", message: "请填写有效邮箱" });
@@ -2118,7 +2191,7 @@ export default function AdminPage() {
       const data = await res.json();
       if (data.ok) {
         setOrders(data.orders || []);
-        if (data.currentStaff) setCurrentStaff(data.currentStaff);
+        if (data.currentStaff) applyCurrentStaff(data.currentStaff);
         setAuthed(true);
       }
     } catch (e) {
@@ -2126,11 +2199,12 @@ export default function AdminPage() {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, []);
+  }, [applyCurrentStaff]);
 
   useEffect(() => {
+    if (authed === true && tab !== "orders" && tab !== "abnormal") return;
     loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus);
-  }, [loadOrders, appliedSearch, filterStatus, tab]);
+  }, [authed, loadOrders, appliedSearch, filterStatus, tab]);
 
   useEffect(() => {
     if (!authed || (tab !== "orders" && tab !== "abnormal")) return;
@@ -2178,19 +2252,22 @@ export default function AdminPage() {
       return;
     }
     if (target === "withdrawals") {
+      if (!canReviewWithdrawals) return;
       setTab("withdrawals");
       return;
     }
     if (target === "codes") {
+      if (!canViewCodes) return;
       setTab("codes");
       return;
     }
     if (target === "mail") {
+      if (!canSendMail) return;
       setTab("mail");
       return;
     }
     if (target === "users") {
-      if (!canManageUsers) return;
+      if (!canViewUsers) return;
       setTab("users");
     }
   }
@@ -2460,6 +2537,9 @@ export default function AdminPage() {
   if (authed === null) {
     return <div className="admin-loading"><LoaderCircle size={28} className="spin-icon" /></div>;
   }
+  if (authed === true && !permissionsReady) {
+    return <div className="admin-loading"><LoaderCircle size={28} className="spin-icon" /></div>;
+  }
 
   const mailSearchText = mailSearch.trim().toLowerCase();
   const visibleMailLogs = mailSearchText
@@ -2496,12 +2576,12 @@ export default function AdminPage() {
           <button type="button" className={`admin-tab-btn${tab === "abnormal" ? " active" : ""}`} onClick={() => setTab("abnormal")}>
             异常订单{Number(overview?.abnormalOrders || 0) > 0 && <em className="admin-tab-badge warn">{overview.abnormalOrders}</em>}
           </button>
-          {canManageUsers && <button type="button" className={`admin-tab-btn${tab === "users" ? " active" : ""}`} onClick={() => setTab("users")}>用户管理</button>}
+          {canViewUsers && <button type="button" className={`admin-tab-btn${tab === "users" ? " active" : ""}`} onClick={() => setTab("users")}>用户管理</button>}
           {canReviewWithdrawals && <button type="button" className={`admin-tab-btn${tab === "withdrawals" ? " active" : ""}`} onClick={() => setTab("withdrawals")}>
             提现审核{Number(overview?.pendingWithdrawals || 0) > 0 && <em className="admin-tab-badge">{overview.pendingWithdrawals}</em>}
           </button>}
-          {canManageCodes && <button type="button" className={`admin-tab-btn${tab === "codes" ? " active" : ""}`} onClick={() => setTab("codes")}>兑换码</button>}
-          {canAdjustBalance && <button type="button" className={`admin-tab-btn${tab === "balance" ? " active" : ""}`} onClick={() => setTab("balance")}>余额变动</button>}
+          {canViewCodes && <button type="button" className={`admin-tab-btn${tab === "codes" ? " active" : ""}`} onClick={() => setTab("codes")}>兑换码</button>}
+          {canViewBalanceLog && <button type="button" className={`admin-tab-btn${tab === "balance" ? " active" : ""}`} onClick={() => setTab("balance")}>余额变动</button>}
           {canSendMail && <button type="button" className={`admin-tab-btn${tab === "mail" ? " active" : ""}`} onClick={() => setTab("mail")}>客服发信</button>}
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "staff" ? " active" : ""}`} onClick={() => setTab("staff")}>工作人员</button>}
         </div>
@@ -2529,22 +2609,30 @@ export default function AdminPage() {
                 <span>异常订单</span>
                 <b>{overview?.abnormalOrders ?? 0}</b>
               </button>
-              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("withdrawals")}>
-                <span>待审核提现</span>
-                <b>{overview?.pendingWithdrawals ?? 0}</b>
-              </button>
-              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("codes")}>
-                <span>可用兑换码</span>
-                <b>{overview?.activeCodes ?? 0}</b>
-              </button>
-              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("mail")}>
-                <span>失败邮件</span>
-                <b>{overview?.failedMails ?? 0}</b>
-              </button>
-              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("users")}>
-                <span>注册用户</span>
-                <b>{overview?.usersTotal ?? 0}</b>
-              </button>
+              {canReviewWithdrawals && (
+                <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("withdrawals")}>
+                  <span>待审核提现</span>
+                  <b>{overview?.pendingWithdrawals ?? 0}</b>
+                </button>
+              )}
+              {canViewCodes && (
+                <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("codes")}>
+                  <span>可用兑换码</span>
+                  <b>{overview?.activeCodes ?? 0}</b>
+                </button>
+              )}
+              {canSendMail && (
+                <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("mail")}>
+                  <span>失败邮件</span>
+                  <b>{overview?.failedMails ?? 0}</b>
+                </button>
+              )}
+              {canViewUsers && (
+                <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("users")}>
+                  <span>注册用户</span>
+                  <b>{overview?.usersTotal ?? 0}</b>
+                </button>
+              )}
               <div className="admin-overview-mini">
                 <span>今日订单</span>
                 <b>{overview?.todayOrders ?? 0}</b>
@@ -2607,13 +2695,15 @@ export default function AdminPage() {
                       <span className="admin-userlist-balance">¥{u.balance.toFixed(2)}</span>
                     </button>
                     <div className="admin-userlist-actions">
-                      <button
-                        type="button"
-                        className="admin-userlist-action ban"
-                        title={u.banned ? "解除封禁" : "封禁账户"}
-                        onClick={() => setConfirmUserAction({ email: u.email, action: u.banned ? "unban" : "ban" })}
-                      >{u.banned ? "解禁" : "封禁"}</button>
-                      {isRootStaff && (
+                      {canBanUsers && (
+                        <button
+                          type="button"
+                          className="admin-userlist-action ban"
+                          title={u.banned ? "解除封禁" : "封禁账户"}
+                          onClick={() => setConfirmUserAction({ email: u.email, action: u.banned ? "unban" : "ban" })}
+                        >{u.banned ? "解禁" : "封禁"}</button>
+                      )}
+                      {canDeleteUsers && (
                         <button
                           type="button"
                           className="admin-userlist-action delete"
@@ -2696,7 +2786,7 @@ export default function AdminPage() {
               <div className="admin-userlist-head">
                 <h3>提现申请 <em>{withdrawals.length}</em></h3>
                 <div className="admin-inline-actions">
-                  {isRootStaff && (
+                  {canDeleteRecords && (
                     <>
                       <button
                         type="button"
@@ -2802,6 +2892,13 @@ export default function AdminPage() {
           </div>
         ) : tab === "codes" ? (
           <div className="admin-codes-pane">
+            {!canManageCodes && (
+              <div className="admin-code-form admin-code-send-only">
+                <div className="admin-card-title"><Mail size={15} />兑换码发信</div>
+                <p>当前账号可查看可用兑换码，并将兑换码发送至用户邮箱。</p>
+              </div>
+            )}
+            {canManageCodes && (
             <form
               className="admin-code-form"
               onSubmit={(e) => {
@@ -2836,7 +2933,7 @@ export default function AdminPage() {
                       {redeemHistoryLoading ? <LoaderCircle size={11} className="spin-icon" /> : "搜索"}
                     </button>
                   </div>
-                  {isRootStaff && (
+                  {canDeleteRecords && (
                     <div className="admin-inline-actions admin-code-history-actions">
                       <button
                         type="button"
@@ -2990,6 +3087,7 @@ export default function AdminPage() {
                 </>
               )}
             </form>
+            )}
             {codeResult && codeType !== "history" && <div className={`admin-alert ${codeResult.type}`}>{codeResult.message}</div>}
             {codeType !== "history" && (
               <>
@@ -3024,8 +3122,21 @@ export default function AdminPage() {
                   <span><b>{c.type === "service" ? (c.services || []).map((s) => s.label).join(" + ") : `¥${Number(c.amount || 0).toFixed(2)}`}</b><em>{c.status === "active" ? "可兑换" : c.status === "used" ? "已使用" : "已作废"}</em></span>
                   <span>{c.usedBy || c.usedOrderId || "--"}</span>
                   <div>
-                    <button type="button" disabled={c.status !== "active"} onClick={() => codeAction(c.code, "void")}>作废</button>
-                    {isRootStaff && (
+                    {canSendRedeemCodes && (
+                      <button
+                        type="button"
+                        disabled={c.status !== "active"}
+                        onClick={() => {
+                          setSendCodeModal({ code: c.code, type: c.type, label: c.type === "service"
+                            ? (c.services || []).map((s) => s.label).join(" + ")
+                            : `¥${Number(c.amount || 0).toFixed(2)}` });
+                          setSendCodeEmail("");
+                          setSendCodeResult(null);
+                        }}
+                      >发信</button>
+                    )}
+                    {canManageCodes && <button type="button" disabled={c.status !== "active"} onClick={() => codeAction(c.code, "void")}>作废</button>}
+                    {canDeleteRecords && (
                       <button type="button" className="danger" onClick={() => codeAction(c.code, "delete")}><Trash2 size={11} />删除</button>
                     )}
                   </div>
@@ -3050,7 +3161,7 @@ export default function AdminPage() {
               <div className="admin-userlist-head">
                 <h3>发信记录 <em>{visibleMailLogs.length}{mailSearchText ? ` / ${mailLogs.length}` : ""}</em></h3>
                 <div className="admin-inline-actions">
-                  {isRootStaff && (
+                  {canDeleteRecords && (
                     <>
                       <button
                         type="button"
@@ -3225,7 +3336,7 @@ export default function AdminPage() {
                   <span className="stat-add">累计加 <b>+¥{globalLog.totalAdded.toFixed(2)}</b></span>
                   <span className="stat-deduct">累计减 <b>−¥{globalLog.totalDeducted.toFixed(2)}</b></span>
                 </div>
-                {isRootStaff && (
+                {canDeleteRecords && (
                   <div className="admin-inline-actions">
                     <button
                       type="button"
@@ -3558,7 +3669,7 @@ export default function AdminPage() {
                         <small>{item.createdAtBeijing}</small>
                       </div>
                       <p>{actionDetailText(item)}</p>
-                      <span>{item.target || "system"}</span>
+                      <span>{item.targetLabel || item.target || "系统"}</span>
                     </div>
                   </div>
                 ))}
@@ -3915,21 +4026,23 @@ export default function AdminPage() {
                 </div>
                 <div className="admin-user-meta">注册于 {userInfo.user.createdAtBeijing || "--"}</div>
               </div>
-              <div className="admin-balance-form">
-                <div className="admin-balance-row">
-                  <span>金额</span>
-                  <input type="number" inputMode="decimal" step="0.01" min="0.01" value={balForm.amount} onChange={(e) => setBalForm({ ...balForm, amount: e.target.value })} placeholder="例如 100" />
+              {canAdjustBalance && (
+                <div className="admin-balance-form">
+                  <div className="admin-balance-row">
+                    <span>金额</span>
+                    <input type="number" inputMode="decimal" step="0.01" min="0.01" value={balForm.amount} onChange={(e) => setBalForm({ ...balForm, amount: e.target.value })} placeholder="例如 100" />
+                  </div>
+                  <div className="admin-balance-row">
+                    <span>原因</span>
+                    <textarea value={balForm.reason} onChange={(e) => setBalForm({ ...balForm, reason: e.target.value })} placeholder="将写入余额明细" rows={2} />
+                  </div>
+                  {balResult && <div className={`admin-alert ${balResult.type}`}>{balResult.message}</div>}
+                  <div className="admin-balance-actions">
+                    <button type="button" className="admin-balance-add" disabled={balBusy} onClick={() => adjustBalance(+1)}><CheckCircle2 size={13} />增加</button>
+                    <button type="button" className="admin-balance-deduct" disabled={balBusy} onClick={() => adjustBalance(-1)}><AlertTriangle size={13} />扣除</button>
+                  </div>
                 </div>
-                <div className="admin-balance-row">
-                  <span>原因</span>
-                  <textarea value={balForm.reason} onChange={(e) => setBalForm({ ...balForm, reason: e.target.value })} placeholder="将写入余额明细" rows={2} />
-                </div>
-                {balResult && <div className={`admin-alert ${balResult.type}`}>{balResult.message}</div>}
-                <div className="admin-balance-actions">
-                  <button type="button" className="admin-balance-add" disabled={balBusy} onClick={() => adjustBalance(+1)}><CheckCircle2 size={13} />增加</button>
-                  <button type="button" className="admin-balance-deduct" disabled={balBusy} onClick={() => adjustBalance(-1)}><AlertTriangle size={13} />扣除</button>
-                </div>
-              </div>
+              )}
               <div className="admin-tx-list">
                 <div className="admin-tx-list-label">余额明细 · {userInfo.transactions.length} 条</div>
                 {userInfo.transactions.map((tx) => (
@@ -4058,9 +4171,9 @@ export default function AdminPage() {
                 <small>可用 {activeCodeBatch.counts?.active || 0} · 作废 {activeCodeBatch.counts?.void || 0} · 生成 #{activeCodeBatch.createdByStaffId || 1}</small>
               </div>
               <div className="admin-code-batch-actions">
-                <button type="button" onClick={() => copyText((activeCodeBatch.codes || []).map((c) => c.code).join("\n"))}><Copy size={12} />复制全部</button>
-                <button type="button" onClick={() => batchCodeAction(activeCodeBatch.id, "void")} disabled={!!codeBusy}><AlertTriangle size={12} />全部作废</button>
-                {isRootStaff && (
+                {canManageCodes && <button type="button" onClick={() => copyText((activeCodeBatch.codes || []).map((c) => c.code).join("\n"))}><Copy size={12} />复制全部</button>}
+                {canManageCodes && <button type="button" onClick={() => batchCodeAction(activeCodeBatch.id, "void")} disabled={!!codeBusy}><AlertTriangle size={12} />全部作废</button>}
+                {canDeleteRecords && (
                   <button type="button" className="danger" onClick={() => batchCodeAction(activeCodeBatch.id, "delete")} disabled={!!codeBusy}><Trash2 size={12} />删除批次</button>
                 )}
               </div>
@@ -4071,21 +4184,23 @@ export default function AdminPage() {
                       <strong>{c.code}</strong>
                       <small>{c.status === "active" ? "可兑换" : c.status === "used" ? "已使用" : "已作废"}{c.usedBy ? ` · ${c.usedBy}` : ""}{c.usedOrderId ? ` · ${c.usedOrderId}` : ""}</small>
                     </button>
-                    <button
-                      type="button"
-                      className="send"
-                      title="发送至邮箱"
-                      disabled={c.status !== "active"}
-                      onClick={() => {
-                        setSendCodeModal({ code: c.code, type: c.type || activeCodeBatch.type, label: activeCodeBatch.type === "service"
-                          ? (activeCodeBatch.services || []).map((s) => s.label).join(" + ")
-                          : `¥${Number(activeCodeBatch.amount || 0).toFixed(2)}` });
-                        setSendCodeEmail("");
-                        setSendCodeResult(null);
-                      }}
-                    >发</button>
-                    <button type="button" disabled={c.status !== "active" || !!codeBusy} onClick={() => codeActionV2(c.code, "void")}>废</button>
-                    {isRootStaff && (
+                    {canSendRedeemCodes && (
+                      <button
+                        type="button"
+                        className="send"
+                        title="发送至邮箱"
+                        disabled={c.status !== "active"}
+                        onClick={() => {
+                          setSendCodeModal({ code: c.code, type: c.type || activeCodeBatch.type, label: activeCodeBatch.type === "service"
+                            ? (activeCodeBatch.services || []).map((s) => s.label).join(" + ")
+                            : `¥${Number(activeCodeBatch.amount || 0).toFixed(2)}` });
+                          setSendCodeEmail("");
+                          setSendCodeResult(null);
+                        }}
+                      >发</button>
+                    )}
+                    {canManageCodes && <button type="button" disabled={c.status !== "active" || !!codeBusy} onClick={() => codeActionV2(c.code, "void")}>废</button>}
+                    {canDeleteRecords && (
                       <button type="button" className="danger" disabled={!!codeBusy} onClick={() => codeActionV2(c.code, "delete")}>删</button>
                     )}
                   </div>

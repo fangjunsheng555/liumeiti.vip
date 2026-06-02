@@ -15,7 +15,7 @@ export async function GET(request) {
   const session = adminSession(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const permissions = adminPermissionProfile(session);
-  if (!permissions.canManageUsers && !permissions.canAdjustBalance) {
+  if (!permissions.canViewUsers && !permissions.canAdjustBalance) {
     return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   }
   const url = new URL(request.url);
