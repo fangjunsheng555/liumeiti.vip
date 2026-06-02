@@ -15,6 +15,7 @@ import {
   Lock,
   RefreshCw,
   Search,
+  ShieldCheck,
   X,
 } from "lucide-react";
 import { copyText } from "../lib/store";
@@ -136,7 +137,7 @@ export default function ServiceCenterPage() {
   const [authUser, setAuthUser] = useState(null);
   const [authModal, setAuthModal] = useState(null);
   const [authForm, setAuthForm] = useState({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
-  const [authCaptcha, setAuthCaptcha] = useState({ a: 0, b: 0 });
+  const [authCaptcha, setAuthCaptcha] = useState({ token: "", image: "", loading: false, error: "" });
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authNotice, setAuthNotice] = useState("");
@@ -166,10 +167,22 @@ export default function ServiceCenterPage() {
     return () => { document.body.style.overflow = ""; };
   }, [authModal]);
 
-  useEffect(() => {
-    if (authModal === "register") {
-      setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
+  async function refreshAuthCaptcha(clearAnswer = true) {
+    setAuthCaptcha((cur) => ({ ...cur, loading: true, error: "" }));
+    if (clearAnswer) setAuthForm((f) => ({ ...f, captchaAnswer: "" }));
+    try {
+      const res = await fetch("/api/auth/captcha", { credentials: "same-origin" });
+      const data = await res.json();
+      if (!res.ok || !data.ok || !data.token || !data.image) throw new Error(data.message || "验证码加载失败");
+      setAuthCaptcha({ token: data.token, image: data.image, loading: false, error: "" });
+    } catch {
+      setAuthCaptcha({ token: "", image: "", loading: false, error: "验证码加载失败，请点击刷新" });
     }
+  }
+
+  useEffect(() => {
+    if (authModal === "register") refreshAuthCaptcha(true);
+    else setAuthCaptcha({ token: "", image: "", loading: false, error: "" });
     if (!authModal) setAuthForm({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
   }, [authModal]);
 
@@ -274,9 +287,8 @@ export default function ServiceCenterPage() {
       if (authModal === "register") payload = {
         email: authForm.email.trim(),
         password: authForm.password,
-        captchaA: authCaptcha.a,
-        captchaB: authCaptcha.b,
-        captchaAnswer: Number(authForm.captchaAnswer),
+        captchaToken: authCaptcha.token,
+        captchaAnswer: authForm.captchaAnswer.trim(),
       };
       if (authModal === "forgot") payload = { email: authForm.email.trim() };
       if (authModal === "reset") payload = {
@@ -303,7 +315,7 @@ export default function ServiceCenterPage() {
         return;
       }
       const msg = {
-        captcha_failed: "人机验证失败,请重新计算",
+        captcha_failed: "验证码错误，请重新输入",
         email_taken: "该邮箱已注册",
         invalid_email: "邮箱格式错误",
         password_length: "密码 6-64 位",
@@ -312,8 +324,8 @@ export default function ServiceCenterPage() {
         code_invalid_or_expired: "验证码错误或已过期",
         user_not_found: "该邮箱未注册",
       }[data.error] || data.error || "操作失败";
+      if (authModal === "register" && data.error === "captcha_failed") refreshAuthCaptcha(true);
       setAuthError(msg);
-      if (authModal === "register") setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) });
     } catch {
       setAuthError("网络错误");
     } finally {
@@ -651,14 +663,26 @@ export default function ServiceCenterPage() {
               )}
               {authModal === "register" && (
                 <label className="auth-field auth-captcha">
-                  <span>人机验证</span>
+                  <span>验证码</span>
                   <div className="auth-captcha-row">
-                    <div className="auth-captcha-question">{authCaptcha.a} + {authCaptcha.b} =</div>
-                    <input value={authForm.captchaAnswer} onChange={(e) => setAuthForm((f) => ({ ...f, captchaAnswer: e.target.value }))} placeholder="?" inputMode="numeric" required />
-                    <button type="button" className="auth-captcha-refresh" onClick={() => setAuthCaptcha({ a: 1 + Math.floor(Math.random() * 9), b: 1 + Math.floor(Math.random() * 9) })}>
-                      <RefreshCw size={15} />
+                    <div className="auth-captcha-control">
+                      <ShieldCheck size={16} />
+                      <input
+                        value={authForm.captchaAnswer}
+                        onChange={(e) => setAuthForm((f) => ({ ...f, captchaAnswer: e.target.value.replace(/\s+/g, "").slice(0, 4) }))}
+                        placeholder="验证码"
+                        inputMode="numeric"
+                        autoComplete="off"
+                        maxLength={4}
+                        required
+                      />
+                    </div>
+                    <button type="button" className="auth-captcha-image" onClick={() => refreshAuthCaptcha(true)} disabled={authCaptcha.loading} aria-label="刷新验证码">
+                      {authCaptcha.image && !authCaptcha.loading ? <img src={authCaptcha.image} alt="验证码" /> : <LoaderCircle size={18} className="spin-icon" />}
+                      <span><RefreshCw size={12} /></span>
                     </button>
                   </div>
+                  {authCaptcha.error && <em className="auth-captcha-error">{authCaptcha.error}</em>}
                 </label>
               )}
               {authModal === "reset" && (
@@ -675,7 +699,7 @@ export default function ServiceCenterPage() {
               )}
               {authNotice && <div className="auth-notice">{authNotice}</div>}
               {authError && <div className="auth-error">{authError}</div>}
-              <button type="submit" className="auth-submit" disabled={authBusy}>
+              <button type="submit" className="auth-submit" disabled={authBusy || (authModal === "register" && (authCaptcha.loading || !authCaptcha.token))}>
                 {authBusy ? <><LoaderCircle size={14} className="spin-icon" />处理中</> : authModal === "register" ? "注册并登录" : authModal === "forgot" ? "发送验证码" : authModal === "reset" ? "重置并登录" : "登录"}
               </button>
               {(authModal === "login" || authModal === "register") && (

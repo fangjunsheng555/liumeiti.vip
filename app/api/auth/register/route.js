@@ -6,6 +6,7 @@ import {
   getCookieFromRequest, inviteCodeFromRequest, normalizeInviteCode,
   prepareNewUserReferralProfile,
   checkRateLimit, rateLimitResponse,
+  verifyRegisterCaptcha,
 } from "../../_utils.js";
 
 export async function POST(request) {
@@ -13,9 +14,8 @@ export async function POST(request) {
   try { body = await request.json(); } catch (e) {}
   const email = String(body.email || "").trim().toLowerCase();
   const password = String(body.password || "");
-  const captchaA = Number(body.captchaA);
-  const captchaB = Number(body.captchaB);
-  const captchaAnswer = Number(body.captchaAnswer);
+  const captchaToken = String(body.captchaToken || "");
+  const captchaAnswer = String(body.captchaAnswer || "");
 
   if (!validEmail(email)) {
     return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
@@ -30,7 +30,7 @@ export async function POST(request) {
   if (password.length < 6 || password.length > 64) {
     return Response.json({ ok: false, error: "password_length" }, { status: 400 });
   }
-  if (!Number.isFinite(captchaA) || !Number.isFinite(captchaB) || captchaA + captchaB !== captchaAnswer) {
+  if (!verifyRegisterCaptcha(captchaToken, captchaAnswer)) {
     return Response.json({ ok: false, error: "captcha_failed" }, { status: 400 });
   }
 
