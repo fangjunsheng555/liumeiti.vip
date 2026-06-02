@@ -366,16 +366,25 @@ export function adminRoleFromSession(session) {
 export function adminPermissionProfile(session) {
   const role = adminRoleFromSession(session);
   const root = role === "owner";
+  const operator = role === "operator";
+  const support = role === "support";
+  const finance = role === "finance";
   return {
     role,
     root,
     canViewOrders: true,
-    canEditOrders: root || role === "operator" || role === "support",
+    canEditOrders: root || operator || support,
+    canViewUsers: root || finance,
     canManageUsers: root,
-    canAdjustBalance: root,
-    canManageCodes: root || role === "operator",
-    canReviewWithdrawals: root || role === "finance",
-    canSendMail: root || role === "support" || role === "operator",
+    canBanUsers: root,
+    canDeleteUsers: root,
+    canAdjustBalance: root || finance,
+    canViewBalanceLog: root || finance,
+    canViewCodes: root || operator || support,
+    canManageCodes: root || operator,
+    canSendRedeemCodes: root || operator || support,
+    canReviewWithdrawals: root || finance,
+    canSendMail: root || support || operator,
     canManageStaff: root,
     canDeleteRecords: root,
   };

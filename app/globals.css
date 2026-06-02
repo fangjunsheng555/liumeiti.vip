@@ -8605,6 +8605,20 @@ button { cursor: pointer; border: none; background: transparent; }
   grid-template-columns: 1fr;
   align-items: stretch;
 }
+.admin-code-send-only {
+  align-items: start;
+}
+.admin-code-send-only p {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.55;
+  font-weight: 750;
+}
 .admin-code-type-toggle {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

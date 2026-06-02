@@ -1,6 +1,6 @@
 import {
   adminSessionFromRequest, adminActorFromSession,
-  listAdminStaff, createAdminStaff, getAdminActionLog, clean, isRootAdminSession,
+  listAdminStaff, createAdminStaff, getAdminActionLog, clean, isRootAdminSession, adminPermissionProfile,
 } from "../../_utils.js";
 
 export async function GET(request) {
@@ -12,6 +12,13 @@ export async function GET(request) {
     ok: true,
     currentStaffId: Number(session.staffId || 1),
     currentStaffRoot: true,
+    currentStaff: {
+      id: Number(session.staffId || 1),
+      username: session.staffUsername || "admin",
+      root: isRootAdminSession(session),
+      role: adminPermissionProfile(session).role,
+      permissions: adminPermissionProfile(session),
+    },
     staff,
     actions,
   });

@@ -26,10 +26,13 @@ function parseMailRecipients(value) {
 }
 
 function currentStaffPayload(session) {
+  const permissions = adminPermissionProfile(session);
   return {
     id: Number(session.staffId || 1),
     username: session.staffUsername || "admin",
     root: isRootAdminSession(session),
+    role: permissions.role,
+    permissions,
   };
 }
 

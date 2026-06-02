@@ -1,6 +1,6 @@
 import {
   adminSessionFromRequest, adminActorFromSession, isRootAdminSession,
-  listRedeemCodes, getAllOrders, deleteRedeemHistoryEntries, clean,
+  adminPermissionProfile, listRedeemCodes, getAllOrders, deleteRedeemHistoryEntries, clean,
 } from "../../_utils.js";
 
 function serviceLabel(code) {
@@ -63,6 +63,7 @@ function normalizeHistoryCode(code, orderMap) {
 export async function GET(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!adminPermissionProfile(session).canManageCodes) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
 
   const url = new URL(request.url);
   const q = clean(url.searchParams.get("q") || "", 80).toLowerCase();
@@ -95,6 +96,8 @@ export async function GET(request) {
       id: Number(session.staffId || 1),
       username: session.staffUsername || "admin",
       root: isRootAdminSession(session),
+      role: adminPermissionProfile(session).role,
+      permissions: adminPermissionProfile(session),
     },
   });
 }

@@ -19,7 +19,7 @@ function adminOk(request) {
 export async function PATCH(request, { params }) {
   const session = adminSession(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  if (!adminPermissionProfile(session).canManageUsers) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  if (!adminPermissionProfile(session).canBanUsers) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const actor = adminActorFromRequest(request);
   const { email: rawEmail } = await params;
   const email = decodeURIComponent(rawEmail || "").toLowerCase().trim();
@@ -54,7 +54,7 @@ export async function PATCH(request, { params }) {
 export async function DELETE(request, { params }) {
   const session = adminSession(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  if (!isRootAdminSession(session)) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  if (!adminPermissionProfile(session).canDeleteUsers) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const actor = adminActorFromRequest(request);
   const { email: rawEmail } = await params;
   const email = decodeURIComponent(rawEmail || "").toLowerCase().trim();

@@ -6,6 +6,7 @@ import {
 export async function GET(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!adminPermissionProfile(session).canViewCodes) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const { codes, batches } = await listManageableRedeemCodesAndBatches();
   return Response.json({ ok: true, codes, batches });
 }
