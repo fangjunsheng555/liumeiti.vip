@@ -10864,6 +10864,18 @@ button { cursor: pointer; border: none; background: transparent; }
 .admin-action-detail-modal {
   max-width: 560px;
 }
+.admin-action-modal-tools {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+.admin-action-modal-tools .admin-filter-btn {
+  flex: 1;
+}
 .admin-action-detail-list {
   display: grid;
   gap: 8px;
@@ -10879,13 +10891,34 @@ button { cursor: pointer; border: none; background: transparent; }
 }
 .admin-action-detail-item {
   display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 6px;
+  align-items: flex-start;
   padding: 10px;
   border-radius: 10px;
   background: #f8fafc;
   border: 1px solid rgba(148, 163, 184, 0.2);
 }
-.admin-action-detail-item > div {
+.admin-action-detail-item.selected {
+  background: #eef6ff;
+  border-color: rgba(14, 165, 233, 0.28);
+}
+.admin-action-detail-check {
+  display: inline-grid;
+  place-items: center;
+  padding-top: 2px;
+}
+.admin-action-detail-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: #0f766e;
+}
+.admin-action-detail-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.admin-action-detail-main > div {
   display: flex;
   justify-content: space-between;
   gap: 8px;
