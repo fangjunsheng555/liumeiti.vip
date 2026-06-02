@@ -6,7 +6,7 @@ import MobileNav from "../components/MobileNav";
 import FloatingSupport from "../components/FloatingSupport";
 import { DEFAULT_USER_AVATAR_ID, USER_AVATARS, normalizeUserAvatarId, userAvatarPath } from "../lib/avatars";
 import {
-  ArrowRight, CheckCircle2, Clock, Copy,
+  ArrowRight, CheckCircle2, Clock, Copy, ExternalLink,
   LoaderCircle, LogOut, Mail, ShoppingBag, X,
   AlertTriangle, Wallet, TrendingDown, TrendingUp,
   User, Users, Edit3, Check,
@@ -84,6 +84,7 @@ export default function AccountPage() {
   const [inviteModal, setInviteModal] = useState(false);
   const [downlineModal, setDownlineModal] = useState(false);
   const [activityModal, setActivityModal] = useState(false);
+  const [casetifyModal, setCasetifyModal] = useState(false);
   const [moneyBusy, setMoneyBusy] = useState("");
   const [moneyStatus, setMoneyStatus] = useState(null);
   const [authMode, setAuthMode] = useState("login");
@@ -154,6 +155,20 @@ export default function AccountPage() {
     }
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const openActivityFromHash = () => {
+      if (window.location.hash !== "#casetify-reward") return;
+      setCasetifyModal(true);
+      window.setTimeout(() => {
+        document.getElementById("casetify-reward")?.scrollIntoView({ block: "center", behavior: "smooth" });
+      }, 80);
+    };
+    openActivityFromHash();
+    window.addEventListener("hashchange", openActivityFromHash);
+    return () => window.removeEventListener("hashchange", openActivityFromHash);
+  }, []);
+
   async function logout() {
     await fetch("/api/auth/login", { method: "DELETE" });
     window.location.href = "/";
@@ -221,6 +236,80 @@ export default function AccountPage() {
     copy(text);
     setCopiedKey(key);
     setTimeout(() => setCopiedKey(""), 1800);
+  }
+
+  function renderCasetifyActivityCard() {
+    return (
+      <button
+        id="casetify-reward"
+        type="button"
+        className="account-invite-poster account-casetify-poster"
+        onClick={() => setCasetifyModal(true)}
+      >
+        <div className="account-invite-poster-icon account-casetify-poster-icon"><Gift size={20} /></div>
+        <div>
+          <span>Maoyang X CASETiFY · 至 2026.12.31</span>
+          <strong>消费充值送手机壳</strong>
+          <p>注册用户满 ¥999，或单次充值 ¥1666，可联系客服领取</p>
+        </div>
+      </button>
+    );
+  }
+
+  function renderCasetifyActivityModal() {
+    if (!casetifyModal) return null;
+    return (
+      <div className="account-modal-mask" onClick={() => setCasetifyModal(false)}>
+        <div className="account-money-modal account-invite-modal account-casetify-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="account-modal-head">
+            <div>
+              <div className="account-modal-id">Maoyang X CASETiFY</div>
+              <div className="account-modal-status status-completed">活动至 2026.12.31</div>
+            </div>
+            <button type="button" className="account-modal-close" onClick={() => setCasetifyModal(false)}>
+              <X size={16} />
+            </button>
+          </div>
+          <div className="account-invite-modal-body">
+            <div className="account-invite-hero account-casetify-hero">
+              <span><Gift size={15} />注册用户专享奖励</span>
+              <strong>消费充值送 CASETiFY 手机壳</strong>
+              <p>注册用户累计消费满 ¥999，或单次充值 ¥1666，可联系在线客服领取 CASETiFY 官网在售手机壳 1 个，支持定制款</p>
+            </div>
+            <div className="account-casetify-intro">
+              <strong>关于 CASETiFY 手机壳</strong>
+              <p>CASETiFY 手机壳主打防摔保护、丰富联名与个性化定制，适合想兼顾日常保护和外观风格的用户</p>
+            </div>
+            <div className="account-invite-rule-list account-casetify-rule-list">
+              <div>
+                <b>领取条件</b>
+                <p>活动有效期至 2026 年 12 月 31 日，注册用户累计消费满 ¥999，或单次充值 ¥1666，即可申请领取</p>
+              </div>
+              <div>
+                <b>可选款式</b>
+                <p>支持 CASETiFY 官网在售任意手机壳款式，包含可定制款，具体机型与库存以官网展示为准</p>
+              </div>
+              <div>
+                <b>收货范围</b>
+                <p>本活动暂不支持中国大陆地址收货，请确认可提供支持配送的收货地址</p>
+              </div>
+              <div>
+                <b>领取说明</b>
+                <p>领取手机壳后，对应充值金额仅可用于本站消费，不支持退款，确认领取即视为认可活动说明</p>
+              </div>
+            </div>
+            <div className="account-casetify-actions">
+              <a href="https://www.casetify.com/" target="_blank" rel="noreferrer">
+                <ExternalLink size={14} />点击查看有什么款式
+              </a>
+              <Link href="/service-center#contact" onClick={() => setCasetifyModal(false)}>
+                <Send size={14} />联系在线客服
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   function startEditName() {
@@ -308,6 +397,7 @@ export default function AccountPage() {
               <p>分享稳定好用的流媒体服务，一次推荐可持续获得长期收益</p>
             </div>
           </button>
+          {renderCasetifyActivityCard()}
           <section className="auth-modal account-auth-card">
             <div className="auth-modal-head">
               {authMode === "login" || authMode === "register" ? (
@@ -412,6 +502,7 @@ export default function AccountPage() {
             </div>
           </div>
         )}
+        {renderCasetifyActivityModal()}
         <FloatingSupport />
         <MobileNav />
       </div>
@@ -588,6 +679,8 @@ export default function AccountPage() {
             <button type="submit" disabled={moneyBusy === "withdraw"}>{moneyBusy === "withdraw" ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}确认提现</button>
           </form>
         </section>
+
+        {renderCasetifyActivityCard()}
 
         <section className="account-orders">
           <div className="account-orders-head">
@@ -863,6 +956,8 @@ export default function AccountPage() {
           </div>
         </div>
       )}
+
+      {renderCasetifyActivityModal()}
 
       {activeOrder && (
         <div className="account-modal-mask" onClick={() => setActiveOrder(null)}>
