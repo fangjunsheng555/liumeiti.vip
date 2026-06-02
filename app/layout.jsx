@@ -1,11 +1,12 @@
 import './globals.css';
 import ReferralTracker from './components/ReferralTracker';
+import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from './social-meta';
 
 const siteUrl = 'https://www.liumeiti.vip';
 const siteTitle = '冒央会社 - 流媒体会员服务';
-const siteDescription = '流媒体会员与节点服务一站选购，覆盖 Spotify、Netflix、Disney+、HBO Max 等，支持订单查询、在线客服与售后保障。';
-const socialDescription = '流媒体会员与节点服务一站选购，价格透明，订单可查，在线客服持续跟进售后。';
-const socialImage = `${siteUrl}/logo-mark.png?v=20260602`;
+const siteDescription = SOCIAL_DESCRIPTION;
+const socialDescription = SOCIAL_DESCRIPTION;
+const socialImage = SOCIAL_IMAGE;
 
 export const metadata = {
   metadataBase: new URL(siteUrl),
@@ -51,11 +52,7 @@ export const metadata = {
     description: socialDescription,
     images: [
       {
-        url: socialImage,
-        width: 384,
-        height: 384,
-        type: 'image/png',
-        alt: '冒央会社',
+        ...SOCIAL_IMAGE_META,
       },
     ],
   },

@@ -1,7 +1,8 @@
-const siteUrl = "https://www.liumeiti.vip";
+import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../social-meta";
+
 const inviteTitle = "账户中心与合伙人计划";
-const inviteDescription = "登录冒央会社账户，查看订单、余额、优惠券、提现与合伙人邀请记录。";
-const inviteImage = `${siteUrl}/logo-mark.png?v=20260602`;
+const inviteDescription = SOCIAL_DESCRIPTION;
+const inviteImage = SOCIAL_IMAGE;
 
 export const metadata = {
   title: inviteTitle,
@@ -22,11 +23,7 @@ export const metadata = {
     description: inviteDescription,
     images: [
       {
-        url: inviteImage,
-        width: 384,
-        height: 384,
-        type: "image/png",
-        alt: "冒央会社",
+        ...SOCIAL_IMAGE_META,
       },
     ],
   },

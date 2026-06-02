@@ -35,6 +35,46 @@ function copyText(text) {
   }
 }
 
+function actionDetailText(item) {
+  if (typeof item?.detailText === "string" && item.detailText.trim()) return item.detailText;
+  if (typeof item?.detail === "string" && item.detail.trim()) return item.detail;
+  const detail = item?.detail;
+  if (detail && typeof detail === "object") {
+    const labels = {
+      username: "账号",
+      role: "角色",
+      email: "用户",
+      amount: "金额",
+      balanceBefore: "调整前",
+      balanceAfter: "调整后",
+      status: "状态",
+      from: "原状态",
+      to: "新状态",
+      type: "类型",
+      quantity: "数量",
+      total: "总数",
+      changed: "变更",
+      deletedCount: "删除",
+      successCount: "成功",
+      failedCount: "失败",
+      sentCount: "发送成功",
+      orderId: "订单",
+      logId: "记录",
+      ip: "IP",
+      userAgent: "UA",
+    };
+    const parts = Object.entries(detail)
+      .filter(([, value]) => value !== undefined && value !== null && value !== "")
+      .slice(0, 8)
+      .map(([key, value]) => {
+        const text = Array.isArray(value) ? value.slice(0, 5).join(", ") : String(value);
+        return `${labels[key] || key}: ${text}${Array.isArray(value) && value.length > 5 ? "..." : ""}`;
+      });
+    if (parts.length) return parts.join("；");
+  }
+  return "已记录一次后台操作";
+}
+
 function escapeHtml(value) {
   return String(value || "").replace(/[&<>"']/g, (ch) => ({
     "&": "&amp;",
@@ -3207,7 +3247,7 @@ export default function AdminPage() {
                     </label>
                     <div className="admin-action-log-main">
                       <strong>{item.actionLabel || item.action}</strong>
-                      <small>{item.detailText || item.detail || "已记录一次后台操作"}</small>
+                      <small>{actionDetailText(item)}</small>
                       <em>{item.target || "system"} · {item.createdAtBeijing}</em>
                     </div>
                     <button
@@ -3519,7 +3559,7 @@ export default function AdminPage() {
                       <strong>{item.actionLabel || item.action}</strong>
                       <small>{item.createdAtBeijing}</small>
                     </div>
-                    <p>{item.detailText || item.detail || "已记录一次后台操作"}</p>
+                    <p>{actionDetailText(item)}</p>
                     <span>{item.target || "system"}</span>
                   </div>
                 ))}

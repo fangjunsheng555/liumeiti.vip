@@ -37,15 +37,37 @@ const ACTION_LABELS = {
 function readableDetail(detail) {
   if (!detail || typeof detail !== "object") return "";
   const parts = [];
+  if (detail.username) parts.push(`账号 ${detail.username}`);
+  if (detail.role) parts.push(`角色 ${detail.role}`);
   if (detail.email) parts.push(`用户 ${detail.email}`);
   if (detail.amount) parts.push(`金额 ¥${Number(detail.amount).toFixed(2)}`);
+  if (detail.balanceBefore !== undefined) parts.push(`调整前 ¥${Number(detail.balanceBefore || 0).toFixed(2)}`);
+  if (detail.balanceAfter !== undefined) parts.push(`调整后 ¥${Number(detail.balanceAfter || 0).toFixed(2)}`);
   if (detail.paymentMethod) parts.push(`支付方式 ${detail.paymentMethod}`);
   if (detail.paidAmount) parts.push(`实付 ${detail.paidAmount}`);
   if (detail.itemCount) parts.push(`${detail.itemCount} 件商品`);
   if (detail.status) parts.push(`状态 ${detail.status}`);
+  if (detail.from || detail.to) parts.push(`状态 ${detail.from || "-"} -> ${detail.to || "-"}`);
+  if (detail.type) parts.push(`类型 ${detail.type}`);
+  if (detail.quantity) parts.push(`数量 ${detail.quantity}`);
+  if (detail.total) parts.push(`总数 ${detail.total}`);
+  if (detail.changed) parts.push(`变更 ${detail.changed}`);
+  if (detail.successCount) parts.push(`成功 ${detail.successCount}`);
   if (detail.deletedCount) parts.push(`删除 ${detail.deletedCount} 条`);
   if (detail.sentCount || detail.failedCount) parts.push(`发送 ${detail.sentCount || 0} 成功 / ${detail.failedCount || 0} 失败`);
   if (detail.orderIds?.length) parts.push(`订单 ${detail.orderIds.slice(0, 5).join(", ")}${detail.orderIds.length > 5 ? "..." : ""}`);
+  if (detail.ids?.length) parts.push(`记录 ${detail.ids.slice(0, 5).join(", ")}${detail.ids.length > 5 ? "..." : ""}`);
+  if (detail.codes?.length) parts.push(`兑换码 ${detail.codes.slice(0, 5).join(", ")}${detail.codes.length > 5 ? "..." : ""}`);
+  if (detail.ip) parts.push(`IP ${detail.ip}`);
+  if (detail.userAgent) parts.push(`UA ${String(detail.userAgent).slice(0, 80)}`);
+  if (!parts.length) {
+    Object.entries(detail).some(([key, value]) => {
+      if (value === undefined || value === null || value === "") return false;
+      const text = Array.isArray(value) ? value.slice(0, 5).join(", ") : String(value);
+      parts.push(`${key}: ${text}${Array.isArray(value) && value.length > 5 ? "..." : ""}`);
+      return parts.length >= 6;
+    });
+  }
   return parts.join("，");
 }
 
