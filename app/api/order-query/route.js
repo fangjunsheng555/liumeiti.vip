@@ -7,9 +7,11 @@ import {
   generateNumericCode,
   checkRateLimit,
   rateLimitResponse,
+  getOrderById,
+  getOrdersByEmail,
+  redisConfig,
 } from "../_utils.js";
 
-const ORDERS_KEY = "liumeiti:orders";
 const QUERY_CODE_TTL_SECONDS = 10 * 60;
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
@@ -126,16 +128,6 @@ async function readBody(request) {
   }
 }
 
-async function loadOrders() {
-  const rows = await redisCmd(["LRANGE", ORDERS_KEY, "0", "199"]);
-  if (!Array.isArray(rows)) return null;
-  return rows
-    .map((item) => {
-      try { return JSON.parse(item); } catch (error) { return null; }
-    })
-    .filter((order) => order && !order.deleted);
-}
-
 function verificationKey(email, query) {
   const digest = createHash("sha256")
     .update(normalizeEmail(email) + "|" + normalizeOrderId(query || normalizeEmail(query)))
@@ -228,11 +220,12 @@ async function handle(request) {
     return Response.json({ ok: false, error: "invalid_query" }, { status: 400, headers });
   }
 
-  const orders = await loadOrders();
-  if (orders === null) {
+  if (!redisConfig()) {
     return Response.json({ ok: true, configured: false, orders: [] }, { headers });
   }
-  const matched = orders.filter((order) => orderMatches(order, query, type)).slice(0, 10);
+  const matched = type === "orderId"
+    ? [await getOrderById(query)].filter((order) => order && orderMatches(order, query, type))
+    : (await getOrdersByEmail(query, 50)).filter((order) => orderMatches(order, query, type)).slice(0, 10);
   if (matched.length === 0) {
     return Response.json({ ok: true, configured: true, orders: [] }, { headers });
   }

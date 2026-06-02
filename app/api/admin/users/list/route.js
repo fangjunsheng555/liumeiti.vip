@@ -1,27 +1,29 @@
 import {
   getCookieFromRequest, verifySession,
-  listAllUserEmails, getUser,
+  listAllUserEmails, getUser, adminPermissionProfile,
 } from "../../../_utils.js";
 
-function adminOk(request) {
+function adminSession(request) {
   const token = getCookieFromRequest(request, "lm_admin");
   const session = verifySession(token);
-  return session && session.role === "admin";
+  return session && session.role === "admin" ? session : null;
 }
 
 // GET /api/admin/users/list[?q=keyword]
 // Returns all registered users (email + username + balance + createdAt).
 export async function GET(request) {
-  if (!adminOk(request)) {
+  const session = adminSession(request);
+  if (!session) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  if (!adminPermissionProfile(session).canManageUsers) {
+    return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   }
   const url = new URL(request.url);
   const q = String(url.searchParams.get("q") || "").trim().toLowerCase();
 
   const emails = await listAllUserEmails();
-  // Fetch each user record in parallel (capped to avoid abuse)
-  const limited = emails.slice(0, 500);
-  const records = await Promise.all(limited.map((email) => getUser(email)));
+  const records = await Promise.all(emails.map((email) => getUser(email)));
   const users = records
     .filter(Boolean)
     .map((u) => ({

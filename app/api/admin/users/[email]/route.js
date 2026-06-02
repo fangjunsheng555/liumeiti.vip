@@ -1,7 +1,7 @@
 import {
   getCookieFromRequest, verifySession, adminActorFromRequest, pushAdminActionLog, isRootAdminSession,
   getUser, setUser, deleteUser,
-  validEmail,
+  validEmail, adminPermissionProfile,
 } from "../../../_utils.js";
 
 function adminSession(request) {
@@ -17,7 +17,9 @@ function adminOk(request) {
 // PATCH /api/admin/users/:email   body: { banned: boolean }
 // Toggle ban status.
 export async function PATCH(request, { params }) {
-  if (!adminOk(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const session = adminSession(request);
+  if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!adminPermissionProfile(session).canManageUsers) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const actor = adminActorFromRequest(request);
   const { email: rawEmail } = await params;
   const email = decodeURIComponent(rawEmail || "").toLowerCase().trim();

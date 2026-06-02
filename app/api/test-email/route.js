@@ -2,12 +2,22 @@
 // Usage: curl -X POST http://localhost:3000/api/test-email -H "content-type: application/json" -d '{"to":"your@email.com"}'
 
 import { buildEmailBrandHeader } from "../email-brand.js";
-import { adminSessionFromRequest } from "../_utils.js";
+import { adminSessionFromRequest, isRootAdminSession } from "../_utils.js";
+
+function smtpDiagnosticEnabled() {
+  return process.env.NODE_ENV !== "production" || process.env.ENABLE_SMTP_TEST === "true";
+}
 
 export async function POST(request) {
+  if (!smtpDiagnosticEnabled()) {
+    return Response.json({ ok: false, error: "not_found" }, { status: 404 });
+  }
   const session = adminSessionFromRequest(request);
   if (!session) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  if (!isRootAdminSession(session)) {
+    return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   }
   let body = {};
   try {
@@ -16,12 +26,12 @@ export async function POST(request) {
   const to = String(body.to || "").trim();
 
   const env = {
-    SMTP_HOST: process.env.SMTP_HOST,
-    SMTP_PORT: process.env.SMTP_PORT,
-    SMTP_USER: process.env.SMTP_USER,
+    SMTP_HOST: process.env.SMTP_HOST ? "***set***" : null,
+    SMTP_PORT: process.env.SMTP_PORT ? "***set***" : null,
+    SMTP_USER: process.env.SMTP_USER ? "***set***" : null,
     SMTP_PASS: process.env.SMTP_PASS ? "***set***" : null,
-    SMTP_FROM: process.env.SMTP_FROM,
-    BRAND_NAME: process.env.BRAND_NAME,
+    SMTP_FROM: process.env.SMTP_FROM ? "***set***" : null,
+    BRAND_NAME: process.env.BRAND_NAME ? "***set***" : null,
   };
 
   if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
@@ -131,4 +141,8 @@ export async function POST(request) {
       env,
     }, { status: 502 });
   }
+}
+
+export async function GET() {
+  return Response.json({ ok: false, error: "not_found" }, { status: 404 });
 }

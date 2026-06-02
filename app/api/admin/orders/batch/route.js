@@ -1,7 +1,7 @@
 import {
   getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
-  pushAdminActionLog, formatBeijingTime, isRootAdminSession,
+  pushAdminActionLog, formatBeijingTime, isRootAdminSession, adminPermissionProfile,
   clean, sendSimpleEmail,
 } from "../../../_utils.js";
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
@@ -62,6 +62,9 @@ export async function POST(request) {
   }
   if (!action) {
     return Response.json({ ok: false, error: "invalid_action" }, { status: 400 });
+  }
+  if (!adminPermissionProfile(session).canEditOrders) {
+    return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   }
   if (action === "delete" && !isRootAdminSession(session)) {
     return Response.json({ ok: false, error: "forbidden" }, { status: 403 });

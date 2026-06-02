@@ -8,9 +8,8 @@ import {
   clientIpFromRequest, clientUserAgentFromRequest,
   inviteCodeFromRequest, normalizeInviteCode, resolveReferralForOrder,
   pushAdminActionLog,
+  saveOrderRecord, verifyPaymentQuote,
 } from "../_utils.js";
-
-const ORDERS_KEY = "liumeiti:orders";
 
 const PRODUCTS = {
   spotify: { label: "Spotify", amount: 128, cycle: "1年", needsAccountPassword: true, needsContact: true, hasPlan: true },
@@ -117,33 +116,6 @@ function subscriptionLinks(username) {
     shadowrocket: "https://hk.joinvip.vip:2056/sub/" + encoded,
     clash: "https://hk.joinvip.vip:2056/sub/" + encoded + "?format=clash",
   };
-}
-
-function redisConfig() {
-  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return { url: url.replace(/\/$/, ""), token };
-}
-
-async function saveOrder(order) {
-  const redis = redisConfig();
-  if (!redis) return null;
-  try {
-    const response = await fetch(redis.url + "/pipeline", {
-      method: "POST",
-      headers: { Authorization: "Bearer " + redis.token, "Content-Type": "application/json" },
-      body: JSON.stringify([
-        ["LPUSH", ORDERS_KEY, JSON.stringify(order)],
-        ["LTRIM", ORDERS_KEY, "0", "199"],
-      ]),
-    });
-    if (!response.ok) return false;
-    const result = await response.json();
-    return Array.isArray(result) && result.every((item) => !item.error);
-  } catch (error) {
-    return false;
-  }
 }
 
 function orderText(order) {
@@ -481,7 +453,12 @@ export async function POST(request) {
   const couponDiscount = roundMoney(coupon.discount || 0);
   const finalAmount = paymentMethod === "redeem" ? 0 : Math.max(0, Math.round((bundleFinalAmount - couponDiscount) * 100) / 100);
   const finalUsdt = Math.round((finalAmount * USDT_DISCOUNT / USDT_RATE) * 100) / 100;
-  const paymentAdjustment = paymentMethod === "alipay" && finalAmount > 0 ? normalizePaymentAdjustment(body.paymentAdjustment) : 0;
+  const quote = paymentMethod === "alipay" && finalAmount > 0 ? verifyPaymentQuote(body.paymentQuoteToken) : null;
+  if (paymentMethod === "alipay" && finalAmount > 0 && !quote) {
+    await restoreCoupon(userEmail, coupon.couponId, orderId);
+    return Response.json({ ok: false, error: "payment_quote_required", message: "付款金额已刷新，请返回支付页重新确认金额" }, { status: 400 });
+  }
+  const paymentAdjustment = quote ? normalizePaymentAdjustment(quote.paymentAdjustment) : 0;
   const payableAmount = paymentMethod === "alipay" ? roundMoney(Math.max(0.01, finalAmount + paymentAdjustment)) : finalAmount;
   const paidAmount = paymentMethod === "usdt" ? finalUsdt : paymentMethod === "alipay" ? payableAmount : finalAmount;
   const paidCurrency = paymentMethod === "usdt" ? "USDT" : paymentMethod === "redeem" ? "CODE" : "CNY";
@@ -608,7 +585,7 @@ export async function POST(request) {
   }
 
   const deliveries = [];
-  const stored = await saveOrder(order);
+  const stored = await saveOrderRecord(order);
   deliveries.push({ channel: "storage", ok: Boolean(stored) });
   if (!stored) {
     await restoreCoupon(userEmail, coupon.couponId, orderId);

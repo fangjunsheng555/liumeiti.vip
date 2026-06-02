@@ -411,7 +411,7 @@ export default function ShopPage() {
               <div>
                 <div className="detail-title">{selectedProduct.detailTitle}</div>
                 <div className="detail-body">{selectedProduct.detailBody}</div>
-                <div className="modal-actions">
+                <div className="modal-actions product-detail-actions">
                   <button
                     className={`primary-btn${isInCart(selectedProduct.key) ? " in-cart" : ""}`}
                     onClick={() => hasProductPlans(selectedProduct.key)
@@ -430,7 +430,7 @@ export default function ShopPage() {
                   {SERVICE_SLUG_BY_KEY[selectedProduct.key] && (
                     <Link href={`/services/${SERVICE_SLUG_BY_KEY[selectedProduct.key]}`} className="secondary-btn">
                       <ArrowRight size={16} />
-                      服务介绍
+                      服务指南
                     </Link>
                   )}
                 </div>
