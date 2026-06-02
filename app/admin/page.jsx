@@ -2092,6 +2092,16 @@ export default function AdminPage() {
     }
   }
 
+  function openStaffActionModal(staff) {
+    const staffId = Number(staff?.id || 1);
+    setSelectedActionIds(new Set());
+    setActionDeleteResult(null);
+    setActiveStaffAction({
+      staff,
+      actions: staffPane.actions.filter((action) => Number(action.staffId || 1) === staffId),
+    });
+  }
+
   // Try fetching orders to detect if authed
   const loadOrders = useCallback(async (q, status, options = {}) => {
     const silent = Boolean(options.silent);
@@ -2460,6 +2470,9 @@ export default function AdminPage() {
     const id = Number(item.staffId || 1);
     staffActionCounts.set(id, (staffActionCounts.get(id) || 0) + 1);
   });
+  const activeStaffActionIds = (activeStaffAction?.actions || []).map((item) => item.id).filter(Boolean);
+  const activeStaffSelectedCount = activeStaffActionIds.filter((id) => selectedActionIds.has(id)).length;
+  const activeStaffAllSelected = activeStaffActionIds.length > 0 && activeStaffSelectedCount === activeStaffActionIds.length;
 
   // ── Dashboard ──
   return (
@@ -3166,10 +3179,7 @@ export default function AdminPage() {
                     <button
                       type="button"
                       className="admin-staff-account-btn"
-                      onClick={() => setActiveStaffAction({
-                        staff: item,
-                        actions: staffPane.actions.filter((action) => Number(action.staffId || 1) === Number(item.id)),
-                      })}
+                      onClick={() => openStaffActionModal(item)}
                     >
                       {item.username}
                       <em>{staffActionCounts.get(Number(item.id)) || 0} 条记录</em>
@@ -3187,29 +3197,7 @@ export default function AdminPage() {
             <div className="admin-action-log-panel">
               <div className="admin-action-log-head">
                 <div className="admin-card-title"><ShieldCheck size={15} />后台操作记录</div>
-                <div className="admin-action-log-tools">
-                  <button
-                    type="button"
-                    className="admin-filter-btn"
-                    onClick={() => {
-                      const ids = staffPane.actions.map((item) => item.id).filter(Boolean);
-                      setSelectedActionIds((current) => (current.size === ids.length ? new Set() : new Set(ids)));
-                    }}
-                    disabled={staffPane.actions.length === 0 || actionDeleteBusy}
-                  >
-                    {selectedActionIds.size === staffPane.actions.length && staffPane.actions.length > 0 ? "取消全选" : "全选"}
-                  </button>
-                  <button
-                    type="button"
-                    className="admin-filter-btn danger"
-                    onClick={deleteSelectedActions}
-                    disabled={selectedActionIds.size === 0 || actionDeleteBusy}
-                  >
-                    {actionDeleteBusy ? "删除中" : `删除 ${selectedActionIds.size}`}
-                  </button>
-                </div>
               </div>
-              {actionDeleteResult && <div className={`admin-alert ${actionDeleteResult.type}`}>{actionDeleteResult.message}</div>}
               <div className="admin-action-staff-summary" aria-label="工作人员操作记录">
                 {staffPane.staff.map((staff) => {
                   const actions = staffPane.actions.filter((action) => Number(action.staffId || 1) === Number(staff.id));
@@ -3218,50 +3206,13 @@ export default function AdminPage() {
                       type="button"
                       key={staff.id}
                       className="admin-action-staff-card"
-                      onClick={() => setActiveStaffAction({ staff, actions })}
+                      onClick={() => openStaffActionModal(staff)}
                     >
                       <strong>{staff.username}</strong>
                       <span>{actions.length} 条记录</span>
                     </button>
                   );
                 })}
-              </div>
-              <div className="admin-action-log-list">
-                {staffPane.actions.length === 0 ? (
-                  <div className="admin-action-log-item"><span>暂无操作记录</span></div>
-                ) : staffPane.actions.map((item) => (
-                  <div key={item.id} className={`admin-action-log-item${selectedActionIds.has(item.id) ? " selected" : ""}`}>
-                    <label className="admin-action-log-check" aria-label="选择操作记录">
-                      <input
-                        type="checkbox"
-                        checked={selectedActionIds.has(item.id)}
-                        onChange={(e) => {
-                          setSelectedActionIds((current) => {
-                            const next = new Set(current);
-                            if (e.target.checked) next.add(item.id);
-                            else next.delete(item.id);
-                            return next;
-                          });
-                        }}
-                      />
-                    </label>
-                    <div className="admin-action-log-main">
-                      <strong>{item.actionLabel || item.action}</strong>
-                      <small>{actionDetailText(item)}</small>
-                      <em>{item.target || "system"} · {item.createdAtBeijing}</em>
-                    </div>
-                    <button
-                      type="button"
-                      className="admin-action-staff-btn"
-                      onClick={() => setActiveStaffAction({
-                        staff: staffPane.staff.find((staff) => Number(staff.id) === Number(item.staffId)) || { id: item.staffId, username: item.staffUsername },
-                        actions: staffPane.actions.filter((action) => Number(action.staffId || 1) === Number(item.staffId || 1)),
-                      })}
-                    >
-                      #{item.staffId} {item.staffUsername}
-                    </button>
-                  </div>
-                ))}
               </div>
             </div>
           </div>
@@ -3550,17 +3501,65 @@ export default function AdminPage() {
               </button>
             </div>
             <div className="admin-modal-body">
+              {actionDeleteResult && <div className={`admin-alert ${actionDeleteResult.type}`}>{actionDeleteResult.message}</div>}
+              {activeStaffAction.actions.length > 0 && (
+                <div className="admin-action-modal-tools">
+                  <button
+                    type="button"
+                    className="admin-filter-btn"
+                    onClick={() => {
+                      setSelectedActionIds((current) => {
+                        const next = new Set(current);
+                        if (activeStaffAllSelected) {
+                          activeStaffActionIds.forEach((id) => next.delete(id));
+                        } else {
+                          activeStaffActionIds.forEach((id) => next.add(id));
+                        }
+                        return next;
+                      });
+                    }}
+                    disabled={actionDeleteBusy}
+                  >
+                    {activeStaffAllSelected ? "取消全选" : "全选"}
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-filter-btn danger"
+                    onClick={deleteSelectedActions}
+                    disabled={activeStaffSelectedCount === 0 || actionDeleteBusy}
+                  >
+                    {actionDeleteBusy ? "删除中" : `删除 ${activeStaffSelectedCount}`}
+                  </button>
+                </div>
+              )}
               <div className="admin-action-detail-list">
                 {activeStaffAction.actions.length === 0 ? (
                   <div className="admin-action-detail-empty">暂无操作记录</div>
                 ) : activeStaffAction.actions.map((item) => (
-                  <div key={item.id} className="admin-action-detail-item">
-                    <div>
-                      <strong>{item.actionLabel || item.action}</strong>
-                      <small>{item.createdAtBeijing}</small>
+                  <div key={item.id} className={`admin-action-detail-item${selectedActionIds.has(item.id) ? " selected" : ""}`}>
+                    <label className="admin-action-detail-check" aria-label="选择操作记录">
+                      <input
+                        type="checkbox"
+                        checked={selectedActionIds.has(item.id)}
+                        disabled={!item.id || actionDeleteBusy}
+                        onChange={(e) => {
+                          setSelectedActionIds((current) => {
+                            const next = new Set(current);
+                            if (e.target.checked) next.add(item.id);
+                            else next.delete(item.id);
+                            return next;
+                          });
+                        }}
+                      />
+                    </label>
+                    <div className="admin-action-detail-main">
+                      <div>
+                        <strong>{item.actionLabel || item.action}</strong>
+                        <small>{item.createdAtBeijing}</small>
+                      </div>
+                      <p>{actionDetailText(item)}</p>
+                      <span>{item.target || "system"}</span>
                     </div>
-                    <p>{actionDetailText(item)}</p>
-                    <span>{item.target || "system"}</span>
                   </div>
                 ))}
               </div>
