@@ -1,7 +1,7 @@
 {
   "name": "冒央会社",
   "short_name": "冒央会社",
-  "description": "流媒体会员与节点服务一站选购，支持订单查询与在线客服售后。",
+  "description": "流媒体会员与机场节点一站选购，覆盖 Spotify、Netflix、机场节点、Disney、hbomax等...稳定渠道、专业团队、快速处理、隐私保护",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

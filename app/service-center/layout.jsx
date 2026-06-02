@@ -1,18 +1,20 @@
+import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../social-meta";
+
 export const metadata = {
   title: "服务中心",
-  description: "通过邮箱验证码安全查询冒央会社订单状态，查看售后保障、常见问题与在线客服联系方式。",
+  description: SOCIAL_DESCRIPTION,
   alternates: { canonical: "/service-center" },
   openGraph: {
     title: "服务中心 | 冒央会社",
-    description: "订单查询、售后支持、服务保障与客服联系方式。",
+    description: SOCIAL_DESCRIPTION,
     url: "/service-center",
-    images: [{ url: "/logo-mark.png?v=20260602", width: 384, height: 384, type: "image/png", alt: "冒央会社" }],
+    images: [SOCIAL_IMAGE_META],
   },
   twitter: {
     card: "summary",
     title: "服务中心 | 冒央会社",
-    description: "安全查询订单状态并联系冒央会社客服。",
-    images: ["/logo-mark.png?v=20260602"],
+    description: SOCIAL_DESCRIPTION,
+    images: [SOCIAL_IMAGE],
   },
 };
 

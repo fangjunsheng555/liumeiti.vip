@@ -12,22 +12,23 @@ import {
 import FloatingSupport from "../components/FloatingSupport";
 import MobileNav from "../components/MobileNav";
 import { SERVICE_PAGES } from "../services/service-data";
+import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../social-meta";
 
 export const metadata = {
   title: "企业资质与服务保障",
-  description: "了解冒央会社 Maoyang Taiwan Inc 的企业信息、服务条款、退款规则、隐私政策与数据保留说明",
+  description: SOCIAL_DESCRIPTION,
   alternates: { canonical: "/legal" },
   openGraph: {
     title: "企业资质与服务保障 | 冒央会社",
-    description: "台湾注册实体，清晰展示服务承诺、售后保障、隐私保护、退款规则与数据保留说明",
+    description: SOCIAL_DESCRIPTION,
     url: "/legal",
-    images: [{ url: "https://www.liumeiti.vip/logo-mark.png?v=20260602", width: 384, height: 384, type: "image/png", alt: "冒央会社" }],
+    images: [SOCIAL_IMAGE_META],
   },
   twitter: {
     card: "summary",
     title: "企业资质与服务保障 | 冒央会社",
-    description: "查看冒央会社企业信息、服务条款、隐私政策、退款规则与数据保留说明",
-    images: ["https://www.liumeiti.vip/logo-mark.png?v=20260602"],
+    description: SOCIAL_DESCRIPTION,
+    images: [SOCIAL_IMAGE],
   },
 };
 

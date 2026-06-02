@@ -5,6 +5,7 @@ import FloatingSupport from "../../components/FloatingSupport";
 import MobileNav from "../../components/MobileNav";
 import { getServiceBySlug, SERVICE_PAGES } from "../service-data";
 import ServiceOrderActions from "../ServiceOrderActions";
+import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../../social-meta";
 
 export function generateStaticParams() {
   return SERVICE_PAGES.map((item) => ({ slug: item.slug }));
@@ -21,23 +22,15 @@ export async function generateMetadata({ params }) {
     alternates: { canonical: `/services/${service.slug}` },
     openGraph: {
       title: `${title} | 冒央会社`,
-      description: service.description,
+      description: SOCIAL_DESCRIPTION,
       url: `/services/${service.slug}`,
-      images: [
-        {
-          url: "https://www.liumeiti.vip/logo-mark.png?v=20260602",
-          width: 384,
-          height: 384,
-          type: "image/png",
-          alt: "冒央会社",
-        },
-      ],
+      images: [SOCIAL_IMAGE_META],
     },
     twitter: {
       card: "summary",
       title: `${title} | 冒央会社`,
-      description: service.description,
-      images: ["https://www.liumeiti.vip/logo-mark.png?v=20260602"],
+      description: SOCIAL_DESCRIPTION,
+      images: [SOCIAL_IMAGE],
     },
   };
 }
