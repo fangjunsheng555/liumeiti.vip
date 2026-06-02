@@ -291,7 +291,7 @@ export default function AccountPage() {
             </div>
             <div className="account-casetify-intro">
               <strong>关于 CASETiFY 手机壳</strong>
-              <p>CASETiFY 手机壳主打防摔保护、丰富联名与个性化定制，适合想兼顾日常保护和外观风格的用户</p>
+              <p>CASETiFY 手机壳主打防摔保护、丰富联名与个性化定制，适合想兼顾日常保护和外观风格的用户，奖品由 CASETiFY 官方发出，并在发出后提供包囊跟踪编号</p>
             </div>
             <div className="account-invite-rule-list account-casetify-rule-list">
               <div>
