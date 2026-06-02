@@ -338,6 +338,22 @@
   font-weight: 700;
   color: rgba(240, 253, 250, 0.82);
 }
+.account-casetify-poster {
+  background:
+    radial-gradient(circle at 90% 4%, rgba(255, 255, 255, 0.22), transparent 134px),
+    linear-gradient(135deg, #111827 0%, #0f766e 54%, #22c55e 100%);
+  border-color: rgba(187, 247, 208, 0.34);
+}
+.account-casetify-poster::after {
+  content: "活动详情";
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(255, 255, 255, 0.36);
+  color: #0f766e;
+}
+.account-casetify-poster-icon {
+  background: rgba(255, 255, 255, 0.18);
+  color: #dcfce7;
+}
 .account-auth-card {
   position: relative;
   max-width: 430px;
@@ -7638,6 +7654,7 @@ button { cursor: pointer; border: none; background: transparent; }
 
 @media (max-width: 520px) {
   .account-invite-rule-list { grid-template-columns: 1fr; }
+  .account-casetify-actions { grid-template-columns: 1fr; }
   .account-invite-modal-body { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
   .account-avatar-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .account-avatar-choice img { width: 62px; height: 62px; }
@@ -10018,6 +10035,30 @@ button { cursor: pointer; border: none; background: transparent; }
   font-weight: 900;
 }
 .account-invite-link-box button:disabled { opacity: 0.55; cursor: not-allowed; }
+.account-casetify-hero {
+  background:
+    radial-gradient(circle at 100% 0%, rgba(187, 247, 208, 0.32), transparent 138px),
+    linear-gradient(135deg, #111827 0%, #134e4a 68%, #0f766e 100%);
+}
+.account-casetify-intro {
+  padding: 12px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(248, 250, 252, 0.98), rgba(240, 253, 250, 0.78));
+  border: 1px solid rgba(15, 118, 110, 0.10);
+}
+.account-casetify-intro strong {
+  display: block;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 950;
+}
+.account-casetify-intro p {
+  margin-top: 5px;
+  color: #475569;
+  font-size: 11.5px;
+  line-height: 1.6;
+  font-weight: 700;
+}
 .account-invite-rule-list {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -10040,6 +10081,35 @@ button { cursor: pointer; border: none; background: transparent; }
   font-size: 11.2px;
   line-height: 1.55;
   font-weight: 700;
+}
+.account-casetify-rule-list > div {
+  background: rgba(248, 250, 252, 0.94);
+}
+.account-casetify-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.account-casetify-actions a {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  text-decoration: none;
+  color: #0f172a;
+  background: #fff;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  font-size: 12px;
+  font-weight: 950;
+  text-align: center;
+}
+.account-casetify-actions a:first-child {
+  color: #fff;
+  background: linear-gradient(135deg, #0f172a, #0f766e);
+  border-color: rgba(15, 118, 110, 0.24);
 }
 .account-downline-list {
   display: grid;
