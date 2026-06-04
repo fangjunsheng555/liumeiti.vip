@@ -505,7 +505,7 @@ export default function AccountPage() {
               <div className="account-modal-head">
                 <div>
                   <div className="account-modal-id">合伙人计划</div>
-                  <div className="account-modal-status status-completed">最高 15% 佣金</div>
+                  <div className="account-modal-status status-completed">最高 15% 佣金，活动长期有效</div>
                 </div>
                 <button type="button" className="account-modal-close" onClick={() => setActivityModal(false)}>
                   <X size={16} />
