@@ -5834,41 +5834,17 @@ button { cursor: pointer; border: none; background: transparent; }
 }
 
 .pay-submit-notice {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #ecfeff 0%, #f0fdfa 100%);
-  border: 1px solid rgba(20, 184, 166, 0.28);
-  box-shadow: 0 10px 26px rgba(15, 118, 110, 0.08);
-  color: #0f766e;
-}
-.pay-submit-notice-icon {
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 11px;
-  background: #ccfbf1;
-  color: #0f766e;
-}
-.pay-submit-notice strong {
   display: block;
-  font-size: 13.5px;
-  line-height: 1.25;
-  font-weight: 900;
-  color: #0f172a;
-}
-.pay-submit-notice small {
-  display: block;
-  margin-top: 3px;
-  font-size: 11.5px;
+  min-height: 20px;
+  margin: -2px 2px 0;
+  font-size: 13px;
   line-height: 1.45;
-  font-weight: 700;
-  color: #0f766e;
+  font-weight: 900;
+  color: #dc2626;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pay-submit-btn {
@@ -6466,10 +6442,7 @@ button { cursor: pointer; border: none; background: transparent; }
   .usdt-address-value { font-size: 10.5px; padding: 6px 9px; }
   .pay-summary-foldable { padding: 0 12px; font-size: 11.5px; }
   .pay-summary-foldable summary { padding: 9px 0; }
-  .pay-submit-notice { padding: 10px 11px; gap: 9px; border-radius: 12px; }
-  .pay-submit-notice-icon { width: 28px; height: 28px; flex-basis: 28px; border-radius: 9px; }
-  .pay-submit-notice strong { font-size: 12.5px; }
-  .pay-submit-notice small { font-size: 10.5px; line-height: 1.4; }
+  .pay-submit-notice { margin-top: -1px; font-size: 11.5px; line-height: 1.35; }
   .pay-submit-btn { padding: 13px 18px; font-size: 14px; min-height: 46px; }
 
   /* Checkout done */
