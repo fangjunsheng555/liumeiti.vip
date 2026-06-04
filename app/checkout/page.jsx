@@ -151,6 +151,8 @@ export default function CheckoutPage() {
   const [paymentMethod, setPaymentMethod] = useState("alipay");
   const [paymentAdjustment, setPaymentAdjustment] = useState(0);
   const [paymentQuoteToken, setPaymentQuoteToken] = useState("");
+  const [paymentPageEnteredAt, setPaymentPageEnteredAt] = useState(0);
+  const [paySubmitNotice, setPaySubmitNotice] = useState("");
   const [status, setStatus] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [passwordVisible, setPasswordVisible] = useState(false);
@@ -540,6 +542,7 @@ export default function CheckoutPage() {
       submitOrders();
       return;
     }
+    setPaySubmitNotice("");
     setPaymentQuoteToken("");
     setPaymentAdjustment(0);
     if (paymentMethod === "alipay" && finalCny > 0) {
@@ -563,6 +566,7 @@ export default function CheckoutPage() {
       setSubmitting(false);
     }
     setStatus(null);
+    setPaymentPageEnteredAt(Date.now());
     setStep("pay");
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -575,7 +579,14 @@ export default function CheckoutPage() {
       setStep("form");
       return;
     }
+    const scanPaymentActive = !serviceRedeemActive && step === "pay" && (paymentMethod === "alipay" || paymentMethod === "usdt");
+    if (scanPaymentActive && paymentPageEnteredAt && Date.now() - paymentPageEnteredAt < 3000) {
+      setStatus(null);
+      setPaySubmitNotice("请扫码完成付款");
+      return;
+    }
 
+    setPaySubmitNotice("");
     setSubmitting(true);
     setStatus({ type: "info", message: "正在提交订单..." });
 
@@ -1041,7 +1052,7 @@ export default function CheckoutPage() {
                 <button
                   type="button"
                   className="pay-method-switch"
-                  onClick={() => { setStep("form"); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                  onClick={() => { setPaySubmitNotice(""); setPaymentPageEnteredAt(0); setStep("form"); window.scrollTo({ top: 0, behavior: "smooth" }); }}
                   disabled={submitting}
                 >
                   切换方式
@@ -1134,6 +1145,18 @@ export default function CheckoutPage() {
                   )}
                 </div>
               </details>
+
+              {paySubmitNotice && paymentMethod !== "balance" && (
+                <div className="pay-submit-notice" role="status" aria-live="polite">
+                  <span className="pay-submit-notice-icon">
+                    <ShieldCheck size={15} />
+                  </span>
+                  <div>
+                    <strong>{paySubmitNotice}</strong>
+                    <small>完成付款后再提交订单，方便我们为您快速核对</small>
+                  </div>
+                </div>
+              )}
 
               {/* 提交按钮 */}
               <button
