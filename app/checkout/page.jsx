@@ -580,9 +580,9 @@ export default function CheckoutPage() {
       return;
     }
     const scanPaymentActive = !serviceRedeemActive && step === "pay" && (paymentMethod === "alipay" || paymentMethod === "usdt");
-    if (scanPaymentActive && paymentPageEnteredAt && Date.now() - paymentPageEnteredAt < 3000) {
+    if (scanPaymentActive && paymentPageEnteredAt && Date.now() - paymentPageEnteredAt < 5000) {
       setStatus(null);
-      setPaySubmitNotice("请扫码完成付款");
+      setPaySubmitNotice("请扫码完成付款，付款完成后再点击「付款完成」提交订单");
       return;
     }
 
@@ -1148,13 +1148,7 @@ export default function CheckoutPage() {
 
               {paySubmitNotice && paymentMethod !== "balance" && (
                 <div className="pay-submit-notice" role="status" aria-live="polite">
-                  <span className="pay-submit-notice-icon">
-                    <ShieldCheck size={15} />
-                  </span>
-                  <div>
-                    <strong>{paySubmitNotice}</strong>
-                    <small>完成付款后再提交订单，方便我们为您快速核对</small>
-                  </div>
+                  {paySubmitNotice}
                 </div>
               )}
 
