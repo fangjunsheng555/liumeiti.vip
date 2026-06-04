@@ -405,7 +405,7 @@ export default function AccountPage() {
           <button type="button" className="account-invite-poster" onClick={() => setActivityModal(true)}>
             <div className="account-invite-poster-icon"><BadgePercent size={20} /></div>
             <div>
-              <span>合伙人计划</span>
+              <span>合伙人计划 · 长期有效</span>
               <strong>注册即可获得专属邀请链接</strong>
               <p>分享稳定好用的流媒体服务，一次推荐可持续获得长期收益</p>
             </div>
@@ -936,7 +936,7 @@ export default function AccountPage() {
             <div className="account-modal-head">
               <div>
                 <div className="account-modal-id">合伙人计划</div>
-                <div className="account-modal-status status-completed">最高 15% 佣金</div>
+                <div className="account-modal-status status-completed">最高 15% 佣金，活动长期有效</div>
               </div>
               <button type="button" className="account-modal-close" onClick={() => setInviteModal(false)}>
                 <X size={16} />
