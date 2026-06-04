@@ -42,6 +42,10 @@ const PRODUCT_PROMOS = {
   rocket: { badge: "必备工具", badgeIcon: Sparkles, originalPrice: 268, monthlyRange: [6200, 9200] },
 };
 
+const OPERATION_SLOT_MINUTES = 10;
+const OPERATION_SLOTS_PER_DAY = 24 * 60 / OPERATION_SLOT_MINUTES;
+const AVERAGE_DAILY_ORDER_TARGET = 1275;
+
 function serviceIcon(label) {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
@@ -53,19 +57,81 @@ function seededUnit(seed) {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 
-function productMonthlySold(productKey, range = [3000, 5000], date = new Date()) {
+function beijingParts(date = new Date()) {
   const beijing = new Date(date.getTime() + 8 * 60 * 60 * 1000);
-  const year = beijing.getUTCFullYear();
-  const month = beijing.getUTCMonth();
-  const start = Date.UTC(year, month, 1);
-  const end = Date.UTC(year, month + 1, 1);
-  const now = Date.UTC(year, month, beijing.getUTCDate(), beijing.getUTCHours(), beijing.getUTCMinutes(), beijing.getUTCSeconds());
-  const progress = Math.max(0.01, Math.min(0.995, (now - start) / Math.max(1, end - start)));
+  return {
+    year: beijing.getUTCFullYear(),
+    month: beijing.getUTCMonth() + 1,
+    day: beijing.getUTCDate(),
+    hour: beijing.getUTCHours(),
+    minute: beijing.getUTCMinutes(),
+    second: beijing.getUTCSeconds(),
+  };
+}
+
+function daySeed(parts) {
+  return parts.year * 10000 + parts.month * 100 + parts.day;
+}
+
+function operationWeight(hour) {
+  if (hour >= 0 && hour < 6) return 0.16;
+  if (hour >= 6 && hour < 8) return 0.55;
+  if (hour >= 8 && hour < 11) return 1.32;
+  if (hour >= 11 && hour < 14) return 0.82;
+  if (hour >= 14 && hour < 17) return 0.96;
+  if (hour >= 17 && hour < 21) return 1.42;
+  if (hour >= 21 && hour < 23) return 0.78;
+  return 0.28;
+}
+
+function slotWeight(slot, seed) {
+  const hour = Math.floor((slot * OPERATION_SLOT_MINUTES) / 60);
+  const jitter = 0.74 + seededUnit(seed + slot * 17) * 0.52;
+  return operationWeight(hour) * jitter;
+}
+
+function dailyOrderTarget(seed) {
+  return Math.min(1500, Math.floor(1080 + seededUnit(seed + 91) * 390));
+}
+
+function processedOrderCount(parts) {
+  const seed = daySeed(parts);
+  const target = dailyOrderTarget(seed);
+  const currentSlot = Math.min(OPERATION_SLOTS_PER_DAY - 1, Math.floor((parts.hour * 60 + parts.minute) / OPERATION_SLOT_MINUTES));
+  const slotProgress = ((parts.minute % OPERATION_SLOT_MINUTES) * 60 + parts.second) / (OPERATION_SLOT_MINUTES * 60);
+  let fullDayWeight = 0;
+  let elapsedWeight = 0;
+  for (let slot = 0; slot < OPERATION_SLOTS_PER_DAY; slot += 1) {
+    const weight = slotWeight(slot, seed);
+    fullDayWeight += weight;
+    if (slot < currentSlot) elapsedWeight += weight;
+    if (slot === currentSlot) elapsedWeight += weight * slotProgress;
+  }
+  return Math.min(1500, Math.floor(target * (elapsedWeight / fullDayWeight)));
+}
+
+function daysInBeijingMonth(parts) {
+  return new Date(Date.UTC(parts.year, parts.month, 0)).getUTCDate();
+}
+
+function productMonthlySold(productKey, range = [3000, 5000], date = new Date()) {
+  const parts = beijingParts(date);
+  const daysInMonth = daysInBeijingMonth(parts);
   const keySeed = productKey.split("").reduce((sum, ch) => sum + ch.charCodeAt(0), 0);
-  const monthSeed = year * 100 + month + 1 + keySeed * 13;
+  const monthSeed = parts.year * 100 + parts.month + keySeed * 13;
   const target = Math.floor(range[0] + seededUnit(monthSeed) * (range[1] - range[0]));
-  const dayWave = 0.96 + seededUnit(monthSeed + beijing.getUTCDate() * 97 + beijing.getUTCHours()) * 0.08;
-  return Math.max(18, Math.min(target, Math.floor(target * Math.pow(progress, 0.98) * dayWave)));
+  const completedDays = Math.max(0, parts.day - 1);
+  const previousDaysRatio = completedDays / Math.max(1, daysInMonth);
+  const previousDaysWave = 0.985 + seededUnit(monthSeed + completedDays * 37) * 0.03;
+  const previousSold = target * previousDaysRatio * previousDaysWave;
+  const todaySeed = daySeed(parts);
+  const todayTarget = dailyOrderTarget(todaySeed);
+  const todayDone = processedOrderCount(parts);
+  const todayRatio = Math.max(0, Math.min(1, todayDone / Math.max(1, todayTarget)));
+  const dailyDemand = Math.max(0.82, Math.min(1.22, todayTarget / AVERAGE_DAILY_ORDER_TARGET));
+  const productWave = 0.92 + seededUnit(todaySeed + keySeed * 19) * 0.16;
+  const expectedToday = (target / Math.max(1, daysInMonth)) * dailyDemand * productWave;
+  return Math.max(18, Math.min(target, Math.floor(previousSold + expectedToday * todayRatio)));
 }
 
 export default function ShopPage() {
@@ -73,7 +139,7 @@ export default function ShopPage() {
   const [planPickerKey, setPlanPickerKey] = useState(null);
   const [planChoices, setPlanChoices] = useState(DEFAULT_PRODUCT_PLANS);
   const [cartExpanded, setCartExpanded] = useState(false);
-  const [soldTick, setSoldTick] = useState(0);
+  const [soldTick, setSoldTick] = useState(() => Date.now());
   const { cart, cartPlans, addToCart, removeFromCart } = useCart();
 
   const selectedProduct = useMemo(() => PRODUCTS.find((item) => item.key === selectedKey) || null, [selectedKey]);
@@ -202,9 +268,7 @@ export default function ShopPage() {
               const displayAmount = defaultPlan?.amount || item.amount;
               const displayCycle = defaultPlan?.unit || defaultPlan?.cycle || (hasProductPlans(item.key) ? "年起" : item.cycle);
               const saved = Number(promo.originalPrice || 0) - Number(displayAmount || 0);
-              const soldThisMonth = soldTick
-                ? productMonthlySold(item.key, promo.monthlyRange, new Date(soldTick))
-                : Math.max(18, Math.floor(((promo.monthlyRange?.[0] || 3000) + (promo.monthlyRange?.[1] || 5000)) / 45));
+              const soldThisMonth = productMonthlySold(item.key, promo.monthlyRange, new Date(soldTick));
               const added = isInCart(item.key);
               return (
                 <article

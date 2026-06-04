@@ -31,7 +31,7 @@ const OPERATION_INITIAL_METRICS = {
 };
 
 const HERO_STATS = [
-  { metric: "processedToday", label: "今日已处理订单", icon: TrendingUp },
+  { metric: "processedToday", label: "今日已完成订单", icon: TrendingUp },
   { metric: "averageResponse", label: "平均响应时间", icon: Clock },
   { metric: "queueCount", label: "当前排队数量", icon: Users },
   { metric: "serviceYears", label: "服务运行年限", icon: Award },
