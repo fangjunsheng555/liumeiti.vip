@@ -5835,10 +5835,9 @@ button { cursor: pointer; border: none; background: transparent; }
 
 .pay-submit-notice {
   display: block;
-  min-height: 20px;
-  margin: -2px 2px 0;
+  margin: -6px 2px -8px;
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.2;
   font-weight: 900;
   color: #dc2626;
   text-align: center;
@@ -6442,7 +6441,7 @@ button { cursor: pointer; border: none; background: transparent; }
   .usdt-address-value { font-size: 10.5px; padding: 6px 9px; }
   .pay-summary-foldable { padding: 0 12px; font-size: 11.5px; }
   .pay-summary-foldable summary { padding: 9px 0; }
-  .pay-submit-notice { margin-top: -1px; font-size: 11.5px; line-height: 1.35; }
+  .pay-submit-notice { margin: -4px 2px -7px; font-size: 11.5px; line-height: 1.2; }
   .pay-submit-btn { padding: 13px 18px; font-size: 14px; min-height: 46px; }
 
   /* Checkout done */
