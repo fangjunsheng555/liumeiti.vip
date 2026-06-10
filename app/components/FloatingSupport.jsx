@@ -20,7 +20,7 @@ export default function FloatingSupport() {
               <QQBrandIcon />
             </a>
             <a
-              href="https://wa.me/message/MRLWFP22GKEAE1"
+              href="https://wa.me/message/4ISUO4RPBYSSJ1"
               target="_blank"
               rel="noopener noreferrer"
               className="floating-icon-btn whatsapp"
