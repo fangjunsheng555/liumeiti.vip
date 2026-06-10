@@ -111,7 +111,7 @@ const TESTIMONIALS = [
 
 const SUPPORT_CHANNELS = [
   { label: "QQ", value: "2802632995", copyValue: "2802632995" },
-  { label: "WhatsApp", value: "+1 4315093334", copyValue: "+1 4315093334" },
+  { label: "WhatsApp", value: "+34 671143339", copyValue: "+34 671143339" },
   { label: "Telegram", value: "@MaoyangSupport", copyValue: "@MaoyangSupport" },
 ];
 
