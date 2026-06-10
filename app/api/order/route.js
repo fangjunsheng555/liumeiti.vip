@@ -68,7 +68,7 @@ function resolveProductPlan(service, value) {
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
 const SITE_URL = process.env.SITE_URL || `https://${SITE_DOMAIN}`;
-const SUPPORT_CONTACT = process.env.SUPPORT_CONTACT || "请通过 QQ 2802632995 / WhatsApp +1 4315093334 / Telegram @MaoyangSupport 联系在线客服";
+const SUPPORT_CONTACT = process.env.SUPPORT_CONTACT || "请通过 QQ 2802632995 / WhatsApp +34 671143339 / Telegram @MaoyangSupport 联系在线客服";
 const USDT_DISCOUNT = 0.9;
 const USDT_RATE = 6.85;
 const ORDER_LIMIT_MESSAGE = "订单提交次数较多，请 5 分钟后再试，或联系在线客服协助下单";
