@@ -719,28 +719,44 @@ body { line-height: 1.6; }
 /* 统计栏内部：更精致的内边距与分隔 */
 .home-page-shell .home-main .home-hero-metrics { padding: 16px 2px !important; }
 
-/* 实时下单轮播条移入 Hero：与统计栏等宽、同圆角、紧贴其上方（不留空隙） */
-.home-hero-ticker { display: block !important; width: 100% !important; margin: 16px 0 0 !important; }
-.home-page-shell .home-main .home-hero-metrics { margin-top: 8px !important; }
+/* 轮滚条 + 统计栏合并为一张「实时数据面板」：轮滚条做卡头 + 分隔线 + 下方统计 */
+.home-hero-ticker { display: block !important; width: 100% !important; margin: 18px 0 0 !important; }
 .home-page-shell .home-main .home-hero-ticker .home-announcement-row {
   display: flex !important;
   align-items: center !important;
-  justify-content: center !important;
+  justify-content: flex-start !important;
   width: 100% !important;
   max-width: 100% !important;
-  padding: 9px 16px !important;
-  gap: 8px !important;
-  font-size: 12px !important;
+  padding: 6px 14px !important;
+  gap: 6px !important;
+  font-size: 11px !important;
   font-weight: 500 !important;
-  border-radius: 16px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 16px 16px 0 0 !important;
+  background: #fbfbfc !important;
+  box-shadow: none !important;
+  color: var(--sub) !important;
+}
+.home-page-shell .home-main .home-hero-ticker .home-announcement-row span {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+.home-page-shell .home-main .home-hero-ticker .home-announcement-row b { font-weight: 600 !important; color: var(--accent-ink) !important; }
+.home-page-shell .home-main .home-hero-ticker .home-announcement-row svg { width: 13px !important; height: 13px !important; }
+.home-page-shell .home-main .home-hero-ticker .home-announcement-row svg:first-of-type { color: var(--accent) !important; }
+.home-page-shell .home-main .home-hero-ticker .home-announcement-row svg:last-of-type { margin-left: auto !important; color: #c0c0c5 !important; }
+/* 统计栏 = 同一张卡的下半部分（无顶边、上不留缝、圆角只在底部） */
+.home-page-shell .home-main .home-hero-metrics {
+  margin-top: 0 !important;
   background: #ffffff !important;
   border: 1px solid var(--line) !important;
-  box-shadow: var(--shadow-sm) !important;
-  color: var(--ink) !important;
+  border-top: 0 !important;
+  border-radius: 0 0 16px 16px !important;
+  box-shadow: var(--shadow-card) !important;
 }
-.home-page-shell .home-main .home-hero-ticker .home-announcement-row svg { width: 14px !important; height: 14px !important; color: var(--accent) !important; }
-.home-page-shell .home-main .home-hero-ticker .home-announcement-row b { font-weight: 600 !important; }
-.home-page-shell .home-main .home-hero-ticker .home-announcement-row span { min-width: 0 !important; overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; }
 
 /* 流程步骤：精致投影 + 序号徽 */
 .home-page-shell .home-layout-section .info-card {
@@ -769,10 +785,12 @@ body { line-height: 1.6; }
   box-shadow: 0 10px 24px -12px rgba(15, 118, 110, 0.7) !important;
 }
 
-/* 运营数据条：玻璃质感 + teal 描边高光 */
+/* 运营数据条 = 与轮滚条合并成一张卡的下半部分（纯白、无顶边、底圆角） */
 .home-page-shell .home-main .home-hero-metrics {
-  background: linear-gradient(180deg, #ffffff, #f7fdfc) !important;
-  border: 1px solid rgba(20, 184, 166, 0.16) !important;
+  background: #ffffff !important;
+  border: 1px solid var(--line) !important;
+  border-top: 0 !important;
+  border-radius: 0 0 16px 16px !important;
 }
 .home-page-shell .home-main .home-hero-metric b {
   background: linear-gradient(135deg, #0f766e, #0b1220) !important;
