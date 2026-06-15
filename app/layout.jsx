@@ -1,4 +1,5 @@
 import './globals.css';
+import './portal-theme.css';
 import ReferralTracker from './components/ReferralTracker';
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from './social-meta';
 

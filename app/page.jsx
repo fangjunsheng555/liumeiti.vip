@@ -20,6 +20,7 @@ import {
 import MobileNav from "./components/MobileNav";
 import RedeemCard from "./components/RedeemCard";
 import FloatingSupport from "./components/FloatingSupport";
+import { SERVICE_PAGES } from "./services/service-data";
 
 const OPERATION_SLOT_MINUTES = 10;
 const OPERATION_SLOTS_PER_DAY = 24 * 60 / OPERATION_SLOT_MINUTES;
@@ -381,6 +382,7 @@ export default function Page() {
               <ShoppingBag size={16} />订单查询
             </Link>
           </div>
+          <div className="home-hero-ticker"><LiveOrderTicker /></div>
           <div className="home-hero-metrics" aria-label="平台运营数据">
             {HERO_STATS.map(({ metric, label, icon: Icon }) => (
               <div key={label} className="home-hero-metric">
@@ -405,8 +407,30 @@ export default function Page() {
           </div>
         </section>
 
-        <section className="container home-announcement-card">
-          <LiveOrderTicker />
+        <section className="container home-services-section">
+          <div className="section-head simple-head home-compact-head">
+            <div>
+              <div className="section-kicker">服务产品</div>
+              <h2 className="section-title">流媒体会员与节点服务</h2>
+            </div>
+          </div>
+          <div className="home-services-grid">
+            {SERVICE_PAGES.map((s) => (
+              <Link key={s.slug} href={`/services/${s.slug}`} className={`home-service-card svc-${s.slug}`}>
+                <div className="home-service-logo-wrap">
+                  <img src={s.image} alt={s.shortTitle} className="home-service-logo" />
+                </div>
+                <div className="home-service-info">
+                  <div className="home-service-name">{s.shortTitle}</div>
+                  <div className="home-service-sub">{s.subtitle}</div>
+                </div>
+                <div className="home-service-foot">
+                  <span className="home-service-price">{s.price}</span>
+                  <ArrowRight size={16} className="home-service-arrow" />
+                </div>
+              </Link>
+            ))}
+          </div>
         </section>
 
         <section id="redeem" className="section container home-redeem-section">

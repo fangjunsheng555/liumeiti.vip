@@ -273,7 +273,7 @@ export default function ShopPage() {
               return (
                 <article
                   key={item.key}
-                  className={`glass-card product-card product-card-mini product-card-clickable${added ? " product-card-selected" : ""}`}
+                  className={`glass-card product-card product-card-mini product-card-clickable svc-${item.key}${added ? " product-card-selected" : ""}`}
                   role="button"
                   tabIndex={0}
                   onClick={(event) => {
@@ -489,7 +489,7 @@ export default function ShopPage() {
                   </button>
                   <Link href="/service-center#contact" className="secondary-btn">
                     <MessageCircleMore size={16} />
-                    联系在线客服
+                    联系客服
                   </Link>
                   {SERVICE_SLUG_BY_KEY[selectedProduct.key] && (
                     <Link href={`/services/${SERVICE_SLUG_BY_KEY[selectedProduct.key]}`} className="secondary-btn">
@@ -542,7 +542,7 @@ export default function ShopPage() {
               </button>
               <Link href="/service-center#contact" className="secondary-btn">
                 <MessageCircleMore size={16} />
-                联系在线客服
+                联系客服
               </Link>
             </div>
           </div>

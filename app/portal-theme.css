@@ -1,0 +1,885 @@
+/* ============================================================================
+   portal-theme.css — Apple 风极简浅色主题层
+   ----------------------------------------------------------------------------
+   在 globals.css 之后引入；仅做视觉/排版/层次增强，不改 DOM 结构/文案/逻辑/接口。
+   方向：Apple 官网式——#f5f5f7/白为主、近黑大字、超大留白、克制用色、扁平卡片。
+   自托管 Inter（SF 近似，符合 CSP font-src 'self'）。可整体移除回退。
+   ============================================================================ */
+
+/* ── 0. 自托管字体 ── */
+@font-face { font-family: 'InterPortal'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/inter-400.woff2') format('woff2'); }
+@font-face { font-family: 'InterPortal'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/inter-500.woff2') format('woff2'); }
+@font-face { font-family: 'InterPortal'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/inter-600.woff2') format('woff2'); }
+@font-face { font-family: 'InterPortal'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/inter-700.woff2') format('woff2'); }
+@font-face { font-family: 'InterPortal'; font-style: normal; font-weight: 800; font-display: swap; src: url('/fonts/inter-800.woff2') format('woff2'); }
+
+/* ── 1. 设计令牌（Apple 调性） ── */
+:root {
+  --font-portal: 'InterPortal', -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --bg: #f5f5f7;
+  --ink: #1d1d1f;
+  --sub: #6e6e73;
+  --line: rgba(0, 0, 0, 0.08);
+  --card: #ffffff;
+  --accent: #0f766e;
+  --accent-ink: #0b5b53;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --shadow: 0 4px 18px rgba(0, 0, 0, 0.06);
+  --radius: 18px;
+  --radius-lg: 24px;
+}
+
+/* ── 2. 全局 ── */
+html, body, button, input, textarea, select,
+.container, .section-title, .home-hero-card, .home-service-name {
+  font-family: var(--font-portal) !important;
+}
+body { background: var(--bg) !important; color: var(--ink); letter-spacing: -0.01em; }
+.page-shell,
+.home-page-shell, .shop-page-shell, .service-page-shell {
+  background: var(--bg) !important;
+}
+.home-page-shell::before, .bg-orb { display: none !important; }
+
+/* 区块标题：Apple 近黑大字 */
+.section-title {
+  color: var(--ink) !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.024em !important;
+}
+/* kicker：Apple 式纯色小标，无 pill */
+.section-kicker {
+  display: inline-block;
+  background: transparent !important;
+  border: 0 !important;
+  padding: 0 !important;
+  margin-bottom: 4px;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  color: var(--accent) !important;
+  font-weight: 600 !important;
+  font-size: 15px !important;
+}
+
+/* ── 3. 头部：Apple 式半透明细线导航 ── */
+.site-header {
+  background: rgba(245, 245, 247, 0.8) !important;
+  backdrop-filter: saturate(180%) blur(20px) !important;
+  -webkit-backdrop-filter: saturate(180%) blur(20px) !important;
+  border-bottom: 1px solid var(--line) !important;
+  box-shadow: none !important;
+}
+.desktop-nav a { color: var(--ink) !important; font-weight: 500; border-radius: 980px; }
+.desktop-nav a:hover { color: var(--accent-ink) !important; background: rgba(0, 0, 0, 0.04) !important; }
+
+/* ── 4. Hero：干净浅色、超大留白（保留品牌彩色 logo） ── */
+.home-page-shell .home-main .home-hero-card {
+  background: #ffffff !important;
+  border: 1px solid var(--line) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-sm) !important;
+  overflow: visible !important;
+}
+.home-page-shell .home-main .home-hero-card::before { display: none !important; }
+.home-page-shell .home-main .home-hero-full-logo { filter: none !important; mix-blend-mode: normal !important; }
+.home-page-shell .home-main .home-hero-card > p {
+  color: var(--ink) !important;
+  font-size: 19px !important;
+  font-weight: 500 !important;
+  letter-spacing: -0.012em !important;
+}
+/* 徽章：Apple 浅灰小胶囊 */
+.home-page-shell .home-main .home-hero-badges { color: var(--sub) !important; }
+.home-page-shell .home-main .home-hero-badges span {
+  padding: 7px 13px;
+  border-radius: 980px;
+  background: #f5f5f7 !important;
+  border: 1px solid var(--line) !important;
+  color: var(--ink) !important;
+  font-weight: 500;
+}
+.home-page-shell .home-main .home-hero-badges span svg { color: var(--accent) !important; }
+/* 行动按钮：Apple 实色 pill */
+.hero-pair-btn { border-radius: 980px !important; font-weight: 500 !important; }
+.home-hero-actions .hero-pair-btn.primary {
+  background: var(--accent) !important;
+  border: 0 !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+.home-hero-actions .hero-pair-btn.primary:hover { background: var(--accent-ink) !important; transform: none !important; }
+.home-hero-actions .hero-pair-btn.secondary {
+  background: #f5f5f7 !important;
+  border: 1px solid var(--line) !important;
+  color: var(--ink) !important;
+  box-shadow: none !important;
+}
+.home-page-shell .home-main .home-query-btn {
+  background: transparent !important;
+  border: 1px solid var(--line) !important;
+  color: var(--accent-ink) !important;
+}
+/* 运营数据：Apple 干净统计块 */
+.home-page-shell .home-main .home-hero-metric {
+  background: #f5f5f7 !important;
+  border: 0 !important;
+  border-radius: 14px !important;
+  box-shadow: none !important;
+}
+.home-page-shell .home-main .home-hero-metric svg { color: var(--accent) !important; }
+.home-page-shell .home-main .home-hero-metric span { color: var(--sub) !important; }
+.home-page-shell .home-main .home-hero-metric b { color: var(--ink) !important; font-weight: 700 !important; }
+
+/* ── 5. 通用卡片：Apple 扁平白卡 ── */
+.home-trust-card, .home-announcement-card,
+.glass-card, .info-card, .testimonial-card {
+  background: var(--card) !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: var(--shadow-sm) !important;
+  border-radius: var(--radius) !important;
+}
+.home-trust-card h2, .info-title, .testimonial-name { color: var(--ink) !important; }
+
+/* 平台优势：干净磁贴 */
+.home-trust-item {
+  background: var(--card) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: var(--radius) !important;
+  box-shadow: var(--shadow-sm) !important;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.home-trust-item:hover { transform: translateY(-3px); box-shadow: var(--shadow) !important; }
+.home-trust-item svg {
+  width: 44px; height: 44px; padding: 11px;
+  border-radius: 12px;
+  background: #f5f5f7 !important;
+  color: var(--accent) !important;
+  box-shadow: none !important;
+}
+.home-trust-item strong { color: var(--ink) !important; }
+.home-trust-item span { color: var(--sub) !important; }
+.home-announcement-row { border-radius: 14px; }
+.home-announcement-row svg { color: var(--accent) !important; }
+
+/* ── 6. 服务展示：Apple 干净网格（白卡 + 现有品牌图标，图标不变） ── */
+.home-services-section {
+  margin-top: 8px;
+  padding: 0;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+.home-services-section .section-title { color: var(--ink) !important; }
+.home-services-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 16px;
+  margin-top: 14px;
+}
+.home-service-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  border-radius: var(--radius) !important;
+  background: var(--card) !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: var(--shadow-sm) !important;
+  text-decoration: none;
+  color: var(--ink);
+  overflow: hidden;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.home-service-card::before, .home-service-card::after { display: none !important; }
+.home-service-card:hover { transform: translateY(-4px); box-shadow: var(--shadow) !important; }
+.home-service-logo-wrap {
+  width: 56px; height: 56px; border-radius: 15px; overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.home-service-logo { width: 100%; height: 100%; object-fit: cover; display: block; }
+.home-service-info { flex: 1; min-width: 0; }
+.home-service-name { font-size: 17px; font-weight: 700; color: var(--ink) !important; letter-spacing: -0.01em; }
+.home-service-sub {
+  font-size: 13px; color: var(--sub); line-height: 1.45; margin-top: 4px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.home-service-foot { display: flex; align-items: center; justify-content: space-between; }
+.home-service-price { font-size: 14px; font-weight: 700; color: var(--ink); }
+.home-service-arrow { color: var(--accent); transition: transform 0.2s ease; }
+.home-service-card:hover .home-service-arrow { transform: translateX(4px); }
+@media (max-width: 920px) { .home-services-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 560px) {
+  .home-services-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .home-service-card { padding: 16px; }
+  .home-service-logo-wrap { width: 48px; height: 48px; border-radius: 13px; }
+  .home-service-name { font-size: 16px; }
+}
+
+/* ── 7. 兑换区：Apple 浅色卡（去深色摄影） ── */
+.home-redeem-section .redeem-card {
+  background: #ffffff !important;
+  border: 1px solid var(--line) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--shadow-sm) !important;
+  color: var(--ink) !important;
+}
+.home-redeem-section .redeem-card .section-kicker { color: var(--accent) !important; background: transparent !important; border: 0 !important; }
+.home-redeem-section .redeem-card h2 { color: var(--ink) !important; }
+.home-redeem-section .redeem-card .redeem-card-copy p { color: var(--sub) !important; }
+.home-redeem-section .redeem-input-wrap input {
+  background: #f5f5f7 !important;
+  border: 1px solid var(--line) !important;
+  color: var(--ink) !important;
+}
+.home-redeem-section .redeem-input-wrap input::placeholder { color: #a1a1a6 !important; }
+.home-redeem-section .redeem-paste-btn {
+  background: #ffffff !important;
+  border: 1px solid var(--line) !important;
+  color: var(--accent-ink) !important;
+}
+.home-redeem-section .redeem-card-form > button[type="submit"],
+.home-redeem-section .redeem-card-form .auth-submit {
+  background: var(--accent) !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+
+/* ── 8. 流程：干净白卡 ── */
+.info-card .info-icon { color: var(--accent) !important; }
+.info-card .info-step { color: var(--accent) !important; font-weight: 700; }
+
+/* ── 9. 评价：干净白卡 + 金星 ── */
+.testimonial-avatar { background: var(--accent) !important; color: #fff !important; }
+.testimonial-stars svg, .reviews-stars svg { color: #f5a623 !important; }
+.reviews-summary {
+  background: #fff !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 980px;
+  padding: 6px 14px;
+  box-shadow: var(--shadow-sm);
+}
+.testimonial-meta, .testimonial-text, .testimonial-date { color: var(--sub) !important; }
+
+/* ── 10. 页脚：Apple 浅色细线收尾 ── */
+.home-footer {
+  background: transparent !important;
+  border-top: 1px solid var(--line) !important;
+  backdrop-filter: none !important;
+}
+.home-footer .footer-brand { color: var(--ink) !important; }
+.home-footer .footer-links a { color: var(--sub) !important; }
+.home-footer .footer-links a:hover { color: var(--accent-ink) !important; }
+.home-footer .footer-pill {
+  color: var(--sub) !important;
+  background: #fff !important;
+  border: 1px solid var(--line) !important;
+}
+
+/* ── 11. 头部 logo / 浮动客服 修正 ── */
+/* 头部 logo 换成无白底透明版（消除与 #f5f5f7 背景的白底色差），同尺寸 900×200 无缝替换 */
+.brand-img, .checkout-logo { content: url('/logo-transparent.png') !important; }
+
+/* 浮动客服按钮：Apple 浅色——白底 + teal 图标 + 柔和阴影（既不绿也不黑） */
+.floating-button {
+  background: #ffffff !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16), 0 2px 6px rgba(0, 0, 0, 0.08) !important;
+}
+.floating-button svg { color: var(--accent) !important; }
+.floating-button .floating-online-dot { border-color: #ffffff !important; }
+
+/* ============================================================================
+   ── 12. 跨页 Apple 统一层（shop / services / 服务中心 / checkout / account / legal / admin） ──
+   ============================================================================ */
+/* 所有页面外壳统一浅灰底 */
+.portal-page-shell,
+.legal-page-shell,
+.service-landing-shell,
+.admin-login-page { background: var(--bg) !important; }
+.portal-page-shell::before, .service-landing-shell::before { display: none !important; }
+
+/* 通用标题/小标 */
+.section-note { color: var(--sub) !important; }
+
+/* 通用按钮：Apple 实色 pill 主按钮 / 浅灰描线次按钮 */
+.primary-btn, .primary-btn-lg, .cta-btn, .auth-submit, .shop-cart-btn, .buy-btn, .add-cart-btn {
+  background: var(--accent) !important;
+  color: #ffffff !important;
+  border: 0 !important;
+  border-radius: 980px !important;
+  box-shadow: none !important;
+  font-weight: 500 !important;
+}
+.primary-btn:hover, .primary-btn-lg:hover, .cta-btn:hover, .auth-submit:hover { background: var(--accent-ink) !important; }
+.secondary-btn, .ghost-btn {
+  background: #ffffff !important;
+  color: var(--ink) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 980px !important;
+  box-shadow: none !important;
+  font-weight: 500 !important;
+}
+
+/* 通用卡片：Apple 白卡 */
+.card, .panel, .order-card, .service-card, .assurance-card, .faq-card, .checkout-card, .account-card {
+  background: var(--card) !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: var(--shadow-sm) !important;
+  border-radius: var(--radius) !important;
+}
+.card-title, .card-head { color: var(--ink) !important; }
+
+/* 通用表单：Apple 干净输入框 */
+.field input, .field select, .field textarea,
+.input, .input-wrap input, input[type="text"], input[type="email"],
+input[type="tel"], input[type="password"], input[type="search"], textarea, select {
+  background: #ffffff !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 12px !important;
+  color: var(--ink) !important;
+}
+.field input:focus, .field textarea:focus, .input:focus,
+input:focus, textarea:focus, select:focus {
+  outline: none !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.15) !important;
+}
+.field input::placeholder, textarea::placeholder, input::placeholder { color: #a1a1a6 !important; }
+
+/* 徽章/胶囊：Apple 克制 */
+.badge, .pill, .tab-badge {
+  border-radius: 980px !important;
+  font-weight: 500 !important;
+}
+
+/* 选项卡：Apple 分段控件感 */
+.tabs {
+  background: rgba(0, 0, 0, 0.05) !important;
+  border-radius: 12px !important;
+  padding: 3px !important;
+  border: 0 !important;
+}
+
+/* ============================================================================
+   ── 13b. 专业精修：留白节奏 + 字阶层级（Apple 8pt） ──
+   ============================================================================ */
+/* 区块之间呼吸：移动端紧凑舒适，桌面端从容 */
+.home-main > section + section,
+.shop-main > section + section,
+.service-main > section + section,
+.portal-main > section + section { margin-top: 20px !important; }
+@media (min-width: 821px) {
+  .home-main > section + section,
+  .shop-main > section + section,
+  .service-main > section + section,
+  .portal-main > section + section { margin-top: 56px !important; }
+}
+
+/* 区块标题：放大到 Apple 层级（原 19px 偏小） */
+.home-main .section-title,
+.shop-main .section-title,
+.service-main .section-title,
+.portal-main .section-title,
+.section-head .section-title,
+.simple-head .section-title {
+  font-size: clamp(25px, 6.2vw, 34px) !important;
+  line-height: 1.12 !important;
+  letter-spacing: -0.024em !important;
+}
+.section-kicker { margin-bottom: 6px !important; }
+.section-head, .home-compact-head, .simple-head { margin-bottom: 14px !important; }
+@media (min-width: 821px) {
+  .section-head, .home-compact-head, .simple-head { margin-bottom: 22px !important; }
+}
+
+/* Hero 内部呼吸（移动端紧凑） */
+.home-page-shell .home-main .home-hero-card { padding: 30px 22px 26px !important; }
+.home-page-shell .home-main .home-hero-card > p { margin-top: 12px !important; }
+.home-page-shell .home-main .home-hero-badges { margin-top: 16px !important; gap: 8px !important; }
+.home-page-shell .home-main .home-hero-actions { margin-top: 16px !important; }
+.home-page-shell .home-main .home-hero-metrics { margin-top: 16px !important; }
+@media (min-width: 821px) {
+  .home-page-shell .home-main .home-hero-card { padding: 44px 40px 38px !important; }
+}
+
+/* 按钮统一触达高度（Apple ≥44px） */
+.hero-pair-btn, .home-query-btn, .primary-btn, .secondary-btn, .primary-btn-lg, .cta-btn { min-height: 46px !important; }
+
+/* 正文行高更舒展 */
+body { line-height: 1.6; }
+
+/* account 顶部促销横幅：深色渐变 → Apple 浅色卡 */
+.account-invite-poster, .account-casetify-poster {
+  background: #ffffff !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: var(--shadow-sm) !important;
+  border-radius: var(--radius) !important;
+}
+.account-invite-poster *, .account-casetify-poster * { color: var(--ink) !important; }
+.account-invite-hero p, .account-casetify-intro p,
+.account-invite-poster small, .account-casetify-poster small { color: var(--sub) !important; }
+/* 图标圈：teal 实底 + 白图标（原半透明白圈在白卡上看不见） */
+.account-invite-poster-icon, .account-casetify-poster-icon {
+  background: var(--accent) !important;
+  border: 0 !important;
+}
+.account-invite-poster-icon, .account-casetify-poster-icon,
+.account-invite-poster-icon *, .account-casetify-poster-icon * { color: #ffffff !important; }
+.account-invite-poster-icon svg, .account-casetify-poster-icon svg { color: #ffffff !important; stroke: #ffffff !important; }
+/* 横幅内的「查看详情/活动详情」改成浅色小钮 */
+.account-invite-hero a, .account-casetify-hero a, .account-casetify-actions a,
+.account-invite-poster a, .account-casetify-poster a {
+  background: #f5f5f7 !important;
+  border: 1px solid var(--line) !important;
+  color: var(--accent-ink) !important;
+}
+/* 可读性：放大眉标/标题/正文（原 10px 中文在白底发虚） */
+.account-invite-poster strong, .account-casetify-poster strong {
+  font-size: 16px !important;
+  line-height: 1.3 !important;
+  font-weight: 700 !important;
+  color: var(--ink) !important;
+}
+.account-invite-poster p, .account-casetify-poster p {
+  font-size: 13px !important;
+  line-height: 1.55 !important;
+  color: var(--sub) !important;
+}
+.account-invite-poster > div > span,
+.account-casetify-hero > span,
+.account-casetify-hero > div > span,
+.account-casetify-intro > span {
+  font-size: 12.5px !important;
+  font-weight: 700 !important;
+  color: var(--accent) !important;
+  letter-spacing: 0 !important;
+}
+/* 右上角「查看详情/活动详情」伪元素（原浅 teal，白底看不见） */
+.account-invite-poster::after, .account-casetify-poster::after {
+  color: var(--accent) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+}
+
+/* checkout 外壳浅底（根为 .checkout-page，不在 .page-shell 内） */
+.checkout-page { background: var(--bg) !important; }
+
+/* legal 企业摘要深卡 → Apple 白卡 */
+.legal-hero-panel {
+  background: #ffffff !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: var(--shadow-sm) !important;
+  border-radius: var(--radius-lg) !important;
+}
+.legal-hero-panel * { color: var(--ink) !important; }
+.legal-hero-panel .legal-panel-grid > * {
+  background: #f5f5f7 !important;
+  border: 1px solid var(--line) !important;
+}
+.legal-hero-panel .legal-panel-grid small,
+.legal-hero-panel .legal-panel-grid > * > span:last-child { color: var(--sub) !important; }
+
+/* account 活动弹窗（邀请 / CASETiFY）：Apple 浅色 + 可读文字 */
+.account-money-modal, .account-invite-modal, .account-casetify-modal {
+  background: #ffffff !important;
+  color: var(--ink) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.25) !important;
+}
+.account-money-modal :is(h1, h2, h3, h4, strong, b),
+.account-casetify-modal :is(h1, h2, h3, h4, strong, b),
+.account-invite-modal :is(h1, h2, h3, h4, strong, b) { color: var(--ink) !important; }
+.account-money-modal p, .account-casetify-modal p, .account-invite-modal p {
+  color: var(--sub) !important;
+  font-size: 14px !important;
+  line-height: 1.65 !important;
+}
+/* 活动 hero 横幅：深渐变底 → 浅 teal 渐变（既可读又有设计感） */
+.account-invite-hero, .account-casetify-hero {
+  background: linear-gradient(135deg, #e9f8f3, #f1fbf9) !important;
+  border: 1px solid rgba(20, 184, 166, 0.2) !important;
+  border-radius: 14px !important;
+  box-shadow: none !important;
+}
+.account-invite-hero strong, .account-casetify-hero strong { color: var(--ink) !important; font-size: 17px !important; font-weight: 600 !important; }
+.account-invite-hero p, .account-casetify-hero p { color: var(--sub) !important; }
+.account-invite-hero > span, .account-casetify-hero > span { color: var(--accent) !important; }
+.account-invite-hero > span svg, .account-casetify-hero > span svg { color: var(--accent) !important; stroke: var(--accent) !important; }
+.account-money-modal .account-casetify-hero > span,
+.account-money-modal .account-invite-hero > span { color: var(--accent) !important; font-size: 13px !important; font-weight: 700 !important; }
+/* 弹窗内图标圈：teal + 白图标 */
+.account-casetify-modal .account-invite-poster-icon,
+.account-invite-modal .account-invite-poster-icon { background: var(--accent) !important; }
+.account-casetify-modal .account-invite-poster-icon svg,
+.account-invite-modal .account-invite-poster-icon svg { color: #ffffff !important; stroke: #ffffff !important; }
+/* 规则列表项：浅灰底卡 */
+.account-casetify-rule-list > li, .account-invite-rule-list > li,
+.account-casetify-rule-list > div, .account-invite-rule-list > div {
+  background: #f5f5f7 !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 12px !important;
+  color: var(--ink) !important;
+}
+/* 关闭按钮 + 官网链接 */
+.account-money-modal .auth-close, .account-casetify-modal .auth-close, .account-invite-modal .auth-close { color: var(--ink) !important; }
+.account-casetify-actions a {
+  background: var(--accent) !important;
+  color: #ffffff !important;
+  border: 0 !important;
+  border-radius: 980px !important;
+}
+
+/* ============================================================================
+   ── 20. 编辑式专业重构：去卡片化 + 强字阶 ──
+   把"白卡堆叠"改为内容在干净背景上呼吸；卡片只留给服务磁贴/评价/表单。
+   ============================================================================ */
+
+/* —— Hero：开放式（无白盒），品牌 + 标语 + CTA + 统计栏 —— */
+.home-page-shell .home-main .home-hero-card {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 26px 18px 6px !important;
+}
+@media (min-width: 821px) {
+  .home-page-shell .home-main .home-hero-card { padding: 56px 0 18px !important; }
+}
+.home-page-shell .home-main .home-hero-card > p {
+  font-size: clamp(21px, 5.2vw, 28px) !important;
+  font-weight: 600 !important;
+  color: var(--ink) !important;
+  letter-spacing: -0.022em !important;
+  line-height: 1.26 !important;
+  max-width: 19ch !important;
+  margin: 16px auto 0 !important;
+}
+
+/* 运营数据：单条干净统计栏 + 分隔线（替代 4 个小盒子） */
+.home-page-shell .home-main .home-hero-metrics {
+  background: #ffffff !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 16px !important;
+  padding: 14px 4px !important;
+  margin-top: 24px !important;
+  box-shadow: var(--shadow-sm) !important;
+  gap: 0 !important;
+}
+.home-page-shell .home-main .home-hero-metric {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 2px 6px !important;
+}
+.home-page-shell .home-main .home-hero-metric + .home-hero-metric {
+  border-left: 1px solid var(--line) !important;
+}
+
+/* —— 平台优势：去卡片，开放特性行（图标改白底以免与灰底融掉） —— */
+.home-page-shell .home-trust-card {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+.home-page-shell .home-trust-card h2 {
+  font-size: clamp(24px, 6vw, 32px) !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.024em !important;
+  margin-bottom: 16px !important;
+}
+.home-page-shell .home-trust-item {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 6px 4px !important;
+}
+.home-page-shell .home-trust-item:hover { transform: none !important; box-shadow: none !important; }
+.home-page-shell .home-trust-item svg {
+  background: #ffffff !important;
+  border: 1px solid var(--line) !important;
+}
+
+/* —— 流程：扁平干净卡 —— */
+.home-page-shell .home-layout-section .info-card { box-shadow: none !important; }
+
+/* ============================================================================
+   ── 21. 精致化 craft：克制字重(400–600) + 精准字号 + 层级 ──
+   去掉 globals 的 900/950 黑体（不精致的根源），按 Apple 字重重排。
+   ============================================================================ */
+/* 标题：semibold 更精致 */
+.section-title, .home-trust-card h2,
+.home-main .section-title, .shop-main .section-title, .service-main .section-title {
+  font-weight: 600 !important;
+  letter-spacing: -0.026em !important;
+}
+.section-kicker { font-weight: 600 !important; }
+
+/* Hero 标语 */
+.home-page-shell .home-main .home-hero-card > p {
+  font-weight: 600 !important;
+  font-size: clamp(22px, 5.4vw, 30px) !important;
+  line-height: 1.22 !important;
+}
+
+/* Hero 徽章：去黑体去盒子 → teal 勾 + 灰字内联，轻盈精致 */
+.home-page-shell .home-main .home-hero-badges { gap: 8px 18px !important; }
+.home-page-shell .home-main .home-hero-badges span {
+  background: transparent !important;
+  border: 0 !important;
+  padding: 0 !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  color: var(--sub) !important;
+  gap: 6px !important;
+}
+.home-page-shell .home-main .home-hero-badges span svg { color: var(--accent) !important; }
+
+/* 统计栏：隐藏图标 + 精准 number/label */
+.home-page-shell .home-main .home-hero-metric {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 3px !important;
+}
+.home-page-shell .home-main .home-hero-metric svg { display: none !important; }
+.home-page-shell .home-main .home-hero-metric {
+  padding: 2px 3px !important;
+  min-width: 0 !important;
+}
+.home-page-shell .home-main .home-hero-metric span {
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  color: var(--sub) !important;
+  line-height: 1.3 !important;
+  white-space: nowrap !important;
+  letter-spacing: -0.02em !important;
+  text-align: center;
+}
+.home-page-shell .home-main .home-hero-metric b { font-size: 18px !important; font-weight: 600 !important; letter-spacing: -0.01em !important; }
+
+/* 平台优势：精致字重 */
+.home-trust-item strong { font-weight: 600 !important; font-size: 15px !important; }
+.home-trust-item span { font-weight: 400 !important; font-size: 12.5px !important; color: var(--sub) !important; }
+
+/* 服务卡 / 评价 / 流程：克制字重 */
+.home-service-name, .home-service-price,
+.info-title, .testimonial-name, .card-title { font-weight: 600 !important; }
+.info-desc, .testimonial-text, .testimonial-meta { font-weight: 400 !important; }
+
+/* 按钮：精致字号字重 */
+.hero-pair-btn, .home-query-btn, .primary-btn, .secondary-btn, .primary-btn-lg, .cta-btn {
+  font-size: 15px !important;
+  font-weight: 500 !important;
+}
+
+/* 立减角标：去 900 黑体，精致小徽 */
+.hero-auth-tip { font-weight: 600 !important; font-size: 10px !important; letter-spacing: 0 !important; }
+
+/* ============================================================================
+   ── 22. 高级感 polish：精致分层投影 + 组件内部细节 ──
+   扁平 1px 边框 → Apple/Stripe 式柔投影，白卡有高级悬浮感。
+   ============================================================================ */
+:root {
+  --shadow-card: 0 0 0 0.5px rgba(0, 0, 0, 0.035), 0 2px 5px rgba(0, 0, 0, 0.04), 0 14px 30px -14px rgba(0, 0, 0, 0.12);
+  --shadow-card-h: 0 0 0 0.5px rgba(0, 0, 0, 0.05), 0 6px 12px rgba(0, 0, 0, 0.06), 0 24px 44px -16px rgba(0, 0, 0, 0.2);
+}
+.home-service-card,
+.testimonial-card,
+.home-redeem-section .redeem-card,
+.home-page-shell .home-main .home-hero-metrics {
+  border: 0 !important;
+  box-shadow: var(--shadow-card) !important;
+}
+.home-service-card:hover,
+.testimonial-card:hover { box-shadow: var(--shadow-card-h) !important; }
+
+/* 服务磁贴：精致内部节奏（图标→名称→价格分隔线） */
+.home-service-card { padding: 18px !important; gap: 0 !important; }
+.home-service-logo-wrap { margin-bottom: 14px !important; }
+.home-service-info { margin-bottom: 14px !important; }
+.home-service-foot {
+  border-top: 1px solid var(--line) !important;
+  padding-top: 12px !important;
+  margin-top: auto !important;
+}
+.home-service-price { font-size: 15px !important; }
+.home-service-arrow { width: 18px !important; height: 18px !important; }
+
+/* 平台优势图标：细腻一致的描线方块 */
+.home-page-shell .home-trust-item svg {
+  width: 46px !important; height: 46px !important; padding: 12px !important;
+  border-radius: 13px !important;
+  box-shadow: var(--shadow-card) !important;
+}
+
+/* 统计栏内部：更精致的内边距与分隔 */
+.home-page-shell .home-main .home-hero-metrics { padding: 16px 2px !important; }
+
+/* 实时下单轮播条移入 Hero（统计栏上方）：紧凑居中胶囊 */
+.home-hero-ticker { display: flex !important; justify-content: center !important; margin: 6px 0 12px !important; }
+.home-page-shell .home-main .home-hero-ticker .home-announcement-row {
+  display: inline-flex !important;
+  align-items: center !important;
+  width: auto !important;
+  max-width: 100% !important;
+  padding: 6px 14px !important;
+  gap: 7px !important;
+  font-size: 11.5px !important;
+  font-weight: 500 !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: var(--shadow-sm) !important;
+  color: var(--ink) !important;
+}
+.home-page-shell .home-main .home-hero-ticker .home-announcement-row svg { width: 13px !important; height: 13px !important; color: var(--accent) !important; }
+.home-page-shell .home-main .home-hero-ticker .home-announcement-row b { font-weight: 600 !important; }
+
+/* 流程步骤：精致投影 + 序号徽 */
+.home-page-shell .home-layout-section .info-card {
+  box-shadow: var(--shadow-card) !important;
+  border: 0 !important;
+}
+
+/* ============================================================================
+   ── 23. 设计感回归：品牌色 + 柔和渐变 + 层次（避免"白纸黑字像课本"） ──
+   保持干净编辑式结构，但加回有设计的色彩/渐变/质感（克制，不回到杂乱）。
+   ============================================================================ */
+/* 页面顶部柔和品牌光晕——Hero 区有设计感，而非纯白 */
+.home-page-shell {
+  background:
+    radial-gradient(64rem 36rem at 50% -14%, rgba(20, 184, 166, 0.13), transparent 62%),
+    radial-gradient(46rem 30rem at 6% 1%, rgba(37, 99, 235, 0.06), transparent 56%),
+    radial-gradient(44rem 28rem at 100% 5%, rgba(15, 118, 110, 0.06), transparent 56%),
+    var(--bg) !important;
+}
+
+/* 主行动按钮：品牌渐变（更有设计感） */
+.home-hero-actions .hero-pair-btn.primary,
+.primary-btn, .cta-btn, .primary-btn-lg, .account-casetify-actions a,
+.home-redeem-section .redeem-card-form > button[type="submit"] {
+  background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%) !important;
+  box-shadow: 0 10px 24px -12px rgba(15, 118, 110, 0.7) !important;
+}
+
+/* 运营数据条：玻璃质感 + teal 描边高光 */
+.home-page-shell .home-main .home-hero-metrics {
+  background: linear-gradient(180deg, #ffffff, #f7fdfc) !important;
+  border: 1px solid rgba(20, 184, 166, 0.16) !important;
+}
+.home-page-shell .home-main .home-hero-metric b {
+  background: linear-gradient(135deg, #0f766e, #0b1220) !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+}
+
+/* 平台优势图标：品牌渐变磁贴（设计感，替代描线方块） */
+.home-page-shell .home-trust-item svg {
+  background: linear-gradient(135deg, #0f766e, #14b8a6) !important;
+  color: #ffffff !important;
+  border: 0 !important;
+  box-shadow: 0 10px 20px -8px rgba(15, 118, 110, 0.55) !important;
+}
+
+/* 服务磁贴：品牌色顶条 + 品牌色价格/箭头（设计感回归，克制） */
+.home-service-card { overflow: hidden !important; }
+.home-service-card::before {
+  content: "" !important;
+  display: block !important;
+  position: absolute !important;
+  left: 0 !important; top: 0 !important; right: 0 !important;
+  height: 3px !important;
+  background: var(--svc, #0f766e) !important;
+}
+.home-service-card.svc-spotify { --svc: #1db954; }
+.home-service-card.svc-netflix { --svc: #e50914; }
+.home-service-card.svc-disney { --svc: #1f4fd8; }
+.home-service-card.svc-hbo-max { --svc: #a855f7; }
+.home-service-card.svc-airport-node { --svc: #0f766e; }
+.home-service-card .home-service-price { color: var(--svc, #0f766e) !important; }
+.home-service-card .home-service-arrow { color: var(--svc, #0f766e) !important; }
+
+/* 兑换区：浅 teal 渐变焦点卡（设计感，替代纯白） */
+.home-redeem-section .redeem-card {
+  background: linear-gradient(135deg, #ecfbf6 0%, #f4fbff 100%) !important;
+  border: 1px solid rgba(20, 184, 166, 0.2) !important;
+}
+
+/* ============================================================================
+   ── 24. 活动弹窗修正：可滚动（不再裁切溢出）+ 高对比文字 ──
+   ============================================================================ */
+.account-money-modal, .account-casetify-modal, .account-invite-modal, .account-modal {
+  max-height: 86vh !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+}
+/* 文字加深，提升可读性（原 #6e6e73 浅灰对比不足） */
+.account-money-modal p, .account-casetify-modal p, .account-invite-modal p, .account-modal p,
+.account-casetify-hero p, .account-invite-hero p,
+.account-casetify-rule-list p, .account-invite-rule-list p,
+.account-casetify-intro p { color: #424245 !important; }
+.account-money-modal strong, .account-casetify-modal strong, .account-invite-modal strong, .account-modal strong,
+.account-casetify-hero strong, .account-invite-hero strong,
+.account-casetify-rule-list b, .account-invite-rule-list b,
+.account-casetify-intro strong { color: #1d1d1f !important; }
+
+/* ============================================================================
+   ── 25. 全站统一美化：各页外壳柔和品牌光晕 + 渐变主按钮（与首页一致） ──
+   ============================================================================ */
+.shop-page-shell, .service-page-shell, .portal-page-shell,
+.legal-page-shell, .service-landing-shell {
+  background:
+    radial-gradient(60rem 34rem at 50% -14%, rgba(20, 184, 166, 0.1), transparent 60%),
+    radial-gradient(44rem 28rem at 100% 4%, rgba(37, 99, 235, 0.05), transparent 56%),
+    var(--bg) !important;
+}
+.checkout-page {
+  background:
+    radial-gradient(50rem 30rem at 50% -10%, rgba(20, 184, 166, 0.09), transparent 60%),
+    var(--bg) !important;
+}
+/* 商品 / 服务详情主按钮：品牌渐变（与首页统一） */
+.product-cta, .service-order-btn, .service-buy-btn,
+.shop-main .primary-btn, .service-landing-shell .primary-btn {
+  background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%) !important;
+  box-shadow: 0 10px 24px -12px rgba(15, 118, 110, 0.7) !important;
+}
+
+/* 商品卡：品牌色顶线（用 inset 投影，贴合圆角且不裁切露在外的角标） */
+.shop-products-section .product-card {
+  position: relative !important;
+  overflow: visible !important;
+  box-shadow: inset 0 3px 0 var(--svc, #0f766e), var(--shadow-card) !important;
+}
+.shop-products-section .product-card::after { display: none !important; }
+.product-card.svc-spotify { --svc: #1db954; }
+.product-card.svc-netflix { --svc: #e50914; }
+.product-card.svc-disney { --svc: #1f4fd8; }
+.product-card.svc-max { --svc: #a855f7; }
+.product-card.svc-rocket { --svc: #0f766e; }
+.product-promo-card { --svc: #6e6e73; }
+
+/* ============================================================================
+   ── 26. 微交互：统一过渡曲线 + 按压反馈 + hover（细腻手感） ──
+   ============================================================================ */
+.home-service-card, .product-card, .testimonial-card, .info-card, .home-trust-item,
+.hero-pair-btn, .primary-btn, .secondary-btn, .product-cta, .cta-btn,
+.home-query-btn, .floating-button, .home-redeem-section .redeem-card-form > button {
+  transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1), box-shadow 0.22s ease, background 0.2s ease, border-color 0.2s ease !important;
+}
+.hero-pair-btn:active, .primary-btn:active, .secondary-btn:active, .product-cta:active,
+.cta-btn:active, .home-service-card:active, .floating-button:active { transform: scale(0.97) !important; }
+.product-card:hover { transform: translateY(-4px) !important; box-shadow: var(--shadow-card-h) !important; }
+.floating-button:hover { transform: translateY(-2px) !important; }
+/* 输入聚焦环统一（柔和 teal） */
+.field input:focus, .field textarea:focus, input:focus, textarea:focus, select:focus,
+.redeem-input-wrap input:focus {
+  outline: none !important;
+  border-color: #14b8a6 !important;
+  box-shadow: 0 0 0 3.5px rgba(20, 184, 166, 0.16) !important;
+}
