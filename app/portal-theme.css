@@ -719,25 +719,28 @@ body { line-height: 1.6; }
 /* 统计栏内部：更精致的内边距与分隔 */
 .home-page-shell .home-main .home-hero-metrics { padding: 16px 2px !important; }
 
-/* 实时下单轮播条移入 Hero（统计栏上方）：紧凑居中胶囊 */
-.home-hero-ticker { display: flex !important; justify-content: center !important; margin: 6px 0 12px !important; }
+/* 实时下单轮播条移入 Hero：与统计栏等宽、同圆角、紧贴其上方（不留空隙） */
+.home-hero-ticker { display: block !important; width: 100% !important; margin: 16px 0 0 !important; }
+.home-page-shell .home-main .home-hero-metrics { margin-top: 8px !important; }
 .home-page-shell .home-main .home-hero-ticker .home-announcement-row {
-  display: inline-flex !important;
+  display: flex !important;
   align-items: center !important;
-  width: auto !important;
+  justify-content: center !important;
+  width: 100% !important;
   max-width: 100% !important;
-  padding: 6px 14px !important;
-  gap: 7px !important;
-  font-size: 11.5px !important;
+  padding: 9px 16px !important;
+  gap: 8px !important;
+  font-size: 12px !important;
   font-weight: 500 !important;
-  border-radius: 999px !important;
+  border-radius: 16px !important;
   background: #ffffff !important;
   border: 1px solid var(--line) !important;
   box-shadow: var(--shadow-sm) !important;
   color: var(--ink) !important;
 }
-.home-page-shell .home-main .home-hero-ticker .home-announcement-row svg { width: 13px !important; height: 13px !important; color: var(--accent) !important; }
+.home-page-shell .home-main .home-hero-ticker .home-announcement-row svg { width: 14px !important; height: 14px !important; color: var(--accent) !important; }
 .home-page-shell .home-main .home-hero-ticker .home-announcement-row b { font-weight: 600 !important; }
+.home-page-shell .home-main .home-hero-ticker .home-announcement-row span { min-width: 0 !important; overflow: hidden !important; text-overflow: ellipsis !important; white-space: nowrap !important; }
 
 /* 流程步骤：精致投影 + 序号徽 */
 .home-page-shell .home-layout-section .info-card {
