@@ -75,6 +75,8 @@ export default function RootLayout({ children }) {
   return (
     <html lang="zh-CN">
       <body>
+        <link rel="preload" href="/fonts/inter-400.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+        <link rel="preload" href="/fonts/inter-600.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
         <ReferralTracker />
         {children}
       </body>

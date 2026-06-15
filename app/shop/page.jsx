@@ -292,7 +292,7 @@ export default function ShopPage() {
                     </div>
                   )}
                   <div className="product-card-top">
-                    <img src={item.image} alt={item.title} className="product-image" />
+                    <img src={item.image} alt={item.title} className="product-image" loading="lazy" decoding="async" width="56" height="56" />
                     <div className="product-name-block">
                       <div className="product-name">{item.title}</div>
                       <div className="product-subtitle">{item.subtitle}</div>

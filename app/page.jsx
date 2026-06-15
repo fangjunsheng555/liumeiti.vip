@@ -333,6 +333,34 @@ export default function Page() {
 
   return (
     <div className="page-shell home-page-shell">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify([
+            {
+              "@context": "https://schema.org",
+              "@type": "Organization",
+              name: "冒央会社",
+              alternateName: "Maoyang Taiwan Inc",
+              url: "https://www.liumeiti.vip",
+              logo: "https://www.liumeiti.vip/icon-512.png",
+              address: {
+                "@type": "PostalAddress",
+                streetAddress: "远东路1号3-218",
+                addressLocality: "板桥区",
+                addressRegion: "新北市",
+                addressCountry: "TW",
+              },
+            },
+            {
+              "@context": "https://schema.org",
+              "@type": "WebSite",
+              name: "冒央会社",
+              url: "https://www.liumeiti.vip",
+            },
+          ]),
+        }}
+      />
       <header className="site-header">
         <div className="container header-inner">
           <Link href="/" className="brand-wrap" aria-label="冒央会社 Maoyang Taiwan Inc">
@@ -418,7 +446,7 @@ export default function Page() {
             {SERVICE_PAGES.map((s) => (
               <Link key={s.slug} href={`/services/${s.slug}`} className={`home-service-card svc-${s.slug}`}>
                 <div className="home-service-logo-wrap">
-                  <img src={s.image} alt={s.shortTitle} className="home-service-logo" />
+                  <img src={s.image} alt={s.shortTitle} className="home-service-logo" loading="lazy" decoding="async" width="56" height="56" />
                 </div>
                 <div className="home-service-info">
                   <div className="home-service-name">{s.shortTitle}</div>

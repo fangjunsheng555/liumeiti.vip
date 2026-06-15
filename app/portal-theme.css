@@ -904,3 +904,6 @@ body { line-height: 1.6; }
   border-color: #14b8a6 !important;
   box-shadow: 0 0 0 3.5px rgba(20, 184, 166, 0.16) !important;
 }
+
+/* loading.jsx 旋转动画 */
+@keyframes portal-spin { to { transform: rotate(360deg); } }
