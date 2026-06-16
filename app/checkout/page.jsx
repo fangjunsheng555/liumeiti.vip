@@ -883,7 +883,7 @@ export default function CheckoutPage() {
                 </label>
                 <label className="order-field">
                   <span>
-                    QQ / 微信 / WhatsApp / Telegram
+                    QQ / {L("微信", "WeChat")} / WhatsApp / Telegram
                     {contactRequired ? <em className="field-required">*</em> : <em className="field-optional">{L("(选填)", "(optional)")}</em>}
                   </span>
                   <input
