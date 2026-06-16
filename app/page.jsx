@@ -270,7 +270,7 @@ const EN_LIVE_ORDER_NAMES = [
 const EN_LIVE_ORDER_PRODUCTS = [
   "Spotify Premium Family", "Spotify Premium Individual", "Spotify Premium Duo", "Netflix 4K Profile", "Netflix full account",
   "Disney+ Profile", "Disney+ full account", "HBO Max Profile", "HBO Max full account",
-  "VPN · Basic", "VPN · Premium", "VPN · Deluxe", "VPN · Unlimited",
+  "VPN · Standard", "VPN · Plus", "VPN · Premium", "VPN · Unlimited",
   "Spotify + Netflix", "Netflix + Disney+", "Spotify + VPN",
 ];
 const EN_LIVE_ORDER_TIMES = [

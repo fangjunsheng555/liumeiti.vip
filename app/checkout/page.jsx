@@ -1076,7 +1076,7 @@ export default function CheckoutPage() {
                 ) : paymentMethod === "alipay" ? (
                   <>
                     <b>¥{alipayPayableCny.toFixed(2)}</b>
-                    <small>{L("付款核对尾差", "Verification diff")} {paymentAdjustment > 0 ? "+" : ""}¥{paymentAdjustment.toFixed(2)}{L("，商品金额", " · item total")} ¥{finalCny.toFixed(2)}</small>
+                    <small>{L("付款核对尾差", "Verification adjustment")} {paymentAdjustment > 0 ? "+" : ""}¥{paymentAdjustment.toFixed(2)}{L("，商品金额", " · item total")} ¥{finalCny.toFixed(2)}</small>
                   </>
                 ) : (
                   <b>¥{finalCny}</b>

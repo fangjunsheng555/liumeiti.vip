@@ -12,9 +12,9 @@ const PRODUCT_TITLE_EN = {
 
 const PLAN_LABEL_EN = {
   spotify: { member: "Family member", individual: "Individual", duo: "Duo", family: "Family" },
-  netflix: { seat: "Single Profile", full: "Full account" },
-  disney: { seat: "Single Profile", full: "Full account" },
-  max: { seat: "Single Profile", full: "Full account" },
+  netflix: { seat: "Dedicated Profile", full: "Full account" },
+  disney: { seat: "Dedicated Profile", full: "Full account" },
+  max: { seat: "Dedicated Profile", full: "Full account" },
   rocket: {
     basic: "Standard",
     pro: "Plus",

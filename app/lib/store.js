@@ -149,11 +149,11 @@ export const PRODUCT_EN = {
     subtitle: "Premium Individual / Duo / Family",
     price: "From ¥128/yr",
     cycle: "1 yr",
-    shortIntro: "Top-region Premium — Family member, Individual, Duo or Family plan",
+    shortIntro: "Premium-region accounts — Family member, Individual, Duo or Family plan",
     highlights: ["Top region", "Multiple plans", "After-sales"],
-    detailTitle: "Top-region Spotify Premium — pick a member seat or plan",
+    detailTitle: "Premium-region Spotify accounts — pick a member seat or plan",
     detailBody:
-      "Includes lossless audio, podcasts, AI DJ, offline downloads, playlists and the full catalog. Choose Family member ¥128/yr, Individual ¥388/yr, Duo ¥488/yr (invite 1 account free) or Family ¥588/yr (invite 5 accounts free) — all top-region Premium with after-sales support.",
+      "Includes lossless audio, podcasts, AI DJ, offline downloads, playlists and the full catalog. Choose Family member ¥128/yr, Individual ¥388/yr, Duo ¥488/yr (invite 1 account free) or Family ¥588/yr (invite 5 accounts free) — all on premium-region accounts with after-sales support.",
     orderTitle: "Spotify · annual plans",
     orderBody: "Enter your contact and pay via Alipay. After you submit, our team will reach you within 30 minutes.",
   },
@@ -166,7 +166,7 @@ export const PRODUCT_EN = {
     highlights: ["4K Dolby", "Lockable Profile", "Full account"],
     detailTitle: "Netflix top 4K Dolby plan — Profile or full account",
     detailBody:
-      "Top-tier 4K Dolby plan, available worldwide. Single Profile ¥168/yr — one private profile with a PIN lock, no queue at peak. Full account ¥588/yr — up to 5 profiles/seats, ideal for families or long-term multi-user use.",
+      "Top-tier 4K Dolby plan, available worldwide. Dedicated Profile ¥168/yr — one private profile with a PIN lock, no queue at peak. Full account ¥588/yr — up to 5 profiles/seats, ideal for families or long-term multi-user use.",
     orderTitle: "Netflix · 4K Dolby plan",
     orderBody: "Enter your contact and pay via Alipay. After you submit, our team will reach you within 30 minutes.",
   },
@@ -179,7 +179,7 @@ export const PRODUCT_EN = {
     highlights: ["4K Dolby", "Worldwide", "Full account"],
     detailTitle: "Disney+ top 4K Dolby plan — Profile or full account",
     detailBody:
-      "Top-tier 4K Dolby plan, available worldwide. Single Profile ¥108/yr — one private spot, no interference. Full account ¥588/yr — up to 7 profiles/seats, great for family sharing and long-term use; every order includes after-sales support.",
+      "Top-tier 4K Dolby plan, available worldwide. Dedicated Profile ¥108/yr — one private spot, no interference. Full account ¥588/yr — up to 7 profiles/seats, great for family sharing and long-term use; every order includes after-sales support.",
     orderTitle: "Disney+ · 4K Dolby plan",
     orderBody: "Enter your contact and pay via Alipay. After you submit, our team will reach you within 30 minutes.",
   },
@@ -192,7 +192,7 @@ export const PRODUCT_EN = {
     highlights: ["4K Dolby", "Worldwide", "Full account"],
     detailTitle: "HBO Max top 4K Dolby plan — Profile or full account",
     detailBody:
-      "Top-tier 4K Dolby plan, available worldwide. Single Profile ¥148/yr — one private spot, no interference. Full account ¥588/yr — up to 5 profiles/seats, ideal for film-loving families and stable multi-user use.",
+      "Top-tier 4K Dolby plan, available worldwide. Dedicated Profile ¥148/yr — one private spot, no interference. Full account ¥588/yr — up to 5 profiles/seats, ideal for film-loving families and stable multi-user use.",
     orderTitle: "HBO Max · 4K Dolby plan",
     orderBody: "Enter your contact and pay via Alipay. After you submit, our team will reach you within 30 minutes.",
   },
@@ -213,21 +213,21 @@ export const PRODUCT_EN = {
 
 export const PRODUCT_PLAN_EN = {
   spotify: {
-    member: { label: "Family member", desc: "Top-region family plan, one member seat" },
-    individual: { label: "Individual", desc: "Top-region individual plan, private use" },
+    member: { label: "Family member", desc: "Premium-region family plan, one member seat" },
+    individual: { label: "Individual", desc: "Premium-region individual plan, private use" },
     duo: { label: "Duo", desc: "Invite 1 account to use free" },
     family: { label: "Family", desc: "Invite 5 accounts to use free" },
   },
   netflix: {
-    seat: { label: "Single Profile", desc: "4K Dolby private profile, lockable" },
+    seat: { label: "Dedicated Profile", desc: "4K Dolby private profile, lockable" },
     full: { label: "Full account", desc: "Up to 5 profiles / seats" },
   },
   disney: {
-    seat: { label: "Single Profile", desc: "4K Dolby private profile, no interference" },
+    seat: { label: "Dedicated Profile", desc: "4K Dolby private profile, no interference" },
     full: { label: "Full account", desc: "Up to 7 profiles / seats" },
   },
   max: {
-    seat: { label: "Single Profile", desc: "4K Dolby private profile, with support" },
+    seat: { label: "Dedicated Profile", desc: "4K Dolby private profile, with support" },
     full: { label: "Full account", desc: "Up to 5 profiles / seats" },
   },
   rocket: {
