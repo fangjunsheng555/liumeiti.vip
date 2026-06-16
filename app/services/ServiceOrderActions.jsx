@@ -5,8 +5,10 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import { Headphones, ShoppingBag, X } from "lucide-react";
 import { getDefaultProductPlan, getProductPlan, getProductPlanOptions } from "../lib/store";
+import { useLocale } from "../components/LocaleProvider";
 
 export default function ServiceOrderActions({ service }) {
+  const { t, locale } = useLocale();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(() => getDefaultProductPlan(service?.key));
@@ -36,11 +38,11 @@ export default function ServiceOrderActions({ service }) {
           <div className="modal-head-left">
             <img src={service.image} alt={service.title} className="modal-product-image" />
             <div>
-              <div className="section-kicker">规格选择</div>
-              <div className="modal-title">{service.shortTitle} · 选择规格</div>
+              <div className="section-kicker">{t("svc.selectPlan")}</div>
+              <div className="modal-title">{service.shortTitle} · {t("svc.selectPlan")}</div>
             </div>
           </div>
-          <button className="close-btn" onClick={() => setPickerOpen(false)} aria-label="关闭">
+          <button className="close-btn" onClick={() => setPickerOpen(false)} aria-label={t("common.close")}>
             <X size={22} />
           </button>
         </div>
@@ -57,7 +59,7 @@ export default function ServiceOrderActions({ service }) {
                 <strong>{plan.label}</strong>
                 <small>{plan.desc}</small>
               </span>
-              <b>¥{plan.amount}<em>/{plan.unit || "年"}</em></b>
+              <b>¥{plan.amount}<em>/{plan.unit || (locale === "en" ? "yr" : "年")}</em></b>
             </button>
           ))}
         </div>
@@ -65,11 +67,11 @@ export default function ServiceOrderActions({ service }) {
         <div className="modal-actions rocket-picker-actions">
           <button className="primary-btn" onClick={checkoutWithPlan}>
             <ShoppingBag size={16} />
-            选择规格并下单
+            {t("svc.pickAndOrder")}
           </button>
           <Link href="/service-center#contact" className="secondary-btn">
             <Headphones size={16} />
-            联系在线客服
+            {t("svc.askSupport")}
           </Link>
         </div>
       </div>
@@ -80,10 +82,10 @@ export default function ServiceOrderActions({ service }) {
     <>
       <div className="service-seo-actions">
         <button type="button" className="primary-btn" onClick={() => setPickerOpen(true)}>
-          <ShoppingBag size={16} />立即下单
+          <ShoppingBag size={16} />{t("svc.orderNow")}
         </button>
         <Link href="/service-center#contact" className="secondary-btn">
-          <Headphones size={16} />咨询客服
+          <Headphones size={16} />{t("svc.askSupport")}
         </Link>
       </div>
 

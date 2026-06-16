@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import MobileNav from "../components/MobileNav";
 import FloatingSupport from "../components/FloatingSupport";
+import { useLocale } from "../components/LocaleProvider";
 import { DEFAULT_USER_AVATAR_ID, USER_AVATARS, normalizeUserAvatarId, userAvatarPath } from "../lib/avatars";
 import {
   ArrowRight, CheckCircle2, Clock, Copy, ExternalLink,
@@ -64,6 +65,8 @@ function GoogleIcon() {
 }
 
 export default function AccountPage() {
+  const { locale } = useLocale();
+  const L = (zh, en) => (locale === "en" ? en : zh);
   const [state, setState] = useState({ loading: true, email: null, username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
   const [activeOrder, setActiveOrder] = useState(null);
   const [txModal, setTxModal] = useState(false);
@@ -415,45 +418,45 @@ export default function AccountPage() {
             <div className="auth-modal-head">
               {authMode === "login" || authMode === "register" ? (
                 <div className="auth-modal-tabs">
-                  <button type="button" className={`auth-tab${authMode === "login" ? " active" : ""}`} onClick={() => setAuthMode("login")}>登录</button>
+                  <button type="button" className={`auth-tab${authMode === "login" ? " active" : ""}`} onClick={() => setAuthMode("login")}>{L("登录", "Sign in")}</button>
                   <button type="button" className={`auth-tab register-tab${authMode === "register" ? " active" : ""}`} onClick={() => setAuthMode("register")}>
-                    注册
-                    <span className="auth-tab-tip">立减¥8.88</span>
+                    {L("注册", "Sign up")}
+                    <span className="auth-tab-tip">{L("立减¥8.88", "¥8.88 off")}</span>
                   </button>
                 </div>
               ) : (
-                <div className="auth-modal-title">{authMode === "forgot" ? "找回密码" : "重置密码"}</div>
+                <div className="auth-modal-title">{authMode === "forgot" ? L("找回密码", "Reset password") : L("重置密码", "Set new password")}</div>
               )}
             </div>
             <form className="auth-form" onSubmit={doAuth}>
               <label className="auth-field">
-                <span>邮箱</span>
+                <span>{L("邮箱", "Email")}</span>
                 <input type="email" value={authForm.email} onChange={(e) => setAuthForm((f) => ({ ...f, email: e.target.value }))} placeholder="example@email.com" required />
               </label>
               {(authMode === "login" || authMode === "register") && (
                 <label className="auth-field">
-                  <span>{authMode === "register" ? "密码 (6-64 位)" : "密码"}</span>
-                  <input type="password" value={authForm.password} onChange={(e) => setAuthForm((f) => ({ ...f, password: e.target.value }))} placeholder={authMode === "register" ? "设置一个密码" : "登录密码"} required />
+                  <span>{authMode === "register" ? L("密码 (6-64 位)", "Password (6-64 chars)") : L("密码", "Password")}</span>
+                  <input type="password" value={authForm.password} onChange={(e) => setAuthForm((f) => ({ ...f, password: e.target.value }))} placeholder={authMode === "register" ? L("设置一个密码", "Create a password") : L("登录密码", "Your password")} required />
                 </label>
               )}
               {authMode === "register" && (
                 <label className="auth-field auth-captcha">
-                  <span>验证码</span>
+                  <span>{L("验证码", "Captcha")}</span>
                   <div className="auth-captcha-row">
                     <div className="auth-captcha-control">
                       <ShieldCheck size={16} />
                       <input
                         value={authForm.captchaAnswer}
                         onChange={(e) => setAuthForm((f) => ({ ...f, captchaAnswer: e.target.value.replace(/\s+/g, "").slice(0, 4) }))}
-                        placeholder="验证码"
+                        placeholder={L("验证码", "Captcha")}
                         inputMode="numeric"
                         autoComplete="off"
                         maxLength={4}
                         required
                       />
                     </div>
-                    <button type="button" className="auth-captcha-image" onClick={() => refreshAuthCaptcha(true)} disabled={authCaptcha.loading} aria-label="刷新验证码">
-                      {authCaptcha.image && !authCaptcha.loading ? <img src={authCaptcha.image} alt="验证码" /> : <LoaderCircle size={18} className="spin-icon" />}
+                    <button type="button" className="auth-captcha-image" onClick={() => refreshAuthCaptcha(true)} disabled={authCaptcha.loading} aria-label={L("刷新验证码", "Refresh captcha")}>
+                      {authCaptcha.image && !authCaptcha.loading ? <img src={authCaptcha.image} alt={L("验证码", "Captcha")} /> : <LoaderCircle size={18} className="spin-icon" />}
                       <span><RefreshCw size={12} /></span>
                     </button>
                   </div>
@@ -463,38 +466,38 @@ export default function AccountPage() {
               {authMode === "reset" && (
                 <>
                   <label className="auth-field">
-                    <span>验证码</span>
-                    <input value={authForm.code} onChange={(e) => setAuthForm((f) => ({ ...f, code: e.target.value }))} placeholder="6 位验证码" inputMode="numeric" required />
+                    <span>{L("验证码", "Code")}</span>
+                    <input value={authForm.code} onChange={(e) => setAuthForm((f) => ({ ...f, code: e.target.value }))} placeholder={L("6 位验证码", "6-digit code")} inputMode="numeric" required />
                   </label>
                   <label className="auth-field">
-                    <span>新密码</span>
-                    <input type="password" value={authForm.newPassword} onChange={(e) => setAuthForm((f) => ({ ...f, newPassword: e.target.value }))} placeholder="设置新密码" required />
+                    <span>{L("新密码", "New password")}</span>
+                    <input type="password" value={authForm.newPassword} onChange={(e) => setAuthForm((f) => ({ ...f, newPassword: e.target.value }))} placeholder={L("设置新密码", "Set a new password")} required />
                   </label>
                 </>
               )}
               {authNotice && <div className="auth-notice">{authNotice}</div>}
               {authError && <div className="auth-error">{authError}</div>}
               <button type="submit" className="auth-submit" disabled={authBusy || (authMode === "register" && (authCaptcha.loading || !authCaptcha.token))}>
-                {authBusy ? <><LoaderCircle size={14} className="spin-icon" />处理中</> : authMode === "register" ? "注册并登录" : authMode === "forgot" ? "发送验证码" : authMode === "reset" ? "重置并登录" : "登录"}
+                {authBusy ? <><LoaderCircle size={14} className="spin-icon" />{L("处理中", "Processing")}</> : authMode === "register" ? L("注册并登录", "Sign up & sign in") : authMode === "forgot" ? L("发送验证码", "Send code") : authMode === "reset" ? L("重置并登录", "Reset & sign in") : L("登录", "Sign in")}
               </button>
               {(authMode === "login" || authMode === "register") && (
                 <>
-                  <div className="auth-divider"><span>或使用</span></div>
+                  <div className="auth-divider"><span>{L("或使用", "or use")}</span></div>
                   <div className="oauth-login-grid bottom">
-                    <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />Google 登录</a>
+                    <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
                   </div>
                 </>
               )}
               <div className="auth-hints">
                 {authMode === "login" && (
                   <>
-                    <button type="button" className="auth-switch" onClick={() => setAuthMode("forgot")}>忘记密码?</button>
-                    <span className="auth-hint">还没账号? <button type="button" className="auth-switch" onClick={() => setAuthMode("register")}>立即注册</button></span>
+                    <button type="button" className="auth-switch" onClick={() => setAuthMode("forgot")}>{L("忘记密码?", "Forgot password?")}</button>
+                    <span className="auth-hint">{L("还没账号?", "No account?")} <button type="button" className="auth-switch" onClick={() => setAuthMode("register")}>{L("立即注册", "Sign up")}</button></span>
                   </>
                 )}
-                {authMode === "register" && <span className="auth-hint">已有账号? <button type="button" className="auth-switch" onClick={() => setAuthMode("login")}>去登录</button></span>}
-                {authMode === "forgot" && <button type="button" className="auth-switch" onClick={() => setAuthMode("login")}>返回登录</button>}
-                {authMode === "reset" && <button type="button" className="auth-switch" onClick={() => setAuthMode("forgot")}>重新发送验证码</button>}
+                {authMode === "register" && <span className="auth-hint">{L("已有账号?", "Have an account?")} <button type="button" className="auth-switch" onClick={() => setAuthMode("login")}>{L("去登录", "Sign in")}</button></span>}
+                {authMode === "forgot" && <button type="button" className="auth-switch" onClick={() => setAuthMode("login")}>{L("返回登录", "Back to sign in")}</button>}
+                {authMode === "reset" && <button type="button" className="auth-switch" onClick={() => setAuthMode("forgot")}>{L("重新发送验证码", "Resend code")}</button>}
               </div>
             </form>
           </section>

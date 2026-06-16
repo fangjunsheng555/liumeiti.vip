@@ -4,18 +4,20 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Home, ListChecks, ShoppingCart, Headphones, UserRound } from "lucide-react";
 import { useCart } from "../lib/store";
+import { useLocale } from "./LocaleProvider";
 
 const ITEMS = [
-  { href: "/", label: "首页", icon: Home, match: (path) => path === "/" },
-  { href: "/shop", label: "选购", icon: ListChecks, match: (path) => path === "/shop" },
-  { href: "/checkout", label: "购物车", icon: ShoppingCart, match: (path) => path === "/checkout", cart: true },
-  { href: "/service-center", label: "服务中心", icon: Headphones, match: (path) => path === "/service-center" },
-  { href: "/account", label: "我的", icon: UserRound, match: (path) => path === "/account" },
+  { href: "/", labelKey: "bnav.home", icon: Home, match: (path) => path === "/" },
+  { href: "/shop", labelKey: "bnav.shop", icon: ListChecks, match: (path) => path === "/shop" },
+  { href: "/checkout", labelKey: "bnav.cart", icon: ShoppingCart, match: (path) => path === "/checkout", cart: true },
+  { href: "/service-center", labelKey: "bnav.center", icon: Headphones, match: (path) => path === "/service-center" },
+  { href: "/account", labelKey: "bnav.account", icon: UserRound, match: (path) => path === "/account" },
 ];
 
 export default function MobileNav() {
   const pathname = usePathname();
   const { cart } = useCart();
+  const { t } = useLocale();
 
   return (
     <nav className="mobile-bottom-nav" aria-label="移动端主导航">
@@ -28,7 +30,7 @@ export default function MobileNav() {
               <Icon size={20} strokeWidth={active ? 2.6 : 2.2} />
               {item.cart && cart.length > 0 && <em>{cart.length}</em>}
             </span>
-            <span>{item.label}</span>
+            <span>{t(item.labelKey)}</span>
           </Link>
         );
       })}

@@ -45,6 +45,7 @@ import {
   productItemAmount,
 } from "../lib/store";
 import FloatingSupport from "../components/FloatingSupport";
+import { useLocale } from "../components/LocaleProvider";
 
 const CHECKOUT_DRAFT_KEY = "liumeiti:checkout-draft:v2";
 const CHECKOUT_PENDING_KEY = "liumeiti:checkout-pending:v1";
@@ -145,6 +146,8 @@ function storedInviteCode() {
 
 export default function CheckoutPage() {
   const router = useRouter();
+  const { locale } = useLocale();
+  const L = (zh, en) => (locale === "en" ? en : zh);
   const { cart, cartPlans, hydrated, removeFromCart, replaceCart, clearCart, setCartPlan } = useCart();
   const [step, setStep] = useState("form");
   const [form, setForm] = useState(blankCheckoutForm);
@@ -667,13 +670,13 @@ export default function CheckoutPage() {
           </Link>
           <div className="checkout-secure">
             <Lock size={13} />
-            安全结算
+            {L("安全结算", "Secure checkout")}
           </div>
         </header>
         <div className="checkout-empty checkout-loading-state">
           <LoaderCircle size={46} className="checkout-empty-icon spin-icon" />
-          <h2>正在恢复订单</h2>
-          <p>正在恢复未完成订单</p>
+          <h2>{L("正在恢复订单", "Restoring your order")}</h2>
+          <p>{L("正在恢复未完成订单", "Restoring your unfinished order")}</p>
         </div>
         <FloatingSupport />
       </div>
@@ -691,16 +694,16 @@ export default function CheckoutPage() {
           </Link>
           <div className="checkout-secure">
             <Lock size={13} />
-            安全结算
+            {L("安全结算", "Secure checkout")}
           </div>
         </header>
         <div className="checkout-empty">
           <ShoppingCart size={64} className="checkout-empty-icon" />
-          <h2>购物车为空</h2>
-          <p>先选择需要开通的服务</p>
+          <h2>{L("购物车为空", "Your cart is empty")}</h2>
+          <p>{L("先选择需要开通的服务", "Pick a service to get started")}</p>
           <Link href="/shop" className="primary-btn primary-btn-lg">
             <ArrowLeft size={15} />
-            前往选购
+            {L("前往选购", "Go to shop")}
           </Link>
         </div>
         <FloatingSupport />

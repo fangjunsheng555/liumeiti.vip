@@ -11,8 +11,9 @@ import {
 } from "lucide-react";
 import FloatingSupport from "../components/FloatingSupport";
 import MobileNav from "../components/MobileNav";
-import { SERVICE_PAGES } from "../services/service-data";
+import { SERVICE_PAGES, localizeService } from "../services/service-data";
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../social-meta";
+import { getServerLocale } from "../lib/i18n-server";
 
 export const metadata = {
   title: "企业资质与服务保障",
@@ -137,7 +138,97 @@ const POLICY_SECTIONS = [
   },
 ];
 
-export default function LegalPage() {
+const SUMMARY_ITEMS_EN = [
+  ["Registered in Taiwan", "Maoyang Taiwan Inc", "We serve users and provide after-sales as a company registered in Taiwan"],
+  ["Trackable orders", "Orders synced to email", "Track progress by email or order number after ordering"],
+  ["Privacy first", "Only what the service needs", "We never ask for irrelevant private information"],
+];
+
+const POLICY_SECTIONS_EN = {
+  qualification: {
+    title: "Credentials", kicker: "Registered Entity",
+    lead: "Maoyang Taiwan Inc is a registered entity in Taiwan, focused on streaming memberships, VPN consultation, order assistance and after-sales support.",
+    items: [
+      ["Company info", "Operating as Maoyang Taiwan Inc, providing service purchasing, order assistance and after-sales support"],
+      ["Service assurance", "Transactions and after-sales follow Taiwan's commercial and consumer-protection norms; order info is easy to look up"],
+      ["Order confirmation", "Service scope follows the product page, order page and email notice, so users can confirm before paying"],
+    ],
+    tags: ["Registered entity", "Trackable orders", "Clear service info"],
+  },
+  commitment: {
+    title: "Service promise", kicker: "Service Promise",
+    lead: "We clearly show price, plan, cycle and notes before you order, so it's easy to confirm what you need.",
+    items: [
+      ["Plan info", "The product page shows service type, plan price, cycle and notes to confirm before ordering"],
+      ["Email notice", "An email is sent after the order so key progress and delivery info is timely"],
+      ["Order lookup", "Look up orders and after-sales progress in the Service Center by order number or email"],
+    ],
+    tags: ["Clear pricing", "Trackable progress", "Email synced"],
+  },
+  terms: {
+    title: "Terms of service", kicker: "Terms of Service",
+    lead: "Placing an order confirms the chosen service, cycle, price, payment method and on-page notes. Services may vary by region, device, account status and platform rules.",
+    items: [
+      ["Scope", "We provide streaming memberships, VPN plans, setup assistance, usage guidance and after-sales; we do not support illegal use or encourage breaking platform rules"],
+      ["User responsibility", "Users must provide accurate email, contact, account and payment details; if errors cause delay or failure, please cooperate with support to fix them"],
+      ["Delivery standard", "Order status, setup emails, Service Center results and support records together form the basis of delivery"],
+      ["Exceptions", "If platform policy, regional limits, account checks or force majeure affect the service, we prioritize recovery, replacement or handling per the refund rules"],
+    ],
+    tags: ["Order = confirmation", "Accurate details", "Trackable delivery"],
+  },
+  "after-sale": {
+    title: "After-sales", kicker: "After-Sales",
+    lead: "If an account, Profile, node or subscription has issues, reach our online support and we'll help based on your order.",
+    items: [
+      ["Contact channels", "Submit order info and your issue via QQ, WhatsApp, Telegram or the Service Center"],
+      ["How we help", "We first confirm the service type and scenario, aiming to restore use or give a clear outcome"],
+      ["Progress", "After-sales progress is linked to your order; keep checking results in the Service Center"],
+    ],
+    tags: ["Online support", "Linked to order", "Recovery first"],
+  },
+  privacy: {
+    title: "Privacy policy", kicker: "Privacy",
+    lead: "We don't ask for private data unrelated to the service — only what's needed to complete the order, confirm payment and handle after-sales.",
+    items: [
+      ["Data scope", "We may keep email, contact, order content, payment method, IP and browser info needed for the service"],
+      ["Purpose", "Such info is only used for order delivery, after-sales lookup, payment confirmation and account security"],
+      ["Account data", "Account or password details needed for setup are only used for the matching order; after completion access and retention follow the minimum-necessary principle"],
+      ["Our promise", "We don't sell user data and don't ask for private content unrelated to the service"],
+    ],
+    tags: ["No irrelevant data", "Service use only", "No data selling"],
+  },
+  refund: {
+    title: "Refund rules", kicker: "Refund Rules",
+    lead: "If an account, Profile or node can't be used due to the service itself and can't be recovered after help, a refund can be handled within 7 days per the rules.",
+    items: [
+      ["Eligible cases", "Not delivered after payment, delivery inconsistent with the order, or the service itself fails and can't be recovered — eligible for a refund or equivalent replacement"],
+      ["Process", "Provide the order number, order email and a screenshot or error; after verification we restore use first, then process a refund if it can't be recovered"],
+      ["Refund amount", "Undelivered orders are refunded by amount paid; delivered and partly-used orders are handled by usage time, plan type, platform cost and the cause"],
+      ["Timing", "Alipay or original-channel refunds usually take 1–5 business days; USDT refunds require a TRC20 address, with on-chain fees borne by the user"],
+      ["Not applicable", "Issues from wrong details, voluntary changes, abuse, sharing with strangers or breaking platform rules are not unconditionally refundable"],
+    ],
+    tags: ["Within 7 days", "Recover then refund", "Clear & trackable"],
+  },
+  retention: {
+    title: "Data retention", kicker: "Data Retention",
+    lead: "We keep data as needed for delivery, after-sales tracking, payment reconciliation and security, and minimize unnecessary long-term storage.",
+    items: [
+      ["Order records", "Order number, email, items, amount, status and support notes are kept for after-sales, finance reconciliation and dispute handling"],
+      ["Code records", "Temporary codes such as order-lookup and password-reset codes are short-lived and expire automatically"],
+      ["Security logs", "Login, order submission, admin actions, IP and browser info are only used for security checks and troubleshooting, never made public"],
+      ["Deletion requests", "Users may ask support to correct or delete non-essential data; records required by law, finance or disputes are kept for the necessary period"],
+    ],
+    tags: ["Minimum necessary", "Temporary codes", "Correction on request"],
+  },
+};
+
+export default async function LegalPage() {
+  const locale = await getServerLocale();
+  const en = locale === "en";
+  const summaryItems = en ? SUMMARY_ITEMS_EN : SUMMARY_ITEMS;
+  const policySections = POLICY_SECTIONS.map((s) => (en && POLICY_SECTIONS_EN[s.id] ? { ...s, ...POLICY_SECTIONS_EN[s.id] } : s));
+  const serviceLinks = SERVICE_PAGES.map((s) => localizeService(s, locale));
+  const L = (zh, e) => (en ? e : zh);
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "Organization",
@@ -167,10 +258,10 @@ export default function LegalPage() {
             <img src="/logo.png" alt="冒央会社 Maoyang Taiwan Inc" className="brand-img" />
           </Link>
           <nav className="desktop-nav">
-            <Link href="/shop">服务产品</Link>
-            <Link href="/service-center">服务中心</Link>
-            <Link href="/legal">企业保障</Link>
-            <Link href="/service-center#contact">联系我们</Link>
+            <Link href="/shop">{L("服务产品", "Services")}</Link>
+            <Link href="/service-center">{L("服务中心", "Service Center")}</Link>
+            <Link href="/legal">{L("企业保障", "Assurance")}</Link>
+            <Link href="/service-center#contact">{L("联系我们", "Contact")}</Link>
           </nav>
         </div>
       </header>
@@ -179,27 +270,27 @@ export default function LegalPage() {
         <section className="container legal-hero">
           <div className="legal-hero-copy">
             <div className="section-kicker">MAOYANG TAIWAN INC</div>
-            <h1>企业资质与服务保障</h1>
-            <p>企业信息、服务承诺、售后保障、隐私政策与退款规则集中说明，便于下单前确认</p>
+            <h1>{L("企业资质与服务保障", "Credentials & service assurance")}</h1>
+            <p>{L("企业信息、服务承诺、售后保障、隐私政策与退款规则集中说明，便于下单前确认", "Company info, service promise, after-sales, privacy and refund rules in one place — easy to confirm before ordering")}</p>
             <div className="legal-hero-actions">
-              <Link href="#policy-map">查看保障条款</Link>
-              <Link href="/service-center#contact">联系客服</Link>
+              <Link href="#policy-map">{L("查看保障条款", "View policies")}</Link>
+              <Link href="/service-center#contact">{L("联系客服", "Contact support")}</Link>
             </div>
           </div>
-          <aside className="legal-hero-panel" aria-label="企业保障摘要">
+          <aside className="legal-hero-panel" aria-label={L("企业保障摘要", "Assurance summary")}>
             <img src="/logo-mark.png" alt="" />
-            <strong>冒央会社 Maoyang Taiwan Inc</strong>
-            <span>台湾注册实体 · 订单可查 · 售后可追踪</span>
+            <strong>{L("冒央会社 Maoyang Taiwan Inc", "Maoyang Taiwan Inc")}</strong>
+            <span>{L("台湾注册实体 · 订单可查 · 售后可追踪", "Registered in Taiwan · Trackable orders · After-sales")}</span>
             <div className="legal-panel-grid">
-              <b>2020至今<em>稳定运营</em></b>
-              <b>7 天说明<em>售后处理</em></b>
-              <b>最小化<em>隐私原则</em></b>
+              <b>{L("2020至今", "Since 2020")}<em>{L("稳定运营", "Stable")}</em></b>
+              <b>{L("7 天说明", "7-day")}<em>{L("售后处理", "After-sales")}</em></b>
+              <b>{L("最小化", "Minimal")}<em>{L("隐私原则", "Privacy")}</em></b>
             </div>
           </aside>
         </section>
 
-        <section className="container legal-summary-grid" aria-label="企业状态摘要">
-          {SUMMARY_ITEMS.map(([title, value, desc]) => (
+        <section className="container legal-summary-grid" aria-label={L("企业状态摘要", "Company status")}>
+          {summaryItems.map(([title, value, desc]) => (
             <article key={title} className="legal-summary-card">
               <CheckCircle2 size={17} />
               <small>{title}</small>
@@ -209,8 +300,8 @@ export default function LegalPage() {
           ))}
         </section>
 
-        <section id="policy-map" className="container legal-document-nav" aria-label="保障条款导航">
-          {POLICY_SECTIONS.map(({ id, title, icon: Icon }, index) => (
+        <section id="policy-map" className="container legal-document-nav" aria-label={L("保障条款导航", "Policy navigation")}>
+          {policySections.map(({ id, title, icon: Icon }, index) => (
             <Link key={id} href={`#${id}`}>
               <em>{String(index + 1).padStart(2, "0")}</em>
               <Icon size={16} />
@@ -220,7 +311,7 @@ export default function LegalPage() {
         </section>
 
         <section className="container legal-document-shell">
-          {POLICY_SECTIONS.map(({ id, icon: Icon, title, kicker, lead, items, tags }, index) => (
+          {policySections.map(({ id, icon: Icon, title, kicker, lead, items, tags }, index) => (
             <article key={id} id={id} className="legal-document-card">
               <div className="legal-document-index">{String(index + 1).padStart(2, "0")}</div>
               <div className="legal-document-body">
@@ -253,11 +344,11 @@ export default function LegalPage() {
         <section className="container legal-service-links">
           <div className="legal-service-copy">
             <div className="section-kicker">SERVICE CONFIRMATION</div>
-            <h2>服务详情确认入口</h2>
-            <p>下单前可按服务类型查看规格、适用场景与常见问题，确认后再进入选购或联系客服</p>
+            <h2>{L("服务详情确认入口", "Confirm service details")}</h2>
+            <p>{L("下单前可按服务类型查看规格、适用场景与常见问题，确认后再进入选购或联系客服", "Check plans, use cases and FAQs by service before ordering, then shop or contact support")}</p>
           </div>
           <div className="legal-service-list">
-            {SERVICE_PAGES.map((item) => (
+            {serviceLinks.map((item) => (
               <Link key={item.slug} href={`/services/${item.slug}`}>
                 <FileText size={15} />
                 <span>{item.shortTitle}</span>
@@ -271,14 +362,14 @@ export default function LegalPage() {
       <footer className="site-footer home-footer">
         <div className="container footer-inner">
           <div className="footer-company">
-            <div className="footer-brand">冒央会社 · Maoyang Taiwan Inc</div>
+            <div className="footer-brand">{L("冒央会社 · Maoyang Taiwan Inc", "Maoyang Taiwan Inc")}</div>
             <div className="footer-links">
-              <Link href="/legal">企业资质与服务保障</Link>
-              <Link href="/service-center#contact">联系我们</Link>
+              <Link href="/legal">{L("企业资质与服务保障", "Credentials & service assurance")}</Link>
+              <Link href="/service-center#contact">{L("联系我们", "Contact")}</Link>
             </div>
           </div>
           <div className="footer-legal">
-            <div className="footer-pill">地址：台湾新北市板桥区远东路1号3-218</div>
+            <div className="footer-pill">{L("地址：台湾新北市板桥区远东路1号3-218", "Addr: 3-218, No.1 Yuandong Rd, Banqiao, New Taipei, Taiwan")}</div>
             <div className="footer-pill">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
           </div>
         </div>

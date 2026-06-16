@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Copy, Gift, LoaderCircle, RefreshCw, ShieldCheck, X } from "lucide-react";
+import { useLocale } from "./LocaleProvider";
 
 function GoogleIcon() {
   return (
@@ -28,6 +29,7 @@ function normalizeRedeemCode(value) {
 }
 
 export default function RedeemCard({ autoFillFromQuery = false }) {
+  const { t } = useLocale();
   const [authUser, setAuthUser] = useState(null);
   const [authModal, setAuthModal] = useState(null);
   const [authForm, setAuthForm] = useState({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
@@ -206,9 +208,9 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
     <>
       <div className="redeem-card glass-card">
         <div className="redeem-card-copy">
-          <div className="section-kicker">权益兑换</div>
-          <h2>兑换码兑换</h2>
-          <p>输入兑换码即可领取余额或专属服务权益</p>
+          <div className="section-kicker">{t("redeem.kicker")}</div>
+          <h2>{t("redeem.title")}</h2>
+          <p>{t("redeem.desc")}</p>
         </div>
         <form className="redeem-card-form" onSubmit={submitRedeem}>
           <div className="redeem-input-wrap">
@@ -218,18 +220,18 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
                 setRedeemInput(normalizeRedeemCode(e.target.value));
                 if (redeemStatus?.type === "error") setRedeemStatus(null);
               }}
-              placeholder="准确输入兑换码，支持粘贴"
+              placeholder={t("redeem.placeholder")}
               autoComplete="off"
               inputMode="text"
-              aria-label="兑换码"
+              aria-label={t("redeem.title")}
             />
             <button type="button" className="redeem-paste-btn" onClick={pasteRedeem} disabled={redeemBusy}>
-              <Copy size={13} />粘贴
+              <Copy size={13} />{t("redeem.paste")}
             </button>
           </div>
           <button type="submit" disabled={redeemBusy}>
             {redeemBusy ? <LoaderCircle size={14} className="spin-icon" /> : <Gift size={14} />}
-            {redeemBusy ? "处理中" : "立即兑换"}
+            {redeemBusy ? "..." : t("redeem.submit")}
           </button>
           {redeemStatus && <div className={`redeem-card-status ${redeemStatus.type}`}>{redeemStatus.message}</div>}
         </form>

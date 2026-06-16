@@ -3,9 +3,11 @@ import { notFound } from "next/navigation";
 import { ArrowRight, BadgeCheck, CheckCircle2, ShieldCheck } from "lucide-react";
 import FloatingSupport from "../../components/FloatingSupport";
 import MobileNav from "../../components/MobileNav";
-import { getServiceBySlug, SERVICE_PAGES } from "../service-data";
+import { getServiceBySlug, localizeService, SERVICE_PAGES } from "../service-data";
 import ServiceOrderActions from "../ServiceOrderActions";
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../../social-meta";
+import { getServerLocale } from "../../lib/i18n-server";
+import { getT } from "../../lib/i18n";
 
 export function generateStaticParams() {
   return SERVICE_PAGES.map((item) => ({ slug: item.slug }));
@@ -37,8 +39,11 @@ export async function generateMetadata({ params }) {
 
 export default async function ServiceLandingPage({ params }) {
   const { slug } = await params;
-  const service = getServiceBySlug(slug);
-  if (!service) notFound();
+  const raw = getServiceBySlug(slug);
+  if (!raw) notFound();
+  const locale = await getServerLocale();
+  const t = getT(locale);
+  const service = localizeService(raw, locale);
 
   const jsonLd = [
     {
@@ -85,10 +90,10 @@ export default async function ServiceLandingPage({ params }) {
             <img src="/logo.png" alt="冒央会社 Maoyang Taiwan Inc" className="brand-img" />
           </Link>
           <nav className="desktop-nav">
-            <Link href="/shop">服务产品</Link>
-            <Link href="/service-center">服务中心</Link>
-            <Link href="/legal">企业保障</Link>
-            <Link href="/service-center#contact">联系我们</Link>
+            <Link href="/shop">{t("nav.services")}</Link>
+            <Link href="/service-center">{t("nav.serviceCenter")}</Link>
+            <Link href="/legal">{t("nav.legal")}</Link>
+            <Link href="/service-center#contact">{t("nav.contact")}</Link>
           </nav>
         </div>
       </header>
@@ -119,7 +124,7 @@ export default async function ServiceLandingPage({ params }) {
           <div className="section-head simple-head">
             <div>
               <div className="section-kicker">PLAN OPTIONS</div>
-              <h2 className="section-title">规格与价格</h2>
+              <h2 className="section-title">{t("svc.plansTitle")}</h2>
             </div>
           </div>
           <div className="service-plan-grid">
@@ -137,12 +142,12 @@ export default async function ServiceLandingPage({ params }) {
           <div className="service-process-title">
             <ShieldCheck size={18} />
             <div>
-              <h2>下单与售后说明</h2>
-              <p>选择规格后提交订单，完成支付或使用服务兑换码后，可通过邮箱或订单号查询进度</p>
+              <h2>{t("svc.orderTitle")}</h2>
+              <p>{t("svc.orderDesc")}</p>
             </div>
           </div>
           <div className="service-process-steps">
-            {["选择规格", "填写资料", "提交订单", "售后查询"].map((item, index) => (
+            {[t("svc.step1"), t("svc.step2"), t("svc.step3"), t("svc.step4")].map((item, index) => (
               <div key={item}>
                 <em>{String(index + 1).padStart(2, "0")}</em>
                 <span>{item}</span>
@@ -166,15 +171,15 @@ export default async function ServiceLandingPage({ params }) {
       <footer className="site-footer home-footer">
         <div className="container footer-inner">
           <div className="footer-company">
-            <div className="footer-brand">冒央会社 · Maoyang Taiwan Inc</div>
+            <div className="footer-brand">{t("footer.brand")}</div>
             <div className="footer-links">
-              <Link href="/legal">企业资质与服务保障</Link>
-              <Link href="/shop">返回选购</Link>
+              <Link href="/legal">{t("footer.legal")}</Link>
+              <Link href="/shop">{t("svc.back")}</Link>
             </div>
           </div>
           <div className="footer-legal">
-            <div className="footer-pill">地址：台湾新北市板桥区远东路1号3-218</div>
-            <div className="footer-pill">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
+            <div className="footer-pill">{t("footer.address")}</div>
+            <div className="footer-pill">{t("footer.copyright")}</div>
           </div>
         </div>
       </footer>

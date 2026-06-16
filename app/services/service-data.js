@@ -106,6 +106,106 @@ export const SERVICE_PAGES = [
   },
 ];
 
+// 英文翻译（按 locale 覆盖，不改中文原数据）
+const SERVICE_EN = {
+  spotify: {
+    title: "Spotify Premium Membership",
+    shortTitle: "Spotify",
+    subtitle: "Premium Individual / Duo / Family plans",
+    price: "from ¥128/yr",
+    description: "Spotify Premium plans — Individual, Duo and Family — on premium regions, with lossless audio, podcasts, AI DJ, offline downloads and the full catalogue.",
+    highlights: ["Premium-region accounts", "Individual / Duo / Family", "Emailed once the order completes"],
+    plans: [
+      ["Premium Family (member)", "¥128/yr", "Join a premium-region family plan — ideal for one long-term listener"],
+      ["Premium Individual", "¥388/yr", "Standalone subscription with a clearer account boundary"],
+      ["Premium Duo", "¥488/yr", "Invite 1 account to enjoy the subscription free"],
+      ["Premium Family", "¥588/yr", "Invite up to 5 accounts to enjoy the subscription free"],
+    ],
+    faq: [
+      ["What features are included", "Lossless audio, podcasts, AI DJ, offline downloads, playlists and the full catalogue"],
+      ["How to use the service", "Download the Spotify app or sign in on the web with your account to start"],
+      ["Who is it for", "Great for long-term listeners, family sharing, or anyone needing premium-region benefits"],
+    ],
+  },
+  netflix: {
+    title: "Netflix 4K Dolby Membership",
+    shortTitle: "Netflix",
+    subtitle: "Global 4K Dolby — Profile / full account",
+    price: "from ¥168/yr",
+    description: "Netflix's top 4K Dolby tier, available as a dedicated Profile or a full account. A dedicated Profile can be PIN-locked; a full account supports up to 5 user profiles.",
+    highlights: ["4K Dolby quality", "Lockable dedicated Profile", "Up to 5 profiles per account"],
+    plans: [
+      ["Dedicated Profile", "¥168/yr", "One person, one profile — PIN lock supported"],
+      ["Full account", "¥588/yr", "Supports up to 5 user profiles"],
+    ],
+    faq: [
+      ["Does it work on TV", "Works on common TVs, phones and browsers"],
+      ["How to use the service", "Download the Netflix app or sign in on the web with the account we provide"],
+      ["Is the Profile stable", "A dedicated Profile can be PIN-locked to reduce misuse"],
+    ],
+  },
+  disney: {
+    title: "Disney+ 4K Dolby Membership",
+    shortTitle: "Disney+",
+    subtitle: "Global 4K Dolby — Profile / full account",
+    price: "from ¥108/yr",
+    description: "Disney+'s top 4K Dolby tier, available as a dedicated Profile or full account; a full account supports up to 7 profiles — ideal for family sharing and long-term viewing.",
+    highlights: ["4K Dolby plan", "Profile or full account", "Up to 7 profiles"],
+    plans: [
+      ["Dedicated Profile", "¥108/yr", "One spot per person — watch without interference"],
+      ["Full account", "¥588/yr", "Supports up to 7 user profiles"],
+    ],
+    faq: [
+      ["What content is included", "Great for Disney, Pixar, Marvel, Star Wars and more"],
+      ["How to use the service", "Download the Disney+ app or sign in on the web with the account we provide"],
+      ["How are profiles assigned", "A full account suits families or long-term multi-user use; profiles keep watch history separate"],
+    ],
+  },
+  "hbo-max": {
+    title: "HBO Max 4K Dolby Membership",
+    shortTitle: "HBO Max",
+    subtitle: "Global 4K Dolby — Profile / full account",
+    price: "from ¥148/yr",
+    description: "HBO Max's top 4K Dolby tier, available as a dedicated Profile or full account; a full account supports up to 5 profiles — great for film-lover families and stable multi-user use.",
+    highlights: ["4K Dolby content", "Dedicated Profile", "Up to 5 profiles per account"],
+    plans: [
+      ["Dedicated Profile", "¥148/yr", "One spot per person — no interference"],
+      ["Full account", "¥588/yr", "Supports up to 5 user profiles"],
+    ],
+    faq: [
+      ["Multiple devices supported", "Works on common phones, tablets, TVs and browsers"],
+      ["How to use the service", "Download the HBO Max app or sign in on the web with the account we provide"],
+      ["How is after-sales handled", "Check the Service Center after your order, or reach our online support"],
+    ],
+  },
+  "airport-node": {
+    title: "VPN Service",
+    shortTitle: "VPN",
+    subtitle: "Real-traffic plans & multi-node speed",
+    price: "from ¥128/yr",
+    description: "Multiple real-traffic node plans up to 5 Gbps, covering HK, JP, TW, KR, SG, US, UK, DE, FR and more — ideal for streaming, AI tools and everyday cross-region access.",
+    highlights: ["Real-traffic plans", "Up to 5 Gbps", "Fully encrypted, no logs"],
+    plans: [
+      ["Basic", "¥128/yr", "50 GB/mo real traffic"],
+      ["Premium", "¥198/yr", "100 GB/mo real traffic"],
+      ["Deluxe", "¥398/yr", "200 GB/mo real traffic"],
+      ["Unlimited", "¥698/yr", "Unlimited traffic"],
+      ["¥5 / 10 GB trial", "¥5/once", "10 GB trial traffic"],
+    ],
+    faq: [
+      ["Can I test a node", "Yes — the ¥5 / 10 GB plan is available for testing"],
+      ["How to use the service", "On iPhone/iPad install Shadowrocket; on Android install Clash Meta; on Windows/Mac install Clash Verge (or another mainstream proxy client), then import our subscription link to start"],
+      ["Which clients are supported", "Common subscription tools are supported; the subscription link and instructions are provided once the order completes"],
+    ],
+  },
+};
+
+export function localizeService(service, locale) {
+  if (!service || locale !== "en") return service;
+  const en = SERVICE_EN[service.slug];
+  return en ? { ...service, ...en } : service;
+}
+
 export const SERVICE_ALIASES = {
   spotify: "spotify",
   netflix: "netflix",

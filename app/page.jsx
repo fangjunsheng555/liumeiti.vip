@@ -21,6 +21,9 @@ import MobileNav from "./components/MobileNav";
 import RedeemCard from "./components/RedeemCard";
 import FloatingSupport from "./components/FloatingSupport";
 import { SERVICE_PAGES } from "./services/service-data";
+import LanguageSwitcher from "./components/LanguageSwitcher";
+import { useLocale } from "./components/LocaleProvider";
+import { localizeMetric, localizeTime, serviceCardEn } from "./lib/i18n";
 
 const OPERATION_SLOT_MINUTES = 10;
 const OPERATION_SLOTS_PER_DAY = 24 * 60 / OPERATION_SLOT_MINUTES;
@@ -32,24 +35,24 @@ const OPERATION_INITIAL_METRICS = {
 };
 
 const HERO_STATS = [
-  { metric: "processedToday", label: "今日已完成订单", icon: TrendingUp },
-  { metric: "averageResponse", label: "平均响应时间", icon: Clock },
-  { metric: "queueCount", label: "当前排队数量", icon: Users },
-  { metric: "serviceYears", label: "服务运行年限", icon: Award },
+  { metric: "processedToday", labelKey: "hero.metric.processed", icon: TrendingUp },
+  { metric: "averageResponse", labelKey: "hero.metric.response", icon: Clock },
+  { metric: "queueCount", labelKey: "hero.metric.queue", icon: Users },
+  { metric: "serviceYears", labelKey: "hero.metric.years", icon: Award },
 ];
 
 const TRUST_ITEMS = [
-  { icon: ShieldCheck, title: "稳定渠道", desc: "安全稳定" },
-  { icon: Users, title: "专业团队", desc: "7x24在线" },
-  { icon: BadgeCheck, title: "快速处理", desc: "及时跟进" },
-  { icon: Lock, title: "隐私保护", desc: "放心使用" },
+  { icon: ShieldCheck, tKey: "trust.stable.t", dKey: "trust.stable.d" },
+  { icon: Users, tKey: "trust.team.t", dKey: "trust.team.d" },
+  { icon: BadgeCheck, tKey: "trust.fast.t", dKey: "trust.fast.d" },
+  { icon: Lock, tKey: "trust.privacy.t", dKey: "trust.privacy.d" },
 ];
 
 const LAYOUT_CARDS = [
-  ["选择服务", "选购所需服务，或使用兑换码进行兑换"],
-  ["填写资料", "按要求填写所需邮箱、联系方式与开通资料"],
-  ["确认提交", "核对信息无误后完成支付，兑换码订单无需支付"],
-  ["订单进度", "订单状态更新会向你的邮箱发信，也可在服务中心查询"],
+  ["process.s1.t", "process.s1.d"],
+  ["process.s2.t", "process.s2.d"],
+  ["process.s3.t", "process.s3.d"],
+  ["process.s4.t", "process.s4.d"],
 ];
 
 const TESTIMONIALS = [
@@ -106,6 +109,23 @@ const TESTIMONIALS = [
   { name: "宋*", initial: "宋", region: "太原", service: "Disney+ 整号", rating: 5, date: "3天前", text: "家里电视和手机都能看，档案足够，客服处理速度挺稳" },
   { name: "陆**", initial: "陆", region: "苏州", service: "Spotify 个人订阅", rating: 5, date: "3天前", text: "个人订阅适合自己用，开通信息清楚，后续查订单也方便" },
   { name: "余***", initial: "余", region: "贵阳", service: "机场节点 · 豪华套餐", rating: 5, date: "4天前", text: "流量给得足，多个设备轮着用也够，速度比之前用的平台稳定" },
+];
+
+const TESTIMONIALS_EN = [
+  { name: "James W.", initial: "J", region: "London", service: "Spotify Premium Family", rating: 5, date: "2 hours ago", text: "Support confirmed quickly. Spotify worked right away — playlists and podcasts all fine, and the family plan was great value." },
+  { name: "Mia C.", initial: "M", region: "Singapore", service: "Netflix 4K Dolby", rating: 5, date: "4 hours ago", text: "My own profile can be PIN-locked, 4K playback on the TV is rock solid, and order updates were clear." },
+  { name: "Ethan R.", initial: "E", region: "Sydney", service: "VPN · Premium", rating: 5, date: "6 hours ago", text: "No buffering even at peak hours. Switching nodes is easy and support explained the setup clearly." },
+  { name: "Olivia P.", initial: "O", region: "Vancouver", service: "Disney+ full account", rating: 5, date: "8 hours ago", text: "A full account is plenty for the family — much less hassle than doing it myself, and after-sales is reliable." },
+  { name: "Liam H.", initial: "L", region: "Toronto", service: "HBO Max Profile", rating: 5, date: "12 hours ago", text: "Set up faster than expected, the dedicated profile doesn't interfere with anyone, and I can track the order status." },
+  { name: "Sophia L.", initial: "S", region: "Kuala Lumpur", service: "Spotify Premium Duo", rating: 5, date: "18 hours ago", text: "The Duo plan suits me and a friend perfectly. The invite instructions were clear and it worked right after payment." },
+  { name: "Noah K.", initial: "N", region: "Bangkok", service: "Netflix full account", rating: 5, date: "yesterday", text: "Bought the full account and split profiles for the family — picture quality and Dolby are perfect, saved a lot of back-and-forth." },
+  { name: "Ava M.", initial: "A", region: "New Taipei", service: "Disney+", rating: 5, date: "yesterday", text: "I was hesitant at first, but it was up within 10 minutes. Great experience — already recommended it to friends." },
+  { name: "Lucas B.", initial: "L", region: "Tokyo", service: "VPN · Unlimited", rating: 5, date: "2 days ago", text: "Unlimited works well for multiple devices, the speed is stable, and support sorted out my questions directly." },
+  { name: "Emma T.", initial: "E", region: "Melbourne", service: "HBO Max", rating: 5, date: "3 days ago", text: "First purchase and I worried about scams — turned out very legit, support guided me through, and it's been stable for half a year." },
+  { name: "Daniel S.", initial: "D", region: "Auckland", service: "Spotify Premium Family", rating: 5, date: "3 days ago", text: "Plenty of family invite slots. After setup everyone could stream fine — the whole flow was smooth." },
+  { name: "Grace Y.", initial: "G", region: "Hong Kong", service: "Spotify + Netflix + VPN", rating: 5, date: "4 days ago", text: "Bundling was a bit cheaper too. Music, streaming and VPN in one place, after-sales kept up. I'll be back." },
+  { name: "Henry F.", initial: "H", region: "Seoul", service: "Disney+ Profile", rating: 5, date: "4 days ago", text: "The dedicated profile is stable for movies and animation, the instructions were simple, and the TV logged in first try." },
+  { name: "Chloe D.", initial: "C", region: "Manila", service: "Netflix + VPN", rating: 5, date: "5 days ago", text: "Works fine from overseas too, everything configured at once. I'll likely keep renewing here." },
 ];
 
 const TESTIMONIALS_PER_PAGE = 4;
@@ -237,28 +257,54 @@ function buildOperationMetrics(date = new Date()) {
   };
 }
 
-function liveOrderAt(index) {
+const EN_LIVE_ORDER_CITIES = [
+  "London", "Singapore", "Sydney", "Toronto", "New York", "Tokyo", "Seoul", "Bangkok",
+  "Vancouver", "Melbourne", "Auckland", "Hong Kong", "Kuala Lumpur", "Manila", "Dubai",
+  "Berlin", "Paris", "Amsterdam", "Madrid", "Osaka", "Taipei", "New Taipei", "Macau", "Los Angeles",
+];
+const EN_LIVE_ORDER_NAMES = [
+  "James W.", "Mia C.", "Ethan R.", "Olivia P.", "Liam H.", "Sophia L.", "Noah K.", "Ava M.",
+  "Lucas B.", "Emma T.", "Daniel S.", "Grace Y.", "Henry F.", "Chloe D.", "Jack M.", "Lily Z.",
+  "Owen K.", "Zoe R.", "Leo P.", "Nina S.",
+];
+const EN_LIVE_ORDER_PRODUCTS = [
+  "Spotify Premium Family", "Spotify Premium Individual", "Spotify Premium Duo", "Netflix 4K Profile", "Netflix full account",
+  "Disney+ Profile", "Disney+ full account", "HBO Max Profile", "HBO Max full account",
+  "VPN · Basic", "VPN · Premium", "VPN · Deluxe", "VPN · Unlimited",
+  "Spotify + Netflix", "Netflix + Disney+", "Spotify + VPN",
+];
+const EN_LIVE_ORDER_TIMES = [
+  "just now", "1 min ago", "2 min ago", "3 min ago", "5 min ago", "8 min ago", "12 min ago", "18 min ago", "26 min ago", "36 min ago",
+];
+
+function liveOrderAt(index, locale) {
+  const en = locale === "en";
+  const cities = en ? EN_LIVE_ORDER_CITIES : LIVE_ORDER_CITIES;
+  const names = en ? EN_LIVE_ORDER_NAMES : LIVE_ORDER_NAMES;
+  const products = en ? EN_LIVE_ORDER_PRODUCTS : LIVE_ORDER_PRODUCTS;
+  const times = en ? EN_LIVE_ORDER_TIMES : LIVE_ORDER_TIMES;
   const seed = 20260602 + index * 97;
-  const city = LIVE_ORDER_CITIES[Math.floor(seededUnit(seed + 11) * LIVE_ORDER_CITIES.length) % LIVE_ORDER_CITIES.length];
-  const name = LIVE_ORDER_NAMES[Math.floor(seededUnit(seed + 23) * LIVE_ORDER_NAMES.length) % LIVE_ORDER_NAMES.length];
-  const product = LIVE_ORDER_PRODUCTS[Math.floor(seededUnit(seed + 37) * LIVE_ORDER_PRODUCTS.length) % LIVE_ORDER_PRODUCTS.length];
-  const time = LIVE_ORDER_TIMES[Math.floor(seededUnit(seed + 51) * LIVE_ORDER_TIMES.length) % LIVE_ORDER_TIMES.length];
+  const city = cities[Math.floor(seededUnit(seed + 11) * cities.length) % cities.length];
+  const name = names[Math.floor(seededUnit(seed + 23) * names.length) % names.length];
+  const product = products[Math.floor(seededUnit(seed + 37) * products.length) % products.length];
+  const time = times[Math.floor(seededUnit(seed + 51) * times.length) % times.length];
   return { city, name, product, time };
 }
 
 function LiveOrderTicker() {
+  const { t, locale } = useLocale();
   const [idx, setIdx] = useState(0);
   useEffect(() => {
     const cycleLength = LIVE_ORDER_CITIES.length * 3;
     const timer = setInterval(() => setIdx((i) => (i + 1) % cycleLength), 3200);
     return () => clearInterval(timer);
   }, []);
-  const order = liveOrderAt(idx);
+  const order = liveOrderAt(idx, locale);
   return (
     <div className="home-announcement-row" role="status" aria-live="polite">
       <Megaphone size={15} />
       <span>
-        <b>{order.city}</b> {order.name} 下单了 {order.product} · {order.time}
+        <b>{order.city}</b> {order.name} {t("ticker.ordered")} {order.product} · {order.time}
       </span>
       <ArrowRight size={14} />
     </div>
@@ -266,14 +312,17 @@ function LiveOrderTicker() {
 }
 
 function HomeTestimonials() {
+  const { locale } = useLocale();
+  const list = locale === "en" ? TESTIMONIALS_EN : TESTIMONIALS;
   const [start, setStart] = useState(0);
   useEffect(() => {
+    setStart(0);
     const timer = setInterval(() => {
-      setStart((value) => (value + TESTIMONIALS_PER_PAGE) % TESTIMONIALS.length);
+      setStart((value) => (value + TESTIMONIALS_PER_PAGE) % list.length);
     }, TESTIMONIALS_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, []);
-  const visible = Array.from({ length: TESTIMONIALS_PER_PAGE }, (_, i) => TESTIMONIALS[(start + i) % TESTIMONIALS.length]);
+  }, [list.length]);
+  const visible = Array.from({ length: TESTIMONIALS_PER_PAGE }, (_, i) => list[(start + i) % list.length]);
   return (
     <div className="testimonials-grid testimonials-rotator home-testimonials-grid" key={start}>
       {visible.map((t, i) => (
@@ -301,6 +350,7 @@ function HomeTestimonials() {
 export default function Page() {
   const [metrics, setMetrics] = useState(OPERATION_INITIAL_METRICS);
   const [authUser, setAuthUser] = useState(null);
+  const { locale, t } = useLocale();
 
   useEffect(() => {
     const update = () => setMetrics(buildOperationMetrics());
@@ -367,21 +417,19 @@ export default function Page() {
             <img src="/logo.png" alt="冒央会社 Maoyang Taiwan Inc" className="brand-img" />
           </Link>
           <div className="mobile-header-actions" aria-label="快捷入口">
-            <Link href="/shop" aria-label="服务选购">
-              <ShoppingBag size={16} />
-              <span>选购</span>
-            </Link>
-            <Link href="/service-center" aria-label="服务中心">
+            <LanguageSwitcher />
+            <Link href="/service-center" aria-label={t("nav.support")}>
               <Headphones size={16} />
-              <span>客服</span>
+              <span>{t("nav.support")}</span>
             </Link>
           </div>
           <nav className="desktop-nav">
-            <Link href="/shop">服务产品</Link>
-            <Link href="/#layout">下单流程</Link>
-            <Link href="/service-center#order-query">订单查询</Link>
-            <Link href="/legal">企业保障</Link>
-            <Link href="/service-center#faq">FAQ</Link>
+            <Link href="/shop">{t("nav.services")}</Link>
+            <Link href="/#layout">{t("nav.process")}</Link>
+            <Link href="/service-center#order-query">{t("nav.orderQuery")}</Link>
+            <Link href="/legal">{t("nav.legal")}</Link>
+            <Link href="/service-center#faq">{t("nav.faq")}</Link>
+            <LanguageSwitcher className="desktop-lang" />
           </nav>
         </div>
       </header>
@@ -392,44 +440,44 @@ export default function Page() {
             <img src="/logo-transparent.png" alt="冒央会社 Maoyang Taiwan Inc" className="home-hero-full-logo" />
             <h1 className="sr-only">冒央会社 · 流媒体服务</h1>
           </div>
-          <p>流媒体会员、节点服务与售后协助一站办理</p>
+          <p>{t("hero.tagline")}</p>
           <div className="home-hero-badges">
-            <span><Zap size={14} />即时开通</span>
-            <span><ShieldCheck size={14} />7 天内退款</span>
-            <span><BadgeCheck size={14} />全网最低价</span>
+            <span><Zap size={14} />{t("hero.badge.instant")}</span>
+            <span><ShieldCheck size={14} />{t("hero.badge.refund")}</span>
+            <span><BadgeCheck size={14} />{t("hero.badge.lowest")}</span>
           </div>
           <div className="home-hero-actions">
             <Link href="/shop" className="hero-pair-btn primary">
-              <Zap size={16} />立即开通
+              <Zap size={16} />{t("hero.cta.start")}
             </Link>
             <Link href={authUser === false ? "/account?auth=login" : "/account"} className={`hero-pair-btn secondary${authUser === false ? " with-auth-tip" : ""}`}>
-              <Users size={16} />{authUser === false ? "登录 / 注册" : "个人中心"}
-              {authUser === false && <span className="hero-auth-tip">新用户注册立减 ¥8.88</span>}
+              <Users size={16} />{authUser === false ? t("hero.cta.login") : t("hero.cta.account")}
+              {authUser === false && <span className="hero-auth-tip">{t("hero.authTip")}</span>}
             </Link>
             <Link href="/service-center#order-query" className="home-query-btn">
-              <ShoppingBag size={16} />订单查询
+              <ShoppingBag size={16} />{t("hero.cta.orderQuery")}
             </Link>
           </div>
           <div className="home-hero-ticker"><LiveOrderTicker /></div>
           <div className="home-hero-metrics" aria-label="平台运营数据">
-            {HERO_STATS.map(({ metric, label, icon: Icon }) => (
-              <div key={label} className="home-hero-metric">
+            {HERO_STATS.map(({ metric, labelKey, icon: Icon }) => (
+              <div key={metric} className="home-hero-metric">
                 <Icon size={14} />
-                <span>{label}</span>
-                <b>{metrics[metric]}</b>
+                <span>{t(labelKey)}</span>
+                <b>{localizeMetric(metrics[metric], locale)}</b>
               </div>
             ))}
           </div>
         </section>
 
         <section className="container home-trust-card">
-          <h2>平台优势</h2>
+          <h2>{t("trust.title")}</h2>
           <div className="home-trust-grid">
-            {TRUST_ITEMS.map(({ icon: Icon, title, desc }) => (
-              <div key={title} className="home-trust-item">
+            {TRUST_ITEMS.map(({ icon: Icon, tKey, dKey }) => (
+              <div key={tKey} className="home-trust-item">
                 <Icon size={22} />
-                <strong>{title}</strong>
-                <span>{desc}</span>
+                <strong>{t(tKey)}</strong>
+                <span>{t(dKey)}</span>
               </div>
             ))}
           </div>
@@ -438,8 +486,8 @@ export default function Page() {
         <section className="container home-services-section">
           <div className="section-head simple-head home-compact-head">
             <div>
-              <div className="section-kicker">服务产品</div>
-              <h2 className="section-title">流媒体会员与节点服务</h2>
+              <div className="section-kicker">{t("services.kicker")}</div>
+              <h2 className="section-title">{t("services.title")}</h2>
             </div>
           </div>
           <div className="home-services-grid">
@@ -449,11 +497,11 @@ export default function Page() {
                   <img src={s.image} alt={s.shortTitle} className="home-service-logo" loading="lazy" decoding="async" width="56" height="56" />
                 </div>
                 <div className="home-service-info">
-                  <div className="home-service-name">{s.shortTitle}</div>
-                  <div className="home-service-sub">{s.subtitle}</div>
+                  <div className="home-service-name">{locale === "en" ? (serviceCardEn[s.slug]?.name || s.shortTitle) : s.shortTitle}</div>
+                  <div className="home-service-sub">{locale === "en" ? (serviceCardEn[s.slug]?.subtitle || s.subtitle) : s.subtitle}</div>
                 </div>
                 <div className="home-service-foot">
-                  <span className="home-service-price">{s.price}</span>
+                  <span className="home-service-price">{locale === "en" ? (serviceCardEn[s.slug]?.price || s.price) : s.price}</span>
                   <ArrowRight size={16} className="home-service-arrow" />
                 </div>
               </Link>
@@ -468,17 +516,17 @@ export default function Page() {
         <section id="layout" className="section container home-layout-section">
           <div className="section-head simple-head home-compact-head">
             <div>
-              <div className="section-kicker">服务流程</div>
-              <h2 className="section-title">下单/兑换流程</h2>
+              <div className="section-kicker">{t("process.kicker")}</div>
+              <h2 className="section-title">{t("process.title")}</h2>
             </div>
           </div>
           <div className="layout-grid layout-grid-stack home-layout-grid">
-            {LAYOUT_CARDS.map(([title, desc], index) => (
-              <div key={title} className="glass-card info-card">
+            {LAYOUT_CARDS.map(([titleKey, descKey], index) => (
+              <div key={titleKey} className="glass-card info-card">
                 <div className="info-step">{String(index + 1).padStart(2, "0")}</div>
                 <ShoppingBag size={24} className="info-icon" />
-                <div className="info-title">{title}</div>
-                <div className="info-desc">{desc}</div>
+                <div className="info-title">{t(titleKey)}</div>
+                <div className="info-desc">{t(descKey)}</div>
               </div>
             ))}
           </div>
@@ -487,9 +535,9 @@ export default function Page() {
         <section className="section container home-reviews-section">
           <div className="section-head simple-head home-compact-head">
             <div className="home-review-heading">
-              <div className="section-kicker">用户反馈</div>
+              <div className="section-kicker">{t("reviews.kicker")}</div>
               <div className="home-review-title-row">
-                <h2 className="section-title">用户评价</h2>
+                <h2 className="section-title">{t("reviews.title")}</h2>
                 <div className="reviews-summary">
                   <div className="reviews-stars">
                     {[0, 1, 2, 3, 4].map((i) => <Star key={i} size={18} fill="currentColor" />)}
@@ -508,19 +556,19 @@ export default function Page() {
       <footer className="site-footer home-footer">
         <div className="container footer-inner">
           <div className="footer-company">
-            <div className="footer-brand">冒央会社 · Maoyang Taiwan Inc</div>
+            <div className="footer-brand">{t("footer.brand")}</div>
             <div className="footer-links">
-              <Link href="/legal">企业资质与服务保障</Link>
+              <Link href="/legal">{t("footer.legal")}</Link>
               <Link href="/services/spotify">Spotify</Link>
               <Link href="/services/netflix">Netflix</Link>
               <Link href="/services/disney">Disney+</Link>
               <Link href="/services/hbo-max">HBO Max</Link>
-              <Link href="/services/airport-node">机场节点</Link>
+              <Link href="/services/airport-node">{t("footer.airportNode")}</Link>
             </div>
           </div>
           <div className="footer-legal">
-            <div className="footer-pill">地址：台湾新北市板桥区远东路1号3-218</div>
-            <div className="footer-pill">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
+            <div className="footer-pill">{t("footer.address")}</div>
+            <div className="footer-pill">{t("footer.copyright")}</div>
           </div>
         </div>
       </footer>

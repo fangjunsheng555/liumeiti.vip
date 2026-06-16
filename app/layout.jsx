@@ -1,6 +1,7 @@
 import './globals.css';
 import './portal-theme.css';
 import ReferralTracker from './components/ReferralTracker';
+import { LocaleProvider } from './components/LocaleProvider';
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from './social-meta';
 
 const siteUrl = 'https://www.liumeiti.vip';
@@ -78,7 +79,7 @@ export default function RootLayout({ children }) {
         <link rel="preload" href="/fonts/inter-400.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
         <link rel="preload" href="/fonts/inter-600.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
         <ReferralTracker />
-        {children}
+        <LocaleProvider>{children}</LocaleProvider>
       </body>
     </html>
   );

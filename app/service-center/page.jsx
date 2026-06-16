@@ -22,6 +22,26 @@ import { copyText } from "../lib/store";
 import MobileNav from "../components/MobileNav";
 import FloatingSupport from "../components/FloatingSupport";
 import { QQBrandIcon, TelegramBrandIcon, WhatsAppBrandIcon } from "../components/BrandIcons";
+import { useLocale } from "../components/LocaleProvider";
+
+const ASSURANCE_CARDS_EN = [
+  { title: "Reliable setup", desc: "Six years of streaming-service experience; orders are processed fast by our team", meta: "Pro & worry-free" },
+  { title: "After-sales help", desc: "If an account, Profile or node has issues, reach our support — online 7x14, all year round", meta: "We've got your back" },
+  { title: "Refund policy", desc: "If an account can't be used due to our side, a 7-day refund is supported; support helps troubleshoot first", meta: "Clear rules" },
+  { title: "Order records", desc: "Order lookup info is kept, and orders are also emailed to your order email", meta: "Easy to track" },
+];
+
+const FAQ_EN = [
+  { q: "How soon can I use it after ordering?", a: "Usually 5–10 minutes after payment, and within 1 hour at peak. Every order is checked for service and details to stay accurate and stable." },
+  { q: "Is the account safe? Could it get banned?", a: "We use first-hand source channels, so accounts stay stable long-term. Spotify uses legitimate family invites; Netflix / Disney+ / HBO are lockable dedicated Profiles; VPN nodes use clean streaming-unlocked IPs. If anything goes wrong, just reach our online support." },
+  { q: "What payment methods are there? Is it safe?", a: "Alipay escrow (recommended) and USDT (10% off) are supported. An order confirmation email is sent so lookup and after-sales stay clear." },
+  { q: "Is after-sales supported?", a: "Yes. We support a 7-day refund for account-side issues, plus order consultation, online support and troubleshooting. Reach our online support team anytime." },
+  { q: "How do I contact support?", a: "Reach us on QQ, WhatsApp or Telegram. Online hours are 9am–11pm Beijing time. Contact our online support team anytime." },
+  { q: "About us?", a: "Maoyang Taiwan Inc is based in Taiwan, China and has focused on streaming memberships, usage guidance and after-sales since 2020. We value response speed, service experience and long-term reputation." },
+  { q: "Can you customize enterprise or team plans?", a: "Yes. We have 200+ reseller partners. For long-term cooperation, bulk needs or enterprise scenarios, reach our online support to discuss." },
+];
+
+const STATUS_LABEL_EN = { received: "Order received", completed: "Order completed", invalid: "Invalid · payment not received" };
 
 const LAYOUT_CARDS = [
   ["选择/兑换服务", "Spotify / Netflix / Disney+ / Hbomax / 机场节点"],
@@ -153,6 +173,11 @@ export default function ServiceCenterPage() {
   const [queryDetailOrder, setQueryDetailOrder] = useState(null);
   const [faqOpen, setFaqOpen] = useState(0);
   const [copiedKey, setCopiedKey] = useState("");
+  const { locale } = useLocale();
+  const L = (zh, en) => (locale === "en" ? en : zh);
+  const assuranceCards = ASSURANCE_CARDS.map((c, i) => (locale === "en" ? { ...c, ...ASSURANCE_CARDS_EN[i] } : c));
+  const faqList = locale === "en" ? FAQ_EN : FAQ;
+  const statusLabel = locale === "en" ? STATUS_LABEL_EN : STATUS_LABEL;
 
   useEffect(() => {
     fetch("/api/auth/me", { credentials: "same-origin" })
@@ -429,10 +454,10 @@ export default function ServiceCenterPage() {
             <img src="/logo.png" alt="冒央会社 Maoyang Taiwan Inc" className="brand-img" />
           </Link>
           <nav className="desktop-nav">
-            <Link href="/shop">服务产品</Link>
-            <Link href="/#layout">下单流程</Link>
-            <Link href="#order-query">订单查询</Link>
-            <Link href="/legal">企业保障</Link>
+            <Link href="/shop">{L("服务产品", "Services")}</Link>
+            <Link href="/#layout">{L("下单流程", "How it works")}</Link>
+            <Link href="#order-query">{L("订单查询", "Track order")}</Link>
+            <Link href="/legal">{L("企业保障", "Assurance")}</Link>
             <Link href="#faq">FAQ</Link>
           </nav>
         </div>
@@ -440,12 +465,12 @@ export default function ServiceCenterPage() {
 
       <main className="main-content service-main">
         <section className="section container service-title-section">
-          <Link href="/" className="shop-back-link"><ArrowLeft size={14} />返回首页</Link>
+          <Link href="/" className="shop-back-link"><ArrowLeft size={14} />{L("返回首页", "Home")}</Link>
           <div className="section-head simple-head">
             <div>
-              <div className="section-kicker">服务中心</div>
-              <h1 className="section-title">服务中心</h1>
-              <p className="section-note">订单查询、售后支持与在线客服</p>
+              <div className="section-kicker">{L("服务中心", "Service Center")}</div>
+              <h1 className="section-title">{L("服务中心", "Service Center")}</h1>
+              <p className="section-note">{L("订单查询、售后支持与在线客服", "Order lookup, after-sales and online support")}</p>
             </div>
           </div>
         </section>
@@ -455,14 +480,14 @@ export default function ServiceCenterPage() {
             <div id="order-query" className="query-pair-block order-query-section">
               <div className="section-head simple-head">
                 <div>
-                  <div className="section-kicker">订单查询</div>
-                  <h2 className="section-title">订单查询</h2>
+                  <div className="section-kicker">{L("订单查询", "Track order")}</div>
+                  <h2 className="section-title">{L("订单查询", "Track order")}</h2>
                 </div>
               </div>
               <div className="order-query-panel">
                 <form className={`order-query-form ${queryVerification ? "is-verifying" : ""}`} onSubmit={submitQuery}>
                   <label className="order-query-field">
-                    <span>完整订单号 / 下单邮箱</span>
+                    <span>{L("完整订单号 / 下单邮箱", "Full order number / order email")}</span>
                     <input
                       value={queryInput}
                       onChange={(e) => {
@@ -472,19 +497,19 @@ export default function ServiceCenterPage() {
                           setQueryCode("");
                         }
                       }}
-                      placeholder="输入完整订单号或下单时填写的邮箱"
+                      placeholder={L("输入完整订单号或下单时填写的邮箱", "Enter your full order number or order email")}
                       autoComplete="off"
                     />
                   </label>
                   {queryVerification && (
                     <div className="order-query-verification">
                       <div className="order-query-verify-copy">
-                        <span><Lock size={14} /> 邮箱核验</span>
-                        <strong>验证码已发送至 {queryVerification.emailHint || "下单邮箱"}</strong>
-                        <small>输入 6 位数字后查看订单详情</small>
+                        <span><Lock size={14} /> {L("邮箱核验", "Email verification")}</span>
+                        <strong>{L("验证码已发送至", "Code sent to")} {queryVerification.emailHint || L("下单邮箱", "your order email")}</strong>
+                        <small>{L("输入 6 位数字后查看订单详情", "Enter the 6-digit code to view order details")}</small>
                       </div>
                       <label className="order-query-code-input">
-                        <span>验证码</span>
+                        <span>{L("验证码", "Code")}</span>
                         <input
                           value={queryCode}
                           onChange={(e) => setQueryCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
@@ -496,14 +521,14 @@ export default function ServiceCenterPage() {
                       </label>
                       <button type="submit" className="primary-btn order-query-verify-btn" disabled={queryLoading}>
                         {queryLoading ? <LoaderCircle size={15} className="spin-icon" /> : <Search size={16} />}
-                        验证查询
+                        {L("验证查询", "Verify & search")}
                       </button>
                     </div>
                   )}
                   {!queryVerification && (
                     <button type="submit" className="primary-btn" disabled={queryLoading}>
                       {queryLoading ? <LoaderCircle size={15} className="spin-icon" /> : <Search size={16} />}
-                      查询订单
+                      {L("查询订单", "Search order")}
                     </button>
                   )}
                 </form>
@@ -515,11 +540,11 @@ export default function ServiceCenterPage() {
                     {queryResults.map((order) => (
                       <button key={order.orderId} type="button" className="query-result-row" onClick={() => setQueryDetailOrder(order)}>
                         <div className="query-result-row-main">
-                          <strong>{order.serviceLabel || "订单"}</strong>
+                          <strong>{order.serviceLabel || L("订单", "Order")}</strong>
                           <span>{order.email}</span>
                         </div>
                         <div className="query-result-row-meta">
-                          <span>{STATUS_LABEL[order.status] || order.status}</span>
+                          <span>{statusLabel[order.status] || order.status}</span>
                           <b>¥{Number(order.finalAmount || order.paidAmount || 0).toFixed(2)}</b>
                         </div>
                         <ArrowRight size={14} className="query-result-row-arrow" />
@@ -536,12 +561,12 @@ export default function ServiceCenterPage() {
         <section id="assurance" className="section container assurance-section">
           <div className="section-head simple-head assurance-head">
             <div>
-              <div className="section-kicker">服务保障</div>
-              <h2 className="section-title">服务保障体系</h2>
+              <div className="section-kicker">{L("服务保障", "Assurance")}</div>
+              <h2 className="section-title">{L("服务保障体系", "Our service assurance")}</h2>
             </div>
           </div>
           <div className="assurance-grid">
-            {ASSURANCE_CARDS.map(({ title, desc, meta, icon: Icon }) => (
+            {assuranceCards.map(({ title, desc, meta, icon: Icon }) => (
               <article key={title} className="glass-card assurance-card">
                 <div className="assurance-card-title">
                   <span className="assurance-card-icon"><Icon size={18} /></span>
@@ -559,12 +584,12 @@ export default function ServiceCenterPage() {
             <div id="faq" className="faq-pair-block">
               <div className="section-head simple-head">
                 <div>
-                  <div className="section-kicker">常见问题</div>
-                  <h2 className="section-title">常见问题</h2>
+                  <div className="section-kicker">{L("常见问题", "FAQ")}</div>
+                  <h2 className="section-title">{L("常见问题", "FAQ")}</h2>
                 </div>
               </div>
               <div className="faq-list">
-                {FAQ.map((faq, index) => {
+                {faqList.map((faq, index) => {
                   const open = faqOpen === index;
                   return (
                     <div key={faq.q} className={`faq-card${open ? " faq-open" : ""}`}>
@@ -582,8 +607,8 @@ export default function ServiceCenterPage() {
             <div id="contact" className="contact-pair-block">
               <div className="section-head simple-head">
                 <div>
-                  <div className="section-kicker">在线联系</div>
-                  <h2 className="section-title">联系我们</h2>
+                  <div className="section-kicker">{L("在线联系", "Get in touch")}</div>
+                  <h2 className="section-title">{L("联系我们", "Contact us")}</h2>
                 </div>
               </div>
               <div className="channels-grid channels-row">
@@ -599,7 +624,7 @@ export default function ServiceCenterPage() {
                         className={`channel-copy-btn${copiedKey === ch.label ? " copied" : ""}`}
                         onClick={() => handleCopy(ch.copyValue, ch.label)}
                       >
-                        <Copy size={14} />{copiedKey === ch.label ? "已复制" : "复制"}
+                        <Copy size={14} />{copiedKey === ch.label ? L("已复制", "Copied") : L("复制", "Copy")}
                       </button>
                     </div>
                   );
@@ -613,18 +638,18 @@ export default function ServiceCenterPage() {
       <footer className="site-footer service-footer">
         <div className="container footer-inner">
           <div className="footer-company">
-            <div className="footer-brand">冒央会社 · Maoyang Taiwan Inc</div>
+            <div className="footer-brand">{L("冒央会社 · Maoyang Taiwan Inc", "Maoyang Taiwan Inc")}</div>
             <div className="footer-links">
-              <Link href="/legal">企业资质与服务保障</Link>
+              <Link href="/legal">{L("企业资质与服务保障", "Credentials & service assurance")}</Link>
               <Link href="/services/spotify">Spotify</Link>
               <Link href="/services/netflix">Netflix</Link>
               <Link href="/services/disney">Disney+</Link>
               <Link href="/services/hbo-max">HBO Max</Link>
-              <Link href="/services/airport-node">机场节点</Link>
+              <Link href="/services/airport-node">{L("机场节点", "VPN")}</Link>
             </div>
           </div>
           <div className="footer-legal">
-            <div className="footer-pill">地址：台湾新北市板桥区远东路1号3-218</div>
+            <div className="footer-pill">{L("地址：台湾新北市板桥区远东路1号3-218", "Addr: 3-218, No.1 Yuandong Rd, Banqiao, New Taipei, Taiwan")}</div>
             <div className="footer-pill">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
           </div>
         </div>
@@ -637,14 +662,14 @@ export default function ServiceCenterPage() {
             <div className="auth-modal-head">
               {authModal === "login" || authModal === "register" ? (
                 <div className="auth-modal-tabs">
-                  <button type="button" className={`auth-tab${authModal === "login" ? " active" : ""}`} onClick={() => setAuthModal("login")}>登录</button>
+                  <button type="button" className={`auth-tab${authModal === "login" ? " active" : ""}`} onClick={() => setAuthModal("login")}>{L("登录", "Sign in")}</button>
                   <button type="button" className={`auth-tab register-tab${authModal === "register" ? " active" : ""}`} onClick={() => setAuthModal("register")}>
-                    注册
-                    <span className="auth-tab-tip">立减¥8.88</span>
+                    {L("注册", "Sign up")}
+                    <span className="auth-tab-tip">{L("立减¥8.88", "¥8.88 off")}</span>
                   </button>
                 </div>
               ) : (
-                <div className="auth-modal-title">{authModal === "forgot" ? "找回密码" : "重置密码"}</div>
+                <div className="auth-modal-title">{authModal === "forgot" ? L("找回密码", "Reset password") : L("重置密码", "Set new password")}</div>
               )}
               <button type="button" className="auth-close" onClick={() => !authBusy && setAuthModal(null)}>
                 <X size={19} />
@@ -652,33 +677,33 @@ export default function ServiceCenterPage() {
             </div>
             <form className="auth-form" onSubmit={doAuth}>
               <label className="auth-field">
-                <span>邮箱</span>
+                <span>{L("邮箱", "Email")}</span>
                 <input type="email" value={authForm.email} onChange={(e) => setAuthForm((f) => ({ ...f, email: e.target.value }))} placeholder="example@email.com" required />
               </label>
               {(authModal === "login" || authModal === "register") && (
                 <label className="auth-field">
-                  <span>{authModal === "register" ? "密码 (6-64 位)" : "密码"}</span>
-                  <input type="password" value={authForm.password} onChange={(e) => setAuthForm((f) => ({ ...f, password: e.target.value }))} placeholder={authModal === "register" ? "设置一个密码" : "登录密码"} required />
+                  <span>{authModal === "register" ? L("密码 (6-64 位)", "Password (6-64 chars)") : L("密码", "Password")}</span>
+                  <input type="password" value={authForm.password} onChange={(e) => setAuthForm((f) => ({ ...f, password: e.target.value }))} placeholder={authModal === "register" ? L("设置一个密码", "Create a password") : L("登录密码", "Your password")} required />
                 </label>
               )}
               {authModal === "register" && (
                 <label className="auth-field auth-captcha">
-                  <span>验证码</span>
+                  <span>{L("验证码", "Captcha")}</span>
                   <div className="auth-captcha-row">
                     <div className="auth-captcha-control">
                       <ShieldCheck size={16} />
                       <input
                         value={authForm.captchaAnswer}
                         onChange={(e) => setAuthForm((f) => ({ ...f, captchaAnswer: e.target.value.replace(/\s+/g, "").slice(0, 4) }))}
-                        placeholder="验证码"
+                        placeholder={L("验证码", "Captcha")}
                         inputMode="numeric"
                         autoComplete="off"
                         maxLength={4}
                         required
                       />
                     </div>
-                    <button type="button" className="auth-captcha-image" onClick={() => refreshAuthCaptcha(true)} disabled={authCaptcha.loading} aria-label="刷新验证码">
-                      {authCaptcha.image && !authCaptcha.loading ? <img src={authCaptcha.image} alt="验证码" /> : <LoaderCircle size={18} className="spin-icon" />}
+                    <button type="button" className="auth-captcha-image" onClick={() => refreshAuthCaptcha(true)} disabled={authCaptcha.loading} aria-label={L("刷新验证码", "Refresh captcha")}>
+                      {authCaptcha.image && !authCaptcha.loading ? <img src={authCaptcha.image} alt={L("验证码", "Captcha")} /> : <LoaderCircle size={18} className="spin-icon" />}
                       <span><RefreshCw size={12} /></span>
                     </button>
                   </div>
@@ -688,38 +713,38 @@ export default function ServiceCenterPage() {
               {authModal === "reset" && (
                 <>
                   <label className="auth-field">
-                    <span>验证码</span>
-                    <input value={authForm.code} onChange={(e) => setAuthForm((f) => ({ ...f, code: e.target.value }))} placeholder="6 位验证码" inputMode="numeric" required />
+                    <span>{L("验证码", "Code")}</span>
+                    <input value={authForm.code} onChange={(e) => setAuthForm((f) => ({ ...f, code: e.target.value }))} placeholder={L("6 位验证码", "6-digit code")} inputMode="numeric" required />
                   </label>
                   <label className="auth-field">
-                    <span>新密码</span>
-                    <input type="password" value={authForm.newPassword} onChange={(e) => setAuthForm((f) => ({ ...f, newPassword: e.target.value }))} placeholder="设置新密码" required />
+                    <span>{L("新密码", "New password")}</span>
+                    <input type="password" value={authForm.newPassword} onChange={(e) => setAuthForm((f) => ({ ...f, newPassword: e.target.value }))} placeholder={L("设置新密码", "Set a new password")} required />
                   </label>
                 </>
               )}
               {authNotice && <div className="auth-notice">{authNotice}</div>}
               {authError && <div className="auth-error">{authError}</div>}
               <button type="submit" className="auth-submit" disabled={authBusy || (authModal === "register" && (authCaptcha.loading || !authCaptcha.token))}>
-                {authBusy ? <><LoaderCircle size={14} className="spin-icon" />处理中</> : authModal === "register" ? "注册并登录" : authModal === "forgot" ? "发送验证码" : authModal === "reset" ? "重置并登录" : "登录"}
+                {authBusy ? <><LoaderCircle size={14} className="spin-icon" />{L("处理中", "Processing")}</> : authModal === "register" ? L("注册并登录", "Sign up & sign in") : authModal === "forgot" ? L("发送验证码", "Send code") : authModal === "reset" ? L("重置并登录", "Reset & sign in") : L("登录", "Sign in")}
               </button>
               {(authModal === "login" || authModal === "register") && (
                 <>
-                  <div className="auth-divider"><span>或使用</span></div>
+                  <div className="auth-divider"><span>{L("或使用", "or use")}</span></div>
                   <div className="oauth-login-grid bottom">
-                    <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />Google 登录</a>
+                    <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
                   </div>
                 </>
               )}
               <div className="auth-hints">
                 {authModal === "login" && (
                   <>
-                    <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>忘记密码?</button>
-                    <span className="auth-hint">还没账号? <button type="button" className="auth-switch" onClick={() => setAuthModal("register")}>立即注册</button></span>
+                    <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>{L("忘记密码?", "Forgot password?")}</button>
+                    <span className="auth-hint">{L("还没账号?", "No account?")} <button type="button" className="auth-switch" onClick={() => setAuthModal("register")}>{L("立即注册", "Sign up")}</button></span>
                   </>
                 )}
-                {authModal === "register" && <span className="auth-hint">已有账号? <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>去登录</button></span>}
-                {authModal === "forgot" && <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>返回登录</button>}
-                {authModal === "reset" && <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>重新发送验证码</button>}
+                {authModal === "register" && <span className="auth-hint">{L("已有账号?", "Have an account?")} <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>{L("去登录", "Sign in")}</button></span>}
+                {authModal === "forgot" && <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>{L("返回登录", "Back to sign in")}</button>}
+                {authModal === "reset" && <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>{L("重新发送验证码", "Resend code")}</button>}
               </div>
             </form>
           </div>
@@ -731,42 +756,42 @@ export default function ServiceCenterPage() {
           <div className="query-modal" onClick={(e) => e.stopPropagation()}>
             <div className="query-modal-head">
               <div>
-                <div className="section-kicker">订单详情</div>
-                <div className="query-modal-title">订单详情</div>
+                <div className="section-kicker">{L("订单详情", "Order details")}</div>
+                <div className="query-modal-title">{L("订单详情", "Order details")}</div>
                 <code className="query-modal-id">{queryDetailOrder.orderId}</code>
                 <div className={`query-modal-status status-${queryDetailOrder.status || "received"}`}>
-                  {STATUS_LABEL[queryDetailOrder.status] || queryDetailOrder.status}
+                  {statusLabel[queryDetailOrder.status] || queryDetailOrder.status}
                 </div>
               </div>
-              <button className="close-btn" onClick={() => setQueryDetailOrder(null)} aria-label="关闭"><X size={20} /></button>
+              <button className="close-btn" onClick={() => setQueryDetailOrder(null)} aria-label={L("关闭", "Close")}><X size={20} /></button>
             </div>
             <div className="query-modal-body">
               <div className="query-modal-amount">
-                <span>实付金额</span>
-                <b>{queryDetailOrder.paidCurrency === "USDT" ? `${queryDetailOrder.paidAmount} USDT` : queryDetailOrder.paidCurrency === "CODE" ? "服务兑换码" : `¥${Number(queryDetailOrder.paidAmount || queryDetailOrder.finalAmount || 0).toFixed(2)}`}</b>
-                <em>{paymentLabel(queryDetailOrder)}</em>
+                <span>{L("实付金额", "Amount paid")}</span>
+                <b>{queryDetailOrder.paidCurrency === "USDT" ? `${queryDetailOrder.paidAmount} USDT` : queryDetailOrder.paidCurrency === "CODE" ? L("服务兑换码", "Service code") : `¥${Number(queryDetailOrder.paidAmount || queryDetailOrder.finalAmount || 0).toFixed(2)}`}</b>
+                <em>{locale === "en" ? ({ "兑换码": "Redeem code", "支付宝": "Alipay" }[paymentLabel(queryDetailOrder)] || paymentLabel(queryDetailOrder)) : paymentLabel(queryDetailOrder)}</em>
               </div>
               <div className="query-modal-items">
-                <div className="query-modal-items-label">商品明细 · {queryItems.length} 件</div>
+                <div className="query-modal-items-label">{L("商品明细", "Items")} · {queryItems.length}</div>
                 {queryItems.map((item, idx) => (
                   <div key={idx} className="query-modal-item">
                     <div className="query-modal-item-head">
-                      <strong>{item.label || "订单商品"}</strong>
+                      <strong>{item.label || L("订单商品", "Item")}</strong>
                       <span>¥{Number(item.amount || 0).toFixed(2)}</span>
                     </div>
                     {(item.account || item.password) && (
                       <div className="query-modal-item-creds">
-                        {item.account && <div><span>{item.service === "rocket" ? "用户名" : "账号"}</span><code>{item.account}</code></div>}
-                        {item.password && <div><span>密码</span><code>{item.password}</code></div>}
+                        {item.account && <div><span>{item.service === "rocket" ? L("用户名", "Username") : L("账号", "Account")}</span><code>{item.account}</code></div>}
+                        {item.password && <div><span>{L("密码", "Password")}</span><code>{item.password}</code></div>}
                       </div>
                     )}
                     {item.subscriptionLinks && (
                       <div className="query-modal-item-subs">
                         <button className="query-modal-sub-row" onClick={() => handleCopy(item.subscriptionLinks.shadowrocket, `sr-${idx}`)}>
-                          <span>Shadowrocket</span><small>{item.subscriptionLinks.shadowrocket}</small><em>{copiedKey === `sr-${idx}` ? "已复制" : "复制"}</em>
+                          <span>Shadowrocket</span><small>{item.subscriptionLinks.shadowrocket}</small><em>{copiedKey === `sr-${idx}` ? L("已复制", "Copied") : L("复制", "Copy")}</em>
                         </button>
                         <button className="query-modal-sub-row" onClick={() => handleCopy(item.subscriptionLinks.clash, `cl-${idx}`)}>
-                          <span>Clash</span><small>{item.subscriptionLinks.clash}</small><em>{copiedKey === `cl-${idx}` ? "已复制" : "复制"}</em>
+                          <span>Clash</span><small>{item.subscriptionLinks.clash}</small><em>{copiedKey === `cl-${idx}` ? L("已复制", "Copied") : L("复制", "Copy")}</em>
                         </button>
                       </div>
                     )}
@@ -775,16 +800,16 @@ export default function ServiceCenterPage() {
               </div>
               {queryDetailOrder.staffNotes && (
                 <div className="query-modal-staff-notes">
-                  <div className="query-modal-staff-notes-label">客服备注</div>
+                  <div className="query-modal-staff-notes-label">{L("客服备注", "Support notes")}</div>
                   <div>{queryDetailOrder.staffNotes}</div>
                 </div>
               )}
               <div className="query-modal-rows">
-                <div><span>下单时间</span><b>{queryDetailOrder.createdAtBeijing || "--"}</b></div>
-                <div><span>完成时间</span><b>{queryDetailOrder.completedAtBeijing || "--"}</b></div>
-                <div><span>邮箱</span><b>{queryDetailOrder.email || "--"}</b></div>
-                <div><span>联系方式</span><b>{queryDetailOrder.contact || "--"}</b></div>
-                {queryDetailOrder.remark && <div className="query-modal-row-wide"><span>备注</span><b className="query-modal-remark">{queryDetailOrder.remark}</b></div>}
+                <div><span>{L("下单时间", "Order time")}</span><b>{queryDetailOrder.createdAtBeijing || "--"}</b></div>
+                <div><span>{L("完成时间", "Completed")}</span><b>{queryDetailOrder.completedAtBeijing || "--"}</b></div>
+                <div><span>{L("邮箱", "Email")}</span><b>{queryDetailOrder.email || "--"}</b></div>
+                <div><span>{L("联系方式", "Contact")}</span><b>{queryDetailOrder.contact || "--"}</b></div>
+                {queryDetailOrder.remark && <div className="query-modal-row-wide"><span>{L("备注", "Note")}</span><b className="query-modal-remark">{queryDetailOrder.remark}</b></div>}
               </div>
             </div>
           </div>
