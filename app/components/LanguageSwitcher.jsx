@@ -14,7 +14,7 @@ export default function LanguageSwitcher({ className = "" }) {
       title={t("lang.label")}
       onClick={() => setLocale(next)}
     >
-      <Globe size={16} aria-hidden="true" />
+      <Globe size={16} strokeWidth={1.6} aria-hidden="true" />
       <span>{locale === "en" ? "中文" : "EN"}</span>
     </button>
   );
