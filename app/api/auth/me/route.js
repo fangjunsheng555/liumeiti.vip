@@ -4,6 +4,7 @@ import {
   generateRandomUserAvatarId, validUserAvatarId,
   publicCoupons, publicReferral, ensureUserReferralProfile, listAllUserEmails,
 } from "../../_utils.js";
+import { localizeOrderItemLabel, localizeCycle } from "../../../lib/order-i18n.js";
 
 function subscriptionLinks(username) {
   const encoded = encodeURIComponent(String(username || "").trim());
@@ -13,14 +14,14 @@ function subscriptionLinks(username) {
   };
 }
 
-function publicOrder(order) {
+function publicOrder(order, locale = "zh") {
   let items;
   if (Array.isArray(order.items) && order.items.length > 0) {
     items = order.items.map((it) => {
       const out = {
         service: it.service || "",
-        label: it.label || "",
-        cycle: it.cycle || "",
+        label: localizeOrderItemLabel(it.service, it.plan || it.rocketPlan, it.label || "", locale),
+        cycle: localizeCycle(it.cycle || "", locale),
         amount: Number(it.amount || 0),
         // Show staff-filled credentials when available, fall back to buyer's
         account: it.staffAccount || it.account || "",
@@ -36,8 +37,8 @@ function publicOrder(order) {
   } else {
     items = [{
       service: order.service || "",
-      label: order.serviceLabel || "",
-      cycle: order.cycle || "",
+      label: localizeOrderItemLabel(order.service, order.plan || order.rocketPlan, order.serviceLabel || "", locale),
+      cycle: localizeCycle(order.cycle || "", locale),
       amount: Number(order.finalAmount || 0),
       account: order.account || "",
       password: order.password || "",
@@ -52,7 +53,7 @@ function publicOrder(order) {
     completedAtBeijing: order.completedAtBeijing || "",
     items,
     itemCount: items.length,
-    serviceLabel: order.serviceLabel || items.map((i) => i.label).join(" + "),
+    serviceLabel: items.map((i) => i.label).join(" + "),
     paymentMethod: order.paymentMethod || "alipay",
     redeemCode: order.redeemCode || "",
     finalAmount: Number(order.finalAmount || 0),
@@ -77,7 +78,7 @@ function maskEmail(email) {
   return `${localMask}@${domainMask}${parts.length ? "." + parts.join(".") : ""}`;
 }
 
-async function publicReferralDownlines(email) {
+async function publicReferralDownlines(email, locale = "zh") {
   const lower = String(email || "").trim().toLowerCase();
   const emails = await listAllUserEmails();
   const rows = [];
@@ -92,7 +93,9 @@ async function publicReferralDownlines(email) {
       rows.push({
         email: maskEmail(targetEmail),
         level: first === lower ? 1 : 2,
-        levelLabel: first === lower ? "一级代理" : "二级代理",
+        levelLabel: locale === "en"
+          ? (first === lower ? "L1 agent" : "L2 agent")
+          : (first === lower ? "一级代理" : "二级代理"),
         joinedAtBeijing: user.createdAtBeijing || user.invitedAtBeijing || "",
       });
     }
@@ -106,6 +109,7 @@ export async function GET(request) {
   if (!session || !session.email) {
     return Response.json({ ok: false, error: "not_logged_in" }, { status: 401 });
   }
+  const locale = getCookieFromRequest(request, "locale") === "en" ? "en" : "zh";
 
   const sessionEmail = session.email;
   const user = await getUser(sessionEmail);
@@ -133,7 +137,7 @@ export async function GET(request) {
       (o.userEmail || "").toLowerCase() === sessionEmail ||
       (o.email || "").toLowerCase() === sessionEmail
     )
-    .map(publicOrder);
+    .map((o) => publicOrder(o, locale));
 
   return Response.json({
     ok: true,
@@ -143,7 +147,7 @@ export async function GET(request) {
     balance: Number(profile?.balance || 0),
     coupons: publicCoupons(profile),
     referral: publicReferral(profile),
-    referralDownlines: await publicReferralDownlines(sessionEmail),
+    referralDownlines: await publicReferralDownlines(sessionEmail, locale),
     banned: !!profile?.banned,
     orders: myOrders,
   });
@@ -156,6 +160,7 @@ export async function PATCH(request) {
   if (!session || !session.email) {
     return Response.json({ ok: false, error: "not_logged_in" }, { status: 401 });
   }
+  const en = getCookieFromRequest(request, "locale") === "en";
   let body = {};
   try { body = await request.json(); } catch (e) {}
   const hasUsername = Object.prototype.hasOwnProperty.call(body, "username");
@@ -168,7 +173,7 @@ export async function PATCH(request) {
     return Response.json({
       ok: false,
       error: "invalid_username",
-      message: "用户名 2-20 位,支持中文/字母/数字/下划线",
+      message: en ? "Username must be 2-20 chars: letters / digits / _ / Chinese" : "用户名 2-20 位,支持中文/字母/数字/下划线",
     }, { status: 400 });
   }
   const avatarId = clean(body.avatarId, 40).trim();
@@ -176,7 +181,7 @@ export async function PATCH(request) {
     return Response.json({
       ok: false,
       error: "invalid_avatar",
-      message: "请选择可用头像",
+      message: en ? "Please choose an available avatar" : "请选择可用头像",
     }, { status: 400 });
   }
   const user = await getUser(session.email);

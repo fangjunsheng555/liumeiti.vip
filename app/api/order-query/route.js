@@ -10,7 +10,9 @@ import {
   getOrderById,
   getOrdersByEmail,
   redisConfig,
+  getCookieFromRequest,
 } from "../_utils.js";
+import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 
 const QUERY_CODE_TTL_SECONDS = 10 * 60;
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
@@ -52,7 +54,7 @@ function subscriptionLinks(username) {
   };
 }
 
-function publicOrder(order, type) {
+function publicOrder(order, type, locale = "zh") {
   let items;
   if (Array.isArray(order.items) && order.items.length > 0) {
     items = order.items.map((it) => {
@@ -60,8 +62,8 @@ function publicOrder(order, type) {
       const password = it.staffPassword || it.password || "";
       const out = {
         service: it.service || "",
-        label: it.label || "",
-        cycle: it.cycle || "",
+        label: localizeOrderItemLabel(it.service, it.plan || it.rocketPlan, it.label || "", locale),
+        cycle: localizeCycle(it.cycle || "", locale),
         amount: Number(it.amount || 0),
         account,
         password,
@@ -76,8 +78,8 @@ function publicOrder(order, type) {
   } else {
     const it = {
       service: order.service || "",
-      label: order.serviceLabel || "",
-      cycle: order.cycle || "",
+      label: localizeOrderItemLabel(order.service, order.plan || order.rocketPlan, order.serviceLabel || "", locale),
+      cycle: localizeCycle(order.cycle || "", locale),
       amount: Number(order.finalAmount || 0),
       account: order.account || "",
       password: order.password || "",
@@ -96,7 +98,7 @@ function publicOrder(order, type) {
     staffNotes: order.staffNotes || "",
     items,
     itemCount: items.length,
-    serviceLabel: order.serviceLabel || items.map((i) => i.label).join(" + "),
+    serviceLabel: items.map((i) => i.label).join(" + "),
     paymentMethod: order.paymentMethod || "alipay",
     redeemCode: order.redeemCode || "",
     subtotal: Number(order.subtotal || order.originalAmount || items.reduce((s, i) => s + i.amount, 0)),
@@ -210,6 +212,7 @@ async function handle(request) {
   const body = await readBody(request);
   const query = clean(body.query || body.q || "", 160);
   const code = clean(body.code || body.verificationCode || "", 20).replace(/\s+/g, "");
+  const locale = getCookieFromRequest(request, "locale") === "en" ? "en" : "zh";
   const headers = { "Cache-Control": "no-store, max-age=0" };
 
   if (!query) {
@@ -276,7 +279,7 @@ async function handle(request) {
     ok: true,
     configured: true,
     verified: true,
-    orders: matched.map((order) => publicOrder(order, matchType(type))),
+    orders: matched.map((order) => publicOrder(order, matchType(type), locale)),
   }, { headers });
 }
 

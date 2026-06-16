@@ -270,7 +270,7 @@ export default function ShopPage() {
             <div>
               <div className="section-kicker">{L("服务产品", "Services")}</div>
               <h1 className="section-title">{L("服务选购", "Shop services")}</h1>
-              <p className="section-note">{L("流媒体会员与节点服务，稳定交付", "Streaming memberships & VPN, reliably delivered")}</p>
+              <p className="section-note">{L("流媒体会员与节点服务，稳定交付", "Reliable memberships & VPN")}</p>
             </div>
           </div>
         </section>

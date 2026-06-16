@@ -438,7 +438,7 @@ export default function Page() {
         <section className="home-hero-card container">
           <div className="home-hero-logo-wrap">
             <img src="/logo-transparent.png" alt="冒央会社 Maoyang Taiwan Inc" className="home-hero-full-logo" />
-            <h1 className="sr-only">冒央会社 · 流媒体服务</h1>
+            <h1 className="sr-only">{locale === "en" ? "Maoyang Taiwan Inc · Streaming memberships" : "冒央会社 · 流媒体服务"}</h1>
           </div>
           <p>{t("hero.tagline")}</p>
           <div className="home-hero-badges">

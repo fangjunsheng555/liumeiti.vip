@@ -11234,8 +11234,9 @@ button { cursor: pointer; border: none; background: transparent; }
   color: var(--muted);
 }
 .cart-tile-plan-tag {
-  display: inline-block;
-  margin-left: 4px;
+  display: block;
+  margin: 3px auto 0;
+  max-width: 100%;
   padding: 1px 6px;
   background: #ecfdf5;
   color: #047857;
@@ -11243,7 +11244,9 @@ button { cursor: pointer; border: none; background: transparent; }
   font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0;
-  vertical-align: middle;
+  white-space: normal;
+  line-height: 1.12;
+  word-break: break-word;
 }
 .checkout-card-head .checkout-card-note {
   font-size: 10.5px;
