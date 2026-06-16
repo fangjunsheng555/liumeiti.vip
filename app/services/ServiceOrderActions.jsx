@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { Headphones, ShoppingBag, X } from "lucide-react";
-import { getDefaultProductPlan, getProductPlan, getProductPlanOptions } from "../lib/store";
+import { getDefaultProductPlan, getProductPlan, getProductPlanOptions, localizePlan } from "../lib/store";
 import { useLocale } from "../components/LocaleProvider";
 
 export default function ServiceOrderActions({ service }) {
@@ -47,8 +47,10 @@ export default function ServiceOrderActions({ service }) {
           </button>
         </div>
 
-        <div className="shop-rocket-plan-picker compact" aria-label={`选择${service.shortTitle}规格`}>
-          {planOptions.map((plan) => (
+        <div className="shop-rocket-plan-picker compact" aria-label={locale === "en" ? `Select ${service.shortTitle} plan` : `选择${service.shortTitle}规格`}>
+          {planOptions.map((rawPlan) => {
+            const plan = localizePlan(productKey, rawPlan, locale);
+            return (
             <button
               key={plan.id}
               type="button"
@@ -61,7 +63,8 @@ export default function ServiceOrderActions({ service }) {
               </span>
               <b>¥{plan.amount}<em>/{plan.unit || (locale === "en" ? "yr" : "年")}</em></b>
             </button>
-          ))}
+            );
+          })}
         </div>
 
         <div className="modal-actions rocket-picker-actions">
