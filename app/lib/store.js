@@ -142,6 +142,115 @@ export const DEFAULT_PRODUCT_PLANS = {
 };
 export const DEFAULT_ROCKET_PLAN = DEFAULT_PRODUCT_PLANS.rocket;
 
+// --- English localization (display only; ids/amounts unchanged) ---
+export const PRODUCT_EN = {
+  spotify: {
+    title: "Spotify",
+    subtitle: "Premium Individual / Duo / Family",
+    price: "From ¥128/yr",
+    cycle: "1 yr",
+    shortIntro: "Top-region Premium — Family member, Individual, Duo or Family plan",
+    highlights: ["Top region", "Multiple plans", "After-sales"],
+    detailTitle: "Top-region Spotify Premium — pick a member seat or plan",
+    detailBody:
+      "Includes lossless audio, podcasts, AI DJ, offline downloads, playlists and the full catalog. Choose Family member ¥128/yr, Individual ¥388/yr, Duo ¥488/yr (invite 1 account free) or Family ¥588/yr (invite 5 accounts free) — all top-region Premium with after-sales support.",
+    orderTitle: "Spotify · annual plans",
+    orderBody: "Enter your contact and pay via Alipay. After you submit, our team will reach you within 30 minutes.",
+  },
+  netflix: {
+    title: "Netflix",
+    subtitle: "Global 4K Dolby Profile / full account",
+    price: "From ¥168/yr",
+    cycle: "1 yr",
+    shortIntro: "Top 4K Dolby plan — single Profile or full account",
+    highlights: ["4K Dolby", "Lockable Profile", "Full account"],
+    detailTitle: "Netflix top 4K Dolby plan — Profile or full account",
+    detailBody:
+      "Top-tier 4K Dolby plan, available worldwide. Single Profile ¥168/yr — one private profile with a PIN lock, no queue at peak. Full account ¥588/yr — up to 5 profiles/seats, ideal for families or long-term multi-user use.",
+    orderTitle: "Netflix · 4K Dolby plan",
+    orderBody: "Enter your contact and pay via Alipay. After you submit, our team will reach you within 30 minutes.",
+  },
+  disney: {
+    title: "Disney+",
+    subtitle: "Global 4K Dolby Profile / full account",
+    price: "From ¥108/yr",
+    cycle: "1 yr",
+    shortIntro: "Top 4K Dolby plan — single Profile or full account",
+    highlights: ["4K Dolby", "Worldwide", "Full account"],
+    detailTitle: "Disney+ top 4K Dolby plan — Profile or full account",
+    detailBody:
+      "Top-tier 4K Dolby plan, available worldwide. Single Profile ¥108/yr — one private spot, no interference. Full account ¥588/yr — up to 7 profiles/seats, great for family sharing and long-term use; every order includes after-sales support.",
+    orderTitle: "Disney+ · 4K Dolby plan",
+    orderBody: "Enter your contact and pay via Alipay. After you submit, our team will reach you within 30 minutes.",
+  },
+  max: {
+    title: "HBO Max",
+    subtitle: "Global 4K Dolby Profile / full account",
+    price: "From ¥148/yr",
+    cycle: "1 yr",
+    shortIntro: "Top 4K Dolby plan — single Profile or full account",
+    highlights: ["4K Dolby", "Worldwide", "Full account"],
+    detailTitle: "HBO Max top 4K Dolby plan — Profile or full account",
+    detailBody:
+      "Top-tier 4K Dolby plan, available worldwide. Single Profile ¥148/yr — one private spot, no interference. Full account ¥588/yr — up to 5 profiles/seats, ideal for film-loving families and stable multi-user use.",
+    orderTitle: "HBO Max · 4K Dolby plan",
+    orderBody: "Enter your contact and pay via Alipay. After you submit, our team will reach you within 30 minutes.",
+  },
+  rocket: {
+    title: "VPN",
+    subtitle: "Real-traffic plans & multi-node speed",
+    price: "From ¥128/yr",
+    cycle: "1 yr",
+    shortIntro: "Premium data-center multi-line, up to 5 Gbps, monthly real traffic — unblocks streaming / AI / social",
+    highlights: ["Real-traffic plans", "Fast multi-node", "Encrypted, no logs"],
+    detailTitle: "Premium data-center multi-line, real-traffic plans from ¥128/yr",
+    detailBody:
+      "Premium VPS across HK, JP, TW, KR, SG, US, UK, DE, FR and more, up to 5 Gbps with no congestion at peak. Unblocks all major streaming / AI / social apps, fully encrypted with no logs, maintained 24×7. Choose Standard ¥128/yr (50 GB/mo), Plus ¥198/yr (100 GB/mo), Premium ¥398/yr (200 GB/mo) or Unlimited ¥698/yr (unlimited). A ¥5 10 GB trial is also available.",
+    orderTitle: "VPN · Alipay QR payment",
+    orderBody: "After paying, tap \"Payment done\" to submit. A subscription link is generated once submitted.",
+  },
+};
+
+export const PRODUCT_PLAN_EN = {
+  spotify: {
+    member: { label: "Family member", desc: "Top-region family plan, one member seat" },
+    individual: { label: "Individual", desc: "Top-region individual plan, private use" },
+    duo: { label: "Duo", desc: "Invite 1 account to use free" },
+    family: { label: "Family", desc: "Invite 5 accounts to use free" },
+  },
+  netflix: {
+    seat: { label: "Single Profile", desc: "4K Dolby private profile, lockable" },
+    full: { label: "Full account", desc: "Up to 5 profiles / seats" },
+  },
+  disney: {
+    seat: { label: "Single Profile", desc: "4K Dolby private profile, no interference" },
+    full: { label: "Full account", desc: "Up to 7 profiles / seats" },
+  },
+  max: {
+    seat: { label: "Single Profile", desc: "4K Dolby private profile, with support" },
+    full: { label: "Full account", desc: "Up to 5 profiles / seats" },
+  },
+  rocket: {
+    basic: { label: "Standard", desc: "50 GB/mo real traffic" },
+    pro: { label: "Plus", desc: "100 GB/mo real traffic" },
+    luxury: { label: "Premium", desc: "200 GB/mo real traffic" },
+    unlimited: { label: "Unlimited", desc: "Unlimited traffic" },
+    trial: { label: "Trial 10 GB · ¥5", desc: "10 GB trial traffic", unit: "once", cycle: "once" },
+  },
+};
+
+export function localizeProduct(product, locale) {
+  if (locale !== "en" || !product) return product;
+  const en = PRODUCT_EN[product.key];
+  return en ? { ...product, ...en } : product;
+}
+
+export function localizePlan(productKey, plan, locale) {
+  if (locale !== "en" || !plan) return plan;
+  const en = PRODUCT_PLAN_EN[productKey]?.[plan.id];
+  return en ? { ...plan, ...en } : plan;
+}
+
 export function getRocketPlan(planId) {
   return getProductPlan("rocket", planId);
 }
@@ -231,9 +340,9 @@ export function bundleDiscountRate(itemCount) {
   return 0;
 }
 
-export function bundleDiscountLabel(itemCount) {
-  if (itemCount >= 3) return "3 件起 9 折";
-  if (itemCount === 2) return "2 件 9.5 折";
+export function bundleDiscountLabel(itemCount, locale) {
+  if (itemCount >= 3) return locale === "en" ? "10% off (3+)" : "3 件起 9 折";
+  if (itemCount === 2) return locale === "en" ? "5% off (2)" : "2 件 9.5 折";
   return "";
 }
 

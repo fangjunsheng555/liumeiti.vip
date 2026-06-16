@@ -28,6 +28,8 @@ import {
   copyText,
   bundleDiscountRate,
   bundleDiscountLabel,
+  localizeProduct,
+  localizePlan,
   cartSubtotalCny,
   cartFinalCny,
   cartFinalUsdt,
@@ -227,10 +229,10 @@ export default function CheckoutPage() {
     try {
       const res = await fetch("/api/auth/captcha", { credentials: "same-origin" });
       const data = await res.json();
-      if (!res.ok || !data.ok || !data.token || !data.image) throw new Error(data.message || "验证码加载失败");
+      if (!res.ok || !data.ok || !data.token || !data.image) throw new Error(data.message || L("验证码加载失败", "Failed to load captcha"));
       setAuthCaptcha({ token: data.token, image: data.image, loading: false, error: "" });
     } catch {
-      setAuthCaptcha({ token: "", image: "", loading: false, error: "验证码加载失败，请点击刷新" });
+      setAuthCaptcha({ token: "", image: "", loading: false, error: L("验证码加载失败，请点击刷新", "Couldn't load captcha. Tap to refresh.") });
     }
   }
 
@@ -257,7 +259,7 @@ export default function CheckoutPage() {
       .then((r) => r.json())
       .then((data) => {
         if (!data.ok || data.status !== "active" || data.type !== "service") {
-          setStatus({ type: "error", message: data.message || "服务兑换码无效、已使用或已作废" });
+          setStatus({ type: "error", message: data.message || L("服务兑换码无效、已使用或已作废", "Service code is invalid, used, or voided") });
           setRedeemMode({ loading: false, code, info: null });
           return;
         }
@@ -278,7 +280,7 @@ export default function CheckoutPage() {
         setRedeemMode({ loading: false, code, info: data });
       })
       .catch(() => {
-        setStatus({ type: "error", message: "兑换码识别失败,请稍后再试" });
+        setStatus({ type: "error", message: L("兑换码识别失败,请稍后再试", "Couldn't read the code, please try again") });
         setRedeemMode({ loading: false, code, info: null });
       });
   }, []);
@@ -482,7 +484,7 @@ export default function CheckoutPage() {
       const data = await res.json();
 
       if (authModal === "forgot") {
-        setAuthNotice("验证码已发送至邮箱。请查看收件箱(或垃圾邮件)");
+        setAuthNotice(L("验证码已发送至邮箱。请查看收件箱(或垃圾邮件)", "A code has been sent to your email. Check your inbox (or spam)."));
         setAuthModal("reset");
         setAuthForm((f) => ({ ...f, code: "", newPassword: "" }));
         return;
@@ -493,20 +495,20 @@ export default function CheckoutPage() {
         setAuthModal(null);
       } else {
         const msg = {
-          captcha_failed: "验证码错误，请重新输入",
-          email_taken: "该邮箱已注册",
-          invalid_email: "邮箱格式错误",
-          password_length: "密码 6-64 位",
-          invalid_credentials: "邮箱或密码错误",
-          invalid_code: "验证码格式错误(6 位数字)",
-          code_invalid_or_expired: "验证码错误或已过期",
-          user_not_found: "该邮箱未注册",
-        }[data.error] || data.error || "操作失败";
+          captcha_failed: L("验证码错误，请重新输入", "Wrong captcha, please try again"),
+          email_taken: L("该邮箱已注册", "This email is already registered"),
+          invalid_email: L("邮箱格式错误", "Invalid email format"),
+          password_length: L("密码 6-64 位", "Password must be 6-64 characters"),
+          invalid_credentials: L("邮箱或密码错误", "Wrong email or password"),
+          invalid_code: L("验证码格式错误(6 位数字)", "Invalid code format (6 digits)"),
+          code_invalid_or_expired: L("验证码错误或已过期", "Code is wrong or expired"),
+          user_not_found: L("该邮箱未注册", "This email isn't registered"),
+        }[data.error] || data.error || L("操作失败", "Something went wrong");
         if (authModal === "register" && data.error === "captcha_failed") refreshAuthCaptcha(true);
         setAuthError(msg);
       }
     } catch (error) {
-      setAuthError("网络错误");
+      setAuthError(L("网络错误", "Network error"));
     } finally {
       setAuthBusy(false);
     }
@@ -517,17 +519,17 @@ export default function CheckoutPage() {
   const checkoutReady = hydrated && !redeemMode.loading && draftReady;
 
   function validateForm() {
-    if (cartCount === 0) return "购物车为空,请先选购商品";
+    if (cartCount === 0) return L("购物车为空,请先选购商品", "Your cart is empty. Please add a service first.");
     if (!validEmail(form.email)) {
-      return "请填写有效的邮箱地址,客服将通过邮箱发送订单与开通信息";
+      return L("请填写有效的邮箱地址,客服将通过邮箱发送订单与开通信息", "Please enter a valid email — we'll send your order and access details there.");
     }
     if (contactRequired && !form.contact.trim()) {
-      return "Spotify 订单需要填写联系方式,客服会通过此方式联系您";
+      return L("Spotify 订单需要填写联系方式,客服会通过此方式联系您", "Spotify orders need a contact so support can reach you.");
     }
     for (const p of cartItems) {
       const f = form.fields[p.key] || {};
       if (productNeedsAccountPassword(p) && (!f.account?.trim() || !f.password?.trim())) {
-        return `请为「${p.title}」填写需要开通的账号和密码`;
+        return L(`请为「${p.title}」填写需要开通的账号和密码`, `Please enter the account and password to set up for "${p.title}"`);
       }
     }
     return "";
@@ -550,7 +552,7 @@ export default function CheckoutPage() {
     setPaymentAdjustment(0);
     if (paymentMethod === "alipay" && finalCny > 0) {
       setSubmitting(true);
-      setStatus({ type: "info", message: "正在生成付款金额..." });
+      setStatus({ type: "info", message: L("正在生成付款金额...", "Generating payment amount...") });
       try {
         const response = await fetch("/api/order-quote", {
           method: "POST",
@@ -562,7 +564,7 @@ export default function CheckoutPage() {
         setPaymentAdjustment(Number(quote.paymentAdjustment || 0));
         setPaymentQuoteToken(String(quote.quoteToken || ""));
       } catch (quoteError) {
-        setStatus({ type: "error", message: quoteError.message || "付款金额生成失败，请稍后再试" });
+        setStatus({ type: "error", message: quoteError.message || L("付款金额生成失败，请稍后再试", "Couldn't generate the payment amount, please try again") });
         setSubmitting(false);
         return;
       }
@@ -585,13 +587,13 @@ export default function CheckoutPage() {
     const scanPaymentActive = !serviceRedeemActive && step === "pay" && (paymentMethod === "alipay" || paymentMethod === "usdt");
     if (scanPaymentActive && paymentPageEnteredAt && Date.now() - paymentPageEnteredAt < 5000) {
       setStatus(null);
-      setPaySubmitNotice("请扫码完成付款，付款完成后再点击「付款完成」提交订单");
+      setPaySubmitNotice(L("请扫码完成付款，付款完成后再点击「付款完成」提交订单", "Please scan to pay first, then tap \"Payment done\" to submit the order"));
       return;
     }
 
     setPaySubmitNotice("");
     setSubmitting(true);
-    setStatus({ type: "info", message: "正在提交订单..." });
+    setStatus({ type: "info", message: L("正在提交订单...", "Submitting your order...") });
 
     const items = cartItems.map((p) => {
       const f = form.fields[p.key] || {};
@@ -646,7 +648,7 @@ export default function CheckoutPage() {
         paymentMethod: data.paymentMethod || (serviceRedeemActive ? "redeem" : paymentMethod),
       }]);
       setStep("done");
-      setStatus({ type: "success", message: "订单已成功提交" });
+      setStatus({ type: "success", message: L("订单已成功提交", "Order submitted successfully") });
       clearCart();
       if (typeof window !== "undefined") {
         window.localStorage.removeItem(CHECKOUT_PENDING_KEY);
@@ -654,7 +656,7 @@ export default function CheckoutPage() {
       }
       if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error) {
-      setStatus({ type: "error", message: `${error.message || "订单提交失败"}，已保留填写内容，可稍后重试或联系在线客服处理` });
+      setStatus({ type: "error", message: L(`${error.message || "订单提交失败"}，已保留填写内容，可稍后重试或联系在线客服处理`, `${error.message || "Order submission failed"}. Your details are saved — retry later or contact support.`) });
     } finally {
       setSubmitting(false);
     }
@@ -720,13 +722,13 @@ export default function CheckoutPage() {
         </Link>
         <div className="checkout-secure">
           <Lock size={13} />
-          {serviceRedeemActive ? "兑换码免支付" : paymentMethod === "usdt" ? "USDT-TRC20 安全结算" : "支付宝担保结算"}
+          {serviceRedeemActive ? L("兑换码免支付", "Code · no payment") : paymentMethod === "usdt" ? L("USDT-TRC20 安全结算", "USDT-TRC20 secure checkout") : L("支付宝担保结算", "Alipay secure checkout")}
         </div>
       </header>
 
       <main className="checkout-main">
         <div className="checkout-stepper">
-          {["填写订单", "扫码付款", "提交完成"].map((label, idx) => {
+          {(locale === "en" ? ["Order details", "Scan & pay", "Done"] : ["填写订单", "扫码付款", "提交完成"]).map((label, idx) => {
             const stepIndex = step === "form" ? 0 : step === "pay" ? 1 : 2;
             const done = idx < stepIndex;
             const active = idx === stepIndex;
@@ -745,7 +747,7 @@ export default function CheckoutPage() {
 
         {serviceRedeemActive && (
           <div className="checkout-alert success">
-            服务兑换码已识别: {(redeemMode.info.services || []).map((item) => item.label).join(" + ")}，按页面提示填写后可直接提交,无需支付
+            {L("服务兑换码已识别", "Service code recognized")}: {(redeemMode.info.services || []).map((item) => item.label).join(" + ")}{L("，按页面提示填写后可直接提交,无需支付", " — fill in the form below and submit directly, no payment needed")}
           </div>
         )}
 
@@ -754,22 +756,23 @@ export default function CheckoutPage() {
             <div className="checkout-left">
               {/* Trust strip */}
               <div className="checkout-trust">
-                <span><Lock size={12} />信息加密</span>
-                <span><ShieldCheck size={12} />担保支付</span>
-                <span><Zap size={12} />10 分钟内开通</span>
-                <span><RefreshCw size={12} />7 天内可退</span>
+                <span><Lock size={12} />{L("信息加密", "Encrypted")}</span>
+                <span><ShieldCheck size={12} />{L("担保支付", "Escrow pay")}</span>
+                <span><Zap size={12} />{L("10 分钟内开通", "Live in 10 min")}</span>
+                <span><RefreshCw size={12} />{L("7 天内可退", "7-day refund")}</span>
               </div>
 
               {/* Cart items */}
               <section className="checkout-card">
                 <div className="checkout-card-head">
-                  <h3>已选商品 <em>{cartCount}</em></h3>
-                  {!serviceRedeemActive && <Link href="/shop" className="text-link">+ 继续选购</Link>}
+                  <h3>{L("已选商品", "Selected")} <em>{cartCount}</em></h3>
+                  {!serviceRedeemActive && <Link href="/shop" className="text-link">{L("+ 继续选购", "+ Add more")}</Link>}
                 </div>
                 <div className="cart-items-grid">
                   {cartItems.map((item) => {
                     const itemAmount = productItemAmount(item, planMap[item.key]);
-                    const planInfo = hasProductPlans(item.key) ? getProductPlan(item.key, planMap[item.key]) : null;
+                    const planInfo = hasProductPlans(item.key) ? localizePlan(item.key, getProductPlan(item.key, planMap[item.key]), locale) : null;
+                    const itemL = localizeProduct(item, locale);
                     return (
                       <div key={item.key} className="cart-tile">
                         {!serviceRedeemActive && (
@@ -777,15 +780,15 @@ export default function CheckoutPage() {
                             type="button"
                             className="cart-tile-remove"
                             onClick={() => removeFromCart(item.key)}
-                            aria-label={`移除 ${item.title}`}
-                            title={`移除 ${item.title}`}
+                            aria-label={L(`移除 ${item.title}`, `Remove ${itemL.title}`)}
+                            title={L(`移除 ${item.title}`, `Remove ${itemL.title}`)}
                           >
                             <X size={11} strokeWidth={3} />
                           </button>
                         )}
-                        <img src={item.image} alt={item.title} className="cart-tile-img" />
+                        <img src={item.image} alt={itemL.title} className="cart-tile-img" />
                         <div className="cart-tile-name">
-                          {item.title}
+                          {itemL.title}
                           {planInfo && (
                             <span className="cart-tile-plan-tag">{planInfo.label}</span>
                           )}
@@ -801,7 +804,7 @@ export default function CheckoutPage() {
               {cartItems.some((p) => productNeedsAccountPassword(p)) && (
                 <section className="checkout-card">
                   <div className="checkout-card-head">
-                    <h3>开通信息</h3>
+                    <h3>{L("开通信息", "Setup details")}</h3>
                   </div>
                   <div className="checkout-product-fields">
                     {cartItems.map((p) => {
@@ -810,18 +813,18 @@ export default function CheckoutPage() {
                         return (
                           <div key={p.key} className="order-field-grid">
                             <label className="order-field">
-                              <span>{p.title} · 账号/邮箱</span>
+                              <span>{p.title} · {L("账号/邮箱", "Account / email")}</span>
                               <input
                                 value={f.account || ""}
                                 onChange={(e) => updateProductField(p.key, "account", e.target.value)}
-                                placeholder="需要开通的账号"
+                                placeholder={L("需要开通的账号", "Account to set up")}
                                 autoComplete="username"
                                 required
                               />
                             </label>
                             <label className="order-field">
                               <span className="order-field-label-row">
-                                <span>{p.title} · 密码</span>
+                                <span>{p.title} · {L("密码", "Password")}</span>
                                 {p.key === "spotify" && (
                                   <a
                                     className="order-field-help-link"
@@ -829,7 +832,7 @@ export default function CheckoutPage() {
                                     target="_blank"
                                     rel="noopener noreferrer"
                                   >
-                                    忘记 Spotify 密码？点击找回
+                                    {L("忘记 Spotify 密码？点击找回", "Forgot Spotify password? Reset it")}
                                   </a>
                                 )}
                               </span>
@@ -838,7 +841,7 @@ export default function CheckoutPage() {
                                   type={passwordVisible ? "text" : "password"}
                                   value={f.password || ""}
                                   onChange={(e) => updateProductField(p.key, "password", e.target.value)}
-                                  placeholder="账号密码"
+                                  placeholder={L("账号密码", "Account password")}
                                   autoComplete="current-password"
                                   required
                                 />
@@ -846,7 +849,7 @@ export default function CheckoutPage() {
                                   type="button"
                                   className="password-eye-btn"
                                   onClick={() => setPasswordVisible((v) => !v)}
-                                  aria-label={passwordVisible ? "隐藏密码" : "显示密码"}
+                                  aria-label={passwordVisible ? L("隐藏密码", "Hide password") : L("显示密码", "Show password")}
                                 >
                                   {passwordVisible ? <EyeOff size={18} /> : <Eye size={18} />}
                                 </button>
@@ -864,15 +867,15 @@ export default function CheckoutPage() {
               {/* Contact info */}
               <section className="checkout-card">
                 <div className="checkout-card-head">
-                  <h3>联系方式</h3>
+                  <h3>{L("联系方式", "Contact")}</h3>
                 </div>
                 <label className="order-field">
-                  <span>邮箱 <em className="field-required">*</em></span>
+                  <span>{L("邮箱", "Email")} <em className="field-required">*</em></span>
                   <input
                     type="email"
                     value={form.email}
                     onChange={(e) => updateField("email", e.target.value)}
-                    placeholder="接收订单通知，也可用于后续查询"
+                    placeholder={L("接收订单通知，也可用于后续查询", "For order updates and later lookups")}
                     autoComplete="email"
                     inputMode="email"
                     required
@@ -881,24 +884,24 @@ export default function CheckoutPage() {
                 <label className="order-field">
                   <span>
                     QQ / 微信 / WhatsApp / Telegram
-                    {contactRequired ? <em className="field-required">*</em> : <em className="field-optional">(选填)</em>}
+                    {contactRequired ? <em className="field-required">*</em> : <em className="field-optional">{L("(选填)", "(optional)")}</em>}
                   </span>
                   <input
                     value={form.contact}
                     onChange={(e) => updateField("contact", e.target.value)}
                     placeholder={contactRequired
-                      ? "Spotify 订单需要,方便客服协助开通"
-                      : "可选 — 通常通过邮箱沟通"}
+                      ? L("Spotify 订单需要,方便客服协助开通", "Needed for Spotify so support can help set up")
+                      : L("可选 — 通常通过邮箱沟通", "Optional — we usually reach you by email")}
                     autoComplete="tel"
                     required={contactRequired}
                   />
                 </label>
                 <label className="order-field">
-                  <span>备注(非必填)</span>
+                  <span>{L("备注(非必填)", "Note (optional)")}</span>
                   <textarea
                     value={form.remark}
                     onChange={(e) => updateField("remark", e.target.value)}
-                    placeholder="特殊需求或付款备注等"
+                    placeholder={L("特殊需求或付款备注等", "Special requests or payment notes")}
                     rows={2}
                   />
                 </label>
@@ -908,55 +911,55 @@ export default function CheckoutPage() {
             <aside className="checkout-right">
               <section className="checkout-card sticky-summary">
                 <div className="checkout-card-head">
-                  <h3>订单总览</h3>
+                  <h3>{L("订单总览", "Order summary")}</h3>
                 </div>
 
                 <div className="cart-summary">
                   <div className="cart-summary-row">
-                    <span>商品总价</span>
+                    <span>{L("商品总价", "Subtotal")}</span>
                     <b>¥{subtotal}</b>
                   </div>
                   {discountRate > 0 && (
                     <div className="cart-summary-row discount">
-                      <span>组合优惠 · {bundleDiscountLabel(cartCount)}</span>
+                      <span>{L("组合优惠", "Bundle discount")} · {bundleDiscountLabel(cartCount, locale)}</span>
                       <b>−¥{savings}</b>
                     </div>
                   )}
                   <div className="cart-summary-row total">
-                    <span>组合折后</span>
+                    <span>{L("组合折后", "After bundle")}</span>
                     <b>¥{bundleFinalCny}</b>
                   </div>
                   {couponDiscount > 0 && (
                     <div className="cart-summary-row coupon">
-                      <span>{activeCoupon?.title || "优惠券自动抵扣"}</span>
+                      <span>{activeCoupon?.title || L("优惠券自动抵扣", "Coupon auto-applied")}</span>
                       <b>−¥{couponDiscount.toFixed(2)}</b>
                     </div>
                   )}
                   {serviceRedeemActive && (
                     <div className="cart-summary-row coupon">
-                      <span>服务兑换码抵扣</span>
+                      <span>{L("服务兑换码抵扣", "Service code applied")}</span>
                       <b>−¥{bundleFinalCny.toFixed(2)}</b>
                     </div>
                   )}
                   <div className="cart-summary-row total">
-                    <span>应付总额</span>
+                    <span>{L("应付总额", "Total due")}</span>
                     <b>¥{serviceRedeemActive ? "0.00" : finalCny.toFixed(2)}</b>
                   </div>
                   {cartCount === 1 && (
                     <div className="cart-bundle-hint">
-                      <Gift size={12} />再加 1 件享 9.5 折,加满 3 件享 9 折
+                      <Gift size={12} />{L("再加 1 件享 9.5 折,加满 3 件享 9 折", "Add 1 more for 5% off, 3 items for 10% off")}
                     </div>
                   )}
                   {cartCount === 2 && (
                     <div className="cart-bundle-hint">
-                      <Gift size={12} />再加 1 件升级到 9 折
+                      <Gift size={12} />{L("再加 1 件升级到 9 折", "Add 1 more for 10% off")}
                     </div>
                   )}
                 </div>
 
                 {/* Payment method */}
                 {!serviceRedeemActive && <div className="payment-method-group">
-                  <div className="payment-method-label">选择支付方式</div>
+                  <div className="payment-method-label">{L("选择支付方式", "Payment method")}</div>
                   <div className="payment-method-options">
                     <label className={`payment-method-option${paymentMethod === "alipay" ? " selected" : ""}`}>
                       <input
@@ -969,7 +972,7 @@ export default function CheckoutPage() {
                       <div className="payment-method-icon alipay"><AlipayIcon /></div>
                       <div className="payment-method-detail">
                         <strong>¥{finalCny}</strong>
-                        <small>担保支付 · 即时到账</small>
+                        <small>{L("担保支付 · 即时到账", "Escrow · instant")}</small>
                       </div>
                     </label>
                     <label className={`payment-method-option${paymentMethod === "usdt" ? " selected" : ""}`}>
@@ -983,9 +986,9 @@ export default function CheckoutPage() {
                       <div className="payment-method-icon usdt"><UsdtIcon /></div>
                       <div className="payment-method-detail">
                         <strong>{finalUsdt} USDT</strong>
-                        <small>9 折优惠 · TRC20</small>
+                        <small>{L("9 折优惠 · TRC20", "10% off · TRC20")}</small>
                       </div>
-                      <div className="payment-method-badge">9 折</div>
+                      <div className="payment-method-badge">{L("9 折", "10% off")}</div>
                     </label>
                     {authedUser && (
                       <label className={`payment-method-option${paymentMethod === "balance" ? " selected" : ""}${authedUser.balance < finalCny ? " low-balance" : ""}`}>
@@ -999,8 +1002,8 @@ export default function CheckoutPage() {
                         />
                         <div className="payment-method-icon balance"><BalanceIcon /></div>
                         <div className="payment-method-detail">
-                          <strong>账户余额支付</strong>
-                          <small>余额 ¥{authedUser.balance.toFixed(2)}{authedUser.balance < finalCny ? " · 余额不足" : " · 一键扣款"}</small>
+                          <strong>{L("账户余额支付", "Pay with balance")}</strong>
+                          <small>{L("余额", "Balance")} ¥{authedUser.balance.toFixed(2)}{authedUser.balance < finalCny ? L(" · 余额不足", " · insufficient") : L(" · 一键扣款", " · one tap")}</small>
                         </div>
                       </label>
                     )}
@@ -1008,8 +1011,8 @@ export default function CheckoutPage() {
                       <input type="radio" name="paymentMethod" disabled />
                       <div className="payment-method-icon wechat"><WechatIcon /></div>
                       <div className="payment-method-detail">
-                        <strong>微信支付</strong>
-                        <small>暂未开放,请选择其他方式</small>
+                        <strong>{L("微信支付", "WeChat Pay")}</strong>
+                        <small>{L("暂未开放,请选择其他方式", "Coming soon — pick another method")}</small>
                       </div>
                     </label>
                     <label className="payment-method-option disabled">
@@ -1017,14 +1020,14 @@ export default function CheckoutPage() {
                       <div className="payment-method-icon card"><CardPayIcon /></div>
                       <div className="payment-method-detail">
                         <strong>Mastercard / Visa</strong>
-                        <small>暂未开放,请选择其他方式</small>
+                        <small>{L("暂未开放,请选择其他方式", "Coming soon — pick another method")}</small>
                       </div>
                     </label>
                   </div>
                 </div>}
 
                 <button type="submit" className="primary-btn primary-btn-lg checkout-submit-btn" disabled={cartCount === 0 || submitting}>
-                  {serviceRedeemActive ? "确认兑换并提交订单" : `前往支付 · ${paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}`}
+                  {serviceRedeemActive ? L("确认兑换并提交订单", "Confirm & submit order") : `${L("前往支付", "Pay")} · ${paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}`}
                   <ArrowRight size={15} />
                 </button>
               </section>
@@ -1033,11 +1036,11 @@ export default function CheckoutPage() {
             {/* Mobile sticky bottom CTA */}
             <div className="checkout-mobile-cta">
               <div className="checkout-mobile-cta-info">
-                <small>{serviceRedeemActive ? "服务兑换码" : paymentMethod === "usdt" ? "USDT-TRC20" : "支付宝"}</small>
-                <b>{serviceRedeemActive ? "免支付" : paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}</b>
+                <small>{serviceRedeemActive ? L("服务兑换码", "Service code") : paymentMethod === "usdt" ? "USDT-TRC20" : L("支付宝", "Alipay")}</small>
+                <b>{serviceRedeemActive ? L("免支付", "No pay") : paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}</b>
               </div>
               <button type="submit" className="primary-btn checkout-mobile-cta-btn" disabled={cartCount === 0 || submitting}>
-                {serviceRedeemActive ? "提交兑换" : "前往支付"}
+                {serviceRedeemActive ? L("提交兑换", "Submit") : L("前往支付", "Pay")}
                 <ArrowRight size={15} />
               </button>
             </div>
@@ -1050,7 +1053,7 @@ export default function CheckoutPage() {
               {/* 支付方式头 */}
               <div className="pay-method-head">
                 <span className="pay-method-tag">
-                  {paymentMethod === "usdt" ? "USDT · TRC20" : paymentMethod === "balance" ? "账户余额" : "支付宝"}
+                  {paymentMethod === "usdt" ? "USDT · TRC20" : paymentMethod === "balance" ? L("账户余额", "Balance") : L("支付宝", "Alipay")}
                 </span>
                 <button
                   type="button"
@@ -1058,22 +1061,22 @@ export default function CheckoutPage() {
                   onClick={() => { setPaySubmitNotice(""); setPaymentPageEnteredAt(0); setStep("form"); window.scrollTo({ top: 0, behavior: "smooth" }); }}
                   disabled={submitting}
                 >
-                  切换方式
+                  {L("切换方式", "Change method")}
                 </button>
               </div>
 
               {/* 应付金额 - 大字 */}
               <div className="pay-amount-prominent">
-                <span>{paymentMethod === "balance" ? "余额扣款" : "应付金额"}</span>
+                <span>{paymentMethod === "balance" ? L("余额扣款", "Charged from balance") : L("应付金额", "Amount due")}</span>
                 {paymentMethod === "usdt" ? (
                   <>
                     <b>{finalUsdt} <em>USDT</em></b>
-                    <small>¥{finalCny}(支付宝应付)× 0.9 ÷ {USDT_RATE}</small>
+                    <small>¥{finalCny}{L("(支付宝应付)", " (Alipay due)")} × 0.9 ÷ {USDT_RATE}</small>
                   </>
                 ) : paymentMethod === "alipay" ? (
                   <>
                     <b>¥{alipayPayableCny.toFixed(2)}</b>
-                    <small>付款核对尾差 {paymentAdjustment > 0 ? "+" : ""}¥{paymentAdjustment.toFixed(2)}，商品金额 ¥{finalCny.toFixed(2)}</small>
+                    <small>{L("付款核对尾差", "Verification diff")} {paymentAdjustment > 0 ? "+" : ""}¥{paymentAdjustment.toFixed(2)}{L("，商品金额", " · item total")} ¥{finalCny.toFixed(2)}</small>
                   </>
                 ) : (
                   <b>¥{finalCny}</b>
@@ -1083,10 +1086,10 @@ export default function CheckoutPage() {
               {/* 重要提示 */}
               <div className="pay-tip">
                 {paymentMethod === "usdt"
-                  ? `请使用 TRON (TRC20) 网络转账精确金额 ${finalUsdt} USDT 到下方地址,付款完成后请记得返回本页面点击「付款完成」按钮提交订单`
+                  ? L(`请使用 TRON (TRC20) 网络转账精确金额 ${finalUsdt} USDT 到下方地址,付款完成后请记得返回本页面点击「付款完成」按钮提交订单`, `Send exactly ${finalUsdt} USDT over the TRON (TRC20) network to the address below. After paying, return here and tap "Payment done" to submit your order.`)
                   : paymentMethod === "balance"
-                  ? `点击下方「确认扣款并提交订单」后，将从您的账户余额(¥${authedUser?.balance.toFixed(2) || "0.00"})扣除 ¥${finalCny},随后提交订单`
-                  : "请按上方精确金额完成支付宝付款，尾差用于快速核对订单；付款完成后返回本页面点击「付款完成」提交订单"}
+                  ? L(`点击下方「确认扣款并提交订单」后，将从您的账户余额(¥${authedUser?.balance.toFixed(2) || "0.00"})扣除 ¥${finalCny},随后提交订单`, `Tapping "Confirm & submit" below will deduct ¥${finalCny} from your balance (¥${authedUser?.balance.toFixed(2) || "0.00"}) and place the order.`)
+                  : L("请按上方精确金额完成支付宝付款，尾差用于快速核对订单；付款完成后返回本页面点击「付款完成」提交订单", "Pay the exact amount above via Alipay — the small diff helps us verify your order quickly. After paying, return here and tap \"Payment done\" to submit.")}
               </div>
 
               {/* QR 二维码 — 只对支付宝/USDT 显示,余额支付不需要 */}
@@ -1094,10 +1097,10 @@ export default function CheckoutPage() {
                 <div className="qr-display compact">
                   <img
                     src={paymentMethod === "usdt" ? "/payment/usdt.png" : (cartItems[0]?.qrImage || "/payment/alipay.jpg")}
-                    alt={paymentMethod === "usdt" ? "USDT 收款码" : "支付宝收款码"}
+                    alt={paymentMethod === "usdt" ? L("USDT 收款码", "USDT QR code") : L("支付宝收款码", "Alipay QR code")}
                   />
                   <div className="qr-display-label">
-                    {paymentMethod === "usdt" ? "TRC20 钱包扫一扫或复制下面地址转账" : "支付宝扫一扫"}
+                    {paymentMethod === "usdt" ? L("TRC20 钱包扫一扫或复制下面地址转账", "Scan with a TRC20 wallet, or copy the address below") : L("支付宝扫一扫", "Scan with Alipay")}
                   </div>
                 </div>
               )}
@@ -1106,14 +1109,14 @@ export default function CheckoutPage() {
               {paymentMethod === "usdt" && (
                 <div className="usdt-address-box">
                   <div className="usdt-address-head">
-                    <span>TRON / TRC20 收款地址</span>
+                    <span>{L("TRON / TRC20 收款地址", "TRON / TRC20 address")}</span>
                     <button
                       type="button"
                       className={`usdt-address-copy${copiedKey === "usdt-addr" ? " copied" : ""}`}
                       onClick={() => handleCopy(USDT_ADDRESS, "usdt-addr")}
                     >
                       <Copy size={12} />
-                      {copiedKey === "usdt-addr" ? "已复制" : "复制地址"}
+                      {copiedKey === "usdt-addr" ? L("已复制", "Copied") : L("复制地址", "Copy")}
                     </button>
                   </div>
                   <code className="usdt-address-value">{USDT_ADDRESS}</code>
@@ -1122,27 +1125,28 @@ export default function CheckoutPage() {
 
               {/* 订单总览 - 折叠到底部 */}
               <details className="pay-summary-foldable">
-                <summary>查看订单详情({cartCount} 件)</summary>
+                <summary>{L(`查看订单详情(${cartCount} 件)`, `Order details (${cartCount})`)}</summary>
                 <div className="checkout-cart-summary">
                   {cartItems.map((p) => {
                     const itemAmount = productItemAmount(p, planMap[p.key]);
-                    const planInfo = hasProductPlans(p.key) ? getProductPlan(p.key, planMap[p.key]) : null;
+                    const planInfo = hasProductPlans(p.key) ? localizePlan(p.key, getProductPlan(p.key, planMap[p.key]), locale) : null;
+                    const pL = localizeProduct(p, locale);
                     return (
                       <div key={p.key} className="checkout-cart-row">
-                        <span>{planInfo ? `${p.title} · ${planInfo.label}` : p.title}</span>
+                        <span>{planInfo ? `${pL.title} · ${planInfo.label}` : pL.title}</span>
                         <b>¥{itemAmount}</b>
                       </div>
                     );
                   })}
                   {discountRate > 0 && (
                     <div className="checkout-cart-row discount">
-                      <span>组合优惠 · {bundleDiscountLabel(cartCount)}</span>
+                      <span>{L("组合优惠", "Bundle discount")} · {bundleDiscountLabel(cartCount, locale)}</span>
                       <b>−¥{savings}</b>
                     </div>
                   )}
                   {couponDiscount > 0 && (
                     <div className="checkout-cart-row discount">
-                      <span>{activeCoupon?.title || "优惠券自动抵扣"}</span>
+                      <span>{activeCoupon?.title || L("优惠券自动抵扣", "Coupon auto-applied")}</span>
                       <b>−¥{couponDiscount.toFixed(2)}</b>
                     </div>
                   )}
@@ -1165,16 +1169,16 @@ export default function CheckoutPage() {
                 {submitting ? (
                   <>
                     <LoaderCircle size={15} className="spin-icon" />
-                    正在提交
+                    {L("正在提交", "Submitting")}
                   </>
                 ) : paymentMethod === "balance" ? (
                   <>
-                    确认扣款并提交订单
+                    {L("确认扣款并提交订单", "Confirm & submit order")}
                     <ArrowRight size={15} />
                   </>
                 ) : (
                   <>
-                    付款完成,提交订单
+                    {L("付款完成,提交订单", "Payment done, submit order")}
                     <ArrowRight size={15} />
                   </>
                 )}
@@ -1188,13 +1192,13 @@ export default function CheckoutPage() {
             <div className="checkout-done-icon">
               <CheckCircle2 size={56} />
             </div>
-            <h2>订单已提交</h2>
-            <p>我们将在 10 分钟内联系您，订单确认邮件已发送至您的邮箱,请保持邮箱及联系方式畅通</p>
+            <h2>{L("订单已提交", "Order submitted")}</h2>
+            <p>{L("我们将在 10 分钟内联系您，订单确认邮件已发送至您的邮箱,请保持邮箱及联系方式畅通", "We'll reach out within 10 minutes. A confirmation email has been sent — please keep your email and contact reachable.")}</p>
 
             {orderResults[0] && (
               <div className="order-result-single">
                 <div className="order-result-head">
-                  <span>订单号</span>
+                  <span>{L("订单号", "Order ID")}</span>
                   <code>{orderResults[0].orderId}</code>
                 </div>
                 <div className="order-result-items">
@@ -1210,7 +1214,7 @@ export default function CheckoutPage() {
                           <div className="subscription-links">
                             <div className="subscription-link-row">
                               <a href={it.subscriptionLinks.shadowrocket} target="_blank" rel="noopener noreferrer">
-                                <strong>Shadowrocket 订阅:</strong>
+                                <strong>{L("Shadowrocket 订阅:", "Shadowrocket sub:")}</strong>
                                 <span>{it.subscriptionLinks.shadowrocket}</span>
                               </a>
                               <button
@@ -1219,12 +1223,12 @@ export default function CheckoutPage() {
                                 onClick={() => handleCopy(it.subscriptionLinks.shadowrocket, `sr-${orderId}-${it.service}`)}
                               >
                                 <Copy size={14} />
-                                {copiedKey === `sr-${orderId}-${it.service}` ? "已复制" : "复制"}
+                                {copiedKey === `sr-${orderId}-${it.service}` ? L("已复制", "Copied") : L("复制", "Copy")}
                               </button>
                             </div>
                             <div className="subscription-link-row">
                               <a href={it.subscriptionLinks.clash} target="_blank" rel="noopener noreferrer">
-                                <strong>Clash 订阅:</strong>
+                                <strong>{L("Clash 订阅:", "Clash sub:")}</strong>
                                 <span>{it.subscriptionLinks.clash}</span>
                               </a>
                               <button
@@ -1233,7 +1237,7 @@ export default function CheckoutPage() {
                                 onClick={() => handleCopy(it.subscriptionLinks.clash, `cl-${orderId}-${it.service}`)}
                               >
                                 <Copy size={14} />
-                                {copiedKey === `cl-${orderId}-${it.service}` ? "已复制" : "复制"}
+                                {copiedKey === `cl-${orderId}-${it.service}` ? L("已复制", "Copied") : L("复制", "Copy")}
                               </button>
                             </div>
                           </div>
@@ -1243,18 +1247,18 @@ export default function CheckoutPage() {
                   })}
                 </div>
                 <div className="order-result-paid">
-                  <span>实付</span>
-                  <b>{orderResults[0].paidCurrency === "CODE" ? "服务兑换码" : orderResults[0].paidCurrency === "USDT" ? `${orderResults[0].paidAmount} USDT` : `¥${orderResults[0].paidAmount}`}</b>
+                  <span>{L("实付", "Paid")}</span>
+                  <b>{orderResults[0].paidCurrency === "CODE" ? L("服务兑换码", "Service code") : orderResults[0].paidCurrency === "USDT" ? `${orderResults[0].paidAmount} USDT` : `¥${orderResults[0].paidAmount}`}</b>
                 </div>
               </div>
             )}
 
             <div className="checkout-done-actions">
               <Link href="/shop" className="primary-btn primary-btn-lg">
-                继续选购
+                {L("继续选购", "Keep shopping")}
               </Link>
               <Link href="/service-center#order-query" className="secondary-btn">
-                查询订单状态
+                {L("查询订单状态", "Track order")}
               </Link>
             </div>
           </section>
@@ -1276,15 +1280,15 @@ export default function CheckoutPage() {
             <div className="auth-modal-head">
               {authModal === "login" || authModal === "register" ? (
                 <div className="auth-modal-tabs">
-                  <button type="button" className={`auth-tab${authModal === "login" ? " active" : ""}`} onClick={() => setAuthModal("login")}>登录</button>
+                  <button type="button" className={`auth-tab${authModal === "login" ? " active" : ""}`} onClick={() => setAuthModal("login")}>{L("登录", "Sign in")}</button>
                   <button type="button" className={`auth-tab register-tab${authModal === "register" ? " active" : ""}`} onClick={() => setAuthModal("register")}>
-                    注册
-                    <span className="auth-tab-tip">立减¥8.88</span>
+                    {L("注册", "Sign up")}
+                    <span className="auth-tab-tip">{L("立减¥8.88", "¥8.88 off")}</span>
                   </button>
                 </div>
               ) : (
                 <div className="auth-modal-title">
-                  {authModal === "forgot" ? "找回密码" : "重置密码"}
+                  {authModal === "forgot" ? L("找回密码", "Reset password") : L("重置密码", "Set new password")}
                 </div>
               )}
               <button
@@ -1301,7 +1305,7 @@ export default function CheckoutPage() {
             </div>
             <form className="auth-form" onSubmit={doCheckoutAuth}>
               <label className="auth-field">
-                <span>邮箱</span>
+                <span>{L("邮箱", "Email")}</span>
                 <input
                   type="email"
                   value={authForm.email}
@@ -1315,12 +1319,12 @@ export default function CheckoutPage() {
 
               {(authModal === "login" || authModal === "register") && (
                 <label className="auth-field">
-                  <span>密码{authModal === "register" && " (6-64 位)"}</span>
+                  <span>{L("密码", "Password")}{authModal === "register" && L(" (6-64 位)", " (6-64 chars)")}</span>
                   <input
                     type="password"
                     value={authForm.password}
                     onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
-                    placeholder={authModal === "register" ? "设置一个密码" : "登录密码"}
+                    placeholder={authModal === "register" ? L("设置一个密码", "Create a password") : L("登录密码", "Your password")}
                     autoComplete={authModal === "register" ? "new-password" : "current-password"}
                     minLength={6}
                     required
@@ -1331,22 +1335,22 @@ export default function CheckoutPage() {
               {authModal === "reset" && (
                 <>
                   <label className="auth-field">
-                    <span>邮箱验证码</span>
+                    <span>{L("邮箱验证码", "Email code")}</span>
                     <input
                       value={authForm.code}
                       onChange={(e) => setAuthForm({ ...authForm, code: e.target.value.replace(/\D/g, "") })}
-                      placeholder="6 位数字验证码"
+                      placeholder={L("6 位数字验证码", "6-digit code")}
                       inputMode="numeric"
                       required
                     />
                   </label>
                   <label className="auth-field">
-                    <span>新密码</span>
+                    <span>{L("新密码", "New password")}</span>
                     <input
                       type="password"
                       value={authForm.newPassword}
                       onChange={(e) => setAuthForm({ ...authForm, newPassword: e.target.value })}
-                      placeholder="设置新的登录密码"
+                      placeholder={L("设置新的登录密码", "Set a new password")}
                       minLength={6}
                       required
                     />
@@ -1356,22 +1360,22 @@ export default function CheckoutPage() {
 
               {authModal === "register" && (
                 <label className="auth-field auth-captcha">
-                  <span>验证码</span>
+                  <span>{L("验证码", "Captcha")}</span>
                   <div className="auth-captcha-row">
                     <div className="auth-captcha-control">
                       <ShieldCheck size={16} />
                       <input
                         value={authForm.captchaAnswer}
                         onChange={(e) => setAuthForm({ ...authForm, captchaAnswer: e.target.value.replace(/\s+/g, "").slice(0, 4) })}
-                        placeholder="验证码"
+                        placeholder={L("验证码", "Captcha")}
                         inputMode="numeric"
                         autoComplete="off"
                         maxLength={4}
                         required
                       />
                     </div>
-                    <button type="button" className="auth-captcha-image" onClick={() => refreshAuthCaptcha(true)} disabled={authCaptcha.loading} aria-label="刷新验证码">
-                      {authCaptcha.image && !authCaptcha.loading ? <img src={authCaptcha.image} alt="验证码" /> : <LoaderCircle size={18} className="spin-icon" />}
+                    <button type="button" className="auth-captcha-image" onClick={() => refreshAuthCaptcha(true)} disabled={authCaptcha.loading} aria-label={L("刷新验证码", "Refresh captcha")}>
+                      {authCaptcha.image && !authCaptcha.loading ? <img src={authCaptcha.image} alt={L("验证码", "Captcha")} /> : <LoaderCircle size={18} className="spin-icon" />}
                       <span><RefreshCw size={12} /></span>
                     </button>
                   </div>
@@ -1384,38 +1388,38 @@ export default function CheckoutPage() {
 
               <button type="submit" className="auth-submit" disabled={authBusy || (authModal === "register" && (authCaptcha.loading || !authCaptcha.token))}>
                 {authBusy ? (
-                  <><LoaderCircle size={15} className="spin-icon" />处理中...</>
-                ) : authModal === "login" ? "登录"
-                  : authModal === "register" ? "注册并登录"
-                  : authModal === "forgot" ? "发送邮箱验证码"
-                  : "重置密码并登录"}
+                  <><LoaderCircle size={15} className="spin-icon" />{L("处理中...", "Processing...")}</>
+                ) : authModal === "login" ? L("登录", "Sign in")
+                  : authModal === "register" ? L("注册并登录", "Sign up & sign in")
+                  : authModal === "forgot" ? L("发送邮箱验证码", "Send code")
+                  : L("重置密码并登录", "Reset & sign in")}
               </button>
 
               {(authModal === "login" || authModal === "register") && (
-                <div className="auth-divider"><span>或使用</span></div>
+                <div className="auth-divider"><span>{L("或使用", "or use")}</span></div>
               )}
 
               {(authModal === "login" || authModal === "register") && (
                 <div className="oauth-login-grid bottom">
-                  <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />Google 登录</a>
+                  <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
                 </div>
               )}
 
               <div className="auth-hints">
                 {authModal === "login" && (
                   <>
-                    <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>忘记密码?</button>
-                    <span className="auth-hint">还没账号? <button type="button" className="auth-switch" onClick={() => setAuthModal("register")}>立即注册</button></span>
+                    <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>{L("忘记密码?", "Forgot password?")}</button>
+                    <span className="auth-hint">{L("还没账号?", "No account?")} <button type="button" className="auth-switch" onClick={() => setAuthModal("register")}>{L("立即注册", "Sign up")}</button></span>
                   </>
                 )}
                 {authModal === "register" && (
-                  <span className="auth-hint">已有账号? <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>去登录</button></span>
+                  <span className="auth-hint">{L("已有账号?", "Have an account?")} <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>{L("去登录", "Sign in")}</button></span>
                 )}
                 {authModal === "forgot" && (
-                  <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>返回登录</button>
+                  <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>{L("返回登录", "Back to sign in")}</button>
                 )}
                 {authModal === "reset" && (
-                  <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>重新发送验证码</button>
+                  <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>{L("重新发送验证码", "Resend code")}</button>
                 )}
               </div>
             </form>

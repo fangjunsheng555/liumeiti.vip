@@ -8380,7 +8380,7 @@ button { cursor: pointer; border: none; background: transparent; }
   margin-top: 8px;
   display: grid;
   gap: 4px;
-  max-height: 260px;
+  max-height: clamp(280px, calc(100vh - 300px), 820px);
   overflow-y: auto;
 }
 .admin-userlist-empty {

@@ -272,8 +272,9 @@ body { background: var(--bg) !important; color: var(--ink); letter-spacing: -0.0
 .home-footer .footer-links a:hover { color: var(--accent-ink) !important; }
 .home-footer .footer-pill {
   color: var(--sub) !important;
-  background: #fff !important;
-  border: 1px solid var(--line) !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 2px 0 !important;
 }
 
 /* ── 11. 头部 logo / 浮动客服 修正 ── */

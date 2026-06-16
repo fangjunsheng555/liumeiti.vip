@@ -10,17 +10,26 @@ const MESSAGES = {
   insufficient_balance: "余额不足,无法转账",
 };
 
+const MESSAGES_EN = {
+  invalid_recipient: "Incorrect recipient email — please check and retry",
+  recipient_not_found: "No user found for that email — make sure they've registered",
+  recipient_unavailable: "The recipient is currently unavailable",
+  invalid_amount: "Please enter a valid transfer amount",
+  insufficient_balance: "Insufficient balance for this transfer",
+};
+
 export async function POST(request) {
   const token = getCookieFromRequest(request, "lm_user");
   const session = verifySession(token);
   if (!session || !session.email) return Response.json({ ok: false, error: "not_logged_in" }, { status: 401 });
+  const en = getCookieFromRequest(request, "locale") === "en";
 
   let body = {};
   try { body = await request.json(); } catch (e) {}
   const result = await transferBalanceByEmail(session.email, body.email, body.amount);
   if (!result.ok) {
     const code = clean(result.error, 80);
-    return Response.json({ ok: false, error: code, message: MESSAGES[code] || "转账失败" }, { status: 400 });
+    return Response.json({ ok: false, error: code, message: (en ? MESSAGES_EN : MESSAGES)[code] || (en ? "Transfer failed" : "转账失败") }, { status: 400 });
   }
-  return Response.json({ ok: true, balance: result.balance, message: "转账成功" });
+  return Response.json({ ok: true, balance: result.balance, message: en ? "Transfer complete" : "转账成功" });
 }

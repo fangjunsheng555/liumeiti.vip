@@ -1,11 +1,17 @@
 import Link from "next/link";
+import { getServerLocale } from "./lib/i18n-server";
 
-export const metadata = {
-  title: "页面未找到",
-  robots: { index: false, follow: true },
-};
+export async function generateMetadata() {
+  const locale = await getServerLocale();
+  return {
+    title: locale === "en" ? "Page not found" : "页面未找到",
+    robots: { index: false, follow: true },
+  };
+}
 
-export default function NotFound() {
+export default async function NotFound() {
+  const locale = await getServerLocale();
+  const L = (zh, en) => (locale === "en" ? en : zh);
   return (
     <div className="page-shell home-page-shell">
       <main
@@ -33,10 +39,10 @@ export default function NotFound() {
             404
           </div>
           <h1 style={{ fontSize: 22, fontWeight: 600, margin: "14px 0 6px", color: "#1d1d1f" }}>
-            页面未找到
+            {L("页面未找到", "Page not found")}
           </h1>
           <p style={{ color: "#6e6e73", margin: "0 0 26px", fontSize: 15 }}>
-            抱歉，你访问的页面不存在或已移动
+            {L("抱歉，你访问的页面不存在或已移动", "Sorry, this page doesn't exist or has moved.")}
           </p>
           <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
             <Link
@@ -54,7 +60,7 @@ export default function NotFound() {
                 boxShadow: "0 10px 24px -12px rgba(15,118,110,0.7)",
               }}
             >
-              返回首页
+              {L("返回首页", "Back home")}
             </Link>
             <Link
               href="/shop"
@@ -71,7 +77,7 @@ export default function NotFound() {
                 border: "1px solid rgba(0,0,0,0.1)",
               }}
             >
-              去选购
+              {L("去选购", "Go to shop")}
             </Link>
           </div>
         </div>

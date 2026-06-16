@@ -19,11 +19,14 @@ import {
 } from "lucide-react";
 import {
   PRODUCTS,
+  PRODUCT_EN,
   DEFAULT_PRODUCT_PLANS,
   getProductPlan,
   getProductPlanOptions,
   getDefaultProductPlan,
   hasProductPlans,
+  localizeProduct,
+  localizePlan,
   useCart,
   cartSubtotalCny,
   cartFinalCny,
@@ -135,13 +138,6 @@ function productMonthlySold(productKey, range = [3000, 5000], date = new Date())
   return Math.max(18, Math.min(target, Math.floor(previousSold + expectedToday * todayRatio)));
 }
 
-const PRODUCT_EN = {
-  spotify: { title: "Spotify", subtitle: "Premium Individual / Duo / Family" },
-  netflix: { title: "Netflix", subtitle: "Global 4K Dolby Profile / full account" },
-  disney: { title: "Disney+", subtitle: "Global 4K Dolby Profile / full account" },
-  max: { title: "HBO Max", subtitle: "Global 4K Dolby Profile / full account" },
-  rocket: { title: "VPN", subtitle: "Real-traffic plans & multi-node speed" },
-};
 const BADGE_EN = {
   "热销 No.1": "Best seller",
   "影视首选": "Top pick",
@@ -161,8 +157,9 @@ export default function ShopPage() {
   const [soldTick, setSoldTick] = useState(() => Date.now());
   const { cart, cartPlans, addToCart, removeFromCart } = useCart();
 
-  const selectedProduct = useMemo(() => PRODUCTS.find((item) => item.key === selectedKey) || null, [selectedKey]);
+  const selectedProductRaw = useMemo(() => PRODUCTS.find((item) => item.key === selectedKey) || null, [selectedKey]);
   const planPickerProduct = useMemo(() => PRODUCTS.find((item) => item.key === planPickerKey) || null, [planPickerKey]);
+  const selectedProduct = useMemo(() => localizeProduct(selectedProductRaw, locale), [selectedProductRaw, locale]);
   const cartItems = useMemo(() => cart.map((key) => PRODUCTS.find((p) => p.key === key)).filter(Boolean), [cart]);
   const cartCount = cartItems.length;
   const planMap = Object.fromEntries(
@@ -412,13 +409,15 @@ export default function ShopPage() {
                   </button>
                 </div>
                 <div className="cart-bar-panel-list">
-                  {cartItems.map((item) => (
+                  {cartItems.map((item) => {
+                    const itemL = localizeProduct(item, locale);
+                    return (
                     <div key={item.key} className="cart-bar-panel-item">
-                      <img src={item.image} alt={item.title} />
+                      <img src={item.image} alt={itemL.title} />
                       <div className="cart-bar-panel-info">
-                        <strong>{item.title}</strong>
+                        <strong>{itemL.title}</strong>
                         <span>
-                          ¥{productItemAmount(item, planMap[item.key])} / {hasProductPlans(item.key) ? getProductPlan(item.key, planMap[item.key])?.label : item.cycle}
+                          ¥{productItemAmount(item, planMap[item.key])} / {hasProductPlans(item.key) ? localizePlan(item.key, getProductPlan(item.key, planMap[item.key]), locale)?.label : itemL.cycle}
                         </span>
                       </div>
                       <button
@@ -430,16 +429,17 @@ export default function ShopPage() {
                             setPlanChoices((current) => ({ ...current, [item.key]: getDefaultProductPlan(item.key) }));
                           }
                         }}
-                        aria-label={`移除 ${item.title}`}
+                        aria-label={L(`移除 ${item.title}`, `Remove ${itemL.title}`)}
                       >
                         <X size={14} />
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 {savings > 0 && (
                   <div className="cart-bar-panel-discount">
-                    <span>{bundleDiscountLabel(cartCount)}</span>
+                    <span>{bundleDiscountLabel(cartCount, locale)}</span>
                     <b>{L("已省", "Saved")} ¥{savings.toFixed(2)}</b>
                   </div>
                 )}
@@ -452,7 +452,7 @@ export default function ShopPage() {
                 {savings > 0 && <s>¥{subtotal}</s>}
                 <b>{L("合计", "Total")} ¥{finalAmount.toFixed(2)}</b>
               </span>
-              {cartCount >= 2 && <span className="cart-bar-discount-tag">{bundleDiscountLabel(cartCount)}</span>}
+              {cartCount >= 2 && <span className="cart-bar-discount-tag">{bundleDiscountLabel(cartCount, locale)}</span>}
             </button>
             <button type="button" className="cart-bar-checkout" onClick={goCheckout}>
               {L("去结算", "Checkout")} <ArrowRight size={16} />
@@ -503,17 +503,17 @@ export default function ShopPage() {
                   >
                     {isInCart(selectedProduct.key) ? <Check size={16} /> : <ShoppingCart size={16} />}
                     {hasProductPlans(selectedProduct.key)
-                      ? (isInCart(selectedProduct.key) ? L("更换规格", "Change plan") : L("选择规格", "Choose a plan"))
-                      : (isInCart(selectedProduct.key) ? L("已加入购物车", "Added to cart") : L("加入购物车", "Add to cart"))}
+                      ? (isInCart(selectedProduct.key) ? L("更换规格", "Change plan") : L("选择规格", "Select plan"))
+                      : (isInCart(selectedProduct.key) ? L("已加入购物车", "In cart") : L("加入购物车", "Add to cart"))}
                   </button>
                   <Link href="/service-center#contact" className="secondary-btn">
                     <MessageCircleMore size={16} />
-                    {L("联系客服", "Contact support")}
+                    {L("联系客服", "Support")}
                   </Link>
                   {SERVICE_SLUG_BY_KEY[selectedProduct.key] && (
                     <Link href={`/services/${SERVICE_SLUG_BY_KEY[selectedProduct.key]}`} className="secondary-btn">
                       <ArrowRight size={16} />
-                      {L("服务指南", "Service guide")}
+                      {L("服务指南", "Guide")}
                     </Link>
                   )}
                 </div>
@@ -539,7 +539,9 @@ export default function ShopPage() {
               </button>
             </div>
             <div className="shop-rocket-plan-picker compact" aria-label={`选择${planPickerProduct.title}规格`}>
-              {getProductPlanOptions(planPickerProduct.key).map((plan) => (
+              {getProductPlanOptions(planPickerProduct.key).map((rawPlan) => {
+                const plan = localizePlan(planPickerProduct.key, rawPlan, locale);
+                return (
                 <button
                   key={plan.id}
                   type="button"
@@ -552,16 +554,17 @@ export default function ShopPage() {
                   </span>
                   <b>¥{plan.amount}<em>/{plan.unit || (locale === "en" ? "yr" : "年")}</em></b>
                 </button>
-              ))}
+                );
+              })}
             </div>
             <div className="modal-actions rocket-picker-actions">
               <button className="primary-btn" onClick={addSelectedPlanToCart}>
                 <ShoppingCart size={16} />
-                {L("选择规格并加入", "Select plan & add")}
+                {L("选择规格并加入", "Add to cart")}
               </button>
               <Link href="/service-center#contact" className="secondary-btn">
                 <MessageCircleMore size={16} />
-                {L("联系客服", "Contact support")}
+                {L("联系客服", "Support")}
               </Link>
             </div>
           </div>
