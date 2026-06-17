@@ -10,6 +10,8 @@ const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
 const SITE_URL = process.env.SITE_URL || `https://${SITE_DOMAIN}`;
 const SUPPORT_CONTACT = process.env.SUPPORT_CONTACT || "请通过 QQ 2802632995 / WhatsApp +1 4315093334 / Telegram @MaoyangSupport 联系在线客服";
+const SUPPORT_CONTACT_EN = process.env.SUPPORT_CONTACT_EN
+  || ("Reach our online support via " + SUPPORT_CONTACT.replace(/^请通过\s*/, "").replace(/\s*联系在线客服\s*$/, "").trim());
 
 function adminSession(request) {
   const token = getCookieFromRequest(request, "lm_admin");
@@ -19,12 +21,13 @@ function adminSession(request) {
 
 async function sendInvalidOrderEmail(order) {
   const emailLocale = order.locale === "en" ? "en" : "zh";
+  const supportContact = emailLocale === "en" ? SUPPORT_CONTACT_EN : SUPPORT_CONTACT;
   const html = buildInvalidOrderEmailHtml({
     order,
     brandName: BRAND_NAME,
     siteDomain: SITE_DOMAIN,
     siteUrl: SITE_URL,
-    supportContact: SUPPORT_CONTACT,
+    supportContact,
     locale: emailLocale,
   });
   const text = buildInvalidOrderEmailText({
@@ -32,7 +35,7 @@ async function sendInvalidOrderEmail(order) {
     brandName: BRAND_NAME,
     siteDomain: SITE_DOMAIN,
     siteUrl: SITE_URL,
-    supportContact: SUPPORT_CONTACT,
+    supportContact,
     locale: emailLocale,
   });
   return sendSimpleEmail({

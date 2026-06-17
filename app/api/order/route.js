@@ -1,5 +1,5 @@
 import { buildOrderEmailHtml, buildOrderEmailText } from "./email-template.js";
-import { localizeOrderItemLabel } from "../../lib/order-i18n.js";
+import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import {
   consumeBestCoupon, restoreCoupon, verifySession, getUser,
   setUser, addBalanceTx, pushAdminBalanceLog, makeId, roundMoney,
@@ -70,6 +70,8 @@ const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
 const SITE_URL = process.env.SITE_URL || `https://${SITE_DOMAIN}`;
 const SUPPORT_CONTACT = process.env.SUPPORT_CONTACT || "请通过 QQ 2802632995 / WhatsApp +34 671143339 / Telegram @MaoyangSupport 联系在线客服";
+const SUPPORT_CONTACT_EN = process.env.SUPPORT_CONTACT_EN
+  || ("Reach our online support via " + SUPPORT_CONTACT.replace(/^请通过\s*/, "").replace(/\s*联系在线客服\s*$/, "").trim());
 const USDT_DISCOUNT = 0.9;
 const USDT_RATE = 6.85;
 const ORDER_LIMIT_MESSAGE = "订单提交次数较多，请 5 分钟后再试，或联系在线客服协助下单";
@@ -248,7 +250,7 @@ async function sendOrderEmail(order) {
   const emailLocale = order.locale === "en" ? "en" : "zh";
   const html = buildOrderEmailHtml({
     order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL,
-    supportContact: SUPPORT_CONTACT, usdtRate: USDT_RATE, locale: emailLocale,
+    supportContact: emailLocale === "en" ? SUPPORT_CONTACT_EN : SUPPORT_CONTACT, usdtRate: USDT_RATE, locale: emailLocale,
   });
   const text = buildOrderEmailText({
     order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, usdtRate: USDT_RATE, locale: emailLocale,
@@ -624,10 +626,16 @@ export async function POST(request) {
   ];
   await Promise.all(tasks);
 
+  // Localize item labels in the response so the checkout "done" screen matches the user's language.
+  const respItems = order.items.map((it) => ({
+    ...it,
+    label: localizeOrderItemLabel(it.service, it.plan || it.rocketPlan, it.label, order.locale),
+    cycle: localizeCycle(it.cycle, order.locale),
+  }));
   return Response.json({
     ok: true,
     orderId: order.orderId,
-    items: order.items,
+    items: respItems,
     paidAmount,
     paidCurrency,
     paymentMethod,

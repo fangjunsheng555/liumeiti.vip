@@ -16,6 +16,7 @@ import {
 
 const STATUS_LABEL = { received: "订单已收到", completed: "订单已完成", invalid: "订单无效·未收到付款" };
 const STATUS_LABEL_EN = { received: "Order received", completed: "Completed", invalid: "Invalid · unpaid" };
+const TX_STATUS_EN = { "待审核": "Pending review", "提现中": "Processing", "提现成功": "Withdrawn", "审核失败": "Rejected" };
 
 function copy(text) {
   if (typeof window === "undefined") return;
@@ -54,7 +55,21 @@ function displayTxReason(tx, locale = "zh") {
   }
   const reason = String(tx?.reason || "");
   const orderId = String(tx?.orderId || "").trim();
-  return orderId ? reason.replace(orderId, maskOrderId(orderId)) : reason;
+  const masked = orderId ? reason.replace(orderId, maskOrderId(orderId)) : reason;
+  if (locale !== "en") return masked;
+  // Localize the stored Chinese reason patterns for English users
+  return masked
+    .replace(/^订单支付\s*/, "Order payment ")
+    .replace(/^订单提交失败退款\s*/, "Order failed — refund ")
+    .replace(/^兑换码充值\s*/, "Code top-up ")
+    .replace(/^转账给\s*/, "Transfer to ")
+    .replace(/^收到\s*(.+?)\s*转账$/, "Received from $1")
+    .replace(/^提现申请$/, "Withdrawal request")
+    .replace(/^提现审核失败退回$/, "Withdrawal rejected — refunded")
+    .replace(/^提现重新审核冻结$/, "Withdrawal re-review — held")
+    .replace(/^合伙人收益\s*/, "Partner earnings ")
+    .replace(/·\s*一级10%/, "· L1 10%")
+    .replace(/·\s*二级5%/, "· L2 5%");
 }
 
 function GoogleIcon() {
@@ -846,7 +861,7 @@ export default function AccountPage() {
                       </div>
                       <div className="account-tx-info">
                         <strong>{displayTxReason(tx, locale)}</strong>
-                        <small>{tx.createdAtBeijing}{tx.statusLabel ? ` · ${tx.statusLabel}` : ""}</small>
+                        <small>{tx.createdAtBeijing}{tx.statusLabel ? ` · ${locale === "en" ? (TX_STATUS_EN[tx.statusLabel] || tx.statusLabel) : tx.statusLabel}` : ""}</small>
                       </div>
                       <div className="account-tx-amount">
                         {tx.amount > 0 ? "+" : ""}¥{Math.abs(tx.amount).toFixed(2)}

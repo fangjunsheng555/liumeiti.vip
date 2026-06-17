@@ -931,7 +931,7 @@ export default function CheckoutPage() {
                   </div>
                   {couponDiscount > 0 && (
                     <div className="cart-summary-row coupon">
-                      <span>{activeCoupon?.title || L("优惠券自动抵扣", "Coupon auto-applied")}</span>
+                      <span>{locale === "en" ? "New-user coupon" : (activeCoupon?.title || "优惠券自动抵扣")}</span>
                       <b>−¥{couponDiscount.toFixed(2)}</b>
                     </div>
                   )}
@@ -1146,7 +1146,7 @@ export default function CheckoutPage() {
                   )}
                   {couponDiscount > 0 && (
                     <div className="checkout-cart-row discount">
-                      <span>{activeCoupon?.title || L("优惠券自动抵扣", "Coupon auto-applied")}</span>
+                      <span>{locale === "en" ? "New-user coupon" : (activeCoupon?.title || "优惠券自动抵扣")}</span>
                       <b>−¥{couponDiscount.toFixed(2)}</b>
                     </div>
                   )}
