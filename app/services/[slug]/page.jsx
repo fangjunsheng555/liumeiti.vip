@@ -15,23 +15,28 @@ export function generateStaticParams() {
 
 export async function generateMetadata({ params }) {
   const { slug } = await params;
-  const service = getServiceBySlug(slug);
-  if (!service) return {};
+  const raw = getServiceBySlug(slug);
+  if (!raw) return {};
+  const locale = await getServerLocale();
+  const en = locale === "en";
+  const service = localizeService(raw, locale);
   const title = `${service.title} ${service.price}`;
+  const brand = en ? "Maoyang Taiwan Inc" : "冒央会社";
   return {
     title,
     description: service.description,
     alternates: { canonical: `/services/${service.slug}` },
     openGraph: {
-      title: `${title} | 冒央会社`,
-      description: SOCIAL_DESCRIPTION,
+      title: `${title} | ${brand}`,
+      description: service.description,
       url: `/services/${service.slug}`,
+      locale: en ? "en_US" : "zh_CN",
       images: [SOCIAL_IMAGE_META],
     },
     twitter: {
       card: "summary",
-      title: `${title} | 冒央会社`,
-      description: SOCIAL_DESCRIPTION,
+      title: `${title} | ${brand}`,
+      description: service.description,
       images: [SOCIAL_IMAGE],
     },
   };

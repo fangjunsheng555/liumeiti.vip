@@ -26,7 +26,7 @@ import { useLocale } from "../components/LocaleProvider";
 
 const ASSURANCE_CARDS_EN = [
   { title: "Reliable setup", desc: "Six years of streaming-service experience; orders are processed fast by our team", meta: "Pro & worry-free" },
-  { title: "After-sales help", desc: "If an account, Profile or node has issues, reach our support — online 7x14, all year round", meta: "We've got your back" },
+  { title: "After-sales help", desc: "If an account, Profile or node has issues, reach our support — online every day, 9am–11pm", meta: "We've got your back" },
   { title: "Refund policy", desc: "If an account can't be used due to our side, a 7-day refund is supported; support helps troubleshoot first", meta: "Clear rules" },
   { title: "Order records", desc: "Order lookup info is kept, and orders are also emailed to your order email", meta: "Easy to track" },
 ];
@@ -41,7 +41,7 @@ const FAQ_EN = [
   { q: "Can you customize enterprise or team plans?", a: "Yes. We have 200+ reseller partners. For long-term cooperation, bulk needs or enterprise scenarios, reach our online support to discuss." },
 ];
 
-const STATUS_LABEL_EN = { received: "Order received", completed: "Order completed", invalid: "Invalid · payment not received" };
+const STATUS_LABEL_EN = { received: "Order received", completed: "Completed", invalid: "Invalid · unpaid" };
 
 const LAYOUT_CARDS = [
   ["选择/兑换服务", "Spotify / Netflix / Disney+ / Hbomax / 机场节点"],
@@ -457,7 +457,7 @@ export default function ServiceCenterPage() {
             <Link href="/shop">{L("服务产品", "Services")}</Link>
             <Link href="/#layout">{L("下单流程", "How it works")}</Link>
             <Link href="#order-query">{L("订单查询", "Track order")}</Link>
-            <Link href="/legal">{L("企业保障", "Assurance")}</Link>
+            <Link href="/legal">{L("企业保障", "Guarantees")}</Link>
             <Link href="#faq">FAQ</Link>
           </nav>
         </div>
@@ -800,13 +800,13 @@ export default function ServiceCenterPage() {
               </div>
               {queryDetailOrder.staffNotes && (
                 <div className="query-modal-staff-notes">
-                  <div className="query-modal-staff-notes-label">{L("客服备注", "Support notes")}</div>
+                  <div className="query-modal-staff-notes-label">{L("客服备注", "Support note")}</div>
                   <div>{queryDetailOrder.staffNotes}</div>
                 </div>
               )}
               <div className="query-modal-rows">
-                <div><span>{L("下单时间", "Order time")}</span><b>{queryDetailOrder.createdAtBeijing || "--"}</b></div>
-                <div><span>{L("完成时间", "Completed")}</span><b>{queryDetailOrder.completedAtBeijing || "--"}</b></div>
+                <div><span>{L("下单时间", "Ordered at")}</span><b>{queryDetailOrder.createdAtBeijing || "--"}</b></div>
+                <div><span>{L("完成时间", "Completed at")}</span><b>{queryDetailOrder.completedAtBeijing || "--"}</b></div>
                 <div><span>{L("邮箱", "Email")}</span><b>{queryDetailOrder.email || "--"}</b></div>
                 <div><span>{L("联系方式", "Contact")}</span><b>{queryDetailOrder.contact || "--"}</b></div>
                 {queryDetailOrder.remark && <div className="query-modal-row-wide"><span>{L("备注", "Note")}</span><b className="query-modal-remark">{queryDetailOrder.remark}</b></div>}

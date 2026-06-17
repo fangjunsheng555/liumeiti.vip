@@ -52,13 +52,16 @@ async function sendCompletionEmail(order) {
   });
 
   try {
+    const emailLocale = order.locale === "en" ? "en" : "zh";
     const html = buildCompletionEmailHtml({
-      order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, supportContact: SUPPORT_CONTACT,
+      order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, supportContact: SUPPORT_CONTACT, locale: emailLocale,
     });
     const text = buildCompletionEmailText({
-      order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL,
+      order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale: emailLocale,
     });
-    const subject = `🎉 订单 ${order.orderId} 已开通 · ${BRAND_NAME}`;
+    const subject = emailLocale === "en"
+      ? `🎉 Order ${order.orderId} is ready · ${BRAND_NAME}`
+      : `🎉 订单 ${order.orderId} 已开通 · ${BRAND_NAME}`;
     const info = await transporter.sendMail({
       from: `"${BRAND_NAME}" <${from}>`,
       to: order.email,
@@ -218,12 +221,14 @@ export async function PATCH(request, { params }) {
 }
 
 async function sendInvalidOrderEmail(order) {
+  const emailLocale = order.locale === "en" ? "en" : "zh";
   const html = buildInvalidOrderEmailHtml({
     order,
     brandName: BRAND_NAME,
     siteDomain: SITE_DOMAIN,
     siteUrl: SITE_URL,
     supportContact: SUPPORT_CONTACT,
+    locale: emailLocale,
   });
   const text = buildInvalidOrderEmailText({
     order,
@@ -231,10 +236,13 @@ async function sendInvalidOrderEmail(order) {
     siteDomain: SITE_DOMAIN,
     siteUrl: SITE_URL,
     supportContact: SUPPORT_CONTACT,
+    locale: emailLocale,
   });
   return sendSimpleEmail({
     to: order.email,
-    subject: `订单 ${order.orderId} 未收到付款，已标记无效 · ${BRAND_NAME}`,
+    subject: emailLocale === "en"
+      ? `Order ${order.orderId}: payment not received, marked invalid · ${BRAND_NAME}`
+      : `订单 ${order.orderId} 未收到付款，已标记无效 · ${BRAND_NAME}`,
     text,
     html,
     fromName: BRAND_NAME,

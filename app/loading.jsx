@@ -1,4 +1,7 @@
-export default function Loading() {
+import { getServerLocale } from "./lib/i18n-server";
+
+export default async function Loading() {
+  const locale = await getServerLocale();
   return (
     <div
       className="page-shell home-page-shell"
@@ -11,7 +14,7 @@ export default function Loading() {
           style={{ width: 160, maxWidth: "56%", height: "auto", opacity: 0.92, margin: "0 auto 22px", display: "block" }}
         />
         <div
-          aria-label="加载中"
+          aria-label={locale === "en" ? "Loading" : "加载中"}
           role="status"
           style={{
             width: 30,

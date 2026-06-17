@@ -257,7 +257,7 @@ export default function ShopPage() {
           <nav className="desktop-nav">
             <Link href="/#layout">{L("下单流程", "How it works")}</Link>
             <Link href="/service-center#order-query">{L("订单查询", "Track order")}</Link>
-            <Link href="/legal">{L("企业保障", "Assurance")}</Link>
+            <Link href="/legal">{L("企业保障", "Guarantees")}</Link>
             <Link href="/service-center#faq">FAQ</Link>
           </nav>
         </div>

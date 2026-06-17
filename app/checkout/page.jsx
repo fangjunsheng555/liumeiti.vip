@@ -678,7 +678,7 @@ export default function CheckoutPage() {
         <div className="checkout-empty checkout-loading-state">
           <LoaderCircle size={46} className="checkout-empty-icon spin-icon" />
           <h2>{L("正在恢复订单", "Restoring your order")}</h2>
-          <p>{L("正在恢复未完成订单", "Restoring your unfinished order")}</p>
+          <p>{L("正在恢复未完成订单", "Loading your unfinished checkout…")}</p>
         </div>
         <FloatingSupport />
       </div>
@@ -1178,7 +1178,7 @@ export default function CheckoutPage() {
                   </>
                 ) : (
                   <>
-                    {L("付款完成,提交订单", "Payment done, submit order")}
+                    {L("付款完成,提交订单", "I've paid — submit order")}
                     <ArrowRight size={15} />
                   </>
                 )}

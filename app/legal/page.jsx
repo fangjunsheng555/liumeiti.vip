@@ -15,23 +15,33 @@ import { SERVICE_PAGES, localizeService } from "../services/service-data";
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../social-meta";
 import { getServerLocale } from "../lib/i18n-server";
 
-export const metadata = {
-  title: "企业资质与服务保障",
-  description: SOCIAL_DESCRIPTION,
-  alternates: { canonical: "/legal" },
-  openGraph: {
-    title: "企业资质与服务保障 | 冒央会社",
-    description: SOCIAL_DESCRIPTION,
-    url: "/legal",
-    images: [SOCIAL_IMAGE_META],
-  },
-  twitter: {
-    card: "summary",
-    title: "企业资质与服务保障 | 冒央会社",
-    description: SOCIAL_DESCRIPTION,
-    images: [SOCIAL_IMAGE],
-  },
-};
+export async function generateMetadata() {
+  const locale = await getServerLocale();
+  const en = locale === "en";
+  const title = en ? "Credentials & Service Guarantees" : "企业资质与服务保障";
+  const ogTitle = en ? "Credentials & Service Guarantees | Maoyang Taiwan Inc" : "企业资质与服务保障 | 冒央会社";
+  const description = en
+    ? "Company credentials, service promise, after-sales, privacy policy and refund rules — everything you need to confirm before ordering."
+    : SOCIAL_DESCRIPTION;
+  return {
+    title,
+    description,
+    alternates: { canonical: "/legal" },
+    openGraph: {
+      title: ogTitle,
+      description,
+      url: "/legal",
+      locale: en ? "en_US" : "zh_CN",
+      images: [SOCIAL_IMAGE_META],
+    },
+    twitter: {
+      card: "summary",
+      title: ogTitle,
+      description,
+      images: [SOCIAL_IMAGE],
+    },
+  };
+}
 
 const SUMMARY_ITEMS = [
   ["台湾注册公司", "Maoyang Taiwan Inc", "以台湾注册公司身份为用户提供服务与售后支持"],
@@ -260,7 +270,7 @@ export default async function LegalPage() {
           <nav className="desktop-nav">
             <Link href="/shop">{L("服务产品", "Services")}</Link>
             <Link href="/service-center">{L("服务中心", "Service Center")}</Link>
-            <Link href="/legal">{L("企业保障", "Assurance")}</Link>
+            <Link href="/legal">{L("企业保障", "Guarantees")}</Link>
             <Link href="/service-center#contact">{L("联系我们", "Contact")}</Link>
           </nav>
         </div>

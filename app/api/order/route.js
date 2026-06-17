@@ -1,4 +1,5 @@
 import { buildOrderEmailHtml, buildOrderEmailText } from "./email-template.js";
+import { localizeOrderItemLabel } from "../../lib/order-i18n.js";
 import {
   consumeBestCoupon, restoreCoupon, verifySession, getUser,
   setUser, addBalanceTx, pushAdminBalanceLog, makeId, roundMoney,
@@ -8,7 +9,7 @@ import {
   clientIpFromRequest, clientUserAgentFromRequest,
   inviteCodeFromRequest, normalizeInviteCode, resolveReferralForOrder,
   pushAdminActionLog,
-  saveOrderRecord, verifyPaymentQuote,
+  saveOrderRecord, verifyPaymentQuote, getCookieFromRequest,
 } from "../_utils.js";
 
 const PRODUCTS = {
@@ -244,16 +245,21 @@ async function sendOrderEmail(order) {
 
   const port = Number(process.env.SMTP_PORT) || 587;
   const secure = port === 465;
+  const emailLocale = order.locale === "en" ? "en" : "zh";
   const html = buildOrderEmailHtml({
     order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL,
-    supportContact: SUPPORT_CONTACT, usdtRate: USDT_RATE,
+    supportContact: SUPPORT_CONTACT, usdtRate: USDT_RATE, locale: emailLocale,
   });
   const text = buildOrderEmailText({
-    order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, usdtRate: USDT_RATE,
+    order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, usdtRate: USDT_RATE, locale: emailLocale,
   });
+  const confirmWord = emailLocale === "en" ? "Order confirmation" : "订单确认";
+  const subjItem = order.items[0]
+    ? localizeOrderItemLabel(order.items[0].service, order.items[0].plan || order.items[0].rocketPlan, order.items[0].label, emailLocale)
+    : "";
   const subject = order.items.length > 1
-    ? `订单确认 ${order.orderId} · ${order.items.length} 件 · ${BRAND_NAME}`
-    : `订单确认 ${order.orderId} · ${order.items[0].label} · ${BRAND_NAME}`;
+    ? `${confirmWord} ${order.orderId} · ${order.items.length}${emailLocale === "en" ? "" : " 件"} · ${BRAND_NAME}`
+    : `${confirmWord} ${order.orderId} · ${subjItem} · ${BRAND_NAME}`;
 
   // Try twice — iCloud SMTP sometimes drops the first connection.
   async function attempt(n) {
@@ -498,6 +504,7 @@ export async function POST(request) {
   const order = {
     orderId,
     status: "received",
+    locale: getCookieFromRequest(request, "locale") === "en" ? "en" : "zh",
     userEmail, // links order to logged-in user (for /account regardless of buyer email)
     referral,
     createdAt: now.toISOString(),

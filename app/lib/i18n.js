@@ -191,11 +191,11 @@ export const messages = {
 
 // 首页服务卡英文（副标题/价格），不改共享 service-data
 export const serviceCardEn = {
-  spotify: { subtitle: "Premium Individual / Duo / Family", price: "from ¥128/yr" },
-  netflix: { subtitle: "Global 4K Dolby Profile / account", price: "from ¥168/yr" },
-  disney: { subtitle: "Global 4K Dolby Profile / account", price: "from ¥108/yr" },
-  "hbo-max": { subtitle: "Global 4K Dolby Profile / account", price: "from ¥148/yr" },
-  "airport-node": { name: "VPN", subtitle: "Real-traffic plans, multi-node speed", price: "from ¥128/yr" },
+  spotify: { subtitle: "Premium Individual / Duo / Family", price: "From ¥128/yr" },
+  netflix: { subtitle: "Global 4K Dolby Profile / full account", price: "From ¥168/yr" },
+  disney: { subtitle: "Global 4K Dolby Profile / full account", price: "From ¥108/yr" },
+  "hbo-max": { subtitle: "Global 4K Dolby Profile / full account", price: "From ¥148/yr" },
+  "airport-node": { name: "VPN", subtitle: "Real-traffic plans & multi-node speed", price: "From ¥128/yr" },
 };
 
 // 实时下单条时间本地化

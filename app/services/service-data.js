@@ -111,9 +111,9 @@ const SERVICE_EN = {
   spotify: {
     title: "Spotify Premium Membership",
     shortTitle: "Spotify",
-    subtitle: "Premium Individual / Duo / Family plans",
-    price: "from ¥128/yr",
-    description: "Spotify Premium plans — Family member, Individual, Duo and Family — on premium-region accounts, with lossless audio, podcasts, AI DJ, offline downloads and the full catalogue.",
+    subtitle: "Premium Individual / Duo / Family",
+    price: "From ¥128/yr",
+    description: "Spotify Premium plans — Family member, Individual, Duo and Family — on premium-region accounts, with lossless audio, podcasts, AI DJ, offline downloads and the full catalog.",
     highlights: ["Premium-region accounts", "Individual / Duo / Family", "Emailed once the order completes"],
     plans: [
       ["Family member", "¥128/yr", "A seat on a premium-region family plan — ideal for one long-term listener"],
@@ -122,7 +122,7 @@ const SERVICE_EN = {
       ["Family", "¥588/yr", "Invite up to 5 accounts to use the subscription free"],
     ],
     faq: [
-      ["What features are included", "Lossless audio, podcasts, AI DJ, offline downloads, playlists and the full catalogue"],
+      ["What features are included", "Lossless audio, podcasts, AI DJ, offline downloads, playlists and the full catalog"],
       ["How to use the service", "Download the Spotify app or sign in on the web with your account to start"],
       ["Who is it for", "Great for long-term listeners, family sharing, or anyone needing premium-region benefits"],
     ],
@@ -130,12 +130,12 @@ const SERVICE_EN = {
   netflix: {
     title: "Netflix 4K Dolby Membership",
     shortTitle: "Netflix",
-    subtitle: "Global 4K Dolby — Profile / full account",
-    price: "from ¥168/yr",
+    subtitle: "Global 4K Dolby Profile / full account",
+    price: "From ¥168/yr",
     description: "Netflix's top 4K Dolby tier, available as a dedicated Profile or a full account. A dedicated Profile can be PIN-locked; a full account supports up to 5 user profiles.",
     highlights: ["4K Dolby quality", "Lockable dedicated Profile", "Up to 5 profiles per account"],
     plans: [
-      ["Dedicated Profile", "¥168/yr", "One person, one profile — PIN lock supported"],
+      ["Dedicated Profile", "¥168/yr", "Your own profile — PIN lock supported"],
       ["Full account", "¥588/yr", "Supports up to 5 user profiles"],
     ],
     faq: [
@@ -147,12 +147,12 @@ const SERVICE_EN = {
   disney: {
     title: "Disney+ 4K Dolby Membership",
     shortTitle: "Disney+",
-    subtitle: "Global 4K Dolby — Profile / full account",
-    price: "from ¥108/yr",
+    subtitle: "Global 4K Dolby Profile / full account",
+    price: "From ¥108/yr",
     description: "Disney+'s top 4K Dolby tier, available as a dedicated Profile or full account; a full account supports up to 7 profiles — ideal for family sharing and long-term viewing.",
     highlights: ["4K Dolby plan", "Profile or full account", "Up to 7 profiles"],
     plans: [
-      ["Dedicated Profile", "¥108/yr", "One spot per person — watch without interference"],
+      ["Dedicated Profile", "¥108/yr", "Your own profile, kept separate from others"],
       ["Full account", "¥588/yr", "Supports up to 7 user profiles"],
     ],
     faq: [
@@ -164,12 +164,12 @@ const SERVICE_EN = {
   "hbo-max": {
     title: "HBO Max 4K Dolby Membership",
     shortTitle: "HBO Max",
-    subtitle: "Global 4K Dolby — Profile / full account",
-    price: "from ¥148/yr",
+    subtitle: "Global 4K Dolby Profile / full account",
+    price: "From ¥148/yr",
     description: "HBO Max's top 4K Dolby tier, available as a dedicated Profile or full account; a full account supports up to 5 profiles — great for film-lover families and stable multi-user use.",
     highlights: ["4K Dolby content", "Dedicated Profile", "Up to 5 profiles per account"],
     plans: [
-      ["Dedicated Profile", "¥148/yr", "One spot per person — no interference"],
+      ["Dedicated Profile", "¥148/yr", "Your own profile, with after-sales support"],
       ["Full account", "¥588/yr", "Supports up to 5 user profiles"],
     ],
     faq: [
@@ -182,8 +182,8 @@ const SERVICE_EN = {
     title: "VPN Service",
     shortTitle: "VPN",
     subtitle: "Real-traffic plans & multi-node speed",
-    price: "from ¥128/yr",
-    description: "Multiple real-traffic node plans up to 5 Gbps, covering HK, JP, TW, KR, SG, US, UK, DE, FR and more — ideal for streaming, AI tools and everyday cross-region access.",
+    price: "From ¥128/yr",
+    description: "Multiple real-traffic node plans up to 5 Gbps, covering Hong Kong, Japan, Taiwan, Korea, Singapore, the US, UK, Germany, France and more — ideal for streaming, AI tools and everyday cross-region access.",
     highlights: ["Real-traffic plans", "Up to 5 Gbps", "Fully encrypted, no logs"],
     plans: [
       ["Standard", "¥128/yr", "50 GB/mo real traffic"],

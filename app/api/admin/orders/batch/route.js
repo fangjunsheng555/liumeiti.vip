@@ -18,12 +18,14 @@ function adminSession(request) {
 }
 
 async function sendInvalidOrderEmail(order) {
+  const emailLocale = order.locale === "en" ? "en" : "zh";
   const html = buildInvalidOrderEmailHtml({
     order,
     brandName: BRAND_NAME,
     siteDomain: SITE_DOMAIN,
     siteUrl: SITE_URL,
     supportContact: SUPPORT_CONTACT,
+    locale: emailLocale,
   });
   const text = buildInvalidOrderEmailText({
     order,
@@ -31,10 +33,13 @@ async function sendInvalidOrderEmail(order) {
     siteDomain: SITE_DOMAIN,
     siteUrl: SITE_URL,
     supportContact: SUPPORT_CONTACT,
+    locale: emailLocale,
   });
   return sendSimpleEmail({
     to: order.email,
-    subject: `订单 ${order.orderId} 未收到付款，已标记无效 · ${BRAND_NAME}`,
+    subject: emailLocale === "en"
+      ? `Order ${order.orderId}: payment not received, marked invalid · ${BRAND_NAME}`
+      : `订单 ${order.orderId} 未收到付款，已标记无效 · ${BRAND_NAME}`,
     text,
     html,
     fromName: BRAND_NAME,
