@@ -285,7 +285,7 @@ export default function AccountPage() {
         <div>
           <span>{L("Maoyang X CASETiFY · 至 2026.12.31", "Maoyang X CASETiFY · until 2026.12.31")}</span>
           <strong>{L("消费充值送 CASETiFY 手机壳", "Free CASETiFY case on spend / top-up")}</strong>
-          <p>{L("注册用户消费满 ¥999，或单次充值 ¥1666，可联系客服领取", "Spend ¥999 or top up ¥1666, then claim via support")}</p>
+          <p>{L("注册用户消费满 ¥999，或单次充值 ¥1666，可联系客服领取", "Reach ¥999 in total account spending, or make a single ¥1666 top-up — then claim via support")}</p>
         </div>
       </button>
     );
@@ -309,7 +309,7 @@ export default function AccountPage() {
             <div className="account-invite-hero account-casetify-hero">
               <span><Gift size={15} />{L("注册用户专享奖励", "Members-only reward")}</span>
               <strong>{L("消费充值送 CASETiFY 手机壳", "Free CASETiFY case on spend / top-up")}</strong>
-              <p>{L("注册用户累计消费满 ¥999，或单次充值 ¥1666，可联系在线客服领取 CASETiFY 官网在售任意手机壳 1 个，支持定制款", "Spend ¥999 total or top up ¥1666 at once, then contact support to claim any one case from the CASETiFY store, custom designs included")}</p>
+              <p>{L("注册用户累计消费满 ¥999，或单次充值 ¥1666，可联系在线客服领取 CASETiFY 官网在售任意手机壳 1 个，支持定制款", "Once your cumulative account spending reaches ¥999, or you make a single ¥1666 top-up, contact support to claim any one case from the CASETiFY store, custom designs included")}</p>
             </div>
             <div className="account-casetify-intro">
               <strong>{L("关于 CASETiFY 手机壳", "About CASETiFY cases")}</strong>
@@ -318,7 +318,7 @@ export default function AccountPage() {
             <div className="account-invite-rule-list account-casetify-rule-list">
               <div>
                 <b>{L("领取条件", "Eligibility")}</b>
-                <p>{L("活动有效期至 2026 年 12 月 31 日，注册用户累计消费满 ¥999，或单次充值 ¥1666，即可联系客服免费领取", "Valid until Dec 31, 2026. Members who spend ¥999 in total or top up ¥1666 at once can claim free via support.")}</p>
+                <p>{L("活动有效期至 2026 年 12 月 31 日，注册用户累计消费满 ¥999，或单次充值 ¥1666，即可联系客服免费领取", "Valid until Dec 31, 2026. Once your cumulative account spending reaches ¥999, or you make a single ¥1666 top-up, you can claim free via support.")}</p>
               </div>
               <div>
                 <b>{L("可选款式", "Available styles")}</b>
@@ -419,7 +419,7 @@ export default function AccountPage() {
     return (
       <div className="account-page account-auth-page">
         <header className="account-header">
-          <Link href="/" className="account-brand-only" aria-label="冒央会社首页">
+          <Link href="/" className="account-brand-only" aria-label={L("冒央会社首页", "Maoyang Taiwan Inc home")}>
             <img src="/logo.png" alt="冒央会社" className="account-logo" />
           </Link>
         </header>
@@ -583,7 +583,7 @@ export default function AccountPage() {
   return (
     <div className="account-page">
       <header className="account-header">
-        <Link href="/" className="account-brand-only" aria-label="冒央会社首页">
+        <Link href="/" className="account-brand-only" aria-label={L("冒央会社首页", "Maoyang Taiwan Inc home")}>
           <img src="/logo.png" alt="冒央会社" className="account-logo" />
         </Link>
         <button type="button" className="account-logout" onClick={logout}>
@@ -593,7 +593,7 @@ export default function AccountPage() {
 
       <main className="account-main">
         <section className="account-info-card">
-          <button type="button" className="account-avatar" onClick={() => setAvatarModal(true)} aria-label="更换头像">
+          <button type="button" className="account-avatar" onClick={() => setAvatarModal(true)} aria-label={L("更换头像", "Change avatar")}>
             <img src={userAvatarPath(state.avatarId)} alt="" className="account-avatar-img" />
             <span className="account-avatar-edit"><Edit3 size={10} /></span>
           </button>
@@ -617,7 +617,7 @@ export default function AccountPage() {
               <div className="account-username">
                 <User size={12} />
                 <strong>{state.username || L("未设置", "Not set")}</strong>
-                <button type="button" className="account-name-edit-btn" onClick={startEditName} aria-label="修改用户名"><Edit3 size={11} /></button>
+                <button type="button" className="account-name-edit-btn" onClick={startEditName} aria-label={L("修改用户名", "Edit username")}><Edit3 size={11} /></button>
               </div>
             )}
             {nameError && <div className="account-name-error">{nameError}</div>}

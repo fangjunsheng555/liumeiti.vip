@@ -463,6 +463,11 @@ body { line-height: 1.6; }
   font-weight: 600 !important;
 }
 
+/* 英文：CSS content 伪元素无法用 React L() 本地化，按 <html lang> 覆盖 */
+html[lang="en"] .account-invite-poster::after { content: "View details" !important; }
+html[lang="en"] .account-casetify-poster::after { content: "Activity details" !important; }
+html[lang="en"] .product-card-selected::before { content: "Selected" !important; }
+
 /* checkout 外壳浅底（根为 .checkout-page，不在 .page-shell 内） */
 .checkout-page { background: var(--bg) !important; }
 

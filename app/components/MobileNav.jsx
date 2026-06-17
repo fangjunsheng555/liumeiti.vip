@@ -17,10 +17,10 @@ const ITEMS = [
 export default function MobileNav() {
   const pathname = usePathname();
   const { cart } = useCart();
-  const { t } = useLocale();
+  const { t, locale } = useLocale();
 
   return (
-    <nav className="mobile-bottom-nav" aria-label="移动端主导航">
+    <nav className="mobile-bottom-nav" aria-label={locale === "en" ? "Main navigation" : "移动端主导航"}>
       {ITEMS.map((item) => {
         const Icon = item.icon;
         const active = item.match(pathname);

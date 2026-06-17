@@ -416,7 +416,7 @@ export default function Page() {
           <Link href="/" className="brand-wrap" aria-label="冒央会社 Maoyang Taiwan Inc">
             <img src="/logo.png" alt="冒央会社 Maoyang Taiwan Inc" className="brand-img" />
           </Link>
-          <div className="mobile-header-actions" aria-label="快捷入口">
+          <div className="mobile-header-actions" aria-label={locale === "en" ? "Quick links" : "快捷入口"}>
             <LanguageSwitcher />
             <Link href="/service-center" aria-label={t("nav.support")}>
               <Headphones size={16} />
@@ -459,7 +459,7 @@ export default function Page() {
             </Link>
           </div>
           <div className="home-hero-ticker"><LiveOrderTicker /></div>
-          <div className="home-hero-metrics" aria-label="平台运营数据">
+          <div className="home-hero-metrics" aria-label={locale === "en" ? "Platform stats" : "平台运营数据"}>
             {HERO_STATS.map(({ metric, labelKey, icon: Icon }) => (
               <div key={metric} className="home-hero-metric">
                 <Icon size={14} />

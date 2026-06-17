@@ -264,7 +264,7 @@ export default async function LegalPage() {
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <header className="site-header">
         <div className="container header-inner">
-          <Link href="/" className="brand-wrap" aria-label="返回首页">
+          <Link href="/" className="brand-wrap" aria-label={L("返回首页", "Back home")}>
             <img src="/logo.png" alt="冒央会社 Maoyang Taiwan Inc" className="brand-img" />
           </Link>
           <nav className="desktop-nav">
