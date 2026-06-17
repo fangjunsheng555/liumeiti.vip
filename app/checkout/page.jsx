@@ -587,7 +587,7 @@ export default function CheckoutPage() {
     const scanPaymentActive = !serviceRedeemActive && step === "pay" && (paymentMethod === "alipay" || paymentMethod === "usdt");
     if (scanPaymentActive && paymentPageEnteredAt && Date.now() - paymentPageEnteredAt < 5000) {
       setStatus(null);
-      setPaySubmitNotice(L("请扫码完成付款，付款完成后再点击「付款完成」提交订单", "Please scan to pay first, then tap \"Payment done\" to submit the order"));
+      setPaySubmitNotice(L("请扫码完成付款，付款完成后再点击「付款完成」提交订单", "Please scan to pay first, then tap \"I've paid\" to submit the order"));
       return;
     }
 
@@ -1086,10 +1086,10 @@ export default function CheckoutPage() {
               {/* 重要提示 */}
               <div className="pay-tip">
                 {paymentMethod === "usdt"
-                  ? L(`请使用 TRON (TRC20) 网络转账精确金额 ${finalUsdt} USDT 到下方地址,付款完成后请记得返回本页面点击「付款完成」按钮提交订单`, `Send exactly ${finalUsdt} USDT over the TRON (TRC20) network to the address below. After paying, return here and tap "Payment done" to submit your order.`)
+                  ? L(`请使用 TRON (TRC20) 网络转账精确金额 ${finalUsdt} USDT 到下方地址,付款完成后请记得返回本页面点击「付款完成」按钮提交订单`, `Send exactly ${finalUsdt} USDT over the TRON (TRC20) network to the address below. After paying, return here and tap "I've paid" to submit your order.`)
                   : paymentMethod === "balance"
-                  ? L(`点击下方「确认扣款并提交订单」后，将从您的账户余额(¥${authedUser?.balance.toFixed(2) || "0.00"})扣除 ¥${finalCny},随后提交订单`, `Tapping "Confirm & submit" below will deduct ¥${finalCny} from your balance (¥${authedUser?.balance.toFixed(2) || "0.00"}) and place the order.`)
-                  : L("请按上方精确金额完成支付宝付款，尾差用于快速核对订单；付款完成后返回本页面点击「付款完成」提交订单", "Pay the exact amount above via Alipay — the small diff helps us verify your order quickly. After paying, return here and tap \"Payment done\" to submit.")}
+                  ? L(`点击下方「确认扣款并提交订单」后，将从您的账户余额(¥${authedUser?.balance.toFixed(2) || "0.00"})扣除 ¥${finalCny},随后提交订单`, `Tapping "Confirm & submit order" below will deduct ¥${finalCny} from your balance (¥${authedUser?.balance.toFixed(2) || "0.00"}) and place the order.`)
+                  : L("请按上方精确金额完成支付宝付款，尾差用于快速核对订单；付款完成后返回本页面点击「付款完成」提交订单", "Pay the exact amount above via Alipay — the small diff helps us verify your order quickly. After paying, return here and tap \"I've paid\" to submit.")}
               </div>
 
               {/* QR 二维码 — 只对支付宝/USDT 显示,余额支付不需要 */}

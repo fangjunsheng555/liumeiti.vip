@@ -207,7 +207,7 @@ export const PRODUCT_EN = {
     detailBody:
       "Premium VPS across Hong Kong, Japan, Taiwan, Korea, Singapore, the US, UK, Germany, France and more, reaching up to 5 Gbps with no congestion at peak. Unblocks all major streaming / AI / social apps, fully encrypted with no logs, maintained 24/7. Choose Standard ¥128/yr (50 GB/mo), Plus ¥198/yr (100 GB/mo), Premium ¥398/yr (200 GB/mo) or Unlimited ¥698/yr (unlimited). A ¥5 / 10 GB trial is also available.",
     orderTitle: "VPN · Alipay QR payment",
-    orderBody: "After paying, tap \"Payment done\" to submit. Your subscription link is generated once the order is submitted.",
+    orderBody: "After paying, tap \"I've paid\" to submit. Your subscription link is generated once the order is submitted.",
   },
 };
 
