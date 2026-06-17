@@ -1,4 +1,5 @@
 import { buildEmailBrandHeader } from "../../email-brand.js";
+import { supportContactHtml } from "../../support-links.js";
 
 function escapeHtml(value) {
   return String(value || "")
@@ -156,7 +157,7 @@ export function buildRedeemEmailHtml({
           <tr>
             <td style="padding:24px 32px 0;">
               <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:8px;">需要帮助？</div>
-              <p style="margin:0;font-size:13px;line-height:1.75;color:#475569;">${escapeHtml(supportContact || "请通过 QQ / WhatsApp / Telegram 联系在线客服")}</p>
+              <p style="margin:0;font-size:13px;line-height:1.75;color:#475569;">${supportContactHtml("zh")}</p>
               <p style="margin:8px 0 0;font-size:12.5px;color:#94a3b8;">客服在线时间：北京时间 09:00 – 23:00 · 真人值守</p>
             </td>
           </tr>

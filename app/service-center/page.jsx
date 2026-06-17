@@ -729,7 +729,7 @@ export default function ServiceCenterPage() {
               </button>
               {(authModal === "login" || authModal === "register") && (
                 <>
-                  <div className="auth-divider"><span>{L("或使用", "or use")}</span></div>
+                  <div className="auth-divider"><span>{L("或使用", "or")}</span></div>
                   <div className="oauth-login-grid bottom">
                     <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
                   </div>

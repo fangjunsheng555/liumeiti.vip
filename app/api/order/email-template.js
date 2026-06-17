@@ -1,5 +1,6 @@
 import { buildEmailBrandHeader } from "../email-brand.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
+import { supportContactHtml } from "../support-links.js";
 
 function escapeHtml(value) {
   return String(value || "")
@@ -231,7 +232,7 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
           <tr>
             <td style="padding:24px 32px 0;">
               <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:8px;">${L("需要帮助?", "Need help?")}</div>
-              <p style="margin:0;font-size:13px;line-height:1.75;color:#475569;">${escapeHtml(supportContact || L("请通过 QQ / WhatsApp / Telegram 联系在线客服", "Reach our online support via QQ / WhatsApp / Telegram"))}</p>
+              <p style="margin:0;font-size:13px;line-height:1.75;color:#475569;">${supportContactHtml(locale)}</p>
               <p style="margin:8px 0 0;font-size:12.5px;color:#94a3b8;">${L("客服在线时间:北京时间 09:00 – 23:00 · 真人值守", "Support hours: 9:00 – 23:00 Beijing time · staffed by real people")}</p>
             </td>
           </tr>

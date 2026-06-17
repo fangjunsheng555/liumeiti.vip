@@ -161,32 +161,34 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-async function sendQueryCode(email, code, query) {
+async function sendQueryCode(email, code, query, locale) {
+  const en = locale === "en";
+  const L = (zh, e) => (en ? e : zh);
   const safeCode = escapeHtml(code);
   const safeQuery = escapeHtml(query);
   const html = `<!doctype html>
-<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<html lang="${en ? "en" : "zh-CN"}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',Arial,sans-serif;color:#0f172a;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f6fb;padding:32px 16px;">
     <tr><td align="center">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;background:#fff;border-radius:18px;overflow:hidden;border:1px solid #dbe7ef;">
         <tr><td style="padding:26px 30px 10px;">
-          <h2 style="margin:0 0 8px;font-size:20px;font-weight:900;">订单查询验证码</h2>
-          <p style="margin:0 0 16px;font-size:13px;line-height:1.7;color:#475569;">你正在查询 ${BRAND_NAME} 订单 ${safeQuery}。请输入下方验证码继续查看订单详情。</p>
+          <h2 style="margin:0 0 8px;font-size:20px;font-weight:900;">${L("订单查询验证码", "Order lookup code")}</h2>
+          <p style="margin:0 0 16px;font-size:13px;line-height:1.7;color:#475569;">${L(`你正在查询 ${BRAND_NAME} 订单 ${safeQuery}。请输入下方验证码继续查看订单详情。`, `You're looking up your ${BRAND_NAME} order ${safeQuery}. Enter the code below to view the order details.`)}</p>
           <div style="padding:18px 20px;border-radius:14px;background:#f0fdfa;border:1px solid #99f6e4;text-align:center;">
             <div style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:32px;font-weight:900;color:#134e4a;letter-spacing:.18em;">${safeCode}</div>
-            <div style="margin-top:6px;font-size:11px;color:#0f766e;">10 分钟内有效</div>
+            <div style="margin-top:6px;font-size:11px;color:#0f766e;">${L("10 分钟内有效", "Valid for 10 minutes")}</div>
           </div>
         </td></tr>
-        <tr><td style="padding:14px 30px 28px;font-size:11.5px;color:#94a3b8;line-height:1.6;">若非本人操作，请忽略本邮件。${escapeHtml(SITE_DOMAIN)}</td></tr>
+        <tr><td style="padding:14px 30px 28px;font-size:11.5px;color:#94a3b8;line-height:1.6;">${L("若非本人操作，请忽略本邮件。", "If this wasn't you, please ignore this email. ")}${escapeHtml(SITE_DOMAIN)}</td></tr>
       </table>
     </td></tr>
   </table>
 </body></html>`;
-  const text = `${BRAND_NAME} 订单查询验证码\n\n订单查询: ${query}\n验证码: ${code}\n有效期 10 分钟\n\n若非本人操作，请忽略本邮件。`;
+  const text = L(`${BRAND_NAME} 订单查询验证码\n\n订单查询: ${query}\n验证码: ${code}\n有效期 10 分钟\n\n若非本人操作，请忽略本邮件。`, `${BRAND_NAME} order lookup code\n\nOrder lookup: ${query}\nCode: ${code}\nValid for 10 minutes\n\nIf this wasn't you, please ignore this email.`);
   return sendSimpleEmail({
     to: email,
-    subject: `${BRAND_NAME} · 订单查询验证码 ${code}`,
+    subject: L(`${BRAND_NAME} · 订单查询验证码 ${code}`, `${BRAND_NAME} · Order lookup code ${code}`),
     text,
     html,
   });
@@ -250,7 +252,7 @@ async function handle(request) {
     const nextCode = generateNumericCode(6);
     const stored = await storeVerificationCode(recipient, query, nextCode);
     if (!stored) return Response.json({ ok: false, error: "verification_store_failed" }, { status: 502, headers });
-    const sent = await sendQueryCode(recipient, nextCode, query);
+    const sent = await sendQueryCode(recipient, nextCode, query, locale);
     if (!sent.ok) {
       return Response.json({ ok: false, error: "verification_email_failed" }, { status: 502, headers });
     }

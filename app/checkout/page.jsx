@@ -1396,7 +1396,7 @@ export default function CheckoutPage() {
               </button>
 
               {(authModal === "login" || authModal === "register") && (
-                <div className="auth-divider"><span>{L("或使用", "or use")}</span></div>
+                <div className="auth-divider"><span>{L("或使用", "or")}</span></div>
               )}
 
               {(authModal === "login" || authModal === "register") && (

@@ -1,5 +1,6 @@
 import { buildEmailBrandHeader } from "../email-brand.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
+import { supportContactHtml, supportContactText } from "../support-links.js";
 
 function escapeHtml(value) {
   return String(value || "")
@@ -86,7 +87,7 @@ export function buildInvalidOrderEmailHtml({ order, brandName, siteDomain, siteU
                 <div style="border-radius:16px;background:linear-gradient(135deg,#f0fdfa,#ecfeff);border:1px solid #a7f3d0;padding:16px;">
                   <div style="font-size:14px;font-weight:900;color:#0f766e;margin-bottom:8px;">${L("如果您已经付款", "If you've already paid")}</div>
                   <p style="margin:0;font-size:13.5px;line-height:1.8;color:#134e4a;">${L("请携带付款凭证、订单号与下单邮箱联系在线客服，我们会尽快为您核对并继续处理。", "Contact our online support with your payment proof, order ID and order email, and we'll verify and continue processing as soon as possible.")}</p>
-                  <p style="margin:10px 0 0;font-size:13px;line-height:1.75;color:#475569;">${escapeHtml(supportContact || "")}</p>
+                  <p style="margin:10px 0 0;font-size:13px;line-height:1.75;color:#475569;">${supportContactHtml(locale)}</p>
                 </div>
               </td>
             </tr>
@@ -136,7 +137,7 @@ export function buildInvalidOrderEmailText({ order, brandName, siteDomain, siteU
     L("我们暂未收到此订单对应付款，系统已将订单状态更新为无效。", "We haven't received payment for this order, so it has been marked invalid."),
     L("如果您已经付款，请携带付款凭证、订单号与下单邮箱联系在线客服核对。", "If you've already paid, contact our online support with your payment proof, order ID and order email to verify."),
     "",
-    supportContact || "",
+    supportContactText(locale),
     siteDomain || "liumeiti.vip"
   );
   return lines.join("\n");
