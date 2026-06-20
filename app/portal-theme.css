@@ -959,4 +959,6 @@ html[lang="en"] .product-card-selected::before { content: "Selected" !important;
   .home-hero-actions { width: min(820px, 100%) !important; margin-top: 24px !important; gap: 12px !important; }
   .home-hero-actions .hero-pair-btn,
   .home-page-shell .home-main .home-query-btn { min-height: 56px !important; font-size: 16px !important; }
+  /* 统计栏：桌面端也四格一行（与移动端一致） */
+  .home-page-shell .home-main .home-hero-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
 }
