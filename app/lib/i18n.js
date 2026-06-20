@@ -29,7 +29,7 @@ export const messages = {
     "lang.switchTo": "English",
     "lang.label": "语言",
 
-    "hero.tagline": "流媒体会员、节点服务与售后协助一站办理",
+    "hero.tagline": "专业流媒体、AI 会员订阅与机场节点服务",
     "hero.badge.instant": "即时开通",
     "hero.badge.refund": "7 天内退款",
     "hero.badge.lowest": "全网最低价",
@@ -116,7 +116,7 @@ export const messages = {
     "lang.switchTo": "中文",
     "lang.label": "Language",
 
-    "hero.tagline": "Streaming memberships, VPN & after-sales — all in one place",
+    "hero.tagline": "Professional streaming, AI memberships & VPN service",
     "hero.badge.instant": "Instant setup",
     "hero.badge.refund": "7-day refund",
     "hero.badge.lowest": "Best price",
