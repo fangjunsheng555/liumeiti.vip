@@ -3,6 +3,7 @@ import {
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
   pushAdminActionLog, formatBeijingTime, clean, isRootAdminSession,
   settleOrderReferralCommission, sendSimpleEmail, adminPermissionProfile,
+  restoreAiStock,
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
@@ -161,6 +162,13 @@ export async function PATCH(request, { params }) {
       const now = new Date();
       order.invalidAt = now.toISOString();
       order.invalidAtBeijing = formatBeijingTime(now);
+      // 订单作废：返还此前占用的 AI 会员库存
+      for (const it of (order.items || [])) {
+        if (it.service === "ai" && it.aiStockReserved) {
+          await restoreAiStock(it.plan);
+          it.aiStockReserved = false;
+        }
+      }
     }
     if (newStatus !== "invalid") {
       order.invalidAt = null;
@@ -276,6 +284,10 @@ export async function DELETE(request, { params }) {
     deletedByStaffUsername: actor.staffUsername,
   });
   if (!ok) return Response.json({ ok: false, error: "delete_failed" }, { status: 500 });
+  // 软删订单：返还此前占用的 AI 会员库存
+  for (const it of (target.order.items || [])) {
+    if (it.service === "ai" && it.aiStockReserved) await restoreAiStock(it.plan);
+  }
   await pushAdminActionLog({
     action: "order_delete",
     actor,

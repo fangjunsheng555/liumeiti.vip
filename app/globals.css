@@ -14084,3 +14084,42 @@ body:has(.account-modal-mask) .floating-wrap {
   }
 }
 
+/* ── AI 会员库存管理（后台 AI库存 tab） ── */
+.admin-aistock-pane { display: flex; flex-direction: column; gap: 16px; }
+.admin-aistock-head h3 { margin: 0 0 6px; font-size: 17px; font-weight: 700; color: #0f172a; }
+.admin-aistock-head p { margin: 0; font-size: 13px; line-height: 1.6; color: #64748b; }
+.admin-aistock-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.admin-aistock-field {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 14px;
+  background: #fff;
+}
+.admin-aistock-label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.admin-aistock-label strong { font-size: 14px; font-weight: 700; color: #0f172a; }
+.admin-aistock-label em { font-style: normal; font-size: 12px; color: #94a3b8; }
+.admin-aistock-field input {
+  width: 100%; padding: 10px 12px;
+  border: 1px solid rgba(15, 23, 42, 0.14);
+  border-radius: 10px;
+  font-size: 15px; color: #0f172a; background: #f8fafc;
+}
+.admin-aistock-field input:focus { outline: none; border-color: #10a37f; background: #fff; }
+.admin-aistock-actions { display: flex; gap: 10px; align-items: center; }
+.admin-aistock-save {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 10px 20px; border: none; border-radius: 10px;
+  background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%);
+  color: #fff; font-size: 14px; font-weight: 700; cursor: pointer;
+}
+.admin-aistock-save:disabled { opacity: .6; cursor: not-allowed; }
+.admin-aistock-refresh {
+  padding: 10px 16px; border: 1px solid rgba(15, 23, 42, 0.14); border-radius: 10px;
+  background: #fff; color: #334155; font-size: 14px; cursor: pointer;
+}
+.admin-aistock-refresh:disabled { opacity: .6; cursor: not-allowed; }
+@media (max-width: 560px) {
+  .admin-aistock-grid { grid-template-columns: 1fr; }
+}
+

@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   Flame,
   Gift,
-  Headphones,
   MessageCircleMore,
   ShoppingCart,
   Sparkles,
@@ -44,15 +43,12 @@ const PRODUCT_PROMOS = {
   disney: { badge: "性价比之选", badgeIcon: Gift, originalPrice: 268, monthlyRange: [3100, 5300] },
   max: { badge: "影迷经典最爱", badgeIcon: Tag, originalPrice: 348, monthlyRange: [2600, 4600] },
   rocket: { badge: "必备工具", badgeIcon: Sparkles, originalPrice: 268, monthlyRange: [6200, 9200] },
+  ai: { badge: "AI 精选", badgeIcon: Sparkles, originalPrice: 398, monthlyRange: [1600, 3200] },
 };
 
 const OPERATION_SLOT_MINUTES = 10;
 const OPERATION_SLOTS_PER_DAY = 24 * 60 / OPERATION_SLOT_MINUTES;
 const AVERAGE_DAILY_ORDER_TARGET = 1275;
-
-function serviceIcon(label) {
-  return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-}
 
 function seededUnit(seed) {
   let t = seed + 0x6D2B79F5;
@@ -144,6 +140,7 @@ const BADGE_EN = {
   "性价比之选": "Best value",
   "影迷经典最爱": "Fan favorite",
   "必备工具": "Essential",
+  "AI 精选": "AI pick",
   "人工报价": "Custom quote",
 };
 
@@ -155,6 +152,7 @@ export default function ShopPage() {
   const [planChoices, setPlanChoices] = useState(DEFAULT_PRODUCT_PLANS);
   const [cartExpanded, setCartExpanded] = useState(false);
   const [soldTick, setSoldTick] = useState(() => Date.now());
+  const [aiSoldOut, setAiSoldOut] = useState({});
   const { cart, cartPlans, addToCart, removeFromCart } = useCart();
 
   const selectedProductRaw = useMemo(() => PRODUCTS.find((item) => item.key === selectedKey) || null, [selectedKey]);
@@ -193,8 +191,27 @@ export default function ShopPage() {
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/ai-stock", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled && d && d.ok) setAiSoldOut(d.soldOut || {}); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   function isInCart(key) {
     return cart.includes(key);
+  }
+
+  function isPlanSoldOut(key, planId) {
+    return key === "ai" && Boolean(aiSoldOut[planId]);
+  }
+
+  function allPlansSoldOut(key) {
+    if (key !== "ai") return false;
+    const opts = getProductPlanOptions(key);
+    return opts.length > 0 && opts.every((p) => aiSoldOut[p.id]);
   }
 
   function goCheckout() {
@@ -213,10 +230,14 @@ export default function ShopPage() {
 
   function openPlanSelector(item) {
     if (!item || !hasProductPlans(item.key)) return;
-    const plan = getProductPlan(
+    let plan = getProductPlan(
       item.key,
       cart.includes(item.key) ? (cartPlans[item.key] || planChoices[item.key]) : (planChoices[item.key] || getDefaultProductPlan(item.key)),
     );
+    if (plan && isPlanSoldOut(item.key, plan.id)) {
+      const firstAvailable = getProductPlanOptions(item.key).find((p) => !isPlanSoldOut(item.key, p.id));
+      if (firstAvailable) plan = firstAvailable;
+    }
     setPlanChoices((current) => ({ ...current, [item.key]: plan?.id || getDefaultProductPlan(item.key) }));
     setPlanPickerKey(item.key);
   }
@@ -241,7 +262,9 @@ export default function ShopPage() {
   function addSelectedPlanToCart() {
     const item = planPickerProduct;
     if (!item) return;
-    const plan = getProductPlan(item.key, planChoices[item.key] || getDefaultProductPlan(item.key));
+    const planId = planChoices[item.key] || getDefaultProductPlan(item.key);
+    if (isPlanSoldOut(item.key, planId)) return;
+    const plan = getProductPlan(item.key, planId);
     addToCart(item.key, { plan: plan?.id || getDefaultProductPlan(item.key) });
     setSelectedKey(null);
     setPlanPickerKey(null);
@@ -280,12 +303,13 @@ export default function ShopPage() {
             {PRODUCTS.map((item) => {
               const promo = PRODUCT_PROMOS[item.key] || {};
               const BadgeIcon = promo.badgeIcon || Sparkles;
-              const defaultPlan = hasProductPlans(item.key) ? getProductPlan(item.key, getDefaultProductPlan(item.key)) : null;
+              const defaultPlan = hasProductPlans(item.key) ? localizePlan(item.key, getProductPlan(item.key, getDefaultProductPlan(item.key)), locale) : null;
               const displayAmount = defaultPlan?.amount || item.amount;
-              const displayCycle = defaultPlan?.unit || defaultPlan?.cycle || (hasProductPlans(item.key) ? "年起" : item.cycle);
+              const displayCycle = defaultPlan?.unit || defaultPlan?.cycle || (hasProductPlans(item.key) ? L("年起", "yr") : (locale === "en" ? (PRODUCT_EN[item.key]?.cycle || item.cycle) : item.cycle));
               const saved = Number(promo.originalPrice || 0) - Number(displayAmount || 0);
               const soldThisMonth = productMonthlySold(item.key, promo.monthlyRange, new Date(soldTick));
               const added = isInCart(item.key);
+              const soldOut = allPlansSoldOut(item.key);
               return (
                 <article
                   key={item.key}
@@ -317,7 +341,7 @@ export default function ShopPage() {
                   <div className="price-box price-box-pro">
                     <div className="price-main">
                       <span className="price-now">¥{displayAmount}</span>
-                      <span className="price-cycle">/{locale === "en" ? String(displayCycle).replace("年起", "yr").replace("1年", "yr").replace("年", "yr") : displayCycle}</span>
+                      <span className="price-cycle">/{displayCycle}</span>
                       {promo.originalPrice && <span className="price-original">¥{promo.originalPrice}</span>}
                     </div>
                     <div className="price-meta">
@@ -345,53 +369,20 @@ export default function ShopPage() {
                     </button>
                     <button
                       type="button"
-                      className={`primary-btn product-cta${added ? " in-cart" : ""}`}
+                      className={`primary-btn product-cta${added ? " in-cart" : ""}${soldOut ? " sold-out" : ""}`}
+                      disabled={soldOut}
                       onClick={(event) => {
                         event.stopPropagation();
                         handleCartAction(item);
                       }}
                     >
-                      {added ? <Check size={14} /> : <ShoppingCart size={14} />}
-                      {added ? L("已加入", "Added") : L("加入购物车", "Add to cart")}
+                      {soldOut ? null : added ? <Check size={14} /> : <ShoppingCart size={14} />}
+                      {soldOut ? L("已售罄", "Sold out") : added ? L("已加入", "Added") : L("加入购物车", "Add to cart")}
                     </button>
                   </div>
                 </article>
               );
             })}
-
-            <article className="glass-card product-card product-card-mini product-promo-card" aria-label="咨询更多流媒体服务">
-              <div className="product-badge product-badge-soon"><Headphones size={12} />{L("人工报价", "Custom quote")}</div>
-              <div className="product-card-top more-service-top">
-                <div className="more-service-icon" aria-hidden="true">
-                  <img src="/more-service-logo.png" alt="" />
-                </div>
-                <div className="product-name-block">
-                  <div className="product-name">{L("更多服务咨询", "More services")}</div>
-                  <div className="product-subtitle">YouTube / Apple TV+ / DAZN / Prime Video / ChatGPT {L("等", "& more")}</div>
-                </div>
-              </div>
-              <div className="more-service-consult-box">
-                <strong>{L("没找到想要的平台?", "Can't find the platform you want?")}</strong>
-                <span>{L("联系客服说明平台、地区、时长或团队数量，客服会按需报价", "Tell support the platform, region, duration or team size for a tailored quote")}</span>
-              </div>
-              <div className="more-service-tags" aria-label="可咨询服务示例">
-                {["YouTube", "Apple TV+", "DAZN", "Prime Video"].map((label) => (
-                  <span key={label} className={`service-chip service-chip-${serviceIcon(label)}`}>
-                    <i aria-hidden="true">{label === "YouTube" ? "▶" : label === "Apple TV+" ? "tv+" : label === "DAZN" ? "DAZN" : "prime"}</i>
-                    {label}
-                  </span>
-                ))}
-              </div>
-              <div className="more-service-consult-actions">
-                <Link
-                  href="/service-center#contact"
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  <MessageCircleMore size={12} /> {L("在线咨询", "Ask online")}
-                </Link>
-              </div>
-            </article>
           </div>
         </section>
       </main>
@@ -496,13 +487,16 @@ export default function ShopPage() {
                 <div className="detail-body">{selectedProduct.detailBody}</div>
                 <div className="modal-actions product-detail-actions">
                   <button
-                    className={`primary-btn${isInCart(selectedProduct.key) ? " in-cart" : ""}`}
+                    className={`primary-btn${isInCart(selectedProduct.key) ? " in-cart" : ""}${allPlansSoldOut(selectedProduct.key) ? " sold-out" : ""}`}
+                    disabled={allPlansSoldOut(selectedProduct.key)}
                     onClick={() => hasProductPlans(selectedProduct.key)
                       ? openPlanSelector(selectedProduct)
                       : handleCartAction(selectedProduct)}
                   >
-                    {isInCart(selectedProduct.key) ? <Check size={16} /> : <ShoppingCart size={16} />}
-                    {hasProductPlans(selectedProduct.key)
+                    {allPlansSoldOut(selectedProduct.key) ? null : isInCart(selectedProduct.key) ? <Check size={16} /> : <ShoppingCart size={16} />}
+                    {allPlansSoldOut(selectedProduct.key)
+                      ? L("已售罄", "Sold out")
+                      : hasProductPlans(selectedProduct.key)
                       ? (isInCart(selectedProduct.key) ? L("更换规格", "Change plan") : L("选择规格", "Select plan"))
                       : (isInCart(selectedProduct.key) ? L("已加入购物车", "In cart") : L("加入购物车", "Add to cart"))}
                   </button>
@@ -538,18 +532,20 @@ export default function ShopPage() {
                 <X size={22} />
               </button>
             </div>
-            <div className="shop-rocket-plan-picker compact" aria-label={`选择${planPickerProduct.title}规格`}>
+            <div className="shop-rocket-plan-picker compact" aria-label={locale === "en" ? `Select ${localizeProduct(planPickerProduct, locale).title} plan` : `选择${planPickerProduct.title}规格`}>
               {getProductPlanOptions(planPickerProduct.key).map((rawPlan) => {
                 const plan = localizePlan(planPickerProduct.key, rawPlan, locale);
+                const optSoldOut = isPlanSoldOut(planPickerProduct.key, plan.id);
                 return (
                 <button
                   key={plan.id}
                   type="button"
-                  className={`shop-rocket-plan-option${planChoices[planPickerProduct.key] === plan.id ? " selected" : ""}`}
-                  onClick={() => setPlanChoices((current) => ({ ...current, [planPickerProduct.key]: plan.id }))}
+                  disabled={optSoldOut}
+                  className={`shop-rocket-plan-option${planChoices[planPickerProduct.key] === plan.id ? " selected" : ""}${optSoldOut ? " sold-out" : ""}`}
+                  onClick={() => { if (!optSoldOut) setPlanChoices((current) => ({ ...current, [planPickerProduct.key]: plan.id })); }}
                 >
                   <span>
-                    <strong>{plan.label}</strong>
+                    <strong>{plan.label}{optSoldOut ? ` · ${L("已售罄", "Sold out")}` : ""}</strong>
                     <small>{plan.desc}</small>
                   </span>
                   <b>¥{plan.amount}<em>/{plan.unit || (locale === "en" ? "yr" : "年")}</em></b>
@@ -558,9 +554,13 @@ export default function ShopPage() {
               })}
             </div>
             <div className="modal-actions rocket-picker-actions">
-              <button className="primary-btn" onClick={addSelectedPlanToCart}>
+              <button
+                className="primary-btn"
+                onClick={addSelectedPlanToCart}
+                disabled={isPlanSoldOut(planPickerProduct.key, planChoices[planPickerProduct.key] || getDefaultProductPlan(planPickerProduct.key))}
+              >
                 <ShoppingCart size={16} />
-                {L("选择规格并加入", "Add to cart")}
+                {isPlanSoldOut(planPickerProduct.key, planChoices[planPickerProduct.key] || getDefaultProductPlan(planPickerProduct.key)) ? L("已售罄", "Sold out") : L("选择规格并加入", "Add to cart")}
               </button>
               <Link href="/service-center#contact" className="secondary-btn">
                 <MessageCircleMore size={16} />

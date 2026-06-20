@@ -427,6 +427,7 @@ export function adminPermissionProfile(session) {
     canSendMail: root || support || operator,
     canManageStaff: root,
     canDeleteRecords: root,
+    canManageStock: root,
   };
 }
 
@@ -792,6 +793,7 @@ export const REDEEM_SERVICE_PRODUCTS = {
   disney: { label: "Disney+", amount: 108, hasPlan: true },
   max: { label: "HBO Max", amount: 148, hasPlan: true },
   rocket: { label: "机场节点", amount: 128, hasPlan: true },
+  ai: { label: "AI 会员", amount: 198, hasPlan: true },
 };
 
 export const ROCKET_PLANS = {
@@ -821,6 +823,12 @@ export const PRODUCT_PLANS = {
     full: { id: "full", label: "整号购买", amount: 588, desc: "最多支持 5 个用户档案/车位" },
   },
   rocket: ROCKET_PLANS,
+  ai: {
+    "gpt-plus": { id: "gpt-plus", label: "GPT Plus", amount: 198, unit: "三个月", desc: "ChatGPT Plus 官方会员 · 三个月" },
+    "gpt-pro": { id: "gpt-pro", label: "GPT 5x Pro", amount: 998, unit: "三个月", desc: "ChatGPT Pro 5x 高额度 · 三个月" },
+    "claude-pro": { id: "claude-pro", label: "Claude Pro", amount: 198, unit: "三个月", desc: "Claude Pro 官方会员 · 三个月" },
+    "claude-max": { id: "claude-max", label: "Claude 5x Max", amount: 998, unit: "三个月", desc: "Claude Max 5x 高额度 · 三个月" },
+  },
 };
 export const DEFAULT_PRODUCT_PLANS = {
   spotify: "member",
@@ -828,8 +836,70 @@ export const DEFAULT_PRODUCT_PLANS = {
   disney: "seat",
   max: "seat",
   rocket: "basic",
+  ai: "gpt-plus",
 };
 export const DEFAULT_ROCKET_PLAN = DEFAULT_PRODUCT_PLANS.rocket;
+
+// ── AI 会员库存（每个规格独立整数计数键；键不存在 = 不限，存在 = 受限）──
+export const AI_STOCK_PLAN_IDS = ["gpt-plus", "gpt-pro", "claude-pro", "claude-max"];
+const AI_STOCK_KEY_PREFIX = "liumeiti:stock:ai:";
+function aiStockKey(planId) { return AI_STOCK_KEY_PREFIX + clean(planId, 40); }
+
+// 返回 { planId: number|null }，null = 未配置/不限
+export async function getAiStockMap() {
+  const map = {};
+  await Promise.all(AI_STOCK_PLAN_IDS.map(async (id) => {
+    const raw = await redisCmd(["GET", aiStockKey(id)]);
+    map[id] = raw == null ? null : Math.max(0, Math.floor(Number(raw) || 0));
+  }));
+  return map;
+}
+
+// 返回 { planId: boolean } —— 仅当受限且剩余<=0 时为售罄
+export async function getAiSoldOutMap() {
+  const stock = await getAiStockMap();
+  const out = {};
+  AI_STOCK_PLAN_IDS.forEach((id) => { out[id] = stock[id] != null && stock[id] <= 0; });
+  return out;
+}
+
+// value: 空字符串/null → 删除键（不限）；整数 ≥0 → 设为该值
+export async function setAiStock(planId, value) {
+  if (!AI_STOCK_PLAN_IDS.includes(planId)) return false;
+  if (value === "" || value == null) {
+    await redisCmd(["DEL", aiStockKey(planId)]);
+    return true;
+  }
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 0) return false;
+  await redisCmd(["SET", aiStockKey(planId), String(n)]);
+  return true;
+}
+
+// 原子占用一个库存：未配置/Redis 不可用 → 放行（与全站 fail-soft 一致）；售罄 → 回滚并拒绝
+export async function reserveAiStock(planId) {
+  if (!AI_STOCK_PLAN_IDS.includes(planId)) return { ok: true, unlimited: true };
+  const key = aiStockKey(planId);
+  const cur = await redisCmd(["GET", key]);
+  if (cur == null) return { ok: true, unlimited: true };
+  const next = await redisCmd(["DECRBY", key, "1"]);
+  if (next == null) return { ok: true, unlimited: true };
+  if (Number(next) < 0) {
+    await redisCmd(["INCRBY", key, "1"]);
+    return { ok: false, soldOut: true, remaining: 0 };
+  }
+  return { ok: true, remaining: Number(next) };
+}
+
+// 返还一个库存（仅对受限规格生效）
+export async function restoreAiStock(planId) {
+  if (!AI_STOCK_PLAN_IDS.includes(planId)) return false;
+  const key = aiStockKey(planId);
+  const cur = await redisCmd(["GET", key]);
+  if (cur == null) return false;
+  await redisCmd(["INCRBY", key, "1"]);
+  return true;
+}
 
 function resolveRocketPlanInternal(value) {
   return resolveProductPlanInternal("rocket", value);

@@ -104,6 +104,28 @@ export const SERVICE_PAGES = [
       ["支持哪些客户端", "支持常见订阅工具，订单完成后会提供订阅链接与使用说明"],
     ],
   },
+  {
+    slug: "ai",
+    key: "ai",
+    title: "AI 会员服务",
+    shortTitle: "AI 会员",
+    subtitle: "ChatGPT / Claude 官方会员",
+    price: "¥198/三个月起",
+    image: "/products/ai.jpg",
+    description: "提供 ChatGPT 与 Claude 官方会员，官方渠道直充、独立账号非共享，开通后稳定可用，含 GPT Plus、GPT 5x Pro、Claude Pro、Claude 5x Max 四种规格，均为三个月，全程包售后",
+    highlights: ["官方渠道直充", "独立账号非共享", "下单后30分钟内联系开通"],
+    plans: [
+      ["GPT Plus", "¥198/三个月", "ChatGPT Plus 官方会员，三个月"],
+      ["GPT 5x Pro", "¥998/三个月", "ChatGPT Pro 5x 高额度，三个月"],
+      ["Claude Pro", "¥198/三个月", "Claude Pro 官方会员，三个月"],
+      ["Claude 5x Max", "¥998/三个月", "Claude Max 5x 高额度，三个月"],
+    ],
+    faq: [
+      ["是否官方会员", "均为官方渠道直充的正规会员/订阅，独立账号、非共享，开通后稳定可用"],
+      ["如何使用服务", "下单并完成支付后，充值人员会在30分钟内联系你完成开通，按指引登录使用即可"],
+      ["是否包售后", "订单包含售后保障，使用期间遇到问题可凭订单号或通过在线客服处理"],
+    ],
+  },
 ];
 
 // 英文翻译（按 locale 覆盖，不改中文原数据）
@@ -198,6 +220,25 @@ const SERVICE_EN = {
       ["Which clients are supported", "Common subscription tools are supported; the subscription link and instructions are provided once the order completes"],
     ],
   },
+  ai: {
+    title: "AI Membership",
+    shortTitle: "AI Membership",
+    subtitle: "ChatGPT & Claude official plans",
+    price: "From ¥198/3 mo",
+    description: "Official ChatGPT and Claude memberships — topped up through official channels, private non-shared accounts that stay stable after activation. Four plans: GPT Plus, GPT 5x Pro, Claude Pro and Claude 5x Max, all for 3 months, with full after-sales support.",
+    highlights: ["Official-channel top-up", "Private, non-shared account", "Activated within 30 min of ordering"],
+    plans: [
+      ["GPT Plus", "¥198/3 mo", "ChatGPT Plus official membership, 3 months"],
+      ["GPT 5x Pro", "¥998/3 mo", "ChatGPT Pro 5x higher limits, 3 months"],
+      ["Claude Pro", "¥198/3 mo", "Claude Pro official membership, 3 months"],
+      ["Claude 5x Max", "¥998/3 mo", "Claude Max 5x higher limits, 3 months"],
+    ],
+    faq: [
+      ["Are these official memberships", "Yes — genuine memberships/subscriptions topped up through official channels, private and non-shared"],
+      ["How to use the service", "After you order and pay, our team contacts you within 30 minutes to activate it; just sign in and follow the guide"],
+      ["Is after-sales included", "Every order includes after-sales support — reach us with your order number or via online support if anything comes up"],
+    ],
+  },
 };
 
 export function localizeService(service, locale) {
@@ -215,6 +256,7 @@ export const SERVICE_ALIASES = {
   hbomax: "hbo-max",
   rocket: "airport-node",
   "airport-node": "airport-node",
+  ai: "ai",
 };
 
 export const SERVICE_SLUG_BY_KEY = SERVICE_PAGES.reduce((acc, item) => {

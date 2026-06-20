@@ -1048,6 +1048,8 @@ function exportOrderPdf(order, note = "") {
   });
 }
 
+const AI_STOCK_PLAN_ORDER = ["gpt-plus", "gpt-pro", "claude-pro", "claude-max"];
+
 export default function AdminPage() {
   const [authed, setAuthed] = useState(null); // null=loading, false=login, true=ok
   const [loginName, setLoginName] = useState("");
@@ -1163,6 +1165,12 @@ export default function AdminPage() {
   const [newOrderAlert, setNewOrderAlert] = useState(null);
   const [highlightOrderIds, setHighlightOrderIds] = useState(new Set());
   const overviewRef = useRef(null);
+  const [aiStockMap, setAiStockMap] = useState(null);   // { planId: number|null }
+  const [aiStockForm, setAiStockForm] = useState({});   // { planId: string }
+  const [aiStockLabels, setAiStockLabels] = useState({});
+  const [aiStockLoading, setAiStockLoading] = useState(false);
+  const [aiStockBusy, setAiStockBusy] = useState(false);
+  const [aiStockMsg, setAiStockMsg] = useState(null);   // { type, message }
 
   const isRootStaff = Boolean(currentStaff?.root || Number(currentStaff?.id || 0) === 1);
   const staffPermissions = currentStaff?.permissions || null;
@@ -1178,6 +1186,7 @@ export default function AdminPage() {
   const canBanUsers = permissionsReady ? Boolean(staffPermissions?.canBanUsers ?? isRootStaff) : false;
   const canDeleteUsers = permissionsReady ? Boolean(staffPermissions?.canDeleteUsers ?? isRootStaff) : false;
   const canDeleteRecords = permissionsReady ? Boolean(staffPermissions?.canDeleteRecords ?? isRootStaff) : false;
+  const canManageStock = permissionsReady ? Boolean(staffPermissions?.canManageStock ?? isRootStaff) : false;
 
   const applyCurrentStaff = useCallback((staff) => {
     if (!staff) return;
@@ -1350,6 +1359,59 @@ export default function AdminPage() {
     } catch (e) {}
   }, [applyCurrentStaff]);
 
+  const loadAiStock = useCallback(async () => {
+    setAiStockLoading(true);
+    try {
+      const res = await fetch("/api/admin/stock", { credentials: "same-origin" });
+      if (res.status === 401) { setAuthed(false); return; }
+      const data = await res.json();
+      if (data.ok) {
+        setAiStockMap(data.stock || {});
+        setAiStockLabels(data.labels || {});
+        const form = {};
+        (data.planIds || []).forEach((id) => {
+          const v = data.stock?.[id];
+          form[id] = v == null ? "" : String(v);
+        });
+        setAiStockForm(form);
+      }
+    } catch (e) {} finally {
+      setAiStockLoading(false);
+    }
+  }, []);
+
+  async function saveAiStock() {
+    if (aiStockBusy) return;
+    setAiStockBusy(true);
+    setAiStockMsg(null);
+    try {
+      const res = await fetch("/api/admin/stock", {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stock: aiStockForm }),
+      });
+      if (res.status === 401) { setAuthed(false); return; }
+      const data = await res.json();
+      if (data.ok) {
+        setAiStockMap(data.stock || {});
+        const form = {};
+        Object.keys(aiStockForm).forEach((id) => {
+          const v = data.stock?.[id];
+          form[id] = v == null ? "" : String(v);
+        });
+        setAiStockForm(form);
+        setAiStockMsg({ type: "success", message: "库存已保存" });
+      } else {
+        setAiStockMsg({ type: "error", message: data.error === "invalid_value" ? "请输入 ≥0 的整数，或留空表示不限" : (data.error || "保存失败") });
+      }
+    } catch (e) {
+      setAiStockMsg({ type: "error", message: "网络错误，请重试" });
+    } finally {
+      setAiStockBusy(false);
+    }
+  }
+
   const loadMailLogs = useCallback(async () => {
     setMailLoading(true);
     try {
@@ -1411,11 +1473,15 @@ export default function AdminPage() {
       if (isRootStaff) loadStaff();
       else if (currentStaff) setTab("orders");
     }
+    if (tab === "aistock") {
+      if (canManageStock) loadAiStock();
+      else setTab("orders");
+    }
   }, [
     authed, permissionsReady, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes,
-    loadRedeemHistory, loadMailLogs, loadStaff, logFilter, logSource, isRootStaff,
+    loadRedeemHistory, loadMailLogs, loadStaff, loadAiStock, logFilter, logSource, isRootStaff,
     currentStaff?.id, canViewUsers, canViewBalanceLog, canReviewWithdrawals,
-    canViewCodes, canManageCodes, canSendMail,
+    canViewCodes, canManageCodes, canSendMail, canManageStock,
   ]);
 
   useEffect(() => {
@@ -2583,6 +2649,7 @@ export default function AdminPage() {
           {canViewCodes && <button type="button" className={`admin-tab-btn${tab === "codes" ? " active" : ""}`} onClick={() => setTab("codes")}>兑换码</button>}
           {canViewBalanceLog && <button type="button" className={`admin-tab-btn${tab === "balance" ? " active" : ""}`} onClick={() => setTab("balance")}>余额变动</button>}
           {canSendMail && <button type="button" className={`admin-tab-btn${tab === "mail" ? " active" : ""}`} onClick={() => setTab("mail")}>客服发信</button>}
+          {canManageStock && <button type="button" className={`admin-tab-btn${tab === "aistock" ? " active" : ""}`} onClick={() => setTab("aistock")}>AI库存</button>}
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "staff" ? " active" : ""}`} onClick={() => setTab("staff")}>工作人员</button>}
         </div>
 
@@ -3440,6 +3507,46 @@ export default function AdminPage() {
                 })}
               </div>
             </div>
+          </div>
+        ) : tab === "aistock" ? (
+          <div className="admin-aistock-pane">
+            <div className="admin-aistock-head">
+              <h3>AI 会员库存</h3>
+              <p>分别设置四个规格的可售库存。留空 = 不限；设为 0 = 售罄（前台显示「已售罄」且无法下单）。下单自动扣减，订单被标记「无效」时自动返还。</p>
+            </div>
+            {aiStockLoading && !aiStockMap ? (
+              <div className="admin-userlist-empty">加载中...</div>
+            ) : (
+              <>
+                <div className="admin-aistock-grid">
+                  {AI_STOCK_PLAN_ORDER.map((id) => {
+                    const cur = aiStockMap?.[id];
+                    return (
+                      <label key={id} className="admin-aistock-field">
+                        <span className="admin-aistock-label">
+                          <strong>{aiStockLabels[id] || id}</strong>
+                          <em>{cur == null ? "当前：不限" : `当前剩余：${cur}`}</em>
+                        </span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={aiStockForm[id] ?? ""}
+                          placeholder="不限"
+                          onChange={(e) => setAiStockForm((f) => ({ ...f, [id]: e.target.value.replace(/[^\d]/g, "") }))}
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+                {aiStockMsg && <div className={`admin-alert ${aiStockMsg.type}`}>{aiStockMsg.message}</div>}
+                <div className="admin-aistock-actions">
+                  <button type="button" className="admin-aistock-save" onClick={saveAiStock} disabled={aiStockBusy}>
+                    {aiStockBusy ? <><LoaderCircle size={13} className="spin-icon" />保存中</> : "保存库存"}
+                  </button>
+                  <button type="button" className="admin-aistock-refresh" onClick={loadAiStock} disabled={aiStockLoading}>刷新</button>
+                </div>
+              </>
+            )}
           </div>
         ) : (
         <>

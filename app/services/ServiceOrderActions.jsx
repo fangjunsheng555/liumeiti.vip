@@ -7,21 +7,28 @@ import { Headphones, ShoppingBag, X } from "lucide-react";
 import { getDefaultProductPlan, getProductPlan, getProductPlanOptions, localizePlan } from "../lib/store";
 import { useLocale } from "../components/LocaleProvider";
 
-export default function ServiceOrderActions({ service }) {
+export default function ServiceOrderActions({ service, soldOut = {} }) {
   const { t, locale } = useLocale();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState(() => getDefaultProductPlan(service?.key));
+  const [selectedPlan, setSelectedPlan] = useState(() => {
+    const def = getDefaultProductPlan(service?.key);
+    if (!def || !soldOut?.[def]) return def;
+    const firstAvail = getProductPlanOptions(service?.key).find((p) => !soldOut?.[p.id]);
+    return firstAvail?.id || def;
+  });
   const planOptions = useMemo(() => getProductPlanOptions(service?.key), [service?.key]);
   const productKey = service?.key || "";
   const currentPlan = getProductPlan(productKey, selectedPlan) || planOptions[0] || null;
+  const isSoldOut = (planId) => Boolean(soldOut?.[planId]);
+  const allSoldOut = planOptions.length > 0 && planOptions.every((p) => isSoldOut(p.id));
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
   function checkoutWithPlan() {
-    if (!productKey || !currentPlan) return;
+    if (!productKey || !currentPlan || isSoldOut(currentPlan.id)) return;
     const params = new URLSearchParams();
     params.set("items", productKey);
     params.set(`${productKey}Plan`, currentPlan.id);
@@ -50,15 +57,17 @@ export default function ServiceOrderActions({ service }) {
         <div className="shop-rocket-plan-picker compact" aria-label={locale === "en" ? `Select ${service.shortTitle} plan` : `选择${service.shortTitle}规格`}>
           {planOptions.map((rawPlan) => {
             const plan = localizePlan(productKey, rawPlan, locale);
+            const optSoldOut = isSoldOut(plan.id);
             return (
             <button
               key={plan.id}
               type="button"
-              className={`shop-rocket-plan-option${currentPlan?.id === plan.id ? " selected" : ""}`}
-              onClick={() => setSelectedPlan(plan.id)}
+              disabled={optSoldOut}
+              className={`shop-rocket-plan-option${currentPlan?.id === plan.id ? " selected" : ""}${optSoldOut ? " sold-out" : ""}`}
+              onClick={() => { if (!optSoldOut) setSelectedPlan(plan.id); }}
             >
               <span>
-                <strong>{plan.label}</strong>
+                <strong>{plan.label}{optSoldOut ? ` · ${locale === "en" ? "Sold out" : "已售罄"}` : ""}</strong>
                 <small>{plan.desc}</small>
               </span>
               <b>¥{plan.amount}<em>/{plan.unit || (locale === "en" ? "yr" : "年")}</em></b>
@@ -68,9 +77,9 @@ export default function ServiceOrderActions({ service }) {
         </div>
 
         <div className="modal-actions rocket-picker-actions">
-          <button className="primary-btn" onClick={checkoutWithPlan}>
+          <button className="primary-btn" onClick={checkoutWithPlan} disabled={currentPlan ? isSoldOut(currentPlan.id) : false}>
             <ShoppingBag size={16} />
-            {t("svc.pickAndOrder")}
+            {currentPlan && isSoldOut(currentPlan.id) ? (locale === "en" ? "Sold out" : "已售罄") : t("svc.pickAndOrder")}
           </button>
           <Link href="/service-center#contact" className="secondary-btn">
             <Headphones size={16} />
@@ -84,8 +93,8 @@ export default function ServiceOrderActions({ service }) {
   return (
     <>
       <div className="service-seo-actions">
-        <button type="button" className="primary-btn" onClick={() => setPickerOpen(true)}>
-          <ShoppingBag size={16} />{t("svc.orderNow")}
+        <button type="button" className="primary-btn" onClick={() => setPickerOpen(true)} disabled={allSoldOut}>
+          <ShoppingBag size={16} />{allSoldOut ? (locale === "en" ? "Sold out" : "已售罄") : t("svc.orderNow")}
         </button>
         <Link href="/service-center#contact" className="secondary-btn">
           <Headphones size={16} />{t("svc.askSupport")}

@@ -8,6 +8,7 @@ import ServiceOrderActions from "../ServiceOrderActions";
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../../social-meta";
 import { getServerLocale } from "../../lib/i18n-server";
 import { getT } from "../../lib/i18n";
+import { getAiSoldOutMap, AI_STOCK_PLAN_IDS } from "../../api/_utils.js";
 
 export function generateStaticParams() {
   return SERVICE_PAGES.map((item) => ({ slug: item.slug }));
@@ -50,6 +51,9 @@ export default async function ServiceLandingPage({ params }) {
   const t = getT(locale);
   const service = localizeService(raw, locale);
 
+  const aiSoldOut = service.key === "ai" ? await getAiSoldOutMap() : {};
+  const aiAllSoldOut = service.key === "ai" && AI_STOCK_PLAN_IDS.length > 0 && AI_STOCK_PLAN_IDS.every((id) => aiSoldOut[id]);
+
   const jsonLd = [
     {
       "@context": "https://schema.org",
@@ -62,7 +66,7 @@ export default async function ServiceLandingPage({ params }) {
         "@type": "AggregateOffer",
         priceCurrency: "CNY",
         lowPrice: String(service.plans[0]?.[1] || service.price).replace(/[^\d.]/g, "") || "0",
-        availability: "https://schema.org/InStock",
+        availability: aiAllSoldOut ? "https://schema.org/OutOfStock" : "https://schema.org/InStock",
         url: `https://www.liumeiti.vip/services/${service.slug}`,
       },
     },
@@ -114,7 +118,7 @@ export default async function ServiceLandingPage({ params }) {
                 <span key={item}><BadgeCheck size={14} />{item}</span>
               ))}
             </div>
-            <ServiceOrderActions service={service} />
+            <ServiceOrderActions service={service} soldOut={aiSoldOut} />
           </div>
           <div className="service-seo-visual">
             <img src={service.image} alt={service.title} />
@@ -133,13 +137,16 @@ export default async function ServiceLandingPage({ params }) {
             </div>
           </div>
           <div className="service-plan-grid">
-            {service.plans.map(([name, price, desc]) => (
-              <article key={name} className="service-plan-card">
-                <span>{name}</span>
+            {service.plans.map(([name, price, desc], i) => {
+              const planSoldOut = service.key === "ai" && aiSoldOut[AI_STOCK_PLAN_IDS[i]];
+              return (
+              <article key={name} className={`service-plan-card${planSoldOut ? " sold-out" : ""}`}>
+                <span>{name}{planSoldOut ? ` · ${locale === "en" ? "Sold out" : "已售罄"}` : ""}</span>
                 <b>{price}</b>
                 <p>{desc}</p>
               </article>
-            ))}
+              );
+            })}
           </div>
         </section>
 

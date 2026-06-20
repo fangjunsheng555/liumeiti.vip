@@ -196,6 +196,7 @@ export const serviceCardEn = {
   disney: { subtitle: "Global 4K Dolby Profile / full account", price: "From ¥108/yr" },
   "hbo-max": { subtitle: "Global 4K Dolby Profile / full account", price: "From ¥148/yr" },
   "airport-node": { name: "VPN", subtitle: "Real-traffic plans & multi-node speed", price: "From ¥128/yr" },
+  ai: { name: "AI Membership", subtitle: "ChatGPT & Claude official plans", price: "From ¥198/3 mo" },
 };
 
 // 实时下单条时间本地化

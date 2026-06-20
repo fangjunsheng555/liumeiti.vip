@@ -828,6 +828,7 @@ html[lang="en"] .product-card-selected::before { content: "Selected" !important;
 .home-service-card.svc-disney { --svc: #1f4fd8; }
 .home-service-card.svc-hbo-max { --svc: #a855f7; }
 .home-service-card.svc-airport-node { --svc: #0f766e; }
+.home-service-card.svc-ai { --svc: #10a37f; }
 .home-service-card .home-service-price { color: var(--svc, #0f766e) !important; }
 .home-service-card .home-service-arrow { color: var(--svc, #0f766e) !important; }
 
@@ -889,7 +890,23 @@ html[lang="en"] .product-card-selected::before { content: "Selected" !important;
 .product-card.svc-disney { --svc: #1f4fd8; }
 .product-card.svc-max { --svc: #a855f7; }
 .product-card.svc-rocket { --svc: #0f766e; }
+.product-card.svc-ai { --svc: #10a37f; }
 .product-promo-card { --svc: #6e6e73; }
+
+/* 售罄态（AI 会员库存为 0） */
+.product-card .product-cta.sold-out,
+.product-detail-actions .primary-btn.sold-out,
+.rocket-picker-actions .primary-btn:disabled,
+.service-seo-actions .primary-btn:disabled {
+  opacity: .55 !important;
+  cursor: not-allowed !important;
+  filter: grayscale(.35) !important;
+  box-shadow: none !important;
+}
+.shop-rocket-plan-option.sold-out { opacity: .55 !important; cursor: not-allowed !important; }
+.shop-rocket-plan-option.sold-out strong { text-decoration: line-through !important; }
+.service-plan-card.sold-out { opacity: .62 !important; }
+.service-plan-card.sold-out span { text-decoration: line-through !important; }
 
 /* ============================================================================
    ── 26. 微交互：统一过渡曲线 + 按压反馈 + hover（细腻手感） ──

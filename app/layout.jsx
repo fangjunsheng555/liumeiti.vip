@@ -25,8 +25,8 @@ export async function generateMetadata() {
     description,
     applicationName: en ? 'Maoyang Taiwan Inc' : '冒央会社',
     keywords: en
-      ? ['Maoyang Taiwan Inc', 'liumeiti.vip', 'streaming membership', 'Spotify', 'Netflix', 'Disney+', 'HBO Max', 'VPN', 'membership sharing']
-      : ['冒央会社', 'liumeiti.vip', '流媒体会员', 'Spotify会员', 'Netflix会员', 'Disney+会员', 'HBO Max会员', '机场节点', '流媒体合租'],
+      ? ['Maoyang Taiwan Inc', 'liumeiti.vip', 'streaming membership', 'Spotify', 'Netflix', 'Disney+', 'HBO Max', 'VPN', 'ChatGPT', 'Claude', 'AI membership', 'membership sharing']
+      : ['冒央会社', 'liumeiti.vip', '流媒体会员', 'Spotify会员', 'Netflix会员', 'Disney+会员', 'HBO Max会员', '机场节点', 'ChatGPT会员', 'Claude会员', 'AI会员', '流媒体合租'],
     authors: [{ name: 'Maoyang Taiwan Inc' }],
     creator: 'Maoyang Taiwan Inc',
     publisher: 'Maoyang Taiwan Inc',

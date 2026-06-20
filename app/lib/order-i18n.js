@@ -8,6 +8,7 @@ const PRODUCT_TITLE_EN = {
   disney: "Disney+",
   max: "HBO Max",
   rocket: "VPN",
+  ai: "AI Membership",
 };
 
 const PLAN_LABEL_EN = {
@@ -22,9 +23,15 @@ const PLAN_LABEL_EN = {
     unlimited: "Unlimited",
     trial: "Trial 10 GB · ¥5",
   },
+  ai: {
+    "gpt-plus": "GPT Plus",
+    "gpt-pro": "GPT 5x Pro",
+    "claude-pro": "Claude Pro",
+    "claude-max": "Claude 5x Max",
+  },
 };
 
-const CYCLE_EN = { "1年": "1 yr", "次": "once" };
+const CYCLE_EN = { "1年": "1 yr", "次": "once", "三个月": "3 months" };
 
 export function localizeOrderItemLabel(service, plan, fallbackLabel, locale) {
   if (locale !== "en") return fallbackLabel;

@@ -10,6 +10,7 @@ import {
   inviteCodeFromRequest, normalizeInviteCode, resolveReferralForOrder,
   pushAdminActionLog,
   saveOrderRecord, verifyPaymentQuote, getCookieFromRequest,
+  reserveAiStock, restoreAiStock,
 } from "../_utils.js";
 
 const PRODUCTS = {
@@ -18,6 +19,7 @@ const PRODUCTS = {
   disney: { label: "Disney+", amount: 108, cycle: "1年", hasPlan: true },
   max: { label: "HBO Max", amount: 148, cycle: "1年", hasPlan: true },
   rocket: { label: "机场节点", amount: 128, cycle: "1年", hasPlan: true },
+  ai: { label: "AI 会员", amount: 198, cycle: "三个月", hasPlan: true },
 };
 
 const ROCKET_PLANS = {
@@ -47,6 +49,12 @@ const PRODUCT_PLANS = {
     full: { id: "full", label: "整号购买", amount: 588 },
   },
   rocket: ROCKET_PLANS,
+  ai: {
+    "gpt-plus": { id: "gpt-plus", label: "GPT Plus", amount: 198 },
+    "gpt-pro": { id: "gpt-pro", label: "GPT 5x Pro", amount: 998 },
+    "claude-pro": { id: "claude-pro", label: "Claude Pro", amount: 198 },
+    "claude-max": { id: "claude-max", label: "Claude 5x Max", amount: 998 },
+  },
 };
 const DEFAULT_PRODUCT_PLANS = {
   spotify: "member",
@@ -54,6 +62,7 @@ const DEFAULT_PRODUCT_PLANS = {
   disney: "seat",
   max: "seat",
   rocket: "basic",
+  ai: "gpt-plus",
 };
 const DEFAULT_ROCKET_PLAN = DEFAULT_PRODUCT_PLANS.rocket;
 
@@ -593,10 +602,34 @@ export async function POST(request) {
     await clearRedeemRateLimit(redeemGuard);
   }
 
+  // AI 会员库存占用（原子扣减；售罄则回滚本次订单所有副作用并拒绝）
+  const aiReserved = [];
+  for (const it of order.items) {
+    if (it.service !== "ai") continue;
+    const res = await reserveAiStock(it.plan);
+    if (res.ok) {
+      if (!res.unlimited) { it.aiStockReserved = true; aiReserved.push(it.plan); }
+      continue;
+    }
+    for (const pid of aiReserved) await restoreAiStock(pid);
+    await restoreCoupon(userEmail, coupon.couponId, orderId);
+    if (paymentMethod === "redeem") await restoreServiceRedeemCode(redeemCode, orderId);
+    await refundFailedBalanceOrder(order, userEmail, finalAmount, now);
+    return Response.json({
+      ok: false,
+      error: "out_of_stock",
+      message: order.locale === "en"
+        ? "This plan is sold out. Please pick another plan or contact support."
+        : "该规格库存不足，请选择其他规格或联系在线客服",
+      soldOutPlan: it.plan,
+    }, { status: 409 });
+  }
+
   const deliveries = [];
   const stored = await saveOrderRecord(order);
   deliveries.push({ channel: "storage", ok: Boolean(stored) });
   if (!stored) {
+    for (const pid of aiReserved) await restoreAiStock(pid);
     await restoreCoupon(userEmail, coupon.couponId, orderId);
     if (paymentMethod === "redeem") await restoreServiceRedeemCode(redeemCode, orderId);
     await refundFailedBalanceOrder(order, userEmail, finalAmount, now);

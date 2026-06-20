@@ -109,6 +109,10 @@ const TESTIMONIALS = [
   { name: "宋*", initial: "宋", region: "太原", service: "Disney+ 整号", rating: 5, date: "3天前", text: "家里电视和手机都能看，档案足够，客服处理速度挺稳" },
   { name: "陆**", initial: "陆", region: "苏州", service: "Spotify 个人订阅", rating: 5, date: "3天前", text: "个人订阅适合自己用，开通信息清楚，后续查订单也方便" },
   { name: "余***", initial: "余", region: "贵阳", service: "机场节点 · 豪华套餐", rating: 5, date: "4天前", text: "流量给得足，多个设备轮着用也够，速度比之前用的平台稳定" },
+  { name: "程**", initial: "程", region: "杭州", service: "AI 会员 · GPT Plus", rating: 5, date: "1小时前", text: "GPT Plus 官方直充，独立账号用着放心，下单后十几分钟就开通了，客服很专业" },
+  { name: "Aiden***", initial: "A", region: "硅谷", service: "AI 会员 · Claude Pro", rating: 5, date: "3小时前", text: "Claude Pro 开通很快，写代码和长文都很顺，价格比自己开划算，售后也跟得上" },
+  { name: "邹**", initial: "邹", region: "武汉", service: "AI 会员 · GPT 5x Pro", rating: 5, date: "5小时前", text: "5x 额度日常重度使用完全够，账号稳定没掉过，遇到问题带订单号客服直接处理" },
+  { name: "白*", initial: "白", region: "西安", service: "AI 会员 · Claude 5x Max", rating: 5, date: "7小时前", text: "Max 高额度跑大项目很顺手，官方渠道靠谱，开通和说明都很清楚，会回购" },
 ];
 
 const TESTIMONIALS_EN = [
@@ -126,6 +130,8 @@ const TESTIMONIALS_EN = [
   { name: "Grace Y.", initial: "G", region: "Hong Kong", service: "Spotify + Netflix + VPN", rating: 5, date: "4 days ago", text: "Bundling was a bit cheaper too. Music, streaming and VPN in one place, after-sales kept up. I'll be back." },
   { name: "Henry F.", initial: "H", region: "Seoul", service: "Disney+ Profile", rating: 5, date: "4 days ago", text: "The dedicated profile is stable for movies and animation, the instructions were simple, and the TV logged in first try." },
   { name: "Chloe D.", initial: "C", region: "Manila", service: "Netflix + VPN", rating: 5, date: "5 days ago", text: "Works fine from overseas too, everything configured at once. I'll likely keep renewing here." },
+  { name: "Mason K.", initial: "M", region: "San Francisco", service: "AI Membership · GPT Plus", rating: 5, date: "2 hours ago", text: "Official top-up and a private account I don't have to share — activated within minutes, and support was sharp." },
+  { name: "Ivy L.", initial: "I", region: "Singapore", service: "AI Membership · Claude Pro", rating: 5, date: "6 hours ago", text: "Claude Pro was up fast and stayed stable for long writing and coding. Cheaper than doing it myself, with real after-sales." },
 ];
 
 const TESTIMONIALS_PER_PAGE = 4;
@@ -153,7 +159,8 @@ const LIVE_ORDER_PRODUCTS = [
   "Disney+ 单独车位", "Disney+ 整号购买",
   "HBO Max 单独车位", "HBO Max 整号购买",
   "机场节点 · 普通套餐", "机场节点 · 高级套餐", "机场节点 · 豪华套餐", "机场节点 · 无限套餐", "机场节点 · 5元10GB测试",
-  "Spotify + Netflix", "Netflix + Disney+", "Spotify + HBO Max", "机场节点 + Netflix", "Spotify + 机场节点",
+  "AI 会员 · GPT Plus", "AI 会员 · GPT 5x Pro", "AI 会员 · Claude Pro", "AI 会员 · Claude 5x Max",
+  "Spotify + Netflix", "Netflix + Disney+", "Spotify + HBO Max", "机场节点 + Netflix", "Spotify + 机场节点", "AI 会员 + Netflix",
 ];
 
 const LIVE_ORDER_TIMES = ["刚刚", "1 分钟前", "2 分钟前", "3 分钟前", "5 分钟前", "8 分钟前", "12 分钟前", "18 分钟前", "26 分钟前", "36 分钟前"];
@@ -271,7 +278,8 @@ const EN_LIVE_ORDER_PRODUCTS = [
   "Spotify Premium Family", "Spotify Premium Individual", "Spotify Premium Duo", "Netflix 4K Profile", "Netflix full account",
   "Disney+ Profile", "Disney+ full account", "HBO Max Profile", "HBO Max full account",
   "VPN · Standard", "VPN · Plus", "VPN · Premium", "VPN · Unlimited",
-  "Spotify + Netflix", "Netflix + Disney+", "Spotify + VPN",
+  "AI Membership · GPT Plus", "AI Membership · GPT 5x Pro", "AI Membership · Claude Pro", "AI Membership · Claude 5x Max",
+  "Spotify + Netflix", "Netflix + Disney+", "Spotify + VPN", "AI Membership + Netflix",
 ];
 const EN_LIVE_ORDER_TIMES = [
   "just now", "1 min ago", "2 min ago", "3 min ago", "5 min ago", "8 min ago", "12 min ago", "18 min ago", "26 min ago", "36 min ago",
@@ -563,6 +571,7 @@ export default function Page() {
               <Link href="/services/netflix">Netflix</Link>
               <Link href="/services/disney">Disney+</Link>
               <Link href="/services/hbo-max">HBO Max</Link>
+              <Link href="/services/ai">{locale === "en" ? "AI" : "AI 会员"}</Link>
               <Link href="/services/airport-node">{t("footer.airportNode")}</Link>
             </div>
           </div>
