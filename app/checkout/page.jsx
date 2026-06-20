@@ -1119,18 +1119,19 @@ export default function CheckoutPage() {
               {/* USDT 地址 */}
               {paymentMethod === "usdt" && (
                 <div className="usdt-address-box">
-                  <div className="usdt-address-head">
-                    <span>{L("TRON / TRC20 收款地址", "TRON / TRC20 address")}</span>
+                  <span className="usdt-address-label">{L("TRON / TRC20 收款地址", "TRON / TRC20 address")}</span>
+                  <div className="usdt-address-field">
+                    <code className="usdt-address-value">{USDT_ADDRESS}</code>
                     <button
                       type="button"
                       className={`usdt-address-copy${copiedKey === "usdt-addr" ? " copied" : ""}`}
                       onClick={() => handleCopy(USDT_ADDRESS, "usdt-addr")}
+                      aria-label={copiedKey === "usdt-addr" ? L("已复制", "Copied") : L("复制地址", "Copy address")}
+                      title={copiedKey === "usdt-addr" ? L("已复制", "Copied") : L("复制地址", "Copy address")}
                     >
-                      <Copy size={12} />
-                      {copiedKey === "usdt-addr" ? L("已复制", "Copied") : L("复制地址", "Copy")}
+                      {copiedKey === "usdt-addr" ? <CheckCircle2 size={16} /> : <Copy size={16} />}
                     </button>
                   </div>
-                  <code className="usdt-address-value">{USDT_ADDRESS}</code>
                 </div>
               )}
 
