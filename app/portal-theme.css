@@ -962,3 +962,51 @@ html[lang="en"] .product-card-selected::before { content: "Selected" !important;
   /* 统计栏：桌面端也四格一行（与移动端一致） */
   .home-page-shell .home-main .home-hero-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
 }
+
+/* ── 29. Hero 左右动态光晕（柔和品牌色 · 缓慢漂浮，纯 CSS） ── */
+.home-page-shell { overflow-x: clip; }
+.home-page-shell .home-main .home-hero-card { isolation: isolate; }
+.home-page-shell .home-main .home-hero-card::before,
+.home-page-shell .home-main .home-hero-card::after {
+  content: "" !important;
+  display: block !important;
+  position: absolute !important;
+  top: 40% !important;
+  width: 360px !important;
+  height: 360px !important;
+  border-radius: 50% !important;
+  z-index: -1 !important;
+  pointer-events: none !important;
+  filter: blur(58px) !important;
+  will-change: transform, opacity;
+}
+.home-page-shell .home-main .home-hero-card::before {
+  left: -70px !important;
+  background: radial-gradient(circle, rgba(20, 184, 166, 0.55), rgba(20, 184, 166, 0) 70%) !important;
+  animation: heroGlowL 10s ease-in-out infinite !important;
+}
+.home-page-shell .home-main .home-hero-card::after {
+  right: -70px !important;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.42), rgba(16, 163, 127, 0.3) 46%, rgba(59, 130, 246, 0) 72%) !important;
+  animation: heroGlowR 13s ease-in-out infinite !important;
+}
+@keyframes heroGlowL {
+  0%, 100% { transform: translateY(0) scale(1); opacity: .48; }
+  50% { transform: translateY(-26px) scale(1.14); opacity: .72; }
+}
+@keyframes heroGlowR {
+  0%, 100% { transform: translateY(0) scale(1.06); opacity: .4; }
+  50% { transform: translateY(24px) scale(1.2); opacity: .62; }
+}
+@media (min-width: 1024px) {
+  .home-page-shell .home-main .home-hero-card::before { width: 460px !important; height: 460px !important; left: -120px !important; }
+  .home-page-shell .home-main .home-hero-card::after { width: 460px !important; height: 460px !important; right: -120px !important; }
+}
+@media (max-width: 560px) {
+  .home-page-shell .home-main .home-hero-card::before { width: 230px !important; height: 230px !important; left: -64px !important; filter: blur(48px) !important; }
+  .home-page-shell .home-main .home-hero-card::after { width: 230px !important; height: 230px !important; right: -64px !important; filter: blur(48px) !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .home-page-shell .home-main .home-hero-card::before,
+  .home-page-shell .home-main .home-hero-card::after { animation: none !important; }
+}
