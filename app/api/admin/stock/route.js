@@ -7,8 +7,10 @@ import {
 const AI_PLAN_LABELS = {
   "gpt-plus": "GPT Plus",
   "gpt-pro": "GPT 5x Pro",
+  "gpt-20x-pro": "GPT 20x Pro",
   "claude-pro": "Claude Pro",
   "claude-max": "Claude 5x Max",
+  "claude-20x-max": "Claude 20x Max",
 };
 
 // GET /api/admin/stock — 读取 AI 会员各规格库存（number | null=不限）

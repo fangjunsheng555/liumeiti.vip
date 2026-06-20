@@ -26,8 +26,10 @@ const PLAN_LABEL_EN = {
   ai: {
     "gpt-plus": "GPT Plus",
     "gpt-pro": "GPT 5x Pro",
+    "gpt-20x-pro": "GPT 20x Pro",
     "claude-pro": "Claude Pro",
     "claude-max": "Claude 5x Max",
+    "claude-20x-max": "Claude 20x Max",
   },
 };
 

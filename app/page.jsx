@@ -159,7 +159,7 @@ const LIVE_ORDER_PRODUCTS = [
   "Disney+ 单独车位", "Disney+ 整号购买",
   "HBO Max 单独车位", "HBO Max 整号购买",
   "机场节点 · 普通套餐", "机场节点 · 高级套餐", "机场节点 · 豪华套餐", "机场节点 · 无限套餐", "机场节点 · 5元10GB测试",
-  "AI 会员 · GPT Plus", "AI 会员 · GPT 5x Pro", "AI 会员 · Claude Pro", "AI 会员 · Claude 5x Max",
+  "AI 会员 · GPT Plus", "AI 会员 · GPT 5x Pro", "AI 会员 · GPT 20x Pro", "AI 会员 · Claude Pro", "AI 会员 · Claude 5x Max", "AI 会员 · Claude 20x Max",
   "Spotify + Netflix", "Netflix + Disney+", "Spotify + HBO Max", "机场节点 + Netflix", "Spotify + 机场节点", "AI 会员 + Netflix",
 ];
 
@@ -278,7 +278,7 @@ const EN_LIVE_ORDER_PRODUCTS = [
   "Spotify Premium Family", "Spotify Premium Individual", "Spotify Premium Duo", "Netflix 4K Profile", "Netflix full account",
   "Disney+ Profile", "Disney+ full account", "HBO Max Profile", "HBO Max full account",
   "VPN · Standard", "VPN · Plus", "VPN · Premium", "VPN · Unlimited",
-  "AI Membership · GPT Plus", "AI Membership · GPT 5x Pro", "AI Membership · Claude Pro", "AI Membership · Claude 5x Max",
+  "AI Membership · GPT Plus", "AI Membership · GPT 5x Pro", "AI Membership · GPT 20x Pro", "AI Membership · Claude Pro", "AI Membership · Claude 5x Max", "AI Membership · Claude 20x Max",
   "Spotify + Netflix", "Netflix + Disney+", "Spotify + VPN", "AI Membership + Netflix",
 ];
 const EN_LIVE_ORDER_TIMES = [
@@ -568,10 +568,10 @@ export default function Page() {
             <div className="footer-links">
               <Link href="/legal">{t("footer.legal")}</Link>
               <Link href="/services/spotify">Spotify</Link>
+              <Link href="/services/ai">{locale === "en" ? "AI" : "AI 会员"}</Link>
               <Link href="/services/netflix">Netflix</Link>
               <Link href="/services/disney">Disney+</Link>
               <Link href="/services/hbo-max">HBO Max</Link>
-              <Link href="/services/ai">{locale === "en" ? "AI" : "AI 会员"}</Link>
               <Link href="/services/airport-node">{t("footer.airportNode")}</Link>
             </div>
           </div>

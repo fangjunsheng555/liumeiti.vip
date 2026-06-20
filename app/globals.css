@@ -3193,17 +3193,8 @@ button { cursor: pointer; border: none; background: transparent; }
 /* Products 3+2 grid layout */
 .products-grid-32 {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 14px;
-}
-.products-grid-32 > .product-card-mini:nth-child(1),
-.products-grid-32 > .product-card-mini:nth-child(2),
-.products-grid-32 > .product-card-mini:nth-child(3) {
-  grid-column: span 2;
-}
-.products-grid-32 > .product-card-mini:nth-child(4),
-.products-grid-32 > .product-card-mini:nth-child(5) {
-  grid-column: span 3;
 }
 
 /* Simplified product card */
@@ -6018,8 +6009,8 @@ button { cursor: pointer; border: none; background: transparent; }
 /* ── V5 responsive overrides ── */
 @media (max-width: 1100px) {
   /* Tablet: 2 cards per row uniformly */
-  .products-grid-32 > .product-card-mini:nth-child(n) { grid-column: span 3 !important; }
-  .product-promo-card { display: grid; grid-column: span 3; }
+  .products-grid-32 { grid-template-columns: repeat(2, 1fr); }
+  .products-grid-32 > .product-card-mini:nth-child(n) { grid-column: auto !important; }
 }
 @media (max-width: 820px) {
   /* Match the .product-card.glass-card 14px override */

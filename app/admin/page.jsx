@@ -1048,7 +1048,7 @@ function exportOrderPdf(order, note = "") {
   });
 }
 
-const AI_STOCK_PLAN_ORDER = ["gpt-plus", "gpt-pro", "claude-pro", "claude-max"];
+const AI_STOCK_PLAN_ORDER = ["gpt-plus", "gpt-pro", "gpt-20x-pro", "claude-pro", "claude-max", "claude-20x-max"];
 
 export default function AdminPage() {
   const [authed, setAuthed] = useState(null); // null=loading, false=login, true=ok

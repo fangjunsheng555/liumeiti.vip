@@ -172,8 +172,8 @@ body { background: var(--bg) !important; color: var(--ink); letter-spacing: -0.0
 .home-services-section .section-title { color: var(--ink) !important; }
 .home-services-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 16px;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 14px;
   margin-top: 14px;
 }
 .home-service-card {

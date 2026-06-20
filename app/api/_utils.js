@@ -826,8 +826,10 @@ export const PRODUCT_PLANS = {
   ai: {
     "gpt-plus": { id: "gpt-plus", label: "GPT Plus", amount: 198, unit: "三个月", desc: "ChatGPT Plus 官方会员 · 三个月" },
     "gpt-pro": { id: "gpt-pro", label: "GPT 5x Pro", amount: 998, unit: "三个月", desc: "ChatGPT Pro 5x 高额度 · 三个月" },
+    "gpt-20x-pro": { id: "gpt-20x-pro", label: "GPT 20x Pro", amount: 1888, unit: "三个月", desc: "ChatGPT Pro 20x 超大额度 · 三个月" },
     "claude-pro": { id: "claude-pro", label: "Claude Pro", amount: 198, unit: "三个月", desc: "Claude Pro 官方会员 · 三个月" },
     "claude-max": { id: "claude-max", label: "Claude 5x Max", amount: 998, unit: "三个月", desc: "Claude Max 5x 高额度 · 三个月" },
+    "claude-20x-max": { id: "claude-20x-max", label: "Claude 20x Max", amount: 1888, unit: "三个月", desc: "Claude Max 20x 超大额度 · 三个月" },
   },
 };
 export const DEFAULT_PRODUCT_PLANS = {
@@ -841,7 +843,7 @@ export const DEFAULT_PRODUCT_PLANS = {
 export const DEFAULT_ROCKET_PLAN = DEFAULT_PRODUCT_PLANS.rocket;
 
 // ── AI 会员库存（每个规格独立整数计数键；键不存在 = 不限，存在 = 受限）──
-export const AI_STOCK_PLAN_IDS = ["gpt-plus", "gpt-pro", "claude-pro", "claude-max"];
+export const AI_STOCK_PLAN_IDS = ["gpt-plus", "gpt-pro", "gpt-20x-pro", "claude-pro", "claude-max", "claude-20x-max"];
 const AI_STOCK_KEY_PREFIX = "liumeiti:stock:ai:";
 function aiStockKey(planId) { return AI_STOCK_KEY_PREFIX + clean(planId, 40); }
 

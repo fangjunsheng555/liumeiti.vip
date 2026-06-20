@@ -27,6 +27,25 @@ export const PRODUCTS = [
     qrImage: "/payment/alipay.jpg",
   },
   {
+    key: "ai",
+    image: "/products/ai.jpg",
+    title: "AI 会员",
+    subtitle: "ChatGPT / Claude 官方会员",
+    amount: 198,
+    cycle: "三个月",
+    hasPlan: true,
+    price: "¥198/三个月起",
+    shortIntro: "ChatGPT 与 Claude 官方会员，官方渠道直充，独立账号，包售后",
+    highlights: ["官方充值", "独立账号", "包售后"],
+    detailTitle: "ChatGPT / Claude 官方会员，官方渠道直充",
+    detailBody:
+      "官方渠道直充会员/订阅，独立账号、非共享，开通后稳定可用，支持 ChatGPT 与 Claude 全部会员功能。可选 GPT Plus ¥198、GPT 5x Pro ¥998、GPT 20x Pro ¥1888、Claude Pro ¥198、Claude 5x Max ¥998、Claude 20x Max ¥1888（均为三个月），下单后充值人员将在30分钟内联系开通，全程包售后",
+    orderTitle: "AI 会员 · 规格选择",
+    orderBody:
+      "填写邮箱与联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
+    qrImage: "/payment/alipay.jpg",
+  },
+  {
     key: "netflix",
     image: "/products/netflix.jpg",
     title: "Netflix",
@@ -103,25 +122,6 @@ export const PRODUCTS = [
       "请在支付完成后点击付款完成提交订单，提交后会生成订阅链接",
     qrImage: "/payment/alipay.jpg",
   },
-  {
-    key: "ai",
-    image: "/products/ai.jpg",
-    title: "AI 会员",
-    subtitle: "ChatGPT / Claude 官方会员",
-    amount: 198,
-    cycle: "三个月",
-    hasPlan: true,
-    price: "¥198/三个月起",
-    shortIntro: "ChatGPT 与 Claude 官方会员，官方渠道直充，独立账号，包售后",
-    highlights: ["官方充值", "独立账号", "包售后"],
-    detailTitle: "ChatGPT / Claude 官方会员，官方渠道直充",
-    detailBody:
-      "官方渠道直充会员/订阅，独立账号、非共享，开通后稳定可用，支持 ChatGPT 与 Claude 全部会员功能。可选 GPT Plus ¥198/三个月、GPT 5x Pro ¥998/三个月、Claude Pro ¥198/三个月、Claude 5x Max ¥998/三个月，下单后充值人员将在30分钟内联系开通，全程包售后",
-    orderTitle: "AI 会员 · 规格选择",
-    orderBody:
-      "填写邮箱与联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
-    qrImage: "/payment/alipay.jpg",
-  },
 ];
 
 export const ROCKET_PLANS = {
@@ -154,8 +154,10 @@ export const PRODUCT_PLANS = {
   ai: {
     "gpt-plus": { id: "gpt-plus", label: "GPT Plus", amount: 198, unit: "三个月", desc: "ChatGPT Plus 官方会员 · 三个月" },
     "gpt-pro": { id: "gpt-pro", label: "GPT 5x Pro", amount: 998, unit: "三个月", desc: "ChatGPT Pro 5x 高额度 · 三个月" },
+    "gpt-20x-pro": { id: "gpt-20x-pro", label: "GPT 20x Pro", amount: 1888, unit: "三个月", desc: "ChatGPT Pro 20x 超大额度 · 三个月" },
     "claude-pro": { id: "claude-pro", label: "Claude Pro", amount: 198, unit: "三个月", desc: "Claude Pro 官方会员 · 三个月" },
     "claude-max": { id: "claude-max", label: "Claude 5x Max", amount: 998, unit: "三个月", desc: "Claude Max 5x 高额度 · 三个月" },
+    "claude-20x-max": { id: "claude-20x-max", label: "Claude 20x Max", amount: 1888, unit: "三个月", desc: "Claude Max 20x 超大额度 · 三个月" },
   },
 };
 export const DEFAULT_PRODUCT_PLANS = {
@@ -244,7 +246,7 @@ export const PRODUCT_EN = {
     highlights: ["Official top-up", "Private account", "After-sales included"],
     detailTitle: "Official ChatGPT / Claude memberships, topped up through official channels",
     detailBody:
-      "Memberships topped up directly through official channels — private, non-shared accounts that stay stable after activation, with full ChatGPT and Claude membership features. Choose GPT Plus ¥198/3 mo, GPT 5x Pro ¥998/3 mo, Claude Pro ¥198/3 mo or Claude 5x Max ¥998/3 mo. Our team reaches out within 30 minutes after you order, with full after-sales support.",
+      "Memberships topped up directly through official channels — private, non-shared accounts that stay stable after activation, with full ChatGPT and Claude membership features. Choose GPT Plus ¥198, GPT 5x Pro ¥998, GPT 20x Pro ¥1888, Claude Pro ¥198, Claude 5x Max ¥998 or Claude 20x Max ¥1888 (all 3 months). Our team reaches out within 30 minutes after you order, with full after-sales support.",
     orderTitle: "AI Membership · choose a plan",
     orderBody: "Enter your email and contact details and pay via Alipay. Once you submit, our team will reach out within 30 minutes.",
   },
@@ -279,8 +281,10 @@ export const PRODUCT_PLAN_EN = {
   ai: {
     "gpt-plus": { label: "GPT Plus", desc: "ChatGPT Plus official membership · 3 months", unit: "3 months" },
     "gpt-pro": { label: "GPT 5x Pro", desc: "ChatGPT Pro 5x higher limits · 3 months", unit: "3 months" },
+    "gpt-20x-pro": { label: "GPT 20x Pro", desc: "ChatGPT Pro 20x much higher limits · 3 months", unit: "3 months" },
     "claude-pro": { label: "Claude Pro", desc: "Claude Pro official membership · 3 months", unit: "3 months" },
     "claude-max": { label: "Claude 5x Max", desc: "Claude Max 5x higher limits · 3 months", unit: "3 months" },
+    "claude-20x-max": { label: "Claude 20x Max", desc: "Claude Max 20x much higher limits · 3 months", unit: "3 months" },
   },
 };
 

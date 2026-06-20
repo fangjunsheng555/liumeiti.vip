@@ -52,8 +52,10 @@ const PRODUCT_PLANS = {
   ai: {
     "gpt-plus": { id: "gpt-plus", label: "GPT Plus", amount: 198 },
     "gpt-pro": { id: "gpt-pro", label: "GPT 5x Pro", amount: 998 },
+    "gpt-20x-pro": { id: "gpt-20x-pro", label: "GPT 20x Pro", amount: 1888 },
     "claude-pro": { id: "claude-pro", label: "Claude Pro", amount: 198 },
     "claude-max": { id: "claude-max", label: "Claude 5x Max", amount: 998 },
+    "claude-20x-max": { id: "claude-20x-max", label: "Claude 20x Max", amount: 1888 },
   },
 };
 const DEFAULT_PRODUCT_PLANS = {
