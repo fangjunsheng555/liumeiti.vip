@@ -903,6 +903,56 @@ export async function restoreAiStock(planId) {
   return true;
 }
 
+// ── USDT 结算汇率：美元兑人民币，每日自动更新，保留两位小数；失败回退 6.85 ──
+export const USDT_RATE_FALLBACK = 6.85;
+const USDT_RATE_KEY = "liumeiti:fx:usd-cny";
+let _usdtRateCache = { rate: 0, date: "" };
+
+function fxDateKeyBeijing() {
+  return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+async function fetchUsdCnyRate() {
+  const sources = [
+    { url: "https://open.er-api.com/v6/latest/USD", pick: (d) => d && d.rates && d.rates.CNY },
+    { url: "https://api.frankfurter.app/latest?from=USD&to=CNY", pick: (d) => d && d.rates && d.rates.CNY },
+  ];
+  for (const s of sources) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4000);
+      const res = await fetch(s.url, { signal: ctrl.signal, cache: "no-store" });
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const n = Math.round(Number(s.pick(data)) * 100) / 100;
+      if (Number.isFinite(n) && n >= 3 && n <= 15) return n;
+    } catch (e) {}
+  }
+  return 0;
+}
+
+export async function getUsdtRate() {
+  const today = fxDateKeyBeijing();
+  if (_usdtRateCache.rate > 0 && _usdtRateCache.date === today) return _usdtRateCache.rate;
+  const cached = await getJsonKey(USDT_RATE_KEY);
+  if (cached && cached.date === today && Number(cached.rate) > 0) {
+    _usdtRateCache = { rate: Number(cached.rate), date: today };
+    return _usdtRateCache.rate;
+  }
+  const fresh = await fetchUsdCnyRate();
+  if (fresh > 0) {
+    _usdtRateCache = { rate: fresh, date: today };
+    await setJsonKey(USDT_RATE_KEY, { rate: fresh, date: today });
+    return fresh;
+  }
+  if (cached && Number(cached.rate) > 0) {
+    _usdtRateCache = { rate: Number(cached.rate), date: cached.date || today };
+    return Number(cached.rate);
+  }
+  return USDT_RATE_FALLBACK;
+}
+
 function resolveRocketPlanInternal(value) {
   return resolveProductPlanInternal("rocket", value);
 }

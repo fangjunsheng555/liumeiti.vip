@@ -10,7 +10,7 @@ import {
   inviteCodeFromRequest, normalizeInviteCode, resolveReferralForOrder,
   pushAdminActionLog,
   saveOrderRecord, verifyPaymentQuote, getCookieFromRequest,
-  reserveAiStock, restoreAiStock,
+  reserveAiStock, restoreAiStock, getUsdtRate,
 } from "../_utils.js";
 
 const PRODUCTS = {
@@ -167,7 +167,7 @@ function orderText(order) {
     lines.push("💰 实付: ¥0(服务兑换码抵扣)");
   } else if (isUsdt) {
     lines.push(`折后人民币: ¥${order.finalAmount}`);
-    lines.push(`💰 实付: ${order.paidAmount} USDT (¥${order.finalAmount} × 0.9 ÷ ${USDT_RATE})`);
+    lines.push(`💰 实付: ${order.paidAmount} USDT (¥${order.finalAmount} × 0.9 ÷ ${order.usdtRate || USDT_RATE})`);
   } else if (isBalance) {
     lines.push(`💰 余额扣款: ¥${order.finalAmount}(已自动从用户余额扣除)`);
   } else {
@@ -261,10 +261,10 @@ async function sendOrderEmail(order) {
   const emailLocale = order.locale === "en" ? "en" : "zh";
   const html = buildOrderEmailHtml({
     order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL,
-    supportContact: emailLocale === "en" ? SUPPORT_CONTACT_EN : SUPPORT_CONTACT, usdtRate: USDT_RATE, locale: emailLocale,
+    supportContact: emailLocale === "en" ? SUPPORT_CONTACT_EN : SUPPORT_CONTACT, usdtRate: order.usdtRate || USDT_RATE, locale: emailLocale,
   });
   const text = buildOrderEmailText({
-    order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, usdtRate: USDT_RATE, locale: emailLocale,
+    order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, usdtRate: order.usdtRate || USDT_RATE, locale: emailLocale,
   });
   const confirmWord = emailLocale === "en" ? "Order confirmation" : "订单确认";
   const subjItem = order.items[0]
@@ -471,7 +471,8 @@ export async function POST(request) {
   const coupon = userEmail && paymentMethod !== "redeem" ? await consumeBestCoupon(userEmail, orderId, couponMaxAmount) : { discount: 0 };
   const couponDiscount = roundMoney(coupon.discount || 0);
   const finalAmount = paymentMethod === "redeem" ? 0 : Math.max(0, Math.round((bundleFinalAmount - couponDiscount) * 100) / 100);
-  const finalUsdt = Math.round((finalAmount * USDT_DISCOUNT / USDT_RATE) * 100) / 100;
+  const usdtRate = await getUsdtRate();
+  const finalUsdt = Math.round((finalAmount * USDT_DISCOUNT / usdtRate) * 100) / 100;
   const quote = paymentMethod === "alipay" && finalAmount > 0 ? verifyPaymentQuote(body.paymentQuoteToken) : null;
   if (paymentMethod === "alipay" && finalAmount > 0 && !quote) {
     await restoreCoupon(userEmail, coupon.couponId, orderId);
@@ -535,6 +536,7 @@ export async function POST(request) {
     couponDiscount,
     finalAmount,
     finalUsdt,
+    usdtRate,
     paymentAdjustment,
     payableAmount,
     paymentMethod,

@@ -173,6 +173,7 @@ export default function CheckoutPage() {
   const [redeemMode, setRedeemMode] = useState({ loading: true, code: "", info: null });
   const [urlPlans, setUrlPlans] = useState({});
   const [draftReady, setDraftReady] = useState(false);
+  const [usdtRate, setUsdtRate] = useState(USDT_RATE);
 
   async function refreshAccountState(isCancelled = () => false) {
     try {
@@ -213,6 +214,16 @@ export default function CheckoutPage() {
   useEffect(() => {
     let cancelled = false;
     refreshAccountState(() => cancelled);
+    return () => { cancelled = true; };
+  }, []);
+
+  // 当日 USDT 汇率（与服务端一致，每日自动更新）
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/usdt-rate", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled && d && d.ok && Number(d.rate) > 0) setUsdtRate(Number(d.rate)); })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
@@ -412,7 +423,7 @@ export default function CheckoutPage() {
   const couponDiscount = !serviceRedeemActive && activeCoupon ? Math.min(Number(activeCoupon.amount || 0), couponEligibleCny) : 0;
   const finalCny = Math.max(0, Math.round((bundleFinalCny - couponDiscount) * 100) / 100);
   const alipayPayableCny = Math.max(0.01, Math.round((finalCny + paymentAdjustment) * 100) / 100);
-  const finalUsdt = Math.round((finalCny * 0.9 / USDT_RATE) * 100) / 100;
+  const finalUsdt = Math.round((finalCny * 0.9 / usdtRate) * 100) / 100;
   const savings = subtotal - bundleFinalCny;
 
   function handleCopy(value, key) {
@@ -1071,7 +1082,7 @@ export default function CheckoutPage() {
                 {paymentMethod === "usdt" ? (
                   <>
                     <b>{finalUsdt} <em>USDT</em></b>
-                    <small>¥{finalCny}{L("(支付宝应付)", " (Alipay due)")} × 0.9 ÷ {USDT_RATE}</small>
+                    <small>¥{finalCny}{L("(支付宝应付)", " (Alipay due)")} × 0.9 ÷ {usdtRate}</small>
                   </>
                 ) : paymentMethod === "alipay" ? (
                   <>
