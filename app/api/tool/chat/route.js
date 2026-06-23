@@ -23,7 +23,11 @@ const IP_LIMIT = Math.max(DAILY, Number(process.env.CHAT_IP_DAILY_LIMIT || DAILY
 
 const MAX_TURNS = 6;            // last N exchanges forwarded upstream
 const MAX_MSG_CHARS = 2000;     // per message
-const MAX_TOTAL_CHARS = 12000;  // safety cap across forwarded messages
+const MAX_TOTAL_CHARS = 12000;  // safety cap across forwarded text (images excluded)
+const ALLOWED_MEDIA = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+const MAX_IMAGES_PER_MSG = 2;          // vision: images per user message
+const MAX_IMG_B64 = 1.4 * 1024 * 1024; // per-image base64 cap (~1MB image); keeps total body under Vercel's ~4.5MB limit
+const WEB_SEARCH_MAX_USES = Math.max(1, Number(process.env.CHAT_WEB_SEARCH_MAX_USES || 3));
 
 const SYSTEM = [
   "你是「Claude opus4.8 AI」，冒央会社（liumeiti.vip）旗下的轻量日常助手。",
@@ -51,6 +55,46 @@ function ipKey(request) {
 
 function json(obj, status = 200) {
   return Response.json(obj, { status });
+}
+
+// length of just the *text* in a message's content (images excluded from char caps)
+function textLen(content) {
+  if (typeof content === "string") return content.length;
+  if (Array.isArray(content)) {
+    let n = 0;
+    for (const b of content) if (b && b.type === "text" && typeof b.text === "string") n += b.text.length;
+    return n;
+  }
+  return 0;
+}
+
+// Normalize one message's content to a safe string | array-of-blocks, or null if empty.
+// Allows text + base64 image blocks (vision); drops everything else.
+function sanitizeContent(content) {
+  if (typeof content === "string") {
+    const t = content.trim();
+    return t ? t.slice(0, MAX_MSG_CHARS) : null;
+  }
+  if (Array.isArray(content)) {
+    const out = [];
+    let imgs = 0;
+    for (const b of content) {
+      if (!b || typeof b !== "object") continue;
+      if (b.type === "text" && typeof b.text === "string") {
+        const t = b.text.slice(0, MAX_MSG_CHARS);
+        if (t.trim()) out.push({ type: "text", text: t });
+      } else if (
+        b.type === "image" && b.source && b.source.type === "base64" &&
+        ALLOWED_MEDIA.has(b.source.media_type) && typeof b.source.data === "string" &&
+        b.source.data.length > 0 && b.source.data.length <= MAX_IMG_B64 && imgs < MAX_IMAGES_PER_MSG
+      ) {
+        out.push({ type: "image", source: { type: "base64", media_type: b.source.media_type, data: b.source.data } });
+        imgs++;
+      }
+    }
+    return out.length ? out : null;
+  }
+  return null;
 }
 
 // GET — return today's quota for the UI (no increment).
@@ -84,21 +128,25 @@ export async function POST(request) {
   try { body = await request.json(); } catch (e) {}
   let msgs = Array.isArray(body.messages) ? body.messages : [];
   msgs = msgs
-    .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim())
-    .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_MSG_CHARS) }))
+    .filter((m) => m && (m.role === "user" || m.role === "assistant"))
+    .map((m) => ({ role: m.role, content: sanitizeContent(m.content) }))
+    .filter((m) => m.content != null)
     .slice(-MAX_TURNS * 2);
   while (msgs.length && msgs[0].role !== "user") msgs.shift();           // must start with user
   while (msgs.length && msgs[msgs.length - 1].role !== "user") msgs.pop(); // must end with user
   if (!msgs.length) return json({ ok: false, error: "empty_message" }, 400);
   let total = 0;
-  for (const m of msgs) total += m.content.length;
+  for (const m of msgs) total += textLen(m.content);
   if (total > MAX_TOTAL_CHARS) {
-    // drop oldest turns until under the cap
+    // drop oldest turns until under the cap (by text length; images don't count)
     while (msgs.length > 2 && total > MAX_TOTAL_CHARS) {
-      total -= (msgs.shift().content.length || 0);
-      while (msgs.length && msgs[0].role !== "user") total -= (msgs.shift().content.length || 0);
+      total -= textLen(msgs.shift().content);
+      while (msgs.length && msgs[0].role !== "user") total -= textLen(msgs.shift().content);
     }
   }
+
+  // 联网搜索：前端开启时挂上 Anthropic 服务端 web_search 工具（实测中转支持）。
+  const wantWeb = body.web_search === true || body.web_search === "1";
 
   const payload = {
     model: MODEL,
@@ -109,6 +157,9 @@ export async function POST(request) {
     // No temperature/top_p/thinking — Opus 4.8 rejects sampling params and we want
     // thinking off (snappy). Omitting `thinking` runs without extended thinking.
   };
+  if (wantWeb) {
+    payload.tools = [{ type: "web_search_20250305", name: "web_search", max_uses: WEB_SEARCH_MAX_USES }];
+  }
 
   let upstream;
   try {
