@@ -167,7 +167,7 @@ export default function VisitorsPanel() {
                 <td style={{ ...td, whiteSpace: "nowrap" }}>{siteLabel(r.site)}</td>
                 <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r.count}</td>
                 <td style={{ ...td, whiteSpace: "nowrap", color: r.email ? C.text : C.faint }}>{r.email || "—"}</td>
-                <td style={{ ...td, maxWidth: 280, color: C.muted, fontSize: 12, lineHeight: 1.4, wordBreak: "break-all" }}>{r.ua}</td>
+                <td style={td}><div title={r.ua} style={{ maxWidth: 240, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: C.muted, fontSize: 12 }}>{r.ua}</div></td>
                 <td style={td}><button type="button" style={{ ...btn(false), padding: "5px 10px", fontSize: 12.5 }} onClick={() => openDetail(r.id)}>查看</button></td>
               </tr>
             ))}
