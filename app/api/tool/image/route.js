@@ -14,7 +14,7 @@ import {
 } from "../../_utils.js";
 
 export const runtime = "nodejs";
-export const maxDuration = 60; // image generation can take 10–30s
+export const maxDuration = 300; // gpt-image-2 实测：简单图 ~30s，复杂图 60–80s+。给足时间别让函数掐断（需 Vercel 套餐允许，或开启 Fluid Compute）
 
 // Base/key default to the chat relay's base but a SEPARATE key (OpenAI-format,
 // Bearer). The relay exposes both Anthropic (/v1/messages, x-api-key) and
