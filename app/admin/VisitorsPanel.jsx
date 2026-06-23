@@ -14,6 +14,14 @@ const C = {
   accent: "var(--accent, #0f766e)", accentSoft: "var(--accent-soft, #e6f4f1)", danger: "#dc2626",
 };
 const siteLabel = (s) => (s === "tool" ? "工具站" : s === "main" ? "主站" : s || "—");
+// 北京时间短格式：26-06-23 21:18（无秒、无后缀）
+function fmt(ms) {
+  const n = Number(ms || 0);
+  if (!n) return "—";
+  const d = new Date(n + 8 * 3600 * 1000);
+  const p = (x) => String(x).padStart(2, "0");
+  return `${String(d.getUTCFullYear()).slice(2)}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
 
 export default function VisitorsPanel() {
   const [rows, setRows] = useState([]);
@@ -111,7 +119,8 @@ export default function VisitorsPanel() {
   const pages = Math.max(1, Math.ceil(total / LIMIT));
 
   const th = { textAlign: "left", padding: "9px 10px", fontSize: 12.5, color: C.muted, fontWeight: 600, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" };
-  const td = { padding: "9px 10px", fontSize: 13, color: C.text, borderBottom: `1px solid ${C.border}`, verticalAlign: "top" };
+  const td = { padding: "5px 9px", fontSize: 13, color: C.text, borderBottom: `1px solid ${C.border}`, verticalAlign: "middle" };
+  const ellip = { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
   const btn = (active) => ({ padding: "7px 14px", borderRadius: 9, border: `1px solid ${active ? C.accent : C.border}`, background: active ? C.accentSoft : C.surface, color: active ? C.accent : C.text, fontSize: 13, fontWeight: 600, cursor: "pointer" });
 
   return (
@@ -141,17 +150,17 @@ export default function VisitorsPanel() {
       {msg && <div style={{ marginBottom: 10, fontSize: 13, color: C.accent }}>{msg}</div>}
 
       <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 12, background: C.surface }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
           <thead>
             <tr>
-              <th style={{ ...th, width: 34 }}><input type="checkbox" checked={rows.length > 0 && selected.size === rows.length} onChange={toggleAll} aria-label="全选" /></th>
-              <th style={th}>最后访问（北京时间）</th>
-              <th style={th}>IP</th>
-              <th style={th}>站点</th>
-              <th style={th}>页数</th>
-              <th style={th}>登录邮箱</th>
+              <th style={{ ...th, width: 30 }}><input type="checkbox" checked={rows.length > 0 && selected.size === rows.length} onChange={toggleAll} aria-label="全选" /></th>
+              <th style={{ ...th, width: 122 }}>最后访问</th>
+              <th style={{ ...th, width: 116 }}>IP</th>
+              <th style={{ ...th, width: 54 }}>站点</th>
+              <th style={{ ...th, width: 44 }}>页数</th>
+              <th style={{ ...th, width: 150 }}>登录邮箱</th>
               <th style={th}>UA</th>
-              <th style={{ ...th, width: 60 }}>操作</th>
+              <th style={{ ...th, width: 52 }}>操作</th>
             </tr>
           </thead>
           <tbody>
@@ -162,12 +171,12 @@ export default function VisitorsPanel() {
             ) : rows.map((r) => (
               <tr key={r.id}>
                 <td style={td}><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleOne(r.id)} aria-label="选择" /></td>
-                <td style={{ ...td, whiteSpace: "nowrap", color: C.muted, fontVariantNumeric: "tabular-nums" }}>{r.lastSeenText}</td>
-                <td style={{ ...td, whiteSpace: "nowrap", fontFamily: "var(--mono, monospace)" }}>{r.ip}</td>
+                <td style={{ ...td, whiteSpace: "nowrap", color: C.muted, fontVariantNumeric: "tabular-nums" }}>{fmt(r.lastSeen)}</td>
+                <td style={td}><div title={r.ip} style={{ ...ellip, fontFamily: "var(--mono, monospace)" }}>{r.ip}</div></td>
                 <td style={{ ...td, whiteSpace: "nowrap" }}>{siteLabel(r.site)}</td>
                 <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{r.count}</td>
-                <td style={{ ...td, whiteSpace: "nowrap", color: r.email ? C.text : C.faint }}>{r.email || "—"}</td>
-                <td style={td}><div title={r.ua} style={{ maxWidth: 240, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: C.muted, fontSize: 12 }}>{r.ua}</div></td>
+                <td style={td}><div title={r.email} style={{ ...ellip, color: r.email ? C.text : C.faint }}>{r.email || "—"}</div></td>
+                <td style={td}><div title={r.ua} style={{ ...ellip, color: C.muted, fontSize: 12 }}>{r.ua}</div></td>
                 <td style={td}><button type="button" style={{ ...btn(false), padding: "5px 10px", fontSize: 12.5 }} onClick={() => openDetail(r.id)}>查看</button></td>
               </tr>
             ))}
@@ -198,8 +207,8 @@ export default function VisitorsPanel() {
                 <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "7px 14px", fontSize: 13.5, marginBottom: 18 }}>
                   <span style={{ color: C.muted }}>IP</span><span style={{ fontFamily: "var(--mono, monospace)" }}>{detail.ip}</span>
                   <span style={{ color: C.muted }}>登录邮箱</span><span>{detail.email || "—（未登录）"}</span>
-                  <span style={{ color: C.muted }}>首次访问</span><span>{detail.firstSeenText || "—"}</span>
-                  <span style={{ color: C.muted }}>最后访问</span><span>{detail.lastSeenText || "—"}</span>
+                  <span style={{ color: C.muted }}>首次访问</span><span>{fmt(detail.firstSeen)}</span>
+                  <span style={{ color: C.muted }}>最后访问</span><span>{fmt(detail.lastSeen)}</span>
                   <span style={{ color: C.muted }}>访问页数</span><span>{detail.count}（保留最近 {detail.pages.length} 条）</span>
                   <span style={{ color: C.muted }}>UA</span><span style={{ wordBreak: "break-all", color: C.muted, fontSize: 12.5 }}>{detail.ua}</span>
                 </div>
@@ -209,7 +218,7 @@ export default function VisitorsPanel() {
                     <div style={{ padding: 14, color: C.muted, fontSize: 13 }}>无页面记录</div>
                   ) : detail.pages.map((p, i) => (
                     <div key={i} style={{ display: "flex", gap: 10, padding: "8px 12px", fontSize: 12.5, borderBottom: i < detail.pages.length - 1 ? `1px solid ${C.border}` : "none" }}>
-                      <span style={{ color: C.faint, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{p.text}</span>
+                      <span style={{ color: C.faint, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{fmt(p.ts)}</span>
                       <span style={{ color: C.accent, whiteSpace: "nowrap" }}>{siteLabel(p.site)}</span>
                       <span style={{ color: C.text, wordBreak: "break-all" }}>{p.path}</span>
                     </div>
