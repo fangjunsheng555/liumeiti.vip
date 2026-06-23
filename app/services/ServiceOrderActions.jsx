@@ -37,7 +37,17 @@ export default function ServiceOrderActions({ service, soldOut = {} }) {
 
   useEffect(() => {
     setMounted(true);
-    if (productKey) trackEvent("service_view", productKey);
+    if (productKey) {
+      trackEvent("service_view", productKey);
+      // 记「最近看过的服务」到本地，供首页个性化区块展示
+      try {
+        let arr = JSON.parse(window.localStorage.getItem("lm_recent_services") || "[]");
+        if (!Array.isArray(arr)) arr = [];
+        arr = arr.filter((x) => x && x.key !== productKey);
+        arr.unshift({ key: productKey, ts: Date.now() });
+        window.localStorage.setItem("lm_recent_services", JSON.stringify(arr.slice(0, 8)));
+      } catch (e) {}
+    }
   }, [productKey]);
 
   function checkoutWithPlan() {

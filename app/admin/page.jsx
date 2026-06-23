@@ -7,6 +7,7 @@ import VisitorsPanel from "./VisitorsPanel";
 import AbandonedPanel from "./AbandonedPanel";
 import InsightsPanel from "./InsightsPanel";
 import UserActivity from "./UserActivity";
+import AnnouncePanel from "./AnnouncePanel";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
@@ -2658,6 +2659,7 @@ export default function AdminPage() {
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "insights" ? " active" : ""}`} onClick={() => setTab("insights")}>数据洞察</button>}
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "visitors" ? " active" : ""}`} onClick={() => setTab("visitors")}>历史访客</button>}
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "abandoned" ? " active" : ""}`} onClick={() => setTab("abandoned")}>弃单召回</button>}
+          {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "announce" ? " active" : ""}`} onClick={() => setTab("announce")}>站内公告</button>}
         </div>
 
         {newOrderAlert && (
@@ -3322,6 +3324,8 @@ export default function AdminPage() {
           <VisitorsPanel />
         ) : tab === "abandoned" ? (
           <AbandonedPanel />
+        ) : tab === "announce" ? (
+          <AnnouncePanel />
         ) : tab === "staff" ? (
           <div className="admin-staff-pane">
             <form className="admin-staff-form" onSubmit={createStaff}>

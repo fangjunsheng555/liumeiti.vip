@@ -21,6 +21,7 @@ import MobileNav from "./components/MobileNav";
 import RedeemCard from "./components/RedeemCard";
 import FloatingSupport from "./components/FloatingSupport";
 import { SERVICE_PAGES } from "./services/service-data";
+import RecentServices from "./components/RecentServices";
 import LanguageSwitcher from "./components/LanguageSwitcher";
 import { useLocale } from "./components/LocaleProvider";
 import { localizeMetric, localizeTime, serviceCardEn } from "./lib/i18n";
@@ -490,6 +491,8 @@ export default function Page() {
             ))}
           </div>
         </section>
+
+        <RecentServices />
 
         <section className="container home-services-section">
           <div className="section-head simple-head home-compact-head">
