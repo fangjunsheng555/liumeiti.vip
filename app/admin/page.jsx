@@ -5,6 +5,8 @@ import Link from "next/link";
 import { PRODUCTS, getProductPlan, getProductPlanOptions, hasProductPlans } from "../lib/store";
 import VisitorsPanel from "./VisitorsPanel";
 import AbandonedPanel from "./AbandonedPanel";
+import InsightsPanel from "./InsightsPanel";
+import UserActivity from "./UserActivity";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
@@ -2653,6 +2655,7 @@ export default function AdminPage() {
           {canSendMail && <button type="button" className={`admin-tab-btn${tab === "mail" ? " active" : ""}`} onClick={() => setTab("mail")}>客服发信</button>}
           {canManageStock && <button type="button" className={`admin-tab-btn${tab === "aistock" ? " active" : ""}`} onClick={() => setTab("aistock")}>AI库存</button>}
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "staff" ? " active" : ""}`} onClick={() => setTab("staff")}>工作人员</button>}
+          {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "insights" ? " active" : ""}`} onClick={() => setTab("insights")}>数据洞察</button>}
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "visitors" ? " active" : ""}`} onClick={() => setTab("visitors")}>历史访客</button>}
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "abandoned" ? " active" : ""}`} onClick={() => setTab("abandoned")}>弃单召回</button>}
         </div>
@@ -3313,6 +3316,8 @@ export default function AdminPage() {
               </div>
             </div>
           </div>
+        ) : tab === "insights" ? (
+          <InsightsPanel />
         ) : tab === "visitors" ? (
           <VisitorsPanel />
         ) : tab === "abandoned" ? (
@@ -4170,6 +4175,7 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
+              {isRootStaff && <UserActivity email={userInfo.user.email} />}
               </>
               )}
             </div>

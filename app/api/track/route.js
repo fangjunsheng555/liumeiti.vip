@@ -84,8 +84,9 @@ export async function POST(request) {
         ["LPUSH", vkey + ":events", evJson],
         ["LTRIM", vkey + ":events", "0", String(MAX_EVENTS - 1)],
         ["HINCRBY", "lm:ev:day:" + day, name, "1"],
+        ["HINCRBY", "lm:ev:total", name, "1"], // 全局累计(给后台漏斗一次读取)
       ];
-      if (email) cmds.push(["HSET", vkey, "email", email]);
+      if (email) { cmds.push(["HSET", vkey, "email", email], ["SADD", "lm:visit:email:" + email, id]); }
       if (attr) cmds.push(["HSETNX", vkey, "attr", JSON.stringify(attr)]);
       if (slug && (name === "service_view" || name === "cta_click")) {
         cmds.push(["HINCRBY", "lm:svc:" + slug, name === "service_view" ? "views" : "cta", "1"]);
@@ -120,6 +121,7 @@ export async function POST(request) {
       ["LPUSH", vkey + ":pages", pageEntry],
       ["LTRIM", vkey + ":pages", "0", String(MAX_PAGES - 1)],
     ];
+    if (email) cmds.push(["SADD", "lm:visit:email:" + email, id]); // 邮箱→访客 反向索引(用户360)
     if (attr) cmds.push(["HSETNX", vkey, "attr", JSON.stringify(attr)]);
     await redisPipeline(cmds);
   } catch (e) { /* swallow — never break the page */ }
