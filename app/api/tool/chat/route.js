@@ -6,9 +6,10 @@
 // only this server↔relay hop is plaintext. The relay key never reaches the browser.
 // Purely additive — imports existing helpers, edits nothing.
 
+import { createHash } from "node:crypto";
 import {
   getCookieFromRequest, verifySession, validEmail,
-  checkRateLimit, rateLimitResponse, redisCmd,
+  checkRateLimit, rateLimitResponse, redisCmd, clientIpFromRequest,
 } from "../../_utils.js";
 
 export const runtime = "nodejs";
@@ -18,6 +19,7 @@ const KEY = process.env.CHAT_API_KEY || "";
 const MODEL = process.env.CHAT_MODEL || "claude-opus-4-8";
 const DAILY = Math.max(1, Number(process.env.CHAT_DAILY_LIMIT || 30));
 const MAX_TOKENS = Math.max(64, Number(process.env.CHAT_MAX_TOKENS || 800));
+const IP_LIMIT = Math.max(DAILY, Number(process.env.CHAT_IP_DAILY_LIMIT || DAILY * 2)); // 同 IP 每日总额度（默认=2 个账号份），防换号薅额度
 
 const MAX_TURNS = 6;            // last N exchanges forwarded upstream
 const MAX_MSG_CHARS = 2000;     // per message
@@ -40,6 +42,11 @@ function beijingDay() {
 }
 function quotaKey(email) {
   return "liumeiti:tool:chat:" + email + ":" + beijingDay();
+}
+function ipKey(request) {
+  const ip = clientIpFromRequest(request) || "unknown";
+  const h = createHash("sha256").update("chat-ip:" + ip).digest("hex").slice(0, 24); // 哈希，不存原始 IP
+  return "liumeiti:tool:chat:ip:" + h + ":" + beijingDay();
 }
 
 function json(obj, status = 200) {
@@ -66,6 +73,11 @@ export async function POST(request) {
   const qk = quotaKey(email);
   const used = Number((await redisCmd(["GET", qk])) || 0);
   if (used >= DAILY) return json({ ok: false, error: "quota_exceeded", limit: DAILY, used }, 429);
+
+  // 同 IP 防刷：账号额度之外再限每 IP 每日总量（默认 40）。前端不暴露此维度，被卡时按"额度用完"处理。
+  const ik = ipKey(request);
+  const ipUsed = Number((await redisCmd(["GET", ik])) || 0);
+  if (ipUsed >= IP_LIMIT) return json({ ok: false, error: "quota_exceeded", limit: DAILY, used }, 429);
 
   // ── validate + sanitize the conversation ──
   let body = {};
@@ -122,6 +134,8 @@ export async function POST(request) {
   // count one use only after a successful upstream connection
   const n = Number((await redisCmd(["INCR", qk])) || 0);
   if (n === 1) await redisCmd(["EXPIRE", qk, "129600"]); // ~36h, covers the day boundary
+  const ipN = Number((await redisCmd(["INCR", ik])) || 0); // 同 IP 计数同步 +1
+  if (ipN === 1) await redisCmd(["EXPIRE", ik, "129600"]);
 
   // stream the relay's SSE straight through to the browser
   return new Response(upstream.body, {
