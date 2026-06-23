@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -256,6 +256,28 @@ export default function CheckoutPage() {
       setAuthNotice("");
     }
   }, [authModal]);
+
+  // 弃单埋点：进结算页（购物车就绪）发一次 checkout_started；首次拿到有效邮箱再发一次（带联系方式以便后台召回）。
+  // 下单成功后由 /api/order 清除该访客的弃单记录。静默、不影响下单。
+  const checkoutTrackedRef = useRef({ base: false, email: "" });
+  useEffect(() => {
+    if (typeof window === "undefined" || !hydrated || !cart || cart.length === 0) return;
+    const email = (form.email || authedUser?.email || "").trim();
+    const emailValid = /.+@.+\..+/.test(email);
+    const ref = checkoutTrackedRef.current;
+    if (ref.base && (!emailValid || ref.email === email)) return; // 已发过且无新邮箱
+    ref.base = true;
+    if (emailValid) ref.email = email;
+    let amount = 0;
+    try { amount = cartFinalCny(cart, cartPlans) || 0; } catch (e) {}
+    try {
+      fetch("/api/track", {
+        method: "POST", credentials: "include", keepalive: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "event", name: "checkout_started", meta: { services: cart.join(","), amount, email: emailValid ? email : "" } }),
+      }).catch(() => {});
+    } catch (e) {}
+  }, [hydrated, cart, cartPlans, form.email, authedUser]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { buildOrderEmailHtml, buildOrderEmailText } from "./email-template.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import {
@@ -10,7 +11,7 @@ import {
   inviteCodeFromRequest, normalizeInviteCode, resolveReferralForOrder,
   pushAdminActionLog,
   saveOrderRecord, verifyPaymentQuote, getCookieFromRequest,
-  reserveAiStock, restoreAiStock, getUsdtRate,
+  reserveAiStock, restoreAiStock, getUsdtRate, redisCmd,
 } from "../_utils.js";
 
 const PRODUCTS = {
@@ -649,6 +650,14 @@ export async function POST(request) {
   const deliveries = [];
   const stored = await saveOrderRecord(order);
   deliveries.push({ channel: "storage", ok: Boolean(stored) });
+  // 下单成功 → 清除该访客的弃单记录（同 vid = sha256(ip+ua)，与 /api/track 一致）
+  if (stored) {
+    try {
+      const vidKey = createHash("sha256").update(clientIp + "|" + userAgent).digest("hex").slice(0, 24);
+      await redisCmd(["ZREM", "lm:cart:index", vidKey]);
+      await redisCmd(["DEL", "lm:cart:v:" + vidKey]);
+    } catch (e) {}
+  }
   if (!stored) {
     for (const pid of aiReserved) await restoreAiStock(pid);
     await restoreCoupon(userEmail, coupon.couponId, orderId);

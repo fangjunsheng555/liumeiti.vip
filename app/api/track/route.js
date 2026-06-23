@@ -16,6 +16,7 @@ export const runtime = "nodejs";
 
 const PREFIX = "lm:visit:";
 const INDEX = PREFIX + "index";
+const CART_INDEX = "lm:cart:index"; // 弃单索引 ZSET(score=ts, member=访客id)
 const MAX_PAGES = 300;
 const MAX_EVENTS = 120;
 const DEDUP_SEC = 8;
@@ -88,6 +89,16 @@ export async function POST(request) {
       if (attr) cmds.push(["HSETNX", vkey, "attr", JSON.stringify(attr)]);
       if (slug && (name === "service_view" || name === "cta_click")) {
         cmds.push(["HINCRBY", "lm:svc:" + slug, name === "service_view" ? "views" : "cta", "1"]);
+      }
+      // 弃单：到结算页即记一条「待召回」（下单成功后由 /api/order 清除）
+      if (name === "checkout_started") {
+        const ckey = "lm:cart:v:" + id;
+        const cemail = email || (validEmail(meta.email) ? String(meta.email).toLowerCase() : "");
+        const chash = ["HSET", ckey, "ip", ip, "ua", ua, "ts", String(now),
+          "services", cleanStr(meta.services, 200), "amount", cleanStr(String(meta.amount == null ? "" : meta.amount), 20), "status", "open"];
+        if (cemail) chash.push("email", cemail);
+        if (attr) chash.push("attr", JSON.stringify(attr));
+        cmds.push(chash, ["ZADD", CART_INDEX, String(now), id]);
       }
       await redisPipeline(cmds);
       return noContent();

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { PRODUCTS, getProductPlan, getProductPlanOptions, hasProductPlans } from "../lib/store";
 import VisitorsPanel from "./VisitorsPanel";
+import AbandonedPanel from "./AbandonedPanel";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
@@ -2653,6 +2654,7 @@ export default function AdminPage() {
           {canManageStock && <button type="button" className={`admin-tab-btn${tab === "aistock" ? " active" : ""}`} onClick={() => setTab("aistock")}>AI库存</button>}
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "staff" ? " active" : ""}`} onClick={() => setTab("staff")}>工作人员</button>}
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "visitors" ? " active" : ""}`} onClick={() => setTab("visitors")}>历史访客</button>}
+          {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "abandoned" ? " active" : ""}`} onClick={() => setTab("abandoned")}>弃单召回</button>}
         </div>
 
         {newOrderAlert && (
@@ -3313,6 +3315,8 @@ export default function AdminPage() {
           </div>
         ) : tab === "visitors" ? (
           <VisitorsPanel />
+        ) : tab === "abandoned" ? (
+          <AbandonedPanel />
         ) : tab === "staff" ? (
           <div className="admin-staff-pane">
             <form className="admin-staff-form" onSubmit={createStaff}>
