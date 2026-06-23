@@ -46,6 +46,28 @@ function json(obj, status = 200) {
   return Response.json(obj, { status });
 }
 
+// Atomically reserve one unit against account + IP keys. INCR-first (no GET-then-INCR
+// race), fail CLOSED on Redis outage, auto-refund the over-limit increment.
+// Returns { ok, acc } or { error, status, body }.
+async function reserveQuota(qk, ik, accLimit, ipLimit) {
+  const aRaw = await redisCmd(["INCR", qk]);
+  if (aRaw == null) return { error: true, status: 503, body: { ok: false, error: "quota_unavailable" } };
+  const a = Number(aRaw);
+  if (a === 1) await redisCmd(["EXPIRE", qk, "129600"]);
+  const iRaw = await redisCmd(["INCR", ik]);
+  if (iRaw == null) { await redisCmd(["DECR", qk]); return { error: true, status: 503, body: { ok: false, error: "quota_unavailable" } }; }
+  const i = Number(iRaw);
+  if (i === 1) await redisCmd(["EXPIRE", ik, "129600"]);
+  if (a > accLimit || i > ipLimit) {
+    await redisCmd(["DECR", qk]); await redisCmd(["DECR", ik]);
+    return { error: true, status: 429, body: { ok: false, error: "quota_exceeded", limit: accLimit, used: Math.min(a - 1, accLimit) } };
+  }
+  return { ok: true, acc: a };
+}
+async function refundQuota(qk, ik) {
+  try { await redisCmd(["DECR", qk]); await redisCmd(["DECR", ik]); } catch (e) {}
+}
+
 // GET — today's account quota for the UI (no increment, no IP info leaked).
 export async function GET(request) {
   const email = authedEmail(request);
@@ -63,19 +85,15 @@ export async function POST(request) {
   const guard = await checkRateLimit(request, { namespace: "tool:image", limit: 6, windowSec: 60, identity: email });
   if (!guard.ok) return rateLimitResponse(guard, "生成太快了，请稍候再试");
 
-  const qk = quotaKey(email);
-  const used = Number((await redisCmd(["GET", qk])) || 0);
-  if (used >= DAILY) return json({ ok: false, error: "quota_exceeded", limit: DAILY, used }, 429);
-
-  // 同 IP 防刷：账号额度之外再限每 IP 每日总量。任一超限即拒，前端按"额度用完"处理（不暴露 IP 维度）。
-  const ik = ipKey(request);
-  const ipUsed = Number((await redisCmd(["GET", ik])) || 0);
-  if (ipUsed >= IP_LIMIT) return json({ ok: false, error: "quota_exceeded", limit: DAILY, used }, 429);
-
   let body = {};
   try { body = await request.json(); } catch (e) {}
   const prompt = typeof body.prompt === "string" ? body.prompt.trim().slice(0, MAX_PROMPT) : "";
   if (!prompt) return json({ ok: false, error: "empty_prompt" }, 400);
+
+  // ── reserve quota atomically (INCR-first; fail-closed on Redis outage; refund on failure) ──
+  const qk = quotaKey(email), ik = ipKey(request);
+  const rsv = await reserveQuota(qk, ik, DAILY, IP_LIMIT);
+  if (rsv.error) return json(rsv.body, rsv.status);
 
   let upstream, data;
   try {
@@ -88,12 +106,14 @@ export async function POST(request) {
       body: JSON.stringify({ model: MODEL, prompt, n: 1, size: SIZE }),
     });
   } catch (e) {
+    await refundQuota(qk, ik);
     return json({ ok: false, error: "upstream_unreachable" }, 502);
   }
 
   try { data = await upstream.json(); } catch (e) { data = null; }
 
   if (!upstream.ok || !data || data.error) {
+    await refundQuota(qk, ik); // 生成失败，不计费
     const msg = (data && data.error && data.error.message) || "";
     // surface a friendly hint for the relay's transient "no account pool" state
     const transient = /no available|compatible account|overload/i.test(msg);
@@ -103,19 +123,13 @@ export async function POST(request) {
   const item = (Array.isArray(data.data) && data.data[0]) || {};
   const b64 = item.b64_json || "";
   const url = item.url || "";
-  if (!b64 && !url) return json({ ok: false, error: "no_image" }, 502);
-
-  // count one use only after a successful generation
-  const n = Number((await redisCmd(["INCR", qk])) || 0);
-  if (n === 1) await redisCmd(["EXPIRE", qk, "129600"]); // ~36h, covers the day boundary
-  const ipN = Number((await redisCmd(["INCR", ik])) || 0);
-  if (ipN === 1) await redisCmd(["EXPIRE", ik, "129600"]);
+  if (!b64 && !url) { await refundQuota(qk, ik); return json({ ok: false, error: "no_image" }, 502); }
 
   return json({
     ok: true,
     image: b64 ? ("data:image/png;base64," + b64) : url,
     prompt,
-    remaining: Math.max(0, DAILY - n),
+    remaining: Math.max(0, DAILY - rsv.acc),
     limit: DAILY,
   });
 }
