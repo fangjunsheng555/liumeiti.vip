@@ -7,6 +7,18 @@ import { Headphones, ShoppingBag, X } from "lucide-react";
 import { getDefaultProductPlan, getProductPlan, getProductPlanOptions, localizePlan } from "../lib/store";
 import { useLocale } from "../components/LocaleProvider";
 
+// 轻量事件埋点（service_view / cta_click），失败静默，无隐私提示。
+function trackEvent(name, slug, label) {
+  if (typeof window === "undefined") return;
+  try {
+    fetch("/api/track", {
+      method: "POST", credentials: "include", keepalive: true,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "event", name, meta: { slug: slug || "", label: label || "" } }),
+    }).catch(() => {});
+  } catch (e) {}
+}
+
 export default function ServiceOrderActions({ service, soldOut = {} }) {
   const { t, locale } = useLocale();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -25,10 +37,12 @@ export default function ServiceOrderActions({ service, soldOut = {} }) {
 
   useEffect(() => {
     setMounted(true);
-  }, []);
+    if (productKey) trackEvent("service_view", productKey);
+  }, [productKey]);
 
   function checkoutWithPlan() {
     if (!productKey || !currentPlan || isSoldOut(currentPlan.id)) return;
+    trackEvent("cta_click", productKey, currentPlan.id);
     const params = new URLSearchParams();
     params.set("items", productKey);
     params.set(`${productKey}Plan`, currentPlan.id);

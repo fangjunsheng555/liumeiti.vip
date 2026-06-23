@@ -506,6 +506,22 @@ export async function POST(request) {
   const clientIp = clientIpFromRequest(request);
   const userAgent = clientUserAgentFromRequest(request);
 
+  // 营销渠道归因（首次来源）：读 lm_attr Cookie（Domain=.liumeiti.vip，工具站/主站首访写入），与 referral 并列存进订单。
+  let attribution = null;
+  try {
+    const rawAttr = getCookieFromRequest(request, "lm_attr");
+    if (rawAttr) {
+      const a = JSON.parse(rawAttr);
+      const out = {};
+      for (const k of ["utm_source", "utm_medium", "utm_campaign", "referrer", "landing"]) {
+        if (typeof a[k] === "string" && a[k]) out[k] = a[k].slice(0, 200);
+      }
+      if (a.fromTool) out.fromTool = 1;
+      if (a.firstTs) out.firstTs = Number(a.firstTs) || 0;
+      if (Object.keys(out).length) attribution = out;
+    }
+  } catch (e) {}
+
   // Generate subscription links per item using the orderId (one shared link
   // for all rocket items in the cart — a future change can suffix `-{i}` if
   // multiple rocket items per order need separate identifiers).
@@ -521,6 +537,7 @@ export async function POST(request) {
     locale: getCookieFromRequest(request, "locale") === "en" ? "en" : "zh",
     userEmail, // links order to logged-in user (for /account regardless of buyer email)
     referral,
+    attribution, // 营销渠道首次来源（utm/referrer/landing/fromTool），用于后台漏斗按来源拆分
     createdAt: now.toISOString(),
     createdAtBeijing: formatBeijingTime(now),
     clientIp,
