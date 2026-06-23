@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { PRODUCTS, getProductPlan, getProductPlanOptions, hasProductPlans } from "../lib/store";
+import VisitorsPanel from "./VisitorsPanel";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
@@ -2651,6 +2652,7 @@ export default function AdminPage() {
           {canSendMail && <button type="button" className={`admin-tab-btn${tab === "mail" ? " active" : ""}`} onClick={() => setTab("mail")}>客服发信</button>}
           {canManageStock && <button type="button" className={`admin-tab-btn${tab === "aistock" ? " active" : ""}`} onClick={() => setTab("aistock")}>AI库存</button>}
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "staff" ? " active" : ""}`} onClick={() => setTab("staff")}>工作人员</button>}
+          {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "visitors" ? " active" : ""}`} onClick={() => setTab("visitors")}>历史访客</button>}
         </div>
 
         {newOrderAlert && (
@@ -3309,6 +3311,8 @@ export default function AdminPage() {
               </div>
             </div>
           </div>
+        ) : tab === "visitors" ? (
+          <VisitorsPanel />
         ) : tab === "staff" ? (
           <div className="admin-staff-pane">
             <form className="admin-staff-form" onSubmit={createStaff}>

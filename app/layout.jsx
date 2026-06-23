@@ -1,6 +1,7 @@
 import './globals.css';
 import './portal-theme.css';
 import ReferralTracker from './components/ReferralTracker';
+import VisitTracker from './components/VisitTracker';
 import { LocaleProvider } from './components/LocaleProvider';
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from './social-meta';
 import { getServerLocale } from './lib/i18n-server';
@@ -78,6 +79,7 @@ export default async function RootLayout({ children }) {
         <link rel="preload" href="/fonts/inter-400.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
         <link rel="preload" href="/fonts/inter-600.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
         <ReferralTracker />
+        <VisitTracker />
         <LocaleProvider initialLocale={locale}>{children}</LocaleProvider>
       </body>
     </html>
