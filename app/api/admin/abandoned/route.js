@@ -65,11 +65,14 @@ export async function POST(request) {
     const to = (h.email || "").toLowerCase();
     if (!validEmail(to)) return Response.json({ ok: false, error: "no_email" }, { status: 400 });
     const services = h.services || "您挑选的服务";
+    // 邮件 HTML 转义：services 源自客户端结算信标，需防 HTML 注入
+    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const servicesHtml = esc(services);
     const subject = "您在 liumeiti.vip 的订单还没完成 🛒";
     const text = `您好，\n\n看到您挑选了「${services}」但还没完成下单。现在回来即可继续：${SITE}/\n\n如有任何疑问，随时联系客服，我们很乐意帮您。\n\n— liumeiti.vip`;
     const html = `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:520px;margin:0 auto;color:#1d1d1f">
       <h2 style="font-size:19px">您的订单还差一步 🛒</h2>
-      <p style="color:#555;line-height:1.7">看到您挑选了 <b>${services}</b> 但还没完成下单。现在回来即可继续：</p>
+      <p style="color:#555;line-height:1.7">看到您挑选了 <b>${servicesHtml}</b> 但还没完成下单。现在回来即可继续：</p>
       <p style="margin:22px 0"><a href="${SITE}/" style="background:#0f766e;color:#fff;text-decoration:none;padding:11px 26px;border-radius:10px;font-weight:600">回去完成下单 →</a></p>
       <p style="color:#888;font-size:13px;line-height:1.7">如有任何疑问，随时联系客服，我们很乐意帮您。<br>— liumeiti.vip</p>
     </div>`;

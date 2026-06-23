@@ -84,6 +84,7 @@ export async function POST(request) {
         ["LPUSH", vkey + ":events", evJson],
         ["LTRIM", vkey + ":events", "0", String(MAX_EVENTS - 1)],
         ["HINCRBY", "lm:ev:day:" + day, name, "1"],
+        ["EXPIRE", "lm:ev:day:" + day, "7776000"], // 按日事件桶保留 90 天，避免孤儿 key 无界增长
         ["HINCRBY", "lm:ev:total", name, "1"], // 全局累计(给后台漏斗一次读取)
       ];
       if (email) { cmds.push(["HSET", vkey, "email", email], ["SADD", "lm:visit:email:" + email, id]); }
@@ -99,7 +100,7 @@ export async function POST(request) {
           "services", cleanStr(meta.services, 200), "amount", cleanStr(String(meta.amount == null ? "" : meta.amount), 20), "status", "open"];
         if (cemail) chash.push("email", cemail);
         if (attr) chash.push("attr", JSON.stringify(attr));
-        cmds.push(chash, ["ZADD", CART_INDEX, String(now), id]);
+        cmds.push(chash, ["EXPIRE", ckey, "3888000"], ["ZADD", CART_INDEX, String(now), id]); // 弃单 hash 45 天自动过期，避免无界增长
       }
       await redisPipeline(cmds);
       return noContent();

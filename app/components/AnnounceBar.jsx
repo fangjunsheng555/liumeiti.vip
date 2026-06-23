@@ -22,6 +22,11 @@ export default function AnnounceBar() {
   }, []);
 
   if (!a) return null;
+  // AnnounceBar 在 LocaleProvider 之外，不能用 useLocale；按 <html lang> 判断中/英。
+  const en = (typeof document !== "undefined" ? (document.documentElement.lang || "") : "").toLowerCase().startsWith("en");
+  const text = en && a.textEn ? a.textEn : a.text;
+  // 渲染侧兜底：只接受 http(s) 绝对链接或站内相对链接，过滤危险协议。
+  const link = /^(https?:\/\/|\/)/i.test(a.link || "") ? a.link : "";
   const close = (e) => {
     e.preventDefault(); e.stopPropagation();
     try { window.localStorage.setItem("lm_announce_dismissed", String(a.id)); } catch (e2) {}
@@ -29,7 +34,7 @@ export default function AnnounceBar() {
   };
   const inner = (
     <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-      {a.text}{a.link ? " ›" : ""}
+      {text}{link ? " ›" : ""}
     </span>
   );
   const barStyle = {
@@ -37,11 +42,11 @@ export default function AnnounceBar() {
     background: "var(--accent, #0f766e)", color: "#fff", fontSize: 13.5, fontWeight: 600, lineHeight: 1.4,
   };
   return (
-    <div style={barStyle} role="region" aria-label="公告">
-      {a.link
-        ? <a href={a.link} style={{ flex: 1, minWidth: 0, color: "#fff", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.text} ›</a>
+    <div style={barStyle} role="region" aria-label={en ? "Announcement" : "公告"}>
+      {link
+        ? <a href={link} style={{ flex: 1, minWidth: 0, color: "#fff", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{text} ›</a>
         : inner}
-      <button type="button" onClick={close} aria-label="关闭" style={{ flex: "none", background: "transparent", border: 0, color: "#fff", fontSize: 18, lineHeight: 1, cursor: "pointer", opacity: 0.85, padding: 0 }}>×</button>
+      <button type="button" onClick={close} aria-label={en ? "Dismiss" : "关闭"} style={{ flex: "none", background: "transparent", border: 0, color: "#fff", fontSize: 18, lineHeight: 1, cursor: "pointer", opacity: 0.85, padding: 0 }}>×</button>
     </div>
   );
 }

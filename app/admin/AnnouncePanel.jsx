@@ -10,6 +10,7 @@ const C = {
 
 export default function AnnouncePanel() {
   const [text, setText] = useState("");
+  const [textEn, setTextEn] = useState("");
   const [link, setLink] = useState("");
   const [active, setActive] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -21,7 +22,7 @@ export default function AnnouncePanel() {
       try {
         const r = await fetch("/api/admin/announcement", { credentials: "same-origin", cache: "no-store" });
         const d = await r.json();
-        if (d && d.ok && d.announce) { setText(d.announce.text || ""); setLink(d.announce.link || ""); setActive(!!d.announce.active); }
+        if (d && d.ok && d.announce) { setText(d.announce.text || ""); setTextEn(d.announce.textEn || ""); setLink(d.announce.link || ""); setActive(!!d.announce.active); }
       } catch (e) {}
       setLoading(false);
     })();
@@ -30,7 +31,7 @@ export default function AnnouncePanel() {
   async function save() {
     setBusy(true); setMsg("");
     try {
-      const r = await fetch("/api/admin/announcement", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, link, active }) });
+      const r = await fetch("/api/admin/announcement", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, textEn, link, active }) });
       const d = await r.json();
       setMsg(d && d.ok ? "✅ 已保存" + (active ? "并发布" : "（未启用）") : "保存失败");
     } catch (e) { setMsg("保存失败"); }
@@ -47,11 +48,15 @@ export default function AnnouncePanel() {
       {loading ? <div style={{ color: C.muted }}>加载中…</div> : (
         <>
           <div style={{ marginBottom: 14 }}>
-            <label style={label}>公告内容</label>
+            <label style={label}>公告内容（中文）</label>
             <input style={inp} value={text} maxLength={300} onChange={(e) => setText(e.target.value)} placeholder="例如：新增 HBO Max 会员，限时 8 折！" />
           </div>
           <div style={{ marginBottom: 14 }}>
-            <label style={label}>链接（可选，点击横幅跳转）</label>
+            <label style={label}>公告内容（English，可选，留空则英文站也显示中文）</label>
+            <input style={inp} value={textEn} maxLength={300} onChange={(e) => setTextEn(e.target.value)} placeholder="e.g. HBO Max memberships now available — 20% off!" />
+          </div>
+          <div style={{ marginBottom: 14 }}>
+            <label style={label}>链接（可选，点击横幅跳转；仅支持 http(s):// 或站内 / 路径）</label>
             <input style={inp} value={link} maxLength={300} onChange={(e) => setLink(e.target.value)} placeholder="https://www.liumeiti.vip/services/max" />
           </div>
           <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 14, cursor: "pointer", marginBottom: 16 }}>
@@ -61,6 +66,7 @@ export default function AnnouncePanel() {
             <div style={{ marginBottom: 16 }}>
               <div style={{ ...label }}>预览</div>
               <div style={{ background: C.accent, color: "#fff", padding: "10px 16px", borderRadius: 10, fontSize: 13.5, fontWeight: 600 }}>{text}{link ? " ›" : ""}</div>
+              {textEn && <div style={{ background: C.accent, color: "#fff", padding: "10px 16px", borderRadius: 10, fontSize: 13.5, fontWeight: 600, marginTop: 6, opacity: 0.92 }}>{textEn}{link ? " ›" : ""} <span style={{ opacity: 0.7, fontWeight: 400 }}>(EN)</span></div>}
             </div>
           )}
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
