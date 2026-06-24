@@ -816,6 +816,20 @@ button { cursor: pointer; border: none; background: transparent; }
   background: rgba(255, 255, 255, 0.85);
 }
 
+/* ── 二级页面(服务中心/服务选购/服务详情/企业保障)分节节奏收紧 ──
+   这些页内容较稀疏,沿用首页的大节奏(.section 32/44 + .section-head 32 + 42px 标题)
+   会留出大片空白、显得不专业。此处仅作用于二级页 shell,首页 .home-page-shell 完全不受影响。 */
+.service-page-shell .section,
+.shop-page-shell .section { padding: 14px 0 18px; }
+.service-page-shell .section-head,
+.shop-page-shell .section-head,
+.service-landing-shell .section-head,
+.legal-page-shell .section-head { margin-bottom: 14px; }
+.service-page-shell .section-title,
+.shop-page-shell .section-title,
+.service-landing-shell .section-title { font-size: 32px; line-height: 1.08; }
+.service-page-shell .service-title-section { padding-top: 20px; }
+
 /* ─────────────── Product Cards ─────────────── */
 .products-grid {
   display: grid;
