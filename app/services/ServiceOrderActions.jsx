@@ -40,6 +40,14 @@ export default function ServiceOrderActions({ service, soldOut = {} }) {
     if (productKey) trackEvent("service_view", productKey);
   }, [productKey]);
 
+  // 库存在挂载后异步更新时，若当前所选规格变为售罄，自动改选第一个可用规格（避免停在死路上的售罄选项）。
+  useEffect(() => {
+    if (!allSoldOut && selectedPlan && isSoldOut(selectedPlan)) {
+      const firstAvail = planOptions.find((p) => !isSoldOut(p.id));
+      if (firstAvail) setSelectedPlan(firstAvail.id);
+    }
+  }, [soldOut]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function checkoutWithPlan() {
     if (!productKey || !currentPlan || isSoldOut(currentPlan.id)) return;
     trackEvent("cta_click", productKey, currentPlan.id);

@@ -46,7 +46,7 @@ export default function AnnounceBar() {
       {link
         ? <a href={link} style={{ flex: 1, minWidth: 0, color: "#fff", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{text} ›</a>
         : inner}
-      <button type="button" onClick={close} aria-label={en ? "Dismiss" : "关闭"} style={{ flex: "none", background: "transparent", border: 0, color: "#fff", fontSize: 18, lineHeight: 1, cursor: "pointer", opacity: 0.85, padding: 0 }}>×</button>
+      <button type="button" onClick={close} aria-label={en ? "Dismiss" : "关闭"} style={{ flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 32, minHeight: 32, margin: "-6px -6px -6px 0", background: "transparent", border: 0, color: "#fff", fontSize: 18, lineHeight: 1, cursor: "pointer", opacity: 0.85, padding: 4 }}>×</button>
     </div>
   );
 }

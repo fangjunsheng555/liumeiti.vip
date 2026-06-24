@@ -25,10 +25,10 @@ export default function MobileNav() {
         const Icon = item.icon;
         const active = item.match(pathname);
         return (
-          <Link key={item.href} href={item.href} className={`mobile-bottom-nav-item${active ? " active" : ""}`}>
+          <Link key={item.href} href={item.href} className={`mobile-bottom-nav-item${active ? " active" : ""}`} aria-current={active ? "page" : undefined}>
             <span className="mobile-bottom-nav-icon">
               <Icon size={20} strokeWidth={active ? 2.6 : 2.2} />
-              {item.cart && cart.length > 0 && <em>{cart.length}</em>}
+              {item.cart && cart.length > 0 && <em aria-label={locale === "en" ? `${cart.length} items in cart` : `购物车 ${cart.length} 件`}>{cart.length}</em>}
             </span>
             <span>{t(item.labelKey)}</span>
           </Link>

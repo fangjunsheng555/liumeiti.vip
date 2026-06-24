@@ -5452,9 +5452,12 @@ summary:focus-visible {
   color: #64748b;
   font-size: 12px;
   font-weight: 800;
+  transition: background 0.25s ease, color 0.25s ease, box-shadow 0.25s ease;
 }
 .checkout-step.done .checkout-step-num { background: var(--accent); color: #fff; }
 .checkout-step.done { color: var(--accent); }
+/* 已完成步骤后的连接线也变品牌色，强化「进度」读感 */
+.checkout-step.done + .checkout-step::before { background: var(--accent); }
 .checkout-step.active .checkout-step-num {
   background: var(--primary);
   color: #fff;

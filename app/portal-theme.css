@@ -920,7 +920,9 @@ html[lang="en"] .product-card-selected::before { content: "Selected" !important;
   transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1), box-shadow 0.22s ease, background 0.2s ease, border-color 0.2s ease !important;
 }
 .hero-pair-btn:active, .primary-btn:active, .secondary-btn:active, .product-cta:active,
-.cta-btn:active, .home-service-card:active, .floating-button:active { transform: scale(0.97) !important; }
+.cta-btn:active, .floating-button:active { transform: scale(0.97) !important; }
+/* 卡片按压：复合 hover 抬起 + 轻微下压，避免从 -4px 跳到 scale 的纵向抖动 */
+.home-service-card:active, .product-card:active { transform: translateY(-4px) scale(0.98) !important; }
 .product-card:hover { transform: translateY(-4px) !important; box-shadow: var(--shadow-card-h) !important; }
 .floating-button:hover { transform: translateY(-2px) !important; }
 /* 输入聚焦环统一（柔和 teal） */
