@@ -108,9 +108,17 @@ export default async function ServiceLandingPage({ params }) {
       </header>
 
       <main className="main-content portal-main">
+        <nav className="container service-breadcrumb" aria-label={locale === "en" ? "Breadcrumb" : "面包屑导航"}>
+          <Link href="/">{locale === "en" ? "Home" : "首页"}</Link>
+          <span aria-hidden="true">/</span>
+          <Link href="/shop">{locale === "en" ? "Services" : "服务产品"}</Link>
+          <span aria-hidden="true">/</span>
+          <span aria-current="page">{service.shortTitle}</span>
+        </nav>
+
         <section className="container service-seo-hero">
           <div className="service-seo-copy">
-            <div className="section-kicker">SERVICE DETAIL</div>
+            <div className="section-kicker">{locale === "en" ? "Service detail" : "服务详情"}</div>
             <h1>{service.title}</h1>
             <p>{service.description}</p>
             <div className="service-seo-badges">
@@ -132,7 +140,7 @@ export default async function ServiceLandingPage({ params }) {
         <section className="container service-plan-section">
           <div className="section-head simple-head">
             <div>
-              <div className="section-kicker">PLAN OPTIONS</div>
+              <div className="section-kicker">{locale === "en" ? "Plan options" : "规格方案"}</div>
               <h2 className="section-title">{t("svc.plansTitle")}</h2>
             </div>
           </div>
