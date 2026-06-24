@@ -6550,20 +6550,95 @@ summary:focus-visible {
   color: var(--primary); font-size: 12px; font-weight: 700; cursor: pointer;
 }
 
-.admin-main { width: min(960px, calc(100% - 24px)); margin: 14px auto 0; }
-.admin-overview-page { display: grid; gap: 10px; }
+.admin-main { width: min(1240px, calc(100% - 28px)); margin: 16px auto 0; }
+
+/* ===== 分组控制台:固定侧边栏 + 内容区 ===== */
+.admin-shell {
+  display: grid;
+  grid-template-columns: 218px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.admin-sidebar {
+  position: sticky;
+  top: 66px;
+  align-self: start;
+  max-height: calc(100vh - 84px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding: 13px 11px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.06);
+  scrollbar-width: thin;
+}
+.admin-sidebar::-webkit-scrollbar { width: 6px; }
+.admin-sidebar::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.4); border-radius: 999px; }
+.admin-nav-group { display: flex; flex-direction: column; gap: 2px; }
+.admin-nav-group-title {
+  padding: 5px 11px 4px;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  color: #94a3b8;
+}
+.admin-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 11px;
+  border: none;
+  border-radius: 11px;
+  background: transparent;
+  color: #475569;
+  font-size: 13.5px;
+  font-weight: 750;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.16s, color 0.16s, transform 0.12s;
+}
+.admin-nav-item:hover { background: #f1f5f9; color: #0f172a; }
+.admin-nav-item:active { transform: translateY(1px); }
+.admin-nav-icon { flex-shrink: 0; color: #94a3b8; transition: color 0.16s; }
+.admin-nav-item:hover .admin-nav-icon { color: #0f766e; }
+.admin-nav-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-nav-item.active {
+  background: linear-gradient(135deg, #0f172a 0%, #134e4a 100%);
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.22);
+}
+.admin-nav-item.active .admin-nav-icon { color: #5eead4; }
+.admin-nav-item .admin-tab-badge { margin-left: auto; }
+.admin-nav-item.active .admin-tab-badge { background: #fb923c; }
+.admin-nav-scrim { display: none; border: none; padding: 0; }
+.admin-content { min-width: 0; }
+.admin-nav-toggle { display: none; }
+
+/* ===== 状态总览 · KPI 仪表盘 ===== */
+.admin-overview-page { display: grid; gap: 14px; }
 .admin-overview-card {
   display: grid;
-  gap: 7px;
-  padding: 10px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.96);
+  gap: 12px;
+  padding: 18px;
+  border-radius: 18px;
+  background: #fff;
   border: 1px solid var(--line);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.05);
 }
 .admin-overview-page .admin-overview-card {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(166px, 1fr));
+  gap: 12px;
 }
 .admin-overview-page .admin-overview-head,
 .admin-overview-page .admin-overview-latest {
@@ -6574,66 +6649,139 @@ summary:focus-visible {
   justify-content: space-between;
   align-items: center;
   gap: 6px;
-  padding: 1px 2px 3px;
-  color: var(--primary);
+  padding: 0 2px 12px;
+  color: #0f172a;
+  border-bottom: 1px solid var(--line);
 }
 .admin-overview-head span {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11.5px;
+  gap: 7px;
+  font-size: 14px;
   font-weight: 900;
 }
+.admin-overview-head span svg { color: #0f766e; }
 .admin-overview-item,
 .admin-overview-mini,
 .admin-overview-latest {
+  position: relative;
   width: 100%;
   display: grid;
-  gap: 3px;
+  gap: 8px;
   text-align: left;
-  padding: 8px;
-  border-radius: 10px;
-  background: #f8fafc;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  padding: 15px 15px 14px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fbfdff 0%, #f4f8fc 100%);
+  border: 1px solid rgba(148, 163, 184, 0.2);
   color: var(--primary);
+  overflow: hidden;
+}
+.admin-overview-item::before,
+.admin-overview-mini::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 14px;
+  bottom: 14px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: #14b8a6;
 }
 .admin-overview-item {
   cursor: pointer;
+  transition: border-color 0.16s, box-shadow 0.16s, transform 0.14s;
 }
 .admin-overview-item:hover {
-  border-color: rgba(20, 184, 166, 0.45);
-  background: #f0fdfa;
+  border-color: rgba(20, 184, 166, 0.5);
+  box-shadow: 0 10px 24px rgba(15, 118, 110, 0.12);
+  transform: translateY(-2px);
 }
+.admin-overview-item.urgent::before { background: #f59e0b; }
 .admin-overview-item span,
 .admin-overview-mini span,
 .admin-overview-latest span {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
   font-weight: 800;
 }
 .admin-overview-item b,
 .admin-overview-mini b {
-  font-size: 18px;
+  font-size: 30px;
   line-height: 1;
   font-weight: 950;
   color: #0f172a;
+  letter-spacing: -0.01em;
 }
 .admin-overview-item.urgent b { color: #b45309; }
+.admin-overview-mini.money::before { background: #0f766e; }
 .admin-overview-mini.money b {
-  font-size: 15px;
+  font-size: 26px;
   color: #0f766e;
 }
+.admin-overview-latest {
+  gap: 5px;
+  background: linear-gradient(135deg, #0f172a 0%, #134e4a 100%);
+  border-color: transparent;
+}
+.admin-overview-latest::before { display: none; }
+.admin-overview-latest span { color: #5eead4; }
 .admin-overview-latest b {
-  font-size: 10.5px;
+  font-size: 13px;
+  color: #fff;
   font-family: ui-monospace, Menlo, monospace;
   word-break: break-all;
+  font-weight: 800;
 }
 .admin-overview-latest small {
-  color: #0f766e;
-  font-size: 10px;
-  font-weight: 750;
-  line-height: 1.25;
+  color: #a7f3d0;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.3;
 }
+
+/* ===== 平板/移动端:侧边栏转抽屉 ===== */
+@media (max-width: 900px) {
+  .admin-shell { display: block; }
+  .admin-nav-toggle {
+    display: inline-grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+    background: #fff;
+    border: 1px solid var(--line);
+    color: #0f172a;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .admin-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 120;
+    width: 258px;
+    max-width: 84vw;
+    max-height: none;
+    border-radius: 0 20px 20px 0;
+    padding: 18px 12px;
+    transform: translateX(-104%);
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: 0 24px 60px rgba(15, 23, 42, 0.3);
+  }
+  .admin-shell.nav-open .admin-sidebar { transform: translateX(0); }
+  .admin-shell.nav-open .admin-nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 115;
+    background: rgba(15, 23, 42, 0.46);
+    backdrop-filter: blur(2px);
+    -webkit-tap-highlight-color: transparent;
+    animation: adminScrimIn 0.2s ease;
+  }
+}
+@keyframes adminScrimIn { from { opacity: 0; } to { opacity: 1; } }
 .admin-toolbar { display: grid; gap: 8px; margin-bottom: 12px; }
 .admin-search {
   display: flex; align-items: center; gap: 7px;
@@ -8095,37 +8243,6 @@ summary:focus-visible {
 .payment-balance-info strong { color: #78350f; font-weight: 800; }
 
 /* ── Admin: user search + balance adjust ── */
-.admin-tabs {
-  display: flex;
-  gap: 0;
-  margin-bottom: 12px;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 4px;
-  overflow-x: auto;
-}
-.admin-tab-btn {
-  flex: 1;
-  min-width: 72px;
-  padding: 8px 10px;
-  border-radius: 9px;
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  font-size: 12.5px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-}
-.admin-tab-btn.active {
-  background: var(--primary);
-  color: #fff;
-}
 .admin-tab-badge {
   display: inline-grid;
   place-items: center;
@@ -11100,22 +11217,23 @@ summary:focus-visible {
 }
 @media (max-width: 560px) {
   .admin-main { width: calc(100% - 14px); margin-top: 8px; }
-  .admin-overview-page .admin-overview-card { gap: 5px; }
-  .admin-overview-card { padding: 7px; border-radius: 12px; gap: 5px; }
-  .admin-overview-head span { font-size: 10px; gap: 3px; }
-  .admin-overview-head svg { width: 11px; height: 11px; }
+  .admin-overview-page .admin-overview-card { gap: 10px; }
+  .admin-overview-card { padding: 13px; border-radius: 16px; gap: 10px; }
+  .admin-overview-page .admin-overview-card { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
+  .admin-overview-head { padding-bottom: 10px; }
+  .admin-overview-head span { font-size: 12.5px; gap: 5px; }
+  .admin-overview-head svg { width: 13px; height: 13px; }
   .admin-overview-item,
   .admin-overview-mini,
-  .admin-overview-latest { padding: 6px; border-radius: 9px; gap: 2px; }
+  .admin-overview-latest { padding: 12px 12px 11px; border-radius: 12px; gap: 6px; }
   .admin-overview-item span,
   .admin-overview-mini span,
-  .admin-overview-latest span { font-size: 9px; line-height: 1.15; }
+  .admin-overview-latest span { font-size: 10px; line-height: 1.2; }
   .admin-overview-item b,
-  .admin-overview-mini b { font-size: 15px; }
-  .admin-overview-latest b,
-  .admin-overview-latest small { font-size: 9px; }
-  .admin-tabs { margin-bottom: 8px; }
-  .admin-tab-btn { min-width: 68px; padding: 7px 8px; font-size: 11.5px; }
+  .admin-overview-mini b { font-size: 23px; }
+  .admin-overview-mini.money b { font-size: 20px; }
+  .admin-overview-latest b { font-size: 12px; }
+  .admin-overview-latest small { font-size: 10px; }
   .admin-new-order-alert { margin-bottom: 8px; padding: 8px 9px; border-radius: 10px; gap: 5px; }
   .admin-new-order-alert b { font-size: 11px; }
   .admin-new-order-alert span { font-size: 10px; }
@@ -11300,21 +11418,12 @@ summary:focus-visible {
     font-size: 16px !important;
   }
 
-  .admin-tabs {
-    position: sticky;
-    top: 49px;
-    z-index: 29;
-    background: rgba(255, 255, 255, 0.94);
-    backdrop-filter: blur(16px);
-    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
-  }
-
   .admin-toolbar,
   .admin-userlist-head,
   .admin-global-log-toolbar,
   .admin-mail-compose-card {
     position: sticky;
-    top: 101px;
+    top: 60px;
     z-index: 24;
     padding: 8px;
     border: 1px solid rgba(226, 232, 240, 0.9);
@@ -11326,7 +11435,7 @@ summary:focus-visible {
 
   .admin-userlist > .admin-search-mini {
     position: sticky;
-    top: 158px;
+    top: 117px;
     z-index: 23;
     background: rgba(255, 255, 255, 0.96);
     box-shadow: 0 6px 14px rgba(15, 23, 42, 0.045);
@@ -11334,7 +11443,7 @@ summary:focus-visible {
 
   .admin-batch-bar {
     position: sticky;
-    top: 164px;
+    top: 123px;
     z-index: 23;
     background: rgba(255, 255, 255, 0.94);
     backdrop-filter: blur(16px);

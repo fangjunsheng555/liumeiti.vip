@@ -13,6 +13,8 @@ import {
   LoaderCircle, LogOut, Search, ShieldCheck,
   CheckCircle2, Clock, Inbox, X, AlertTriangle, Trash2,
   Gift, CreditCard, Plus, UserPlus, Mail, BellRing, BarChart3, Download, FileText,
+  LayoutDashboard, ClipboardList, ShoppingCart, Users, Wallet, Coins,
+  Megaphone, Footprints, Boxes, Menu,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -1085,6 +1087,7 @@ export default function AdminPage() {
 
   // User/balance management
   const [tab, setTab] = useState("overview"); // overview | orders | abnormal | users | balance | staff
+  const [navOpen, setNavOpen] = useState(false); // 移动端侧栏抽屉开关(纯 UI)
   const [confirmUserAction, setConfirmUserAction] = useState(null); // { email, action: "ban" | "unban" | "delete" }
   const [userActionBusy, setUserActionBusy] = useState(false);
   const [userInfo, setUserInfo] = useState(null); // {user, transactions}
@@ -2295,6 +2298,34 @@ export default function AdminPage() {
     loadOrders("", "all", { silent: true });
   }, [authed, tab, newOrderAlert?.orderId, loadOrders]);
 
+  // 移动端导航抽屉的无障碍管理:仅在抽屉断点(≤900px)生效——
+  // 打开时把焦点移入侧栏、Tab 困在抽屉内、背景设为 inert(屏蔽读屏/抓焦点)、Esc 关闭;关闭时焦点归还汉堡按钮。
+  useEffect(() => {
+    if (!navOpen || typeof window === "undefined") return;
+    if (!window.matchMedia("(max-width: 900px)").matches) return; // 桌面侧栏常驻,无需抽屉焦点管理
+    const sidebar = document.querySelector(".admin-sidebar");
+    const toggle = document.querySelector(".admin-nav-toggle");
+    const content = document.querySelector(".admin-content");
+    const focusables = sidebar ? Array.from(sidebar.querySelectorAll("button:not([disabled])")) : [];
+    if (content) { content.setAttribute("inert", ""); content.setAttribute("aria-hidden", "true"); }
+    if (focusables.length) focusables[0].focus();
+    function onKey(e) {
+      if (e.key === "Escape") { setNavOpen(false); return; }
+      if (e.key === "Tab" && focusables.length) {
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      if (content) { content.removeAttribute("inert"); content.removeAttribute("aria-hidden"); }
+      if (toggle && typeof toggle.focus === "function") toggle.focus();
+    };
+  }, [navOpen]);
+
   function openNewOrderNotice() {
     setTab("orders");
     setSearchInput("");
@@ -2625,11 +2656,69 @@ export default function AdminPage() {
   const activeStaffSelectedCount = activeStaffActionIds.filter((id) => selectedActionIds.has(id)).length;
   const activeStaffAllSelected = activeStaffActionIds.length > 0 && activeStaffSelectedCount === activeStaffActionIds.length;
 
+  // 分组侧边导航模型 —— key/权限门控/角标与旧横向标签条逐项一致,仅改呈现不改功能
+  const navGroups = [
+    {
+      title: "概览",
+      items: [
+        { key: "overview", label: "状态总览", icon: LayoutDashboard, show: true },
+      ],
+    },
+    {
+      title: "交易",
+      items: [
+        { key: "orders", label: "订单管理", icon: ClipboardList, show: true, badge: Number(overview?.pendingOrders || 0) },
+        { key: "abnormal", label: "异常订单", icon: AlertTriangle, show: true, badge: Number(overview?.abnormalOrders || 0), warn: true },
+        { key: "abandoned", label: "弃单召回", icon: ShoppingCart, show: isRootStaff, badge: Number(overview?.abandonedTotal || 0) },
+      ],
+    },
+    {
+      title: "客户",
+      items: [
+        { key: "users", label: "用户管理", icon: Users, show: canViewUsers },
+        { key: "withdrawals", label: "提现审核", icon: Wallet, show: canReviewWithdrawals, badge: Number(overview?.pendingWithdrawals || 0) },
+        { key: "balance", label: "余额变动", icon: Coins, show: canViewBalanceLog },
+      ],
+    },
+    {
+      title: "营销",
+      items: [
+        { key: "codes", label: "兑换码", icon: Gift, show: canViewCodes },
+        { key: "mail", label: "客服发信", icon: Mail, show: canSendMail },
+        { key: "announce", label: "站内公告", icon: Megaphone, show: isRootStaff },
+      ],
+    },
+    {
+      title: "数据",
+      items: [
+        { key: "insights", label: "数据洞察", icon: BarChart3, show: isRootStaff },
+        { key: "visitors", label: "历史访客", icon: Footprints, show: isRootStaff },
+      ],
+    },
+    {
+      title: "系统",
+      items: [
+        { key: "aistock", label: "AI 库存", icon: Boxes, show: canManageStock },
+        { key: "staff", label: "工作人员", icon: ShieldCheck, show: isRootStaff },
+      ],
+    },
+  ];
+
   // ── Dashboard ──
   return (
     <div className="admin-page">
       <header className="admin-header">
         <div className="admin-header-left">
+          <button
+            type="button"
+            className="admin-nav-toggle"
+            aria-label="切换导航菜单"
+            aria-expanded={navOpen}
+            aria-controls="admin-sidebar-nav"
+            onClick={() => setNavOpen((v) => !v)}
+          >
+            <Menu size={18} />
+          </button>
           <Link href="/"><img src="/logo.png" alt="冒央会社" className="admin-logo" /></Link>
           <span className="admin-tag">工作后台{currentStaff?.id ? ` · #${currentStaff.id}` : ""}</span>
         </div>
@@ -2639,28 +2728,39 @@ export default function AdminPage() {
       </header>
 
       <main className="admin-main">
-        <div className="admin-tabs">
-          <button type="button" className={`admin-tab-btn${tab === "overview" ? " active" : ""}`} onClick={() => setTab("overview")}>状态总览</button>
-          <button type="button" className={`admin-tab-btn${tab === "orders" ? " active" : ""}`} onClick={() => setTab("orders")}>
-            订单管理{Number(overview?.pendingOrders || 0) > 0 && <em className="admin-tab-badge">{overview.pendingOrders}</em>}
-          </button>
-          <button type="button" className={`admin-tab-btn${tab === "abnormal" ? " active" : ""}`} onClick={() => setTab("abnormal")}>
-            异常订单{Number(overview?.abnormalOrders || 0) > 0 && <em className="admin-tab-badge warn">{overview.abnormalOrders}</em>}
-          </button>
-          {canViewUsers && <button type="button" className={`admin-tab-btn${tab === "users" ? " active" : ""}`} onClick={() => setTab("users")}>用户管理</button>}
-          {canReviewWithdrawals && <button type="button" className={`admin-tab-btn${tab === "withdrawals" ? " active" : ""}`} onClick={() => setTab("withdrawals")}>
-            提现审核{Number(overview?.pendingWithdrawals || 0) > 0 && <em className="admin-tab-badge">{overview.pendingWithdrawals}</em>}
-          </button>}
-          {canViewCodes && <button type="button" className={`admin-tab-btn${tab === "codes" ? " active" : ""}`} onClick={() => setTab("codes")}>兑换码</button>}
-          {canViewBalanceLog && <button type="button" className={`admin-tab-btn${tab === "balance" ? " active" : ""}`} onClick={() => setTab("balance")}>余额变动</button>}
-          {canSendMail && <button type="button" className={`admin-tab-btn${tab === "mail" ? " active" : ""}`} onClick={() => setTab("mail")}>客服发信</button>}
-          {canManageStock && <button type="button" className={`admin-tab-btn${tab === "aistock" ? " active" : ""}`} onClick={() => setTab("aistock")}>AI库存</button>}
-          {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "staff" ? " active" : ""}`} onClick={() => setTab("staff")}>工作人员</button>}
-          {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "insights" ? " active" : ""}`} onClick={() => setTab("insights")}>数据洞察</button>}
-          {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "visitors" ? " active" : ""}`} onClick={() => setTab("visitors")}>历史访客</button>}
-          {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "abandoned" ? " active" : ""}`} onClick={() => setTab("abandoned")}>弃单召回{Number(overview?.abandonedTotal || 0) > 0 && <em className="admin-tab-badge">{overview.abandonedTotal}</em>}</button>}
-          {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "announce" ? " active" : ""}`} onClick={() => setTab("announce")}>站内公告</button>}
-        </div>
+        <div className={`admin-shell${navOpen ? " nav-open" : ""}`}>
+          <button type="button" className="admin-nav-scrim" aria-label="关闭菜单" onClick={() => setNavOpen(false)} />
+          <nav className="admin-sidebar" id="admin-sidebar-nav" aria-label="后台导航">
+            {navGroups.map((group) => {
+              const items = group.items.filter((it) => it.show);
+              if (!items.length) return null;
+              return (
+                <div className="admin-nav-group" key={group.title}>
+                  <div className="admin-nav-group-title">{group.title}</div>
+                  {items.map((it) => {
+                    const Icon = it.icon;
+                    return (
+                      <button
+                        key={it.key}
+                        type="button"
+                        className={`admin-nav-item${tab === it.key ? " active" : ""}`}
+                        aria-current={tab === it.key ? "page" : undefined}
+                        onClick={() => { setTab(it.key); setNavOpen(false); }}
+                      >
+                        <Icon size={16} className="admin-nav-icon" />
+                        <span className="admin-nav-label">{it.label}</span>
+                        {Number(it.badge) > 0 && (
+                          <em className={`admin-tab-badge${it.warn ? " warn" : ""}`}>{it.badge}</em>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </nav>
+
+          <div className="admin-content">
 
         {newOrderAlert && (
           <button type="button" className="admin-new-order-alert" onClick={openNewOrderNotice}>
@@ -3721,6 +3821,8 @@ export default function AdminPage() {
         )}
         </>
         )}
+          </div>
+        </div>
       </main>
 
       {activeStaffAction && (
