@@ -11,6 +11,7 @@ import {
   getCookieFromRequest, verifySession, validEmail,
   checkRateLimit, rateLimitResponse, redisCmd, clientIpFromRequest,
 } from "../../_utils.js";
+import { getOverride, UNLIMITED } from "../_quota.js";
 
 export const runtime = "nodejs";
 
@@ -19,6 +20,8 @@ const KEY = process.env.CHAT_API_KEY || "";
 const MODEL = process.env.CHAT_MODEL || "claude-opus-4-8";
 const DAILY = Math.max(1, Number(process.env.CHAT_DAILY_LIMIT || 30));
 const MAX_TOKENS = Math.max(64, Number(process.env.CHAT_MAX_TOKENS || 800));
+// 「不限 token」用户的单次回复上限(API 仍要求一个数,取一个很高的值≈不限;可用 env 调高）
+const MAX_TOKENS_UNLIMITED = Math.max(MAX_TOKENS, Number(process.env.CHAT_MAX_TOKENS_UNLIMITED || 8192));
 const IP_LIMIT = Math.max(DAILY, Number(process.env.CHAT_IP_DAILY_LIMIT || DAILY * 2)); // 同 IP 每日总额度（默认=2 个账号份），防换号薅额度
 
 const MAX_TURNS = 6;            // last N exchanges forwarded upstream
@@ -145,7 +148,10 @@ export async function GET(request) {
   const email = authedEmail(request);
   if (!email) return json({ ok: false, error: "not_logged_in" }, 401);
   const used = Number((await redisCmd(["GET", quotaKey(email)])) || 0);
-  return json({ ok: true, limit: DAILY, used, remaining: Math.max(0, DAILY - used), model: MODEL });
+  const ov = await getOverride("chat", email);
+  const unlimited = !!(ov && ov.daily === UNLIMITED);
+  const limit = unlimited ? -1 : (ov && typeof ov.daily === "number" ? ov.daily : DAILY);
+  return json({ ok: true, limit, used, remaining: unlimited ? -1 : Math.max(0, limit - used), unlimited, model: MODEL });
 }
 
 // POST — stream a chat completion from the relay. Body: { messages: [{role, content}] }.
@@ -180,16 +186,24 @@ export async function POST(request) {
     }
   }
 
+  // ── 每用户配额覆盖(后台可设自定义/不限额、不限 token) ──
+  const ov = await getOverride("chat", email);
+  const unlimited = !!(ov && ov.daily === UNLIMITED);
+  const accLimit = unlimited ? Number.MAX_SAFE_INTEGER : (ov && typeof ov.daily === "number" ? ov.daily : DAILY);
+  const ipLimitEff = unlimited ? Number.MAX_SAFE_INTEGER : IP_LIMIT;
+  const effMaxTokens = (ov && ov.maxTokens === UNLIMITED) ? MAX_TOKENS_UNLIMITED
+    : (ov && typeof ov.maxTokens === "number" ? Math.max(64, ov.maxTokens) : MAX_TOKENS);
+
   // ── reserve quota atomically (INCR-first; fail-closed on Redis outage; refund on upstream failure) ──
   const qk = quotaKey(email), ik = ipKey(request);
-  const rsv = await reserveQuota(qk, ik, DAILY, IP_LIMIT);
+  const rsv = await reserveQuota(qk, ik, accLimit, ipLimitEff);
   if (rsv.error) return json(rsv.body, rsv.status);
 
   // 联网搜索：前端开启时挂上 Anthropic 服务端 web_search 工具（实测中转支持）。
   const wantWeb = body.web_search === true || body.web_search === "1";
   const payload = {
     model: MODEL,
-    max_tokens: MAX_TOKENS,
+    max_tokens: effMaxTokens,
     system: SYSTEM,
     messages: msgs,
     stream: true,

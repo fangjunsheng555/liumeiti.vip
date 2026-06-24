@@ -9,13 +9,14 @@ import InsightsPanel from "./InsightsPanel";
 import UserActivity from "./UserActivity";
 import AnnouncePanel from "./AnnouncePanel";
 import AnnouncePostsPanel from "./AnnouncePostsPanel";
+import AIQuotaPanel from "./AIQuotaPanel";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
   CheckCircle2, Clock, Inbox, X, AlertTriangle, Trash2,
   Gift, CreditCard, Plus, UserPlus, Mail, BellRing, BarChart3, Download, FileText,
   LayoutDashboard, ClipboardList, ShoppingCart, Users, Wallet, Coins,
-  Megaphone, Footprints, Boxes, Menu, Newspaper,
+  Megaphone, Footprints, Boxes, Menu, Newspaper, Gauge,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -2701,6 +2702,7 @@ export default function AdminPage() {
       title: "系统",
       items: [
         { key: "aistock", label: "AI 库存", icon: Boxes, show: canManageStock },
+        { key: "ai-quota", label: "AI 限额", icon: Gauge, show: isRootStaff },
         { key: "staff", label: "工作人员", icon: ShieldCheck, show: isRootStaff },
       ],
     },
@@ -3430,6 +3432,8 @@ export default function AdminPage() {
           <AnnouncePanel />
         ) : tab === "announce-posts" ? (
           <AnnouncePostsPanel />
+        ) : tab === "ai-quota" ? (
+          <AIQuotaPanel />
         ) : tab === "staff" ? (
           <div className="admin-staff-pane">
             <form className="admin-staff-form" onSubmit={createStaff}>

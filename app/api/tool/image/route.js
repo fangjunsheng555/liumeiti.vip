@@ -12,6 +12,7 @@ import {
   getCookieFromRequest, verifySession, validEmail,
   checkRateLimit, rateLimitResponse, redisCmd, clientIpFromRequest,
 } from "../../_utils.js";
+import { getOverride, UNLIMITED } from "../_quota.js";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // gpt-image-2 实测：简单图 ~30s，复杂图 60–80s+。给足时间别让函数掐断（需 Vercel 套餐允许，或开启 Fluid Compute）
@@ -73,7 +74,10 @@ export async function GET(request) {
   const email = authedEmail(request);
   if (!email) return json({ ok: false, error: "not_logged_in" }, 401);
   const used = Number((await redisCmd(["GET", quotaKey(email)])) || 0);
-  return json({ ok: true, limit: DAILY, used, remaining: Math.max(0, DAILY - used), model: MODEL });
+  const ov = await getOverride("image", email);
+  const unlimited = !!(ov && ov.daily === UNLIMITED);
+  const limit = unlimited ? -1 : (ov && typeof ov.daily === "number" ? ov.daily : DAILY);
+  return json({ ok: true, limit, used, remaining: unlimited ? -1 : Math.max(0, limit - used), unlimited, model: MODEL });
 }
 
 // POST — generate one image. Body: { prompt: string }.
@@ -90,9 +94,15 @@ export async function POST(request) {
   const prompt = typeof body.prompt === "string" ? body.prompt.trim().slice(0, MAX_PROMPT) : "";
   if (!prompt) return json({ ok: false, error: "empty_prompt" }, 400);
 
+  // ── 每用户配额覆盖(后台可设自定义/不限额) ──
+  const ov = await getOverride("image", email);
+  const unlimited = !!(ov && ov.daily === UNLIMITED);
+  const accLimit = unlimited ? Number.MAX_SAFE_INTEGER : (ov && typeof ov.daily === "number" ? ov.daily : DAILY);
+  const ipLimitEff = unlimited ? Number.MAX_SAFE_INTEGER : IP_LIMIT;
+
   // ── reserve quota atomically (INCR-first; fail-closed on Redis outage; refund on failure) ──
   const qk = quotaKey(email), ik = ipKey(request);
-  const rsv = await reserveQuota(qk, ik, DAILY, IP_LIMIT);
+  const rsv = await reserveQuota(qk, ik, accLimit, ipLimitEff);
   if (rsv.error) return json(rsv.body, rsv.status);
 
   let upstream, data;
@@ -129,8 +139,9 @@ export async function POST(request) {
     ok: true,
     image: b64 ? ("data:image/png;base64," + b64) : url,
     prompt,
-    remaining: Math.max(0, DAILY - rsv.acc),
-    limit: DAILY,
+    remaining: unlimited ? -1 : Math.max(0, accLimit - rsv.acc),
+    limit: unlimited ? -1 : accLimit,
+    unlimited,
   });
 }
 
