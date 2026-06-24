@@ -467,15 +467,9 @@ export default function ServiceCenterPage() {
       </header>
 
       <main className="main-content service-main">
-        <section className="section container service-title-section">
+        <div className="container service-back-row">
           <Link href="/" className="shop-back-link"><ArrowLeft size={14} />{L("返回首页", "Home")}</Link>
-          <div className="section-head simple-head">
-            <div>
-              <h1 className="section-title">{L("服务中心", "Service Center")}</h1>
-            </div>
-          </div>
-        </section>
-
+        </div>
         <section className="section container service-tools-section">
           <div className="service-single-column">
             <div id="order-query" className="query-pair-block order-query-section">

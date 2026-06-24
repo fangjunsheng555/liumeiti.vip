@@ -271,6 +271,9 @@
   font-weight: 900;
 }
 .shop-products-section { padding-top: 4px; }
+/* 服务中心:去掉「服务中心」大标题后,仅留一条紧凑的返回首页行 */
+.service-back-row { padding-top: 14px; }
+.service-back-row .shop-back-link { margin-bottom: 0; }
 .account-auth-page .account-main {
   max-width: 430px;
   margin-top: 26px;
