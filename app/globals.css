@@ -7459,6 +7459,14 @@ summary:focus-visible {
   cursor: not-allowed;
   pointer-events: none;
 }
+/* 余额不足:置灰禁用 + 红字提示(此前 JSX 加了 .low-balance 类但无样式) */
+.payment-method-option.low-balance {
+  background: #f8fafc;
+  border-color: rgba(148, 163, 184, 0.2);
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+.payment-method-option.low-balance .payment-method-detail small { color: #b91c1c; font-weight: 700; }
 .payment-method-option.disabled:hover { transform: none; }
 .payment-method-option.disabled .payment-method-icon {
   background: linear-gradient(135deg, #94a3b8, #64748b) !important;
