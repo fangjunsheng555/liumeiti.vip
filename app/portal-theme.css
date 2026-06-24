@@ -373,7 +373,7 @@ input:focus, textarea:focus, select:focus {
   .home-main > section + section,
   .shop-main > section + section,
   .service-main > section + section,
-  .portal-main > section + section { margin-top: 56px !important; }
+  .portal-main > section + section { margin-top: 16px !important; }
 }
 /* Hero 与「平台优势」之间收紧（pad/桌面端，移动端不变） */
 @media (min-width: 821px) {
