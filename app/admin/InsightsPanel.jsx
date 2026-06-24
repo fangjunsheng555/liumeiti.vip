@@ -3,6 +3,7 @@
 // 后台「数据洞察」专业仪表盘。仅超级管理员入口可见。
 // 数据 = /api/admin/insights?days=N：范围漏斗+转化率 + 每日趋势 + 环比 + 来源/服务 + 累计对照。
 import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, LoaderCircle } from "lucide-react";
 
 const C = {
   text: "var(--text, #1d1d1f)", muted: "var(--muted, #6e6e73)", faint: "var(--faint, #8a8a8e)",
@@ -72,9 +73,9 @@ export default function InsightsPanel() {
         </div>
         <button type="button" onClick={() => load(days)} disabled={loading} style={{ padding: "6px 13px", borderRadius: 9, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>{loading ? "刷新中…" : "刷新"}</button>
       </div>
-      {msg && <div style={{ marginBottom: 12, fontSize: 13, color: C.accent }}>{msg}</div>}
+      {msg && <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "9px 13px", borderRadius: 10, fontSize: 13, fontWeight: 600, background: "#fef2f2", border: "1px solid #fecaca", color: "#dc2626" }}><AlertTriangle size={15} style={{ flex: "none" }} />{msg}</div>}
 
-      {loading && !data ? <div style={{ color: C.muted }}>加载中…</div> : f && (
+      {loading && !data ? <div style={{ display: "inline-flex", alignItems: "center", gap: 8, color: C.muted, fontSize: 13 }}><LoaderCircle size={16} className="spin-icon" />加载中…</div> : f && (
         <>
           {/* KPI 卡片（范围内 + 环比） */}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>

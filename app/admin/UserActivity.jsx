@@ -3,6 +3,7 @@
 // 用户 360 — 在用户详情里展示该用户的访问/行为/来源。仅超管入口下渲染。
 // 数据 = /api/admin/user-activity?email=
 import { useEffect, useState } from "react";
+import { Inbox, LoaderCircle } from "lucide-react";
 
 const C = {
   text: "var(--text, #1d1d1f)", muted: "var(--muted, #6e6e73)", faint: "var(--faint, #8a8a8e)",
@@ -31,12 +32,12 @@ export default function UserActivity({ email }) {
     return () => { on = false; };
   }, [email]);
 
-  if (loading && !d) return <div style={{ color: C.muted, fontSize: 13, padding: "8px 0" }}>加载访问数据…</div>;
+  if (loading && !d) return <div style={{ display: "inline-flex", alignItems: "center", gap: 8, color: C.muted, fontSize: 13, padding: "8px 0" }}><LoaderCircle size={15} className="spin-icon" />加载访问数据…</div>;
   if (!d || !d.ok) return null;
 
   const wrap = { marginTop: 14, padding: 14, border: `1px solid ${C.border}`, borderRadius: 12, background: C.surface2 };
   const h = { fontSize: 14, fontWeight: 700, margin: "0 0 10px", color: C.text };
-  if (!d.found) return <div style={wrap}><div style={h}>访问与行为</div><div style={{ color: C.faint, fontSize: 13 }}>暂无记录（该用户登录后产生访问才会出现）。</div></div>;
+  if (!d.found) return <div style={wrap}><div style={h}>访问与行为</div><div style={{ display: "flex", alignItems: "center", gap: 8, color: C.faint, fontSize: 13 }}><Inbox size={16} style={{ flex: "none" }} />暂无记录（该用户登录后产生访问才会出现）。</div></div>;
 
   const chip = { display: "inline-block", padding: "2px 9px", borderRadius: 20, background: C.accentSoft, color: C.accent, fontSize: 12, fontWeight: 600, marginRight: 6, marginBottom: 6 };
   const rowLine = { display: "flex", gap: 8, fontSize: 12.5, padding: "4px 0", borderBottom: `1px solid ${C.border}` };
