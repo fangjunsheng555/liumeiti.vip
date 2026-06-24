@@ -232,7 +232,7 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
           </div>
           <button type="submit" disabled={redeemBusy}>
             {redeemBusy ? <LoaderCircle size={14} className="spin-icon" /> : <Gift size={14} />}
-            {redeemBusy ? "..." : t("redeem.submit")}
+            {redeemBusy ? L("兑换中", "Redeeming") : t("redeem.submit")}
           </button>
           {redeemStatus && <div className={`redeem-card-status ${redeemStatus.type}`}>{redeemStatus.message}</div>}
         </form>

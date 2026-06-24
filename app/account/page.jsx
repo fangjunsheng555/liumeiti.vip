@@ -412,7 +412,14 @@ export default function AccountPage() {
   }
 
   if (state.loading) {
-    return <div className="account-loading"><LoaderCircle size={28} className="spin-icon" /></div>;
+    return (
+      <div className="account-page">
+        <div className="account-loading" role="status" aria-live="polite">
+          <LoaderCircle size={28} className="spin-icon" />
+          <p style={{ margin: "12px 0 0", fontSize: 13.5, color: "var(--muted, #6e6e73)", fontWeight: 500 }}>{L("正在载入账户…", "Loading your account…")}</p>
+        </div>
+      </div>
+    );
   }
 
   if (!state.email) {
