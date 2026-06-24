@@ -32,10 +32,10 @@ export default function AnnounceBar() {
     return () => { on = false; };
   }, []);
 
-  // 多条时每 3 秒轮播一条
+  // 多条时每 5 秒轮播一条
   useEffect(() => {
     if (items.length <= 1) return;
-    const t = setInterval(() => setIdx((i) => (i + 1) % items.length), 3000);
+    const t = setInterval(() => setIdx((i) => (i + 1) % items.length), 5000);
     return () => clearInterval(t);
   }, [items.length]);
 
@@ -60,29 +60,29 @@ export default function AnnounceBar() {
   const barStyle = {
     position: "relative",
     display: "flex", alignItems: "center", justifyContent: "center",
-    padding: "9px 46px",
+    padding: "5px 44px",
     background: "#ffffff",
-    color: "#1f2937", fontSize: 13.5, fontWeight: 600, lineHeight: 1.45,
+    color: "#1f2937", fontSize: 13, fontWeight: 600, lineHeight: 1.4,
     borderBottom: "1px solid rgba(15, 23, 42, 0.08)",
   };
   const inner = (
     <>
-      {text}<span style={{ color: "#0f766e", marginLeft: 6, fontWeight: 800 }}>›</span>
+      {text}<span style={{ color: "#94a3b8", marginLeft: 6, fontWeight: 700 }}>›</span>
     </>
   );
   return (
     <div style={barStyle} role="region" aria-label={en ? "Announcement" : "公告"}>
       <style>{"@keyframes lmAnnFade{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}"}</style>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 9, maxWidth: "min(1180px, 100%)", minWidth: 0 }}>
-        <span style={{ flex: "none", display: "inline-grid", placeItems: "center", width: 24, height: 24, borderRadius: 8, background: "rgba(15,118,110,0.10)", color: "#0f766e" }} aria-hidden="true">
-          <Megaphone size={14} />
-        </span>
-        <span key={cur.id + ":" + idx} style={{ minWidth: 0, animation: "lmAnnFade .42s ease" }}>
-          {link
-            ? <a href={link} {...(internal ? {} : { target: "_blank", rel: "noopener noreferrer" })} style={textStyle}>{inner}</a>
-            : <span style={textStyle}>{text}</span>}
-        </span>
-      </div>
+      {/* 左侧:简洁中性图标(无底框、非绿) */}
+      <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", display: "inline-flex", color: "#94a3b8" }} aria-hidden="true">
+        <Megaphone size={15} />
+      </span>
+      {/* 居中文案 */}
+      <span key={cur.id + ":" + idx} style={{ maxWidth: "min(1100px, 100%)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", animation: "lmAnnFade .42s ease" }}>
+        {link
+          ? <a href={link} {...(internal ? {} : { target: "_blank", rel: "noopener noreferrer" })} style={textStyle}>{inner}</a>
+          : <span style={textStyle}>{text}</span>}
+      </span>
       <button
         type="button"
         onClick={close}
