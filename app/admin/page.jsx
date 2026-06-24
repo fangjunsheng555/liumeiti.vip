@@ -8,13 +8,14 @@ import AbandonedPanel from "./AbandonedPanel";
 import InsightsPanel from "./InsightsPanel";
 import UserActivity from "./UserActivity";
 import AnnouncePanel from "./AnnouncePanel";
+import AnnouncePostsPanel from "./AnnouncePostsPanel";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
   CheckCircle2, Clock, Inbox, X, AlertTriangle, Trash2,
   Gift, CreditCard, Plus, UserPlus, Mail, BellRing, BarChart3, Download, FileText,
   LayoutDashboard, ClipboardList, ShoppingCart, Users, Wallet, Coins,
-  Megaphone, Footprints, Boxes, Menu,
+  Megaphone, Footprints, Boxes, Menu, Newspaper,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -2686,6 +2687,7 @@ export default function AdminPage() {
         { key: "codes", label: "兑换码", icon: Gift, show: canViewCodes },
         { key: "mail", label: "客服发信", icon: Mail, show: canSendMail },
         { key: "announce", label: "站内公告", icon: Megaphone, show: isRootStaff },
+        { key: "announce-posts", label: "公告中心", icon: Newspaper, show: isRootStaff },
       ],
     },
     {
@@ -3426,6 +3428,8 @@ export default function AdminPage() {
           <AbandonedPanel />
         ) : tab === "announce" ? (
           <AnnouncePanel />
+        ) : tab === "announce-posts" ? (
+          <AnnouncePostsPanel />
         ) : tab === "staff" ? (
           <div className="admin-staff-pane">
             <form className="admin-staff-form" onSubmit={createStaff}>

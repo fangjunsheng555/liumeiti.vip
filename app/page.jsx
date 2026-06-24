@@ -567,6 +567,7 @@ export default function Page() {
             <div className="footer-brand">{t("footer.brand")}</div>
             <div className="footer-links">
               <Link href="/legal">{t("footer.legal")}</Link>
+              <Link href="/announcements">{locale === "en" ? "Announcements" : "公告中心"}</Link>
               <Link href="/services/spotify">Spotify</Link>
               <Link href="/services/ai">{locale === "en" ? "AI" : "AI 会员"}</Link>
               <Link href="/services/netflix">Netflix</Link>
