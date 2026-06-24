@@ -99,6 +99,7 @@ export async function POST(request) {
         const chash = ["HSET", ckey, "ip", ip, "ua", ua, "ts", String(now),
           "services", cleanStr(meta.services, 200), "amount", cleanStr(String(meta.amount == null ? "" : meta.amount), 20), "status", "open"];
         if (cemail) chash.push("email", cemail);
+        if (meta.locale === "en") chash.push("locale", "en"); // 召回邮件按下单时语言本地化
         if (attr) chash.push("attr", JSON.stringify(attr));
         cmds.push(chash, ["EXPIRE", ckey, "3888000"], ["ZADD", CART_INDEX, String(now), id]); // 弃单 hash 45 天自动过期，避免无界增长
       }

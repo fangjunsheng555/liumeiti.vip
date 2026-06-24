@@ -5,11 +5,14 @@ import {
   adminSessionFromRequest, isRootAdminSession, validEmail,
   redisCmd, redisPipeline, formatBeijingTime, sendSimpleEmail,
 } from "../../_utils.js";
+import { buildRecoveryEmailHtml, buildRecoveryEmailText } from "./recovery-email.js";
 
 export const runtime = "nodejs";
 const CART_INDEX = "lm:cart:index";
 const CART = "lm:cart:v:";
-const SITE = "https://www.liumeiti.vip";
+const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
+const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
+const SITE_URL = process.env.SITE_URL || `https://${SITE_DOMAIN}`;
 
 function unauth() { return Response.json({ ok: false, error: "unauthorized" }, { status: 401 }); }
 function gate(request) { const s = adminSessionFromRequest(request); return s && isRootAdminSession(s) ? s : null; }
@@ -65,19 +68,14 @@ export async function POST(request) {
     const to = (h.email || "").toLowerCase();
     if (!validEmail(to)) return Response.json({ ok: false, error: "no_email" }, { status: 400 });
     const services = h.services || "您挑选的服务";
-    // 邮件 HTML 转义：services 源自客户端结算信标，需防 HTML 注入
-    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-    const servicesHtml = esc(services);
-    const subject = "您在 liumeiti.vip 的订单还没完成 🛒";
-    const text = `您好，\n\n看到您挑选了「${services}」但还没完成下单。现在回来即可继续：${SITE}/\n\n如有任何疑问，随时联系客服，我们很乐意帮您。\n\n— liumeiti.vip`;
-    const html = `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:520px;margin:0 auto;color:#1d1d1f">
-      <h2 style="font-size:19px">您的订单还差一步 🛒</h2>
-      <p style="color:#555;line-height:1.7">看到您挑选了 <b>${servicesHtml}</b> 但还没完成下单。现在回来即可继续：</p>
-      <p style="margin:22px 0"><a href="${SITE}/" style="background:#0f766e;color:#fff;text-decoration:none;padding:11px 26px;border-radius:10px;font-weight:600">回去完成下单 →</a></p>
-      <p style="color:#888;font-size:13px;line-height:1.7">如有任何疑问，随时联系客服，我们很乐意帮您。<br>— liumeiti.vip</p>
-    </div>`;
+    const locale = h.locale === "en" ? "en" : "zh";
+    const en = locale === "en";
+    const params = { services, amount: h.amount, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale };
+    const subject = en ? `Your ${BRAND_NAME} order is one step away 🛒` : `您的订单还差一步就完成啦 🛒 · ${BRAND_NAME}`;
+    const html = buildRecoveryEmailHtml(params);
+    const text = buildRecoveryEmailText(params);
     let sent = false;
-    try { const r = await sendSimpleEmail({ to, subject, text, html, fromName: "liumeiti.vip" }); sent = !!(r && (r.messageId || r.ok !== false)); }
+    try { const r = await sendSimpleEmail({ to, subject, text, html, fromName: BRAND_NAME }); sent = !!(r && (r.messageId || r.ok !== false)); }
     catch (e) { sent = false; }
     if (!sent) return Response.json({ ok: false, error: "send_failed" }, { status: 502 });
     await redisCmd(["HSET", ckey, "status", "contacted", "contactedAt", String(Date.now())]);

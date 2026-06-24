@@ -270,11 +270,12 @@ export default function CheckoutPage() {
     if (emailValid) ref.email = email;
     let amount = 0;
     try { amount = cartFinalCny(cart, cartPlans) || 0; } catch (e) {}
+    const locale = (document.cookie.match(/(?:^|; )locale=([^;]+)/) || [])[1] === "en" ? "en" : "zh";
     try {
       fetch("/api/track", {
         method: "POST", credentials: "include", keepalive: true,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "event", name: "checkout_started", meta: { services: cart.join(","), amount, email: emailValid ? email : "" } }),
+        body: JSON.stringify({ type: "event", name: "checkout_started", meta: { services: cart.join(","), amount, email: emailValid ? email : "", locale } }),
       }).catch(() => {});
     } catch (e) {}
   }, [hydrated, cart, cartPlans, form.email, authedUser]);
