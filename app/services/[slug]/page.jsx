@@ -35,7 +35,7 @@ export async function generateMetadata({ params }) {
       images: [SOCIAL_IMAGE_META],
     },
     twitter: {
-      card: "summary",
+      card: "summary_large_image",
       title: `${title} | ${brand}`,
       description: service.description,
       images: [SOCIAL_IMAGE],
