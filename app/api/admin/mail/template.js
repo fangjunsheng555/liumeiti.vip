@@ -45,14 +45,16 @@ export function buildCustomerMailHtml({ subject, content, brandName, siteDomain,
             </tr>
             <tr>
               <td style="padding:22px 20px 8px;">
-                <div style="font-size:15px;line-height:1.8;color:#334155;">
-                  <p style="margin:0 0 12px;">您好，这里是${safeBrand}客服,关于您的服务咨询或订单协助，我们整理了以下说明：</p>
+                <div style="font-size:14px;line-height:1.7;color:#475569;margin-bottom:14px;">
+                  您好 👋 这里是${safeBrand}客服，以下是为您整理的答复：<br />
+                  <span style="color:#94a3b8;">Hi, this is ${safeBrand} support — here's our reply for you:</span>
                 </div>
-                <div style="border:1px solid #dbeafe;background:#f8fbff;border-radius:16px;padding:16px 15px;font-size:15px;line-height:1.85;color:#102033;">
+                <div style="border:1px solid #e2e8f0;background:#f8fafc;border-radius:16px;padding:16px 15px;font-size:15px;line-height:1.85;color:#0f172a;">
                   ${htmlLines(content)}
                 </div>
-                <div style="font-size:15px;line-height:1.8;color:#334155;margin-top:14px;">
-                  <p style="margin:0;">希望我们的答复可以帮助到您，祝您生活愉快工作顺利！感谢您选择${safeBrand}！</p>
+                <div style="font-size:13.5px;line-height:1.7;color:#475569;margin-top:16px;">
+                  如仍需帮助，直接回复本邮件即可，我们会继续为您处理。<br />
+                  <span style="color:#94a3b8;">Need more help? Just reply to this email and we'll continue to assist you.</span>
                 </div>
               </td>
             </tr>
@@ -76,13 +78,14 @@ export function buildCustomerMailHtml({ subject, content, brandName, siteDomain,
 export function buildCustomerMailText({ subject, content, brandName, siteDomain, siteUrl, staffId }) {
   const brand = brandName || "冒央会社";
   return [
-    `${brand}客服人员 · ${subject || "客服服务通知"}`,
+    `${brand}客服 · ${subject || "客服服务通知"}`,
     "",
-    `您好，这里是${brand}客服，关于您的服务咨询或订单协助，我们整理了以下说明：`,
+    `您好，这里是${brand}客服，以下是为您整理的答复：`,
+    `Hi, this is ${brand} support — here's our reply:`,
     "",
     String(content || "").trim(),
     "",
-    `如仍需协助，可直接回复此邮件或通过网站联系方式联系在线客服，我们会继续为您处理。感谢您选择${brand}`,
+    `如仍需帮助，直接回复本邮件即可。 / Need more help? Just reply to this email.`,
     "",
     `工作人员编号 #${staffId || 1}`,
     `${siteDomain || "www.liumeiti.vip"} ${siteUrl || "https://www.liumeiti.vip"}`,
