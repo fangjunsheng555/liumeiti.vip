@@ -13,6 +13,7 @@ import {
   getCookieFromRequest,
 } from "../_utils.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
+import { buildEmailBrandHeader } from "../email-brand.js";
 
 const QUERY_CODE_TTL_SECONDS = 10 * 60;
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
@@ -171,16 +172,27 @@ async function sendQueryCode(email, code, query, locale) {
 <body style="margin:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',Arial,sans-serif;color:#0f172a;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f6fb;padding:32px 16px;">
     <tr><td align="center">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;background:#fff;border-radius:18px;overflow:hidden;border:1px solid #dbe7ef;">
-        <tr><td style="padding:26px 30px 10px;">
-          <h2 style="margin:0 0 8px;font-size:20px;font-weight:900;">${L("订单查询验证码", "Order lookup code")}</h2>
-          <p style="margin:0 0 16px;font-size:13px;line-height:1.7;color:#475569;">${L(`你正在查询 ${BRAND_NAME} 订单 ${safeQuery}。请输入下方验证码继续查看订单详情。`, `You're looking up your ${BRAND_NAME} order ${safeQuery}. Enter the code below to view the order details.`)}</p>
-          <div style="padding:18px 20px;border-radius:14px;background:#f0fdfa;border:1px solid #99f6e4;text-align:center;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;background:#fff;border-radius:18px;overflow:hidden;box-shadow:0 8px 32px rgba(15,23,42,0.06);">
+        ${buildEmailBrandHeader({ brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, label: L("订单查询", "Order Lookup") })}
+        <tr><td style="padding:30px 32px 14px;">
+          <h2 style="margin:0 0 8px;font-size:20px;font-weight:900;color:#0f172a;letter-spacing:-0.02em;">${L("订单查询验证码", "Order lookup code")}</h2>
+          <p style="margin:0 0 18px;font-size:13.5px;line-height:1.7;color:#475569;">${L(`你正在查询 ${BRAND_NAME} 订单 ${safeQuery}。请在 10 分钟内输入下方验证码查看订单详情。`, `You're looking up your ${BRAND_NAME} order ${safeQuery}. Enter the code below within 10 minutes to view the order details.`)}</p>
+          <div style="margin:0 auto;padding:18px 24px;border-radius:14px;background:#f0fdfa;border:1px solid #a7f3d0;text-align:center;">
+            <div style="font-size:11px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:#0f766e;margin-bottom:6px;">${L("验证码", "Code")}</div>
             <div style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:32px;font-weight:900;color:#134e4a;letter-spacing:.18em;">${safeCode}</div>
-            <div style="margin-top:6px;font-size:11px;color:#0f766e;">${L("10 分钟内有效", "Valid for 10 minutes")}</div>
+            <div style="margin-top:6px;font-size:11px;color:#0f766e;">${L("有效期 10 分钟", "Valid for 10 minutes")}</div>
           </div>
         </td></tr>
-        <tr><td style="padding:14px 30px 28px;font-size:11.5px;color:#94a3b8;line-height:1.6;">${L("若非本人操作，请忽略本邮件。", "If this wasn't you, please ignore this email. ")}${escapeHtml(SITE_DOMAIN)}</td></tr>
+        <tr><td style="padding:14px 32px 28px;">
+          <hr style="border:none;border-top:1px solid #e2e8f0;margin:0 0 16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="color:#0f172a;font-size:13px;font-weight:800;letter-spacing:-0.01em;">${escapeHtml(BRAND_NAME)}</td>
+              <td style="text-align:right;color:#94a3b8;font-size:11.5px;">${escapeHtml(SITE_DOMAIN)}</td>
+            </tr>
+          </table>
+          <p style="margin:10px 0 0;font-size:11.5px;color:#94a3b8;line-height:1.6;">${L("本邮件由系统自动发送，请勿直接回复。若非本人操作，请忽略本邮件。", "This email was sent automatically — please don't reply. If this wasn't you, please ignore it.")}</p>
+        </td></tr>
       </table>
     </td></tr>
   </table>

@@ -32,6 +32,7 @@ export async function POST(request, { params }) {
   const siteUrl = process.env.SITE_URL || `https://${siteDomain}`;
   const supportContact = process.env.SUPPORT_CONTACT || "请通过 QQ 2802632995 / WhatsApp +34 671143339 / Telegram @MaoyangSupport 联系在线客服";
   const redeemUrl = `${siteUrl.replace(/\/+$/, "")}/?redeem=${encodeURIComponent(info.code)}#redeem`;
+  const locale = body.locale === "en" ? "en" : "zh"; // 管理员发送时可指定收件人语言，默认中文
 
   const subject = buildRedeemEmailSubject({
     code: info.code,
@@ -39,6 +40,7 @@ export async function POST(request, { params }) {
     services: info.services,
     amount: info.amount,
     brandName,
+    locale,
   });
   const html = buildRedeemEmailHtml({
     code: info.code,
@@ -50,6 +52,7 @@ export async function POST(request, { params }) {
     siteUrl,
     redeemUrl,
     supportContact,
+    locale,
   });
   const text = buildRedeemEmailText({
     code: info.code,
@@ -59,6 +62,7 @@ export async function POST(request, { params }) {
     brandName,
     siteUrl,
     redeemUrl,
+    locale,
   });
 
   const result = await sendSimpleEmail({
