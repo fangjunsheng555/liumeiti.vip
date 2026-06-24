@@ -6720,20 +6720,30 @@ summary:focus-visible {
 }
 .admin-overview-latest {
   gap: 5px;
-  background: linear-gradient(135deg, #0f172a 0%, #134e4a 100%);
-  border-color: transparent;
+  background: linear-gradient(135deg, #ecfdf5 0%, #f8fafc 100%);
+  border-color: rgba(20, 184, 166, 0.22);
 }
-.admin-overview-latest::before { display: none; }
-.admin-overview-latest span { color: #5eead4; }
+.admin-overview-latest::before {
+  content: "";
+  display: block;
+  position: absolute;
+  left: 0;
+  top: 14px;
+  bottom: 14px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: #0f766e;
+}
+.admin-overview-latest span { color: #0f766e; }
 .admin-overview-latest b {
-  font-size: 13px;
-  color: #fff;
+  font-size: 14px;
+  color: #0f172a;
   font-family: ui-monospace, Menlo, monospace;
   word-break: break-all;
-  font-weight: 800;
+  font-weight: 850;
 }
 .admin-overview-latest small {
-  color: #a7f3d0;
+  color: var(--muted);
   font-size: 11px;
   font-weight: 700;
   line-height: 1.3;

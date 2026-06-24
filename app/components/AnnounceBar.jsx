@@ -2,6 +2,7 @@
 
 // 站内公告横幅（主站）。读 /api/announcements；用户可关闭（按公告 id 记 localStorage，内容更新后重新出现）。
 import { useEffect, useState } from "react";
+import { Megaphone, X } from "lucide-react";
 
 export default function AnnounceBar() {
   const [a, setA] = useState(null);
@@ -32,21 +33,36 @@ export default function AnnounceBar() {
     try { window.localStorage.setItem("lm_announce_dismissed", String(a.id)); } catch (e2) {}
     setA(null);
   };
-  const inner = (
-    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-      {text}{link ? " ›" : ""}
-    </span>
-  );
+  const textStyle = {
+    flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+    color: "#fff", textDecoration: "none", letterSpacing: ".005em",
+  };
   const barStyle = {
-    display: "flex", alignItems: "center", gap: 12, padding: "9px 16px",
-    background: "var(--accent, #0f766e)", color: "#fff", fontSize: 13.5, fontWeight: 600, lineHeight: 1.4,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    padding: "10px 16px",
+    background: "linear-gradient(100deg, #0f766e 0%, #115e59 48%, #134e4a 100%)",
+    color: "#fff", fontSize: 13.5, fontWeight: 650, lineHeight: 1.45,
+    borderBottom: "1px solid rgba(8, 47, 43, 0.55)",
+    boxShadow: "0 1px 0 rgba(255,255,255,0.06) inset",
   };
   return (
     <div style={barStyle} role="region" aria-label={en ? "Announcement" : "公告"}>
-      {link
-        ? <a href={link} style={{ flex: 1, minWidth: 0, color: "#fff", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{text} ›</a>
-        : inner}
-      <button type="button" onClick={close} aria-label={en ? "Dismiss" : "关闭"} style={{ flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", minWidth: 32, minHeight: 32, margin: "-6px -6px -6px 0", background: "transparent", border: 0, color: "#fff", fontSize: 18, lineHeight: 1, cursor: "pointer", opacity: 0.85, padding: 4 }}>×</button>
+      <div style={{ display: "flex", alignItems: "center", gap: 11, width: "min(1180px, 100%)" }}>
+        <span style={{ flex: "none", display: "inline-grid", placeItems: "center", width: 26, height: 26, borderRadius: 9, background: "rgba(255,255,255,0.16)" }} aria-hidden="true">
+          <Megaphone size={15} />
+        </span>
+        {link
+          ? <a href={link} style={textStyle}>{text}<span style={{ opacity: 0.85, marginLeft: 6, fontWeight: 800 }}>›</span></a>
+          : <span style={textStyle}>{text}</span>}
+        <button
+          type="button"
+          onClick={close}
+          aria-label={en ? "Dismiss" : "关闭"}
+          style={{ flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 999, background: "rgba(255,255,255,0.14)", border: 0, color: "#fff", cursor: "pointer", opacity: 0.9, padding: 0, marginRight: -2 }}
+        >
+          <X size={15} />
+        </button>
+      </div>
     </div>
   );
 }

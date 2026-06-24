@@ -37,6 +37,7 @@ export default function VisitorsPanel() {
   const [selected, setSelected] = useState(() => new Set());
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [reloadFlag, setReloadFlag] = useState(0);
   const ok = (text) => setMsg({ type: "ok", text });
   const err = (text) => setMsg({ type: "error", text });
   const info = (text) => setMsg({ type: "info", text });
@@ -50,7 +51,8 @@ export default function VisitorsPanel() {
       const res = await fetch("/api/admin/visitors?" + p.toString(), { credentials: "same-origin", cache: "no-store" });
       const data = await res.json();
       if (data && data.ok) {
-        setRows(data.rows || []);
+        // offset===0 时整组替换，否则把新一批追加到末尾（滚动加载更多）
+        setRows((prev) => (offset === 0 ? (data.rows || []) : [...prev, ...(data.rows || [])]));
         setTotal(Number(data.total || 0));
         if (data.searchCapped) info("搜索仅扫描了最近 2000 名访客");
         else setMsg(null);
@@ -59,11 +61,13 @@ export default function VisitorsPanel() {
       }
     } catch (e) { err("加载失败，请重试"); }
     setLoading(false);
-    setSelected(new Set());
-  }, [offset, q, olderOnly]);
+    if (offset === 0) setSelected(new Set());
+  }, [offset, q, olderOnly, reloadFlag]);
 
   useEffect(() => { load(); }, [load]);
 
+  // 强制从头刷新（搜索/筛选/删除后）：offset 已非 0 则归零触发，否则递增 reloadFlag 触发
+  const refresh = () => { if (offset !== 0) setOffset(0); else setReloadFlag((f) => f + 1); };
   const doSearch = () => { setOffset(0); setQ(qInput.trim()); };
   const toggleOlder = () => { setOffset(0); setOlderOnly((v) => !v); };
 
@@ -94,7 +98,7 @@ export default function VisitorsPanel() {
       data && data.ok ? ok(`已删除 ${data.deleted} 名访客记录`) : err("删除失败");
     } catch (e) { err("删除失败"); }
     setBusy(false);
-    load();
+    refresh();
   }
 
   async function deleteOld() {
@@ -116,11 +120,10 @@ export default function VisitorsPanel() {
       ok(`已删除 ${deleted} 名 ${OLD_DAYS} 天前的访客记录${remaining > 0 ? `（仍剩 ${remaining}，可再次点击）` : ""}`);
     } catch (e) { err("删除失败"); }
     setBusy(false);
-    load();
+    refresh();
   }
 
-  const page = Math.floor(offset / LIMIT) + 1;
-  const pages = Math.max(1, Math.ceil(total / LIMIT));
+  const hasMore = rows.length < total;
 
   const th = { textAlign: "left", padding: "9px 10px", fontSize: 12.5, color: C.muted, fontWeight: 600, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" };
   const td = { padding: "5px 9px", fontSize: 13, color: C.text, borderBottom: `1px solid ${C.border}`, verticalAlign: "middle" };
@@ -133,7 +136,7 @@ export default function VisitorsPanel() {
         <h2 style={{ fontSize: 18, margin: 0 }}>历史访客</h2>
         <span style={{ color: C.muted, fontSize: 12.5 }}>主站 + 工具站 · 共 {total} 名{olderOnly ? `（仅 ${OLD_DAYS} 天前）` : ""}</span>
         <span style={{ flex: 1 }} />
-        <button type="button" style={btn(false)} onClick={load} disabled={loading || busy}>刷新</button>
+        <button type="button" style={btn(false)} onClick={refresh} disabled={loading || busy}>刷新</button>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
@@ -208,11 +211,22 @@ export default function VisitorsPanel() {
         </table>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, fontSize: 13, color: C.muted }}>
-        <button type="button" style={{ ...btn(false), opacity: offset > 0 ? 1 : 0.5 }} onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset <= 0 || loading}>上一页</button>
-        <span>第 {page} / {pages} 页</span>
-        <button type="button" style={{ ...btn(false), opacity: offset + LIMIT < total ? 1 : 0.5 }} onClick={() => setOffset(offset + LIMIT)} disabled={offset + LIMIT >= total || loading}>下一页</button>
-      </div>
+      {rows.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, marginTop: 14, fontSize: 12.5, color: C.muted }}>
+          {hasMore ? (
+            <button
+              type="button"
+              style={{ ...btn(false), padding: "9px 22px", display: "inline-flex", alignItems: "center", gap: 8 }}
+              onClick={() => setOffset(offset + LIMIT)}
+              disabled={loading}
+            >
+              {loading ? <LoaderCircle size={14} className="spin-icon" /> : null}
+              {loading ? "加载中…" : `加载更多（还有 ${total - rows.length} 名）`}
+            </button>
+          ) : null}
+          <span>已显示 {rows.length} / {total} 名访客</span>
+        </div>
+      )}
 
       {detail && (
         <div onClick={() => setDetail(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 80, display: "flex", justifyContent: "flex-end" }}>
