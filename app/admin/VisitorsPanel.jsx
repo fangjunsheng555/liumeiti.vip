@@ -5,6 +5,7 @@
 // 点开单条 = /api/admin/visitors/<id>（该访客访问过的所有页面）。
 // 批量删 = DELETE /api/admin/visitors（按选择 ids 或 olderThanDays）。
 import { useCallback, useEffect, useState } from "react";
+import { Inbox, LoaderCircle, CheckCircle2, AlertTriangle, Info, X } from "lucide-react";
 
 const LIMIT = 50;
 const OLD_DAYS = 30;
@@ -32,10 +33,13 @@ export default function VisitorsPanel() {
   const [olderOnly, setOlderOnly] = useState(false);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
+  const [msg, setMsg] = useState(null); // { type: "ok"|"error"|"info", text } | null
   const [selected, setSelected] = useState(() => new Set());
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const ok = (text) => setMsg({ type: "ok", text });
+  const err = (text) => setMsg({ type: "error", text });
+  const info = (text) => setMsg({ type: "info", text });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -48,12 +52,12 @@ export default function VisitorsPanel() {
       if (data && data.ok) {
         setRows(data.rows || []);
         setTotal(Number(data.total || 0));
-        if (data.searchCapped) setMsg("搜索仅扫描了最近 2000 名访客");
-        else setMsg("");
+        if (data.searchCapped) info("搜索仅扫描了最近 2000 名访客");
+        else setMsg(null);
       } else if (res.status === 401) {
-        setMsg("无权限（仅超级管理员可查看）");
+        err("无权限（仅超级管理员可查看）");
       }
-    } catch (e) { setMsg("加载失败，请重试"); }
+    } catch (e) { err("加载失败，请重试"); }
     setLoading(false);
     setSelected(new Set());
   }, [offset, q, olderOnly]);
@@ -80,22 +84,22 @@ export default function VisitorsPanel() {
   async function deleteSelected() {
     if (!selected.size) return;
     if (typeof window !== "undefined" && !window.confirm(`确认删除选中的 ${selected.size} 名访客记录？此操作不可恢复。`)) return;
-    setBusy(true); setMsg("");
+    setBusy(true); setMsg(null);
     try {
       const res = await fetch("/api/admin/visitors", {
         method: "DELETE", credentials: "same-origin",
         headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [...selected] }),
       });
       const data = await res.json();
-      setMsg(data && data.ok ? `已删除 ${data.deleted} 名访客记录` : "删除失败");
-    } catch (e) { setMsg("删除失败"); }
+      data && data.ok ? ok(`已删除 ${data.deleted} 名访客记录`) : err("删除失败");
+    } catch (e) { err("删除失败"); }
     setBusy(false);
     load();
   }
 
   async function deleteOld() {
     if (typeof window !== "undefined" && !window.confirm(`确认删除「${OLD_DAYS} 天前」的所有访客记录？此操作不可恢复。`)) return;
-    setBusy(true); setMsg("");
+    setBusy(true); setMsg(null);
     let deleted = 0, remaining = 0, guard = 0;
     try {
       do {
@@ -104,13 +108,13 @@ export default function VisitorsPanel() {
           headers: { "Content-Type": "application/json" }, body: JSON.stringify({ olderThanDays: OLD_DAYS }),
         });
         const data = await res.json();
-        if (!data || !data.ok) { setMsg("删除失败"); break; }
+        if (!data || !data.ok) { err("删除失败"); break; }
         deleted += Number(data.deleted || 0);
         remaining = Number(data.remaining || 0);
-        setMsg(`正在清理 ${OLD_DAYS} 天前记录…已删 ${deleted}${remaining ? `，剩 ${remaining}` : ""}`);
+        info(`正在清理 ${OLD_DAYS} 天前记录…已删 ${deleted}${remaining ? `，剩 ${remaining}` : ""}`);
       } while (remaining > 0 && ++guard < 12);
-      setMsg(`已删除 ${deleted} 名 ${OLD_DAYS} 天前的访客记录${remaining > 0 ? `（仍剩 ${remaining}，可再次点击）` : ""}`);
-    } catch (e) { setMsg("删除失败"); }
+      ok(`已删除 ${deleted} 名 ${OLD_DAYS} 天前的访客记录${remaining > 0 ? `（仍剩 ${remaining}，可再次点击）` : ""}`);
+    } catch (e) { err("删除失败"); }
     setBusy(false);
     load();
   }
@@ -147,7 +151,19 @@ export default function VisitorsPanel() {
         <button type="button" style={{ ...btn(false), borderColor: C.danger, color: C.danger }} onClick={deleteOld} disabled={busy}>删除 30 天前的全部</button>
       </div>
 
-      {msg && <div style={{ marginBottom: 10, fontSize: 13, color: C.accent }}>{msg}</div>}
+      {msg && (() => {
+        const styles = {
+          ok: { bg: "#f0fdf4", bd: "#bbf7d0", fg: "#16a34a", Icon: CheckCircle2 },
+          error: { bg: "#fef2f2", bd: "#fecaca", fg: C.danger, Icon: AlertTriangle },
+          info: { bg: C.accentSoft, bd: C.accent, fg: C.accent, Icon: Info },
+        }[msg.type] || { bg: C.accentSoft, bd: C.accent, fg: C.accent, Icon: Info };
+        const Icon = styles.Icon;
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "9px 13px", borderRadius: 10, fontSize: 13, fontWeight: 600, background: styles.bg, border: `1px solid ${styles.bd}`, color: styles.fg }}>
+            <Icon size={15} style={{ flex: "none" }} /><span>{msg.text}</span>
+          </div>
+        );
+      })()}
 
       <div style={{ overflowX: "auto", border: `1px solid ${C.border}`, borderRadius: 12, background: C.surface }}>
         <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
@@ -165,9 +181,17 @@ export default function VisitorsPanel() {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td style={{ ...td, textAlign: "center", color: C.muted }} colSpan={8}>加载中…</td></tr>
+              <tr><td style={{ ...td, textAlign: "center", padding: "30px 16px", borderBottom: 0 }} colSpan={8}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 8, color: C.muted, fontSize: 13 }}><LoaderCircle size={16} className="spin-icon" />加载中…</span>
+              </td></tr>
             ) : rows.length === 0 ? (
-              <tr><td style={{ ...td, textAlign: "center", color: C.muted }} colSpan={8}>暂无访客记录</td></tr>
+              <tr><td style={{ ...td, padding: "38px 16px", borderBottom: 0 }} colSpan={8}>
+                <div style={{ textAlign: "center" }}>
+                  <Inbox size={34} style={{ color: C.faint }} />
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginTop: 10 }}>{q ? "没有匹配的访客" : "暂无访客记录"}</div>
+                  <div style={{ fontSize: 12.5, color: C.muted, marginTop: 4 }}>{q ? "换个 IP 或邮箱关键词再试" : "有访客访问主站或工具站后会出现在这里"}</div>
+                </div>
+              </td></tr>
             ) : rows.map((r) => (
               <tr key={r.id}>
                 <td style={td}><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleOne(r.id)} aria-label="选择" /></td>
@@ -196,7 +220,7 @@ export default function VisitorsPanel() {
             <div style={{ display: "flex", alignItems: "center", marginBottom: 16 }}>
               <h3 style={{ margin: 0, fontSize: 17 }}>访客详情</h3>
               <span style={{ flex: 1 }} />
-              <button type="button" style={btn(false)} onClick={() => setDetail(null)}>关闭</button>
+              <button type="button" aria-label="关闭" onClick={() => setDetail(null)} style={{ display: "grid", placeItems: "center", width: 34, height: 34, borderRadius: 9, border: `1px solid ${C.border}`, background: C.surface, color: C.muted, cursor: "pointer" }}><X size={18} /></button>
             </div>
             {detailLoading || detail.loading ? (
               <p style={{ color: C.muted }}>加载中…</p>
@@ -215,9 +239,14 @@ export default function VisitorsPanel() {
                 <h4 style={{ fontSize: 14, margin: "0 0 8px" }}>访问过的页面</h4>
                 <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
                   {detail.pages.length === 0 ? (
-                    <div style={{ padding: 14, color: C.muted, fontSize: 13 }}>无页面记录</div>
+                    <div style={{ padding: "28px 14px", textAlign: "center", color: C.muted }}>
+                      <Inbox size={26} style={{ color: C.faint }} />
+                      <div style={{ fontSize: 12.5, marginTop: 6 }}>暂无页面浏览记录</div>
+                    </div>
                   ) : detail.pages.map((p, i) => (
-                    <div key={i} style={{ display: "flex", gap: 10, padding: "8px 12px", fontSize: 12.5, borderBottom: i < detail.pages.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                    <div key={i} style={{ display: "flex", gap: 10, padding: "8px 12px", fontSize: 12.5, borderBottom: i < detail.pages.length - 1 ? `1px solid ${C.border}` : "none" }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = C.surface2; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}>
                       <span style={{ color: C.faint, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{fmt(p.ts)}</span>
                       <span style={{ color: C.accent, whiteSpace: "nowrap" }}>{siteLabel(p.site)}</span>
                       <span style={{ color: C.text, wordBreak: "break-all" }}>{p.path}</span>
