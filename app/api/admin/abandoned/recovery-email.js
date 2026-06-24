@@ -8,12 +8,43 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
+// 商品 key → 展示名（与 lib/store PRODUCTS 一致）。弃单 services 存的是逗号分隔的 key。
+const PRODUCT_NAMES = {
+  spotify: { zh: "Spotify", en: "Spotify" },
+  ai: { zh: "AI 会员", en: "AI Membership" },
+  netflix: { zh: "Netflix", en: "Netflix" },
+  disney: { zh: "Disney+", en: "Disney+" },
+  max: { zh: "HBO Max", en: "HBO Max" },
+  rocket: { zh: "机场节点", en: "Airport nodes" },
+};
+
+// 解析 services → { displayHtml(好看的名称), ctaUrl(带商品的结算页或选购页) }
+function resolveServices(services, base, en) {
+  const raw = String(services || "");
+  const keys = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  const validKeys = keys.filter((k) => PRODUCT_NAMES[k]);
+  if (validKeys.length) {
+    const names = validKeys.map((k) => (en ? PRODUCT_NAMES[k].en : PRODUCT_NAMES[k].zh));
+    return {
+      displayHtml: escapeHtml(names.join(" · ")),
+      displayText: names.join(" · "),
+      // 点击=自动把这些商品加回购物车并续上结算
+      ctaUrl: base + "/checkout?items=" + encodeURIComponent(validKeys.join(",")),
+      resume: true,
+    };
+  }
+  // 非标准 key（老数据等）→ 原样显示 + 回选购页兜底
+  const fallback = raw || (en ? "the services you picked" : "您挑选的服务");
+  return { displayHtml: escapeHtml(fallback), displayText: fallback, ctaUrl: base + "/shop", resume: false };
+}
+
 export function buildRecoveryEmailHtml({ services, amount, brandName, siteDomain, siteUrl, locale }) {
   const en = locale === "en";
   const L = (zh, e) => (en ? e : zh);
   const base = siteUrl || "https://" + (siteDomain || "www.liumeiti.vip");
-  const shopUrl = base + "/shop";
-  const safeServices = escapeHtml(services || L("您挑选的服务", "the services you picked"));
+  const svc = resolveServices(services, base, en);
+  const safeServices = svc.displayHtml;
+  const ctaUrl = svc.ctaUrl;
   const amountNum = Number(amount);
   const hasAmount = !isNaN(amountNum) && amountNum > 0;
 
@@ -77,8 +108,8 @@ export function buildRecoveryEmailHtml({ services, amount, brandName, siteDomain
           <!-- CTA -->
           <tr>
             <td style="padding:24px 32px 4px;text-align:center;">
-              <a href="${escapeHtml(shopUrl)}" style="display:inline-block;background:linear-gradient(135deg,#0f766e 0%,#14b8a6 100%);color:#ffffff;text-decoration:none;padding:15px 44px;border-radius:999px;font-size:15.5px;font-weight:800;letter-spacing:0.01em;box-shadow:0 10px 24px -10px rgba(15,118,110,0.7);">${L("回去完成下单 →", "Complete my order →")}</a>
-              <div style="margin-top:10px;font-size:11.5px;color:#94a3b8;">${L("无需重新挑选，回到选购页即可继续", "No need to re-pick — just continue from the shop")}</div>
+              <a href="${escapeHtml(ctaUrl)}" style="display:inline-block;background:linear-gradient(135deg,#0f766e 0%,#14b8a6 100%);color:#ffffff;text-decoration:none;padding:15px 44px;border-radius:999px;font-size:15.5px;font-weight:800;letter-spacing:0.01em;box-shadow:0 10px 24px -10px rgba(15,118,110,0.7);">${L("回去完成下单 →", "Complete my order →")}</a>
+              <div style="margin-top:10px;font-size:11.5px;color:#94a3b8;">${svc.resume ? L("商品已为您加回购物车，点击即可直接结算", "Your items are added back to the cart — tap to check out") : L("回到选购页即可继续", "Continue from the shop")}</div>
             </td>
           </tr>
 
@@ -126,8 +157,9 @@ export function buildRecoveryEmailText({ services, amount, brandName, siteDomain
   const en = locale === "en";
   const L = (zh, e) => (en ? e : zh);
   const base = siteUrl || "https://" + (siteDomain || "www.liumeiti.vip");
-  const shopUrl = base + "/shop";
-  const svc = services || L("您挑选的服务", "the services you picked");
+  const resolved = resolveServices(services, base, en);
+  const svc = resolved.displayText;
+  const ctaUrl = resolved.ctaUrl;
   const amountNum = Number(amount);
   const hasAmount = !isNaN(amountNum) && amountNum > 0;
   const lines = [
@@ -137,7 +169,7 @@ export function buildRecoveryEmailText({ services, amount, brandName, siteDomain
     L(`您挑选的「${svc}」我们帮您留着了，回来 30 秒即可完成开通${hasAmount ? `（¥${amountNum.toFixed(0)} 起）` : ""}。`,
       `We saved your selection "${svc}"${hasAmount ? ` (from ¥${amountNum.toFixed(0)})` : ""} — come back and finish in ~30 seconds.`),
     ``,
-    `${L("回去完成下单", "Complete your order")}: ${shopUrl}`,
+    `${resolved.resume ? L("点此带商品直接结算", "Resume checkout with your items") : L("回去完成下单", "Complete your order")}: ${ctaUrl}`,
     ``,
     L("· 支付宝担保 · 7 天可退 · 约 10 分钟开通 · 真人客服值守", "· Alipay escrow · 7-day refund · ~10-min setup · real staffed support"),
     ``,
