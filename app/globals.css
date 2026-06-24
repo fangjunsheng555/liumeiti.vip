@@ -240,7 +240,9 @@
 .home-trust-item span { color: #64748b; font-size: 11px; font-weight: 700; }
 .home-section-head.compact { margin-bottom: 10px; color: #0f172a; }
 .home-section-head.compact span { color: #64748b; }
+@keyframes ticker-fade { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .home-announcement-row {
+  animation: ticker-fade 0.45s ease;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
@@ -4114,7 +4116,7 @@ summary:focus-visible {
   transition: background 0.18s;
 }
 .cart-bar-info:hover { background: rgba(15, 23, 42, 0.04); }
-.cart-bar-info-top {
+.cart-bar-count {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -4123,7 +4125,7 @@ summary:focus-visible {
   color: var(--muted);
   white-space: nowrap;
 }
-.cart-bar-info-top span:first-of-type b { color: var(--primary); font-weight: 800; }
+.cart-bar-count span:first-of-type b { color: var(--primary); font-weight: 800; }
 .cart-bar-discount-tag {
   margin-left: 4px;
   padding: 1px 6px;
@@ -4140,15 +4142,15 @@ summary:focus-visible {
   transition: transform 0.2s;
 }
 .cart-bar-chevron.open { transform: rotate(180deg); }
-.cart-bar-info-bottom {
+.cart-bar-total {
   display: inline-flex;
   align-items: baseline;
   gap: 5px;
   font-size: 11px;
   color: var(--muted);
 }
-.cart-bar-info-bottom s { color: #94a3b8; }
-.cart-bar-info-bottom b {
+.cart-bar-total s { color: #94a3b8; }
+.cart-bar-total b {
   font-size: 17px;
   font-weight: 900;
   color: #134e4a;
@@ -4754,6 +4756,10 @@ summary:focus-visible {
   background: #fff;
   cursor: pointer;
   transition: border-color 0.18s, background 0.18s, box-shadow 0.18s, transform 0.15s;
+}
+.payment-method-option:focus-within {
+  border-color: var(--accent, #0f766e);
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.2);
 }
 .payment-method-option:hover {
   border-color: rgba(15, 118, 110, 0.4);
@@ -11740,8 +11746,8 @@ summary:focus-visible {
     color: #0f766e !important;
     letter-spacing: -.02em !important;
   }
-  .cart-bar-info-top,
-  .cart-bar-info-bottom {
+  .cart-bar-count,
+  .cart-bar-total {
     display: none !important;
   }
   .cart-bar-discount-tag {

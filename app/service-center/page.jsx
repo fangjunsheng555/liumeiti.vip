@@ -450,7 +450,7 @@ export default function ServiceCenterPage() {
     <div className="page-shell service-page-shell">
       <header className="site-header">
         <div className="container header-inner">
-          <Link href="/" className="brand-wrap" aria-label="返回首页">
+          <Link href="/" className="brand-wrap" aria-label={L("返回首页", "Back home")}>
             <img src="/logo-transparent.png" alt="冒央会社 Maoyang Taiwan Inc" className="brand-img" />
           </Link>
           <nav className="desktop-nav">
@@ -516,7 +516,7 @@ export default function ServiceCenterPage() {
                           placeholder="000000"
                           inputMode="numeric"
                           autoComplete="one-time-code"
-                          aria-label="邮箱验证码"
+                          aria-label={L("邮箱验证码", "Email code")}
                         />
                       </label>
                       <button type="submit" className="primary-btn order-query-verify-btn" disabled={queryLoading}>
@@ -593,11 +593,11 @@ export default function ServiceCenterPage() {
                   const open = faqOpen === index;
                   return (
                     <div key={faq.q} className={`faq-card${open ? " faq-open" : ""}`}>
-                      <button className="faq-button" onClick={() => setFaqOpen(open ? -1 : index)}>
+                      <button className="faq-button" onClick={() => setFaqOpen(open ? -1 : index)} aria-expanded={open} aria-controls={`faq-panel-${index}`}>
                         {faq.q}
                         <ChevronDown size={18} className={`chevron${open ? " rotate" : ""}`} />
                       </button>
-                      {open && <div className="faq-answer">{faq.a}</div>}
+                      {open && <div className="faq-answer" id={`faq-panel-${index}`} role="region">{faq.a}</div>}
                     </div>
                   );
                 })}

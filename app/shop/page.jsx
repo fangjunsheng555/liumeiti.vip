@@ -274,7 +274,7 @@ export default function ShopPage() {
     <div className="page-shell shop-page-shell">
       <header className="site-header">
         <div className="container header-inner">
-          <Link href="/" className="brand-wrap" aria-label="返回首页">
+          <Link href="/" className="brand-wrap" aria-label={L("返回首页", "Back home")}>
             <img src="/logo-transparent.png" alt="冒央会社 Maoyang Taiwan Inc" className="brand-img" />
           </Link>
           <nav className="desktop-nav">
@@ -389,8 +389,8 @@ export default function ShopPage() {
 
       {cartCount > 0 && (
         <>
-          {cartExpanded && <button type="button" className="cart-backdrop" aria-label="关闭购物车" onClick={() => setCartExpanded(false)} />}
-          <div className={`cart-bar${cartExpanded ? " expanded" : ""}`} role="region" aria-label="购物车">
+          {cartExpanded && <button type="button" className="cart-backdrop" aria-label={L("关闭购物车", "Close cart")} onClick={() => setCartExpanded(false)} />}
+          <div className={`cart-bar${cartExpanded ? " expanded" : ""}`} role="region" aria-label={L("购物车", "Cart")}>
             {cartExpanded && (
               <div className="cart-bar-panel">
                 <div className="cart-bar-panel-head">

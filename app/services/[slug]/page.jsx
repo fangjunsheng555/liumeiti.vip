@@ -95,7 +95,7 @@ export default async function ServiceLandingPage({ params }) {
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
       <header className="site-header">
         <div className="container header-inner">
-          <Link href="/" className="brand-wrap" aria-label="返回首页">
+          <Link href="/" className="brand-wrap" aria-label={locale === "en" ? "Back home" : "返回首页"}>
             <img src="/logo-transparent.png" alt="冒央会社 Maoyang Taiwan Inc" className="brand-img" />
           </Link>
           <nav className="desktop-nav">

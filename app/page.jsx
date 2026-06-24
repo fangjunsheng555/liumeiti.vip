@@ -309,7 +309,7 @@ function LiveOrderTicker() {
   }, []);
   const order = liveOrderAt(idx, locale);
   return (
-    <div className="home-announcement-row" role="status" aria-live="polite">
+    <div className="home-announcement-row" role="status" aria-live="polite" key={idx}>
       <Megaphone size={15} />
       <span>
         <b>{order.city}</b> {order.name} {t("ticker.ordered")} {order.product} · {order.time}

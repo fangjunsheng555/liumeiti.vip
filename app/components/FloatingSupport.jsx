@@ -48,7 +48,8 @@ export default function FloatingSupport() {
         type="button"
         className={`floating-button${open ? "" : " has-pulse"}`}
         onClick={() => setOpen((value) => !value)}
-        aria-label={L("打开客服菜单", "Open support menu")}
+        aria-expanded={open}
+        aria-label={open ? L("关闭客服菜单", "Close support menu") : L("打开客服菜单", "Open support menu")}
       >
         {open ? <X size={22} /> : <Headphones size={22} />}
         {!open && <span className="floating-online-dot" aria-hidden="true" />}
