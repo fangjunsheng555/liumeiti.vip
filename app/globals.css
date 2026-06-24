@@ -282,12 +282,12 @@
 .account-invite-poster {
   width: 100%;
   display: grid;
-  grid-template-columns: 46px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 11px;
   align-items: center;
   text-align: left;
-  padding: 15px 16px;
-  border-radius: 20px;
+  padding: 10px 14px;
+  border-radius: 18px;
   color: #f8fafc;
   background:
     radial-gradient(circle at 92% 10%, rgba(45, 212, 191, 0.58), transparent 142px),
@@ -312,11 +312,11 @@
   font-weight: 900;
 }
 .account-invite-poster-icon {
-  width: 46px;
-  height: 46px;
+  width: 40px;
+  height: 40px;
   display: grid;
   place-items: center;
-  border-radius: 15px;
+  border-radius: 13px;
   background: rgba(255, 255, 255, 0.15);
   color: #ccfbf1;
   border: 1px solid rgba(255, 255, 255, 0.18);
@@ -330,16 +330,16 @@
 }
 .account-invite-poster strong {
   display: block;
-  margin-top: 2px;
-  font-size: 16px;
-  line-height: 1.18;
+  margin-top: 1px;
+  font-size: 14.5px;
+  line-height: 1.16;
   font-weight: 950;
   color: #fff;
 }
 .account-invite-poster p {
-  margin-top: 4px;
-  font-size: 11.5px;
-  line-height: 1.45;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.38;
   font-weight: 700;
   color: rgba(240, 253, 250, 0.82);
 }
@@ -366,6 +366,8 @@
   margin: 0 auto;
   border: 1px solid rgba(148, 163, 184, 0.24);
 }
+/* 登录框拉到与上方两张活动卡同宽(覆盖 .auth-modal 的 380px 上限) */
+.account-auth-page .account-auth-card { max-width: 100%; }
 
 @media (min-width: 821px) {
   .home-hero-card.container { width: min(1180px, calc(100% - 64px)); }
@@ -417,7 +419,7 @@
   .service-main .process-query-pair { display: grid; gap: 12px; }
   .account-auth-page { padding-bottom: 86px; }
   .account-auth-page .account-main { margin-top: 18px; }
-  .account-invite-poster { border-radius: 16px; padding: 13px; }
+  .account-invite-poster { border-radius: 16px; padding: 9px 13px; }
   .account-auth-card { border-radius: 20px; }
 }
 
