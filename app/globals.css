@@ -12965,7 +12965,7 @@ body:has(.account-modal-mask) .floating-wrap {
 
 .home-hero-full-logo {
   display: block;
-  width: min(470px, calc(100% - 42px));
+  width: min(400px, calc(100% - 48px));
   height: auto;
   object-fit: contain;
   filter: saturate(1.03) contrast(1.02);
@@ -12977,7 +12977,7 @@ body:has(.account-modal-mask) .floating-wrap {
   }
 
   .home-hero-full-logo {
-    width: min(350px, calc(100% - 38px)) !important;
+    width: min(272px, calc(100% - 72px)) !important;
   }
 
   .home-hero-badges {

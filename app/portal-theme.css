@@ -953,7 +953,7 @@ html[lang="en"] .product-card-selected::before { content: "Selected" !important;
 /* ── 28. 桌面端 Hero 放大 + 收窄左右空白（内容更饱满，不再窄居中） ── */
 @media (min-width: 1024px) {
   .home-page-shell .home-main .home-hero-card { padding: 60px 0 10px !important; }
-  .home-page-shell .home-main .home-hero-full-logo { max-width: 560px !important; }
+  .home-page-shell .home-main .home-hero-full-logo { max-width: 440px !important; }
   .home-page-shell .home-main .home-hero-card > p {
     font-size: clamp(32px, 3vw, 42px) !important;
     max-width: 760px !important;
