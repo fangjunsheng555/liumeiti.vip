@@ -46,11 +46,12 @@ export default function AnnouncePanel() {
   const counter = (v) => <div style={{ textAlign: "right", fontSize: 11, color: v.length >= MAX ? C.danger : C.faint, marginTop: 4, fontVariantNumeric: "tabular-nums" }}>{v.length}/{MAX}</div>;
   const card = { border: `1px solid ${C.border}`, borderRadius: 14, background: C.surface, padding: 18, maxWidth: 560 };
 
-  // 预览：忠实还原前端 banner（品牌色条 + 文案 + ›链接提示 + × 关闭）
+  // 预览：忠实还原前端 banner（与 AnnounceBar 同步:喇叭图标 + 品牌渐变 + ›链接提示 + 圆形 × 关闭）
   const Banner = ({ value, tag }) => (
-    <div style={{ display: "flex", alignItems: "center", gap: 12, background: "linear-gradient(135deg,#0f766e,#14b8a6)", color: "#fff", padding: "9px 14px", borderRadius: 10, fontSize: 13.5, fontWeight: 600, lineHeight: 1.4 }}>
-      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}{link ? " ›" : ""}{tag ? <em style={{ opacity: 0.7, fontStyle: "normal", fontWeight: 400, marginLeft: 6 }}>{tag}</em> : null}</span>
-      <span style={{ flex: "none", fontSize: 17, lineHeight: 1, opacity: 0.85 }}>×</span>
+    <div style={{ display: "flex", alignItems: "center", gap: 11, background: "linear-gradient(100deg,#0f766e 0%,#115e59 48%,#134e4a 100%)", color: "#fff", padding: "10px 14px", borderRadius: 10, fontSize: 13.5, fontWeight: 650, lineHeight: 1.45 }}>
+      <span style={{ flex: "none", display: "inline-grid", placeItems: "center", width: 24, height: 24, borderRadius: 8, background: "rgba(255,255,255,0.16)" }}><Megaphone size={14} /></span>
+      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}{link ? <span style={{ opacity: 0.85, marginLeft: 6, fontWeight: 800 }}>›</span> : null}{tag ? <em style={{ opacity: 0.7, fontStyle: "normal", fontWeight: 400, marginLeft: 6 }}>{tag}</em> : null}</span>
+      <span style={{ flex: "none", display: "inline-grid", placeItems: "center", width: 24, height: 24, borderRadius: 999, background: "rgba(255,255,255,0.14)", fontSize: 14, lineHeight: 1 }}>×</span>
     </div>
   );
 
