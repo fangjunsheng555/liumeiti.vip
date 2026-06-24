@@ -454,7 +454,7 @@ export default function ShopPage() {
 
       {selectedProduct && (
         <div className="modal-mask product-detail-mask" onClick={() => setSelectedKey(null)}>
-          <div className="modal-card modal-large product-detail-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-card modal-large product-detail-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={L("商品详情", "Product details")}>
             <div className="modal-head">
               <div className="modal-head-left">
                 <img src={selectedProduct.image} alt={selectedProduct.title} className="modal-product-image" />
@@ -519,7 +519,7 @@ export default function ShopPage() {
 
       {planPickerProduct && (
         <div className="modal-mask product-detail-mask" onClick={() => setPlanPickerKey(null)}>
-          <div className="modal-card rocket-picker-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-card rocket-picker-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={L("选择规格", "Select plan")}>
             <div className="modal-head">
               <div className="modal-head-left">
                 <img src={planPickerProduct.image} alt={planPickerProduct.title} className="modal-product-image" />

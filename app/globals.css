@@ -3969,7 +3969,7 @@ summary:focus-visible {
 }
 .testimonial-head {
   display: grid;
-  grid-template-columns: 42px 1fr auto;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
 }
@@ -3989,11 +3989,19 @@ summary:focus-visible {
   font-size: 14px;
   font-weight: 800;
   color: var(--primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .testimonial-meta {
   margin-top: 2px;
   font-size: 11.5px;
   color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .testimonial-stars {
   display: inline-flex;

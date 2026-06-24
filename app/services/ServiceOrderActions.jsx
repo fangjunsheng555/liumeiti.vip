@@ -62,7 +62,7 @@ export default function ServiceOrderActions({ service, soldOut = {} }) {
 
   const pickerModal = (
     <div className="modal-mask product-detail-mask service-order-mask" onClick={() => setPickerOpen(false)}>
-      <div className="modal-card rocket-picker-modal service-order-picker-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-card rocket-picker-modal service-order-picker-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={t("svc.selectPlan")}>
         <div className="modal-head">
           <div className="modal-head-left">
             <img src={service.image} alt={service.title} className="modal-product-image" />
