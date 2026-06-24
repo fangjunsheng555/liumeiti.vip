@@ -231,8 +231,11 @@ export default function CheckoutPage() {
     if (typeof document === "undefined") return;
     if (authModal) document.body.style.overflow = "hidden";
     else document.body.style.overflow = "";
-    return () => { document.body.style.overflow = ""; };
-  }, [authModal]);
+    if (!authModal) return () => { document.body.style.overflow = ""; };
+    const onKey = (e) => { if (e.key === "Escape" && !authBusy) setAuthModal(null); };
+    document.addEventListener("keydown", onKey);
+    return () => { document.body.style.overflow = ""; document.removeEventListener("keydown", onKey); };
+  }, [authModal, authBusy]);
 
   async function refreshAuthCaptcha(clearAnswer = true) {
     setAuthCaptcha((cur) => ({ ...cur, loading: true, error: "" }));
@@ -1323,7 +1326,7 @@ export default function CheckoutPage() {
             }
           }}
         >
-          <div className="auth-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="auth-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={L("账户登录", "Account")}>
             <div className="auth-modal-head">
               {authModal === "login" || authModal === "register" ? (
                 <div className="auth-modal-tabs">

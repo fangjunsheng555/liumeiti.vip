@@ -33,6 +33,7 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
   const L = (zh, en) => (locale === "en" ? en : zh);
   const [authUser, setAuthUser] = useState(null);
   const [authModal, setAuthModal] = useState(null);
+  const [pendingRedeem, setPendingRedeem] = useState(false);
   const [authForm, setAuthForm] = useState({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
   const [authCaptcha, setAuthCaptcha] = useState({ token: "", image: "", loading: false, error: "" });
   const [authBusy, setAuthBusy] = useState(false);
@@ -63,8 +64,20 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
   useEffect(() => {
     if (typeof document === "undefined") return;
     document.body.style.overflow = authModal ? "hidden" : "";
-    return () => { document.body.style.overflow = ""; };
-  }, [authModal]);
+    if (!authModal) return () => { document.body.style.overflow = ""; };
+    const onKey = (e) => { if (e.key === "Escape" && !authBusy) setAuthModal(null); };
+    document.addEventListener("keydown", onKey);
+    return () => { document.body.style.overflow = ""; document.removeEventListener("keydown", onKey); };
+  }, [authModal, authBusy]);
+
+  // 余额兑换需登录：登录成功后自动重试兑换（authUser 更新后触发）。
+  useEffect(() => {
+    if (pendingRedeem && authUser && authUser !== false) {
+      setPendingRedeem(false);
+      setRedeemStatus(null);
+      submitRedeem();
+    }
+  }, [authUser, pendingRedeem]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function refreshAuthCaptcha(clearAnswer = true) {
     setAuthCaptcha((cur) => ({ ...cur, loading: true, error: "" }));
@@ -101,7 +114,7 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
   }
 
   async function submitRedeem(event) {
-    event.preventDefault();
+    if (event) event.preventDefault();
     const code = redeemInput.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
     if (!code) {
       setRedeemStatus({ type: "error", message: L("请输入兑换码", "Please enter a code") });
@@ -121,8 +134,9 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
         return;
       }
       if (!authUser || authUser === false) {
+        setPendingRedeem(true); // 登录成功后自动重试兑换
         setAuthModal("login");
-        setAuthNotice(L("余额兑换码需要先登录账号，登录后再次点击兑换即可到账", "Balance codes require sign-in. Sign in, then tap redeem again to credit your balance."));
+        setAuthNotice(L("余额兑换码需要先登录账号，登录后将自动为您兑换", "Balance codes require sign-in — we'll redeem automatically once you're signed in."));
         setRedeemStatus({ type: "error", message: L("余额兑换码需要登录账号后兑换", "Please sign in to redeem a balance code") });
         return;
       }
@@ -240,7 +254,7 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
 
       {authModal && (
         <div className="auth-modal-mask" onClick={() => !authBusy && setAuthModal(null)}>
-          <div className="auth-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="auth-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={L("账户登录", "Account")}>
             <div className="auth-modal-head">
               {authModal === "login" || authModal === "register" ? (
                 <div className="auth-modal-tabs">
