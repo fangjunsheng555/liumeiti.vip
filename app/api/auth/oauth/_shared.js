@@ -44,6 +44,31 @@ export function oauthStateCookie(request, state, maxAge = 600) {
   return attrs.join("; ");
 }
 
+// 登录后回跳地址(给工具站等子站用):只允许 liumeiti.vip 注册域及其子域,防开放重定向。
+const RETURN_COOKIE = "lm_oauth_return";
+export function oauthReturnCookieName() { return RETURN_COOKIE; }
+export function safeReturnTo(value) {
+  const s = String(value || "").trim();
+  if (!s) return "";
+  let u;
+  try { u = new URL(s); } catch (e) { return ""; }
+  if (u.protocol !== "https:") return "";
+  const host = u.hostname.toLowerCase();
+  if (host === "liumeiti.vip" || host.endsWith(".liumeiti.vip")) return u.toString();
+  return "";
+}
+export function oauthReturnCookie(request, value, maxAge = 600) {
+  const attrs = [
+    `${RETURN_COOKIE}=${encodeURIComponent(value)}`,
+    "Path=/", "HttpOnly", "SameSite=Lax", `Max-Age=${maxAge}`,
+  ];
+  const configured = process.env.SITE_URL || process.env.NEXT_PUBLIC_SITE_URL || "";
+  if (request.url.startsWith("https://") || configured.startsWith("https://")) attrs.push("Secure");
+  const domain = sharedCookieDomain(request);
+  if (domain) attrs.push("Domain=" + domain);
+  return attrs.join("; ");
+}
+
 export function providerConfigured(provider) {
   if (provider === "google") return Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
   return false;
