@@ -6498,12 +6498,13 @@ summary:focus-visible {
   text-align: center;
 }
 .admin-login-icon {
-  width: 56px; height: 56px;
+  width: 58px; height: 58px;
   margin: 0 auto 16px;
   display: grid; place-items: center;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #ecfeff, #cffafe);
-  color: var(--accent);
+  border-radius: 18px;
+  background: linear-gradient(135deg, #0f172a 0%, #0f766e 100%);
+  color: #5eead4;
+  box-shadow: 0 12px 26px rgba(15, 118, 110, 0.28);
 }
 .admin-login-card h1 { font-size: 20px; font-weight: 900; letter-spacing: -.02em; color: var(--primary); margin-bottom: 4px; }
 .admin-login-card p { font-size: 13px; color: var(--muted); margin-bottom: 18px; }
@@ -6515,13 +6516,17 @@ summary:focus-visible {
 }
 .admin-login-card input:focus { outline: none; border-color: var(--accent); }
 .admin-login-card button[type="submit"] {
-  height: 46px; border-radius: 12px;
-  background: linear-gradient(135deg, #0f172a 0%, #134e4a 100%);
-  color: #fff; font-size: 14px; font-weight: 800;
+  height: 48px; border-radius: 12px;
+  background: linear-gradient(135deg, #0f766e 0%, #14b8a6 100%);
+  color: #fff; font-size: 14.5px; font-weight: 800;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   cursor: pointer; border: none;
+  box-shadow: 0 10px 22px rgba(15, 118, 110, 0.28);
+  transition: transform 0.15s, box-shadow 0.18s;
 }
-.admin-login-card button:disabled { opacity: 0.6; cursor: not-allowed; }
+.admin-login-card button[type="submit"]:hover { transform: translateY(-1px); box-shadow: 0 12px 26px rgba(15, 118, 110, 0.34); }
+.admin-login-card button[type="submit"]:active { transform: translateY(0); }
+.admin-login-card button:disabled { opacity: 0.55; box-shadow: none; cursor: not-allowed; transform: none; }
 .admin-back-link {
   display: inline-flex; align-items: center; gap: 4px;
   margin-top: 14px; font-size: 12px; color: var(--muted); text-decoration: none;
