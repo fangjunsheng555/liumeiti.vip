@@ -34,35 +34,36 @@ export default function AnnounceBar() {
     setA(null);
   };
   const textStyle = {
-    flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+    minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
     color: "#1f2937", textDecoration: "none",
   };
-  // 克制的浅色公告条:白底 + 细线分隔 + 青色小图标点缀,深色文字,不做饱和色块
+  // 克制的浅色公告条:白底 + 细线分隔 + 青色小图标点缀,深色文字;图标+文字整体居中,关闭按钮绝对定位右侧(不影响居中)
   const barStyle = {
+    position: "relative",
     display: "flex", alignItems: "center", justifyContent: "center",
-    padding: "9px 16px",
+    padding: "9px 46px",
     background: "#ffffff",
     color: "#1f2937", fontSize: 13.5, fontWeight: 600, lineHeight: 1.45,
     borderBottom: "1px solid rgba(15, 23, 42, 0.08)",
   };
   return (
     <div style={barStyle} role="region" aria-label={en ? "Announcement" : "公告"}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, width: "min(1180px, 100%)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 9, maxWidth: "min(1180px, 100%)", minWidth: 0 }}>
         <span style={{ flex: "none", display: "inline-grid", placeItems: "center", width: 24, height: 24, borderRadius: 8, background: "rgba(15,118,110,0.10)", color: "#0f766e" }} aria-hidden="true">
           <Megaphone size={14} />
         </span>
         {link
-          ? <a href={link} style={textStyle}>{text}<span style={{ color: "#0f766e", marginLeft: 6, fontWeight: 800 }}>›</span></a>
+          ? <a href={link} target="_blank" rel="noopener noreferrer" style={textStyle}>{text}<span style={{ color: "#0f766e", marginLeft: 6, fontWeight: 800 }}>›</span></a>
           : <span style={textStyle}>{text}</span>}
-        <button
-          type="button"
-          onClick={close}
-          aria-label={en ? "Dismiss" : "关闭"}
-          style={{ flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: 999, background: "transparent", border: 0, color: "#94a3b8", cursor: "pointer", padding: 0, marginRight: -2 }}
-        >
-          <X size={15} />
-        </button>
       </div>
+      <button
+        type="button"
+        onClick={close}
+        aria-label={en ? "Dismiss" : "关闭"}
+        style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: 999, background: "transparent", border: 0, color: "#94a3b8", cursor: "pointer", padding: 0 }}
+      >
+        <X size={15} />
+      </button>
     </div>
   );
 }
