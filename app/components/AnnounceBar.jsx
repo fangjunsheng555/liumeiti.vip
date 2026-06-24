@@ -58,12 +58,16 @@ export default function AnnounceBar() {
     color: "#1f2937", textDecoration: "none",
   };
   const barStyle = {
-    position: "relative",
-    display: "flex", alignItems: "center", justifyContent: "center",
-    padding: "5px 44px",
     background: "#ffffff",
-    color: "#1f2937", fontSize: 13, fontWeight: 600, lineHeight: 1.4,
+    fontSize: 13, fontWeight: 600, lineHeight: 1.4,
     borderBottom: "1px solid rgba(15, 23, 42, 0.08)",
+  };
+  // 内容收进与顶栏相同的容器,使喇叭与 logo 左对齐、关闭与语言按钮右对齐
+  const wrapStyle = {
+    position: "relative",
+    width: "min(1180px, calc(100% - 32px))", margin: "0 auto",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    padding: "5px 0", color: "#1f2937",
   };
   const inner = (
     <>
@@ -73,24 +77,27 @@ export default function AnnounceBar() {
   return (
     <div style={barStyle} role="region" aria-label={en ? "Announcement" : "公告"}>
       <style>{"@keyframes lmAnnFade{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}"}</style>
-      {/* 左侧:简洁中性图标(无底框、非绿) */}
-      <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", display: "inline-flex", color: "#94a3b8" }} aria-hidden="true">
-        <Megaphone size={15} />
-      </span>
-      {/* 居中文案 */}
-      <span key={cur.id + ":" + idx} style={{ maxWidth: "min(1100px, 100%)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", animation: "lmAnnFade .42s ease" }}>
-        {link
-          ? <a href={link} {...(internal ? {} : { target: "_blank", rel: "noopener noreferrer" })} style={textStyle}>{inner}</a>
-          : <span style={textStyle}>{text}</span>}
-      </span>
-      <button
-        type="button"
-        onClick={close}
-        aria-label={en ? "Dismiss" : "关闭"}
-        style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: 999, background: "transparent", border: 0, color: "#94a3b8", cursor: "pointer", padding: 0 }}
-      >
-        <X size={15} />
-      </button>
+      <div style={wrapStyle}>
+        {/* 喇叭:容器左缘(与顶栏 logo 左对齐),中性无底框 */}
+        <span style={{ position: "absolute", left: 0, top: "50%", transform: "translateY(-50%)", display: "inline-flex", color: "#94a3b8" }} aria-hidden="true">
+          <Megaphone size={15} />
+        </span>
+        {/* 居中文案 */}
+        <span key={cur.id + ":" + idx} style={{ maxWidth: "calc(100% - 84px)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", animation: "lmAnnFade .42s ease" }}>
+          {link
+            ? <a href={link} {...(internal ? {} : { target: "_blank", rel: "noopener noreferrer" })} style={textStyle}>{inner}</a>
+            : <span style={textStyle}>{text}</span>}
+        </span>
+        {/* 关闭:容器右缘(与语言按钮右对齐) */}
+        <button
+          type="button"
+          onClick={close}
+          aria-label={en ? "Dismiss" : "关闭"}
+          style={{ position: "absolute", right: 0, top: "50%", transform: "translateY(-50%)", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: 999, background: "transparent", border: 0, color: "#94a3b8", cursor: "pointer", padding: 0 }}
+        >
+          <X size={15} />
+        </button>
+      </div>
     </div>
   );
 }
