@@ -3213,6 +3213,19 @@ button { cursor: pointer; border: none; background: transparent; }
   outline: 3px solid rgba(20, 184, 166, 0.24);
   outline-offset: 3px;
 }
+/* 全站键盘焦点环（仅键盘 :focus-visible 生效，不影响鼠标点击）——此前全站几乎无可见焦点，WCAG 2.4.7 */
+a:focus-visible,
+button:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 3px solid rgba(20, 184, 166, 0.5);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
 .product-card-selected {
   border-color: rgba(20, 184, 166, 0.55) !important;
   background:

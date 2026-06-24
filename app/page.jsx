@@ -422,7 +422,7 @@ export default function Page() {
       <header className="site-header">
         <div className="container header-inner">
           <Link href="/" className="brand-wrap" aria-label="冒央会社 Maoyang Taiwan Inc">
-            <img src="/logo.png" alt="冒央会社 Maoyang Taiwan Inc" className="brand-img" />
+            <img src="/logo-transparent.png" alt="冒央会社 Maoyang Taiwan Inc" className="brand-img" />
           </Link>
           <div className="mobile-header-actions" aria-label={locale === "en" ? "Quick links" : "快捷入口"}>
             <LanguageSwitcher />

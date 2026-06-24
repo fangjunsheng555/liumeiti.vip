@@ -120,6 +120,16 @@ function publicOrder(order, type, locale = "zh") {
   if (output.service === "rocket" && output.account) {
     output.subscriptionLinks = subscriptionLinks(output.account);
   }
+  // 无效/未付订单不释放开通凭据（账号/密码/订阅链接）——仅 received/completed 可见。
+  if (order.status === "invalid") {
+    output.account = "";
+    output.password = "";
+    delete output.subscriptionLinks;
+    output.items = (Array.isArray(output.items) ? output.items : []).map((it) => {
+      const { account, password, subscriptionLinks: _s, ...rest } = it;
+      return rest;
+    });
+  }
   return output;
 }
 

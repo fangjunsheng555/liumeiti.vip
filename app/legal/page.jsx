@@ -265,7 +265,7 @@ export default async function LegalPage() {
       <header className="site-header">
         <div className="container header-inner">
           <Link href="/" className="brand-wrap" aria-label={L("返回首页", "Back home")}>
-            <img src="/logo.png" alt="冒央会社 Maoyang Taiwan Inc" className="brand-img" />
+            <img src="/logo-transparent.png" alt="冒央会社 Maoyang Taiwan Inc" className="brand-img" />
           </Link>
           <nav className="desktop-nav">
             <Link href="/shop">{L("服务产品", "Services")}</Link>

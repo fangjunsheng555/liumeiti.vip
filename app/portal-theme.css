@@ -277,9 +277,8 @@ body { background: var(--bg) !important; color: var(--ink); letter-spacing: -0.0
   padding: 2px 0 !important;
 }
 
-/* ── 11. 头部 logo / 浮动客服 修正 ── */
-/* 头部 logo 换成无白底透明版（消除与 #f5f5f7 背景的白底色差），同尺寸 900×200 无缝替换 */
-.brand-img, .checkout-logo { content: url('/logo-transparent.png') !important; }
+/* ── 11. 浮动客服 修正 ── */
+/* 头部 logo 已直接用 /logo-transparent.png 作为 src（不再用 content 覆盖 hack，避免同时下载 logo.png+透明版两张图）。 */
 
 /* 浮动客服按钮：Apple 浅色——白底 + teal 图标 + 柔和阴影（既不绿也不黑） */
 .floating-button {

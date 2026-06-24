@@ -382,7 +382,9 @@ export default function CheckoutPage() {
             fields: { ...(current.fields || {}), ...savedFields },
           }));
         }
-        if (["alipay", "usdt", "balance"].includes(saved.paymentMethod)) {
+        // 仅恢复 alipay/usdt；'balance' 不从草稿恢复——未登录会落到无 QR 的余额付款页且 balance 为 undefined。
+        // 登录后由下方余额可用逻辑自动选中余额。
+        if (["alipay", "usdt"].includes(saved.paymentMethod)) {
           setPaymentMethod(saved.paymentMethod);
         }
         if (!hasRedeem && !hasItems && cart.length === 0 && Array.isArray(saved.cart)) {
@@ -448,6 +450,13 @@ export default function CheckoutPage() {
   const alipayPayableCny = Math.max(0.01, Math.round((finalCny + paymentAdjustment) * 100) / 100);
   const finalUsdt = Math.round((finalCny * 0.9 / usdtRate) * 100) / 100;
   const savings = subtotal - bundleFinalCny;
+
+  // 余额付款变得不足时（加购/优惠变化抬高总价）自动切回支付宝，避免停留在会被服务端拒绝的余额选项。
+  useEffect(() => {
+    if (paymentMethod === "balance" && (!authedUser || Number(authedUser.balance || 0) < finalCny)) {
+      setPaymentMethod("alipay");
+    }
+  }, [paymentMethod, finalCny, authedUser]);
 
   function handleCopy(value, key) {
     copyText(value);
@@ -702,7 +711,7 @@ export default function CheckoutPage() {
         <header className="checkout-header">
           <Link href="/shop" className="checkout-back">
             <ArrowLeft size={16} />
-            <img src="/logo.png" alt="冒央会社" className="checkout-logo" />
+            <img src="/logo-transparent.png" alt="冒央会社" className="checkout-logo" />
           </Link>
           <div className="checkout-secure">
             <Lock size={13} />
@@ -726,7 +735,7 @@ export default function CheckoutPage() {
         <header className="checkout-header">
           <Link href="/shop" className="checkout-back">
             <ArrowLeft size={16} />
-            <img src="/logo.png" alt="冒央会社" className="checkout-logo" />
+            <img src="/logo-transparent.png" alt="冒央会社" className="checkout-logo" />
           </Link>
           <div className="checkout-secure">
             <Lock size={13} />
@@ -752,7 +761,7 @@ export default function CheckoutPage() {
       <header className="checkout-header">
         <Link href="/shop" className="checkout-back">
           <ArrowLeft size={16} />
-          <img src="/logo.png" alt="冒央会社" className="checkout-logo" />
+          <img src="/logo-transparent.png" alt="冒央会社" className="checkout-logo" />
         </Link>
         <div className="checkout-secure">
           <Lock size={13} />
@@ -912,6 +921,7 @@ export default function CheckoutPage() {
                     placeholder={L("接收订单通知，也可用于后续查询", "For order updates and later lookups")}
                     autoComplete="email"
                     inputMode="email"
+                    maxLength={200}
                     required
                   />
                 </label>
@@ -927,6 +937,7 @@ export default function CheckoutPage() {
                       ? L("Spotify 订单需要,方便客服协助开通", "Needed for Spotify so support can help set up")
                       : L("可选 — 通常通过邮箱沟通", "Optional — we usually reach you by email")}
                     autoComplete="tel"
+                    maxLength={200}
                     required={contactRequired}
                   />
                 </label>
@@ -937,6 +948,7 @@ export default function CheckoutPage() {
                     onChange={(e) => updateField("remark", e.target.value)}
                     placeholder={L("特殊需求或付款备注等", "Special requests or payment notes")}
                     rows={2}
+                    maxLength={1500}
                   />
                 </label>
               </section>
