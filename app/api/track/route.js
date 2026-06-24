@@ -19,7 +19,7 @@ const INDEX = PREFIX + "index";
 const CART_INDEX = "lm:cart:index"; // 弃单索引 ZSET(score=ts, member=访客id)
 const MAX_PAGES = 300;
 const MAX_EVENTS = 120;
-const DEDUP_SEC = 8;
+const DEDUP_SEC = 12;
 const MAX_PATH = 300;
 const BOT_RE = /bot|crawl|spider|slurp|bingpreview|facebookexternalhit|headless|phantom|python-requests|curl\/|wget|axios\/|node-fetch|go-http|libwww|httpclient|monitor|uptime|pingdom|semrush|ahrefs|mj12|dotbot/i;
 // 允许的事件名 → 去重窗口秒（0=不去重）
@@ -28,11 +28,29 @@ const EVENT_DEDUP = { service_view: 1800, cta_click: 5, checkout_started: 0, sig
 function vid(ip, ua) { return createHash("sha256").update(ip + "|" + ua).digest("hex").slice(0, 24); }
 function beijingDay(now) { return new Date(now + 8 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, ""); }
 function cleanStr(s, n) { return String(s == null ? "" : s).slice(0, n); }
+// 噪声查询参数(不进访客记录,否则同一页因这些参数被记成多条、还绕过去重):
+// OAuth 回跳状态 auth、缓存破坏 v、归因 utm/点击 id(已在 attr 里另存)。业务参数(items/*Plan/redeem)保留。
+const NOISE_PARAMS = new Set(["auth", "v", "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid", "ref", "_t"]);
 function cleanPath(p) {
   let s = cleanStr(p, MAX_PATH).trim();
   if (!s) return "/";
-  if (s[0] !== "/") { try { const u = new URL(s); s = u.pathname + u.search; } catch (e) { s = "/" + s.replace(/^https?:\/\/[^/]+/i, ""); } }
-  return s.slice(0, MAX_PATH) || "/";
+  let pathname, search;
+  if (s[0] === "/") {
+    const qi = s.indexOf("?");
+    pathname = qi >= 0 ? s.slice(0, qi) : s;
+    search = qi >= 0 ? s.slice(qi + 1) : "";
+  } else {
+    try { const u = new URL(s); pathname = u.pathname; search = u.search.replace(/^\?/, ""); }
+    catch (e) { return ("/" + s.replace(/^https?:\/\/[^/]+/i, "").replace(/^\/+/, "")).slice(0, MAX_PATH) || "/"; }
+  }
+  if (search) {
+    const kept = search.split("&").filter((part) => {
+      const key = part.split("=")[0];
+      return key && !NOISE_PARAMS.has(decodeURIComponent(key).toLowerCase());
+    });
+    search = kept.length ? "?" + kept.join("&") : "";
+  }
+  return ((pathname || "/") + search).slice(0, MAX_PATH) || "/";
 }
 function authedEmail(request) {
   try { const s = verifySession(getCookieFromRequest(request, "lm_user")); return s && validEmail(s.email) ? String(s.email).toLowerCase() : ""; }
