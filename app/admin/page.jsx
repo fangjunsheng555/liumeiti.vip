@@ -2658,7 +2658,7 @@ export default function AdminPage() {
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "staff" ? " active" : ""}`} onClick={() => setTab("staff")}>工作人员</button>}
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "insights" ? " active" : ""}`} onClick={() => setTab("insights")}>数据洞察</button>}
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "visitors" ? " active" : ""}`} onClick={() => setTab("visitors")}>历史访客</button>}
-          {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "abandoned" ? " active" : ""}`} onClick={() => setTab("abandoned")}>弃单召回</button>}
+          {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "abandoned" ? " active" : ""}`} onClick={() => setTab("abandoned")}>弃单召回{Number(overview?.abandonedTotal || 0) > 0 && <em className="admin-tab-badge">{overview.abandonedTotal}</em>}</button>}
           {isRootStaff && <button type="button" className={`admin-tab-btn${tab === "announce" ? " active" : ""}`} onClick={() => setTab("announce")}>站内公告</button>}
         </div>
 

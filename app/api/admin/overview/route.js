@@ -1,6 +1,7 @@
 import {
   adminSessionFromRequest, isRootAdminSession, adminPermissionProfile,
   getAllOrders, listWithdrawals, listRedeemCodes, getAdminMailLog, listAllUserEmails,
+  redisCmd,
 } from "../../_utils.js";
 
 function beijingDateKey(value = new Date()) {
@@ -100,6 +101,11 @@ export async function GET(request) {
     failedMails: mailLogs.filter((item) => item.ok === false).length,
     usersTotal: userEmails.length,
   };
+
+  // 弃单待召回计数（仅超管，给 tab 徽章用；ZCARD 廉价单次调用）
+  if (isRootAdminSession(session)) {
+    try { overview.abandonedTotal = Number((await redisCmd(["ZCARD", "lm:cart:index"])) || 0); } catch (e) {}
+  }
 
   return Response.json({
     ok: true,
