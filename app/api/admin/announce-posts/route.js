@@ -41,6 +41,7 @@ export async function POST(request) {
     category,
     pinned: Boolean(input.pinned),
     published: Boolean(input.published),
+    inBar: Boolean(input.inBar),   // 在站内公告顶栏轮播(只轮播标题)
   };
   const now = Date.now();
   const posts = await readPosts();

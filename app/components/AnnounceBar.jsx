@@ -1,43 +1,62 @@
 "use client";
 
-// 站内公告横幅（主站）。读 /api/announcements；用户可关闭（按公告 id 记 localStorage，内容更新后重新出现）。
-import { useEffect, useState } from "react";
+// 站内公告顶栏(主站)。读 /api/announcements 的 items 数组,3 秒轮播(只显示标题):
+//  · 来源「站内公告」banner → 点击跳后台预设链接(新标签);
+//  · 来源「公告中心」标记轮播的公告 → 点击进 /announcements(本站)。
+// 用户可关闭(按当前内容签名记 localStorage,内容更新后重新出现)。
+import { useEffect, useRef, useState } from "react";
 import { Megaphone, X } from "lucide-react";
 
 export default function AnnounceBar() {
-  const [a, setA] = useState(null);
+  const [items, setItems] = useState([]);
+  const [idx, setIdx] = useState(0);
+  const [hidden, setHidden] = useState(false);
+  const sigRef = useRef("");
 
   useEffect(() => {
     let on = true;
     fetch("/api/announcements", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => {
-        if (!on || !d || !d.ok || !d.text) return;
+        if (!on || !d || !d.ok) return;
+        const list = (Array.isArray(d.items) ? d.items : []).filter((x) => x && x.text);
+        if (!list.length) return;
+        const sig = list.map((x) => String(x.id)).join("|");
+        sigRef.current = sig;
         let dismissed = "";
         try { dismissed = window.localStorage.getItem("lm_announce_dismissed") || ""; } catch (e) {}
-        if (String(d.id) === dismissed) return;
-        setA(d);
+        if (dismissed === sig) return;
+        setItems(list);
       })
       .catch(() => {});
     return () => { on = false; };
   }, []);
 
-  if (!a) return null;
-  // AnnounceBar 在 LocaleProvider 之外，不能用 useLocale；按 <html lang> 判断中/英。
+  // 多条时每 3 秒轮播一条
+  useEffect(() => {
+    if (items.length <= 1) return;
+    const t = setInterval(() => setIdx((i) => (i + 1) % items.length), 3000);
+    return () => clearInterval(t);
+  }, [items.length]);
+
+  if (hidden || !items.length) return null;
+  const cur = items[idx % items.length] || items[0];
+  // AnnounceBar 在 LocaleProvider 之外,按 <html lang> 判断中/英。
   const en = (typeof document !== "undefined" ? (document.documentElement.lang || "") : "").toLowerCase().startsWith("en");
-  const text = en && a.textEn ? a.textEn : a.text;
-  // 渲染侧兜底：只接受 http(s) 绝对链接或站内相对链接，过滤危险协议。
-  const link = /^(https?:\/\/|\/)/i.test(a.link || "") ? a.link : "";
+  const text = en && cur.textEn ? cur.textEn : cur.text;
+  const link = /^(https?:\/\/|\/)/i.test(cur.link || "") ? cur.link : "";
+  const internal = link.startsWith("/");   // 站内(公告中心)同标签;站外(预设链接)新标签
+
   const close = (e) => {
     e.preventDefault(); e.stopPropagation();
-    try { window.localStorage.setItem("lm_announce_dismissed", String(a.id)); } catch (e2) {}
-    setA(null);
+    try { window.localStorage.setItem("lm_announce_dismissed", sigRef.current); } catch (e2) {}
+    setHidden(true);
   };
+
   const textStyle = {
     minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
     color: "#1f2937", textDecoration: "none",
   };
-  // 克制的浅色公告条:白底 + 细线分隔 + 青色小图标点缀,深色文字;图标+文字整体居中,关闭按钮绝对定位右侧(不影响居中)
   const barStyle = {
     position: "relative",
     display: "flex", alignItems: "center", justifyContent: "center",
@@ -46,15 +65,23 @@ export default function AnnounceBar() {
     color: "#1f2937", fontSize: 13.5, fontWeight: 600, lineHeight: 1.45,
     borderBottom: "1px solid rgba(15, 23, 42, 0.08)",
   };
+  const inner = (
+    <>
+      {text}<span style={{ color: "#0f766e", marginLeft: 6, fontWeight: 800 }}>›</span>
+    </>
+  );
   return (
     <div style={barStyle} role="region" aria-label={en ? "Announcement" : "公告"}>
+      <style>{"@keyframes lmAnnFade{from{opacity:0;transform:translateY(2px)}to{opacity:1;transform:none}}"}</style>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 9, maxWidth: "min(1180px, 100%)", minWidth: 0 }}>
         <span style={{ flex: "none", display: "inline-grid", placeItems: "center", width: 24, height: 24, borderRadius: 8, background: "rgba(15,118,110,0.10)", color: "#0f766e" }} aria-hidden="true">
           <Megaphone size={14} />
         </span>
-        {link
-          ? <a href={link} target="_blank" rel="noopener noreferrer" style={textStyle}>{text}<span style={{ color: "#0f766e", marginLeft: 6, fontWeight: 800 }}>›</span></a>
-          : <span style={textStyle}>{text}</span>}
+        <span key={cur.id + ":" + idx} style={{ minWidth: 0, animation: "lmAnnFade .42s ease" }}>
+          {link
+            ? <a href={link} {...(internal ? {} : { target: "_blank", rel: "noopener noreferrer" })} style={textStyle}>{inner}</a>
+            : <span style={textStyle}>{text}</span>}
+        </span>
       </div>
       <button
         type="button"

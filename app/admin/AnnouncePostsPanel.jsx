@@ -26,7 +26,7 @@ const CAT_MAP = {
 };
 const catLabel = (c) => (CAT_MAP[c] ? CAT_MAP[c].zh : "");
 
-const EMPTY = { id: 0, title: "", titleEn: "", body: "", bodyEn: "", date: "", category: "", pinned: false, published: true };
+const EMPTY = { id: 0, title: "", titleEn: "", body: "", bodyEn: "", date: "", category: "", pinned: false, published: true, inBar: false };
 
 // 显示排序：置顶优先，其次日期字符串倒序（新在前）。
 function sortPosts(list) {
@@ -66,7 +66,7 @@ export default function AnnouncePostsPanel() {
   const editPost = (p) => {
     setForm({
       id: p.id || 0, title: p.title || "", titleEn: p.titleEn || "", body: p.body || "", bodyEn: p.bodyEn || "",
-      date: p.date || "", category: p.category || "", pinned: !!p.pinned, published: p.published !== false,
+      date: p.date || "", category: p.category || "", pinned: !!p.pinned, published: p.published !== false, inBar: !!p.inBar,
     });
     setMsg(null);
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
@@ -81,7 +81,7 @@ export default function AnnouncePostsPanel() {
       title: form.title.trim(), titleEn: form.titleEn.trim(),
       body: form.body, bodyEn: form.bodyEn,
       date: form.date.trim(), category: form.category,
-      pinned: !!form.pinned, published: !!form.published,
+      pinned: !!form.pinned, published: !!form.published, inBar: !!form.inBar,
     };
     try {
       const r = await fetch("/api/admin/announce-posts", {
@@ -200,6 +200,9 @@ export default function AnnouncePostsPanel() {
             <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 14, cursor: "pointer" }}>
               <input type="checkbox" checked={form.published} onChange={(e) => setF("published", e.target.checked)} /> 启用 / 发布（在前端展示）
             </label>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 14, cursor: "pointer" }}>
+              <input type="checkbox" checked={form.inBar} onChange={(e) => setF("inBar", e.target.checked)} /> 在站内公告顶栏轮播（只轮播标题，点击进公告中心）
+            </label>
           </div>
 
           {/* 实时预览 */}
@@ -239,6 +242,7 @@ export default function AnnouncePostsPanel() {
                       {p.published !== false
                         ? <Badge fg={C.ok} bg="#f0fdf4" bd="#bbf7d0"><Eye size={10} />已发布</Badge>
                         : <Badge fg={C.muted} bg={C.surface2} bd={C.border}><EyeOff size={10} />草稿</Badge>}
+                      {p.inBar && <Badge fg={C.accent} bg={C.accentSoft} bd="#bbe7df"><Megaphone size={10} />顶栏轮播</Badge>}
                     </div>
                     <div style={{ fontSize: 14, fontWeight: 700, color: C.text, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title || "（无标题）"}</div>
                     {p.body && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3, lineHeight: 1.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.body}</div>}
