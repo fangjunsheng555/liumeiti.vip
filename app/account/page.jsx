@@ -427,7 +427,7 @@ export default function AccountPage() {
       <div className="account-page account-auth-page">
         <header className="account-header">
           <Link href="/" className="account-brand-only" aria-label={L("冒央会社首页", "Maoyang Taiwan Inc home")}>
-            <img src="/logo-transparent.png" alt="冒央会社" className="account-logo" />
+            <img src="/logo-transparent.png" alt="冒央会社 Maoyang Taiwan Inc" className="account-logo" />
           </Link>
         </header>
         <main className="account-main">
@@ -591,7 +591,7 @@ export default function AccountPage() {
     <div className="account-page">
       <header className="account-header">
         <Link href="/" className="account-brand-only" aria-label={L("冒央会社首页", "Maoyang Taiwan Inc home")}>
-          <img src="/logo-transparent.png" alt="冒央会社" className="account-logo" />
+          <img src="/logo-transparent.png" alt="冒央会社 Maoyang Taiwan Inc" className="account-logo" />
         </Link>
         <button type="button" className="account-logout" onClick={logout}>
           <LogOut size={13} />{L("退出", "Log out")}

@@ -711,7 +711,7 @@ export default function CheckoutPage() {
         <header className="checkout-header">
           <Link href="/shop" className="checkout-back">
             <ArrowLeft size={16} />
-            <img src="/logo-transparent.png" alt="冒央会社" className="checkout-logo" />
+            <img src="/logo-transparent.png" alt="冒央会社 Maoyang Taiwan Inc" className="checkout-logo" />
           </Link>
           <div className="checkout-secure">
             <Lock size={13} />
@@ -735,7 +735,7 @@ export default function CheckoutPage() {
         <header className="checkout-header">
           <Link href="/shop" className="checkout-back">
             <ArrowLeft size={16} />
-            <img src="/logo-transparent.png" alt="冒央会社" className="checkout-logo" />
+            <img src="/logo-transparent.png" alt="冒央会社 Maoyang Taiwan Inc" className="checkout-logo" />
           </Link>
           <div className="checkout-secure">
             <Lock size={13} />
@@ -761,7 +761,7 @@ export default function CheckoutPage() {
       <header className="checkout-header">
         <Link href="/shop" className="checkout-back">
           <ArrowLeft size={16} />
-          <img src="/logo-transparent.png" alt="冒央会社" className="checkout-logo" />
+          <img src="/logo-transparent.png" alt="冒央会社 Maoyang Taiwan Inc" className="checkout-logo" />
         </Link>
         <div className="checkout-secure">
           <Lock size={13} />

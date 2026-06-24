@@ -74,8 +74,8 @@ export default async function ServiceLandingPage({ params }) {
       "@context": "https://schema.org",
       "@type": "BreadcrumbList",
       itemListElement: [
-        { "@type": "ListItem", position: 1, name: "首页", item: "https://www.liumeiti.vip/" },
-        { "@type": "ListItem", position: 2, name: "服务产品", item: "https://www.liumeiti.vip/shop" },
+        { "@type": "ListItem", position: 1, name: locale === "en" ? "Home" : "首页", item: "https://www.liumeiti.vip/" },
+        { "@type": "ListItem", position: 2, name: locale === "en" ? "Services" : "服务产品", item: "https://www.liumeiti.vip/shop" },
         { "@type": "ListItem", position: 3, name: service.shortTitle, item: `https://www.liumeiti.vip/services/${service.slug}` },
       ],
     },
