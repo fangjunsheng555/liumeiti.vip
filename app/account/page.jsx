@@ -385,6 +385,15 @@ export default function AccountPage() {
 
   async function submitMoneyAction(action, endpoint, payload, resetFields = []) {
     if (moneyBusy) return;
+    // 客户端金额预校验：即时反馈，避免往返到服务端才报错
+    if (action === "transfer" || action === "withdraw") {
+      const amt = Number(payload.amount);
+      if (!(amt > 0)) { setMoneyStatus({ type: "error", message: L("请输入大于 0 的金额", "Enter an amount greater than 0") }); return; }
+      if (amt > Number(state.balance || 0)) { setMoneyStatus({ type: "error", message: L(`余额不足，当前余额 ¥${Number(state.balance || 0).toFixed(2)}`, `Insufficient balance (¥${Number(state.balance || 0).toFixed(2)})`) }); return; }
+      if (action === "transfer" && String(payload.email || "").trim().toLowerCase() === String(state.email || "").trim().toLowerCase()) {
+        setMoneyStatus({ type: "error", message: L("不能转账给自己", "You can't transfer to yourself") }); return;
+      }
+    }
     setMoneyBusy(action);
     setMoneyStatus(null);
     try {
