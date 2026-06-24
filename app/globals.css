@@ -7719,10 +7719,12 @@ summary:focus-visible {
 .account-modal-status.status-received { background: #fef3c7; color: #92400e; }
 .account-modal-close {
   display: grid; place-items: center;
-  width: 32px; height: 32px;
-  border-radius: 9px;
+  width: 38px; height: 38px;
+  border-radius: 10px;
   background: #f1f5f9; border: none; color: #475569; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
 }
+.account-modal-close:hover { background: #e2e8f0; color: #0f172a; }
 .account-modal-body { overflow-y: auto; padding: 14px 16px 18px; display: grid; gap: 12px; }
 
 .account-modal-amount {
