@@ -6642,6 +6642,21 @@ summary:focus-visible {
 .admin-content { min-width: 0; }
 .admin-nav-toggle { display: none; }
 
+/* ===== AI 配额:子分类栏目条(随结果滚动而常驻) ===== */
+/* 桌面端 .admin-content 是滚动容器 → top:0 贴容器顶；移动端为窗口滚动 → 让位给 sticky 顶栏 */
+.aiq-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  background: #f4f6fb; /* = .admin-page 背景，遮住下方滚过的内容 */
+  padding: 12px 0 13px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.aiq-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.aiq-tab:hover { background: #eef2f7 !important; color: #0f172a !important; }
+@media (max-width: 900px) { .aiq-sticky { top: 49px; } }
+
 /* ===== 状态总览 · KPI 仪表盘 ===== */
 .admin-overview-page { display: grid; gap: 14px; }
 .admin-overview-card {
