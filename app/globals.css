@@ -6782,6 +6782,41 @@ summary:focus-visible {
   }
 }
 @keyframes adminScrimIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* ===== 桌面端 App-Shell:侧栏与内容区等高填满视口,侧栏常驻、内容区独立滚动 ===== */
+@media (min-width: 901px) {
+  .admin-page { padding-bottom: 0; }
+  .admin-main {
+    height: calc(100vh - 66px); /* 视口减 头部(~49)+上外边距(16) */
+    margin-bottom: 0;
+  }
+  .admin-shell { height: 100%; }
+  .admin-sidebar {
+    position: sticky;
+    top: 0;
+    align-self: stretch;
+    height: 100%;
+    max-height: 100%;
+  }
+  .admin-content {
+    height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 6px;
+    padding-bottom: 10px;
+    scrollbar-width: thin;
+  }
+  .admin-content::-webkit-scrollbar { width: 8px; }
+  .admin-content::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.4); border-radius: 999px; }
+  /* 内容区成为唯一滚动容器后,取消各面板自带的内部滚动框,避免嵌套双滚动条 */
+  .admin-content .admin-userlist-body,
+  .admin-content .admin-code-history-list,
+  .admin-content .admin-code-list,
+  .admin-content .admin-mail-log-list {
+    max-height: none;
+    overflow: visible;
+  }
+}
 .admin-toolbar { display: grid; gap: 8px; margin-bottom: 12px; }
 .admin-search {
   display: flex; align-items: center; gap: 7px;
