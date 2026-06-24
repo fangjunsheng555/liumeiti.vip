@@ -46,12 +46,12 @@ export default function AnnouncePanel() {
   const counter = (v) => <div style={{ textAlign: "right", fontSize: 11, color: v.length >= MAX ? C.danger : C.faint, marginTop: 4, fontVariantNumeric: "tabular-nums" }}>{v.length}/{MAX}</div>;
   const card = { border: `1px solid ${C.border}`, borderRadius: 14, background: C.surface, padding: 18, maxWidth: 560 };
 
-  // 预览：忠实还原前端 banner（与 AnnounceBar 同步:喇叭图标 + 品牌渐变 + ›链接提示 + 圆形 × 关闭）
+  // 预览：忠实还原前端 banner（与 AnnounceBar 同步:白底浅色条 + 青色小图标 + 深色文字 + ›链接 + 圆形关闭）
   const Banner = ({ value, tag }) => (
-    <div style={{ display: "flex", alignItems: "center", gap: 11, background: "linear-gradient(100deg,#0f766e 0%,#115e59 48%,#134e4a 100%)", color: "#fff", padding: "10px 14px", borderRadius: 10, fontSize: 13.5, fontWeight: 650, lineHeight: 1.45 }}>
-      <span style={{ flex: "none", display: "inline-grid", placeItems: "center", width: 24, height: 24, borderRadius: 8, background: "rgba(255,255,255,0.16)" }}><Megaphone size={14} /></span>
-      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}{link ? <span style={{ opacity: 0.85, marginLeft: 6, fontWeight: 800 }}>›</span> : null}{tag ? <em style={{ opacity: 0.7, fontStyle: "normal", fontWeight: 400, marginLeft: 6 }}>{tag}</em> : null}</span>
-      <span style={{ flex: "none", display: "inline-grid", placeItems: "center", width: 24, height: 24, borderRadius: 999, background: "rgba(255,255,255,0.14)", fontSize: 14, lineHeight: 1 }}>×</span>
+    <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#fff", color: "#1f2937", padding: "9px 13px", borderRadius: 10, border: "1px solid rgba(15,23,42,0.08)", fontSize: 13.5, fontWeight: 600, lineHeight: 1.45 }}>
+      <span style={{ flex: "none", display: "inline-grid", placeItems: "center", width: 24, height: 24, borderRadius: 8, background: "rgba(15,118,110,0.10)", color: "#0f766e" }}><Megaphone size={14} /></span>
+      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}{link ? <span style={{ color: "#0f766e", marginLeft: 6, fontWeight: 800 }}>›</span> : null}{tag ? <em style={{ opacity: 0.6, fontStyle: "normal", fontWeight: 500, marginLeft: 6 }}>{tag}</em> : null}</span>
+      <span style={{ flex: "none", display: "inline-grid", placeItems: "center", width: 24, height: 24, borderRadius: 999, color: "#94a3b8", fontSize: 14, lineHeight: 1 }}>×</span>
     </div>
   );
 

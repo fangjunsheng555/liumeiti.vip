@@ -35,30 +35,30 @@ export default function AnnounceBar() {
   };
   const textStyle = {
     flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-    color: "#fff", textDecoration: "none", letterSpacing: ".005em",
+    color: "#1f2937", textDecoration: "none",
   };
+  // 克制的浅色公告条:白底 + 细线分隔 + 青色小图标点缀,深色文字,不做饱和色块
   const barStyle = {
     display: "flex", alignItems: "center", justifyContent: "center",
-    padding: "10px 16px",
-    background: "linear-gradient(100deg, #0f766e 0%, #115e59 48%, #134e4a 100%)",
-    color: "#fff", fontSize: 13.5, fontWeight: 650, lineHeight: 1.45,
-    borderBottom: "1px solid rgba(8, 47, 43, 0.55)",
-    boxShadow: "0 1px 0 rgba(255,255,255,0.06) inset",
+    padding: "9px 16px",
+    background: "#ffffff",
+    color: "#1f2937", fontSize: 13.5, fontWeight: 600, lineHeight: 1.45,
+    borderBottom: "1px solid rgba(15, 23, 42, 0.08)",
   };
   return (
     <div style={barStyle} role="region" aria-label={en ? "Announcement" : "公告"}>
-      <div style={{ display: "flex", alignItems: "center", gap: 11, width: "min(1180px, 100%)" }}>
-        <span style={{ flex: "none", display: "inline-grid", placeItems: "center", width: 26, height: 26, borderRadius: 9, background: "rgba(255,255,255,0.16)" }} aria-hidden="true">
-          <Megaphone size={15} />
+      <div style={{ display: "flex", alignItems: "center", gap: 10, width: "min(1180px, 100%)" }}>
+        <span style={{ flex: "none", display: "inline-grid", placeItems: "center", width: 24, height: 24, borderRadius: 8, background: "rgba(15,118,110,0.10)", color: "#0f766e" }} aria-hidden="true">
+          <Megaphone size={14} />
         </span>
         {link
-          ? <a href={link} style={textStyle}>{text}<span style={{ opacity: 0.85, marginLeft: 6, fontWeight: 800 }}>›</span></a>
+          ? <a href={link} style={textStyle}>{text}<span style={{ color: "#0f766e", marginLeft: 6, fontWeight: 800 }}>›</span></a>
           : <span style={textStyle}>{text}</span>}
         <button
           type="button"
           onClick={close}
           aria-label={en ? "Dismiss" : "关闭"}
-          style={{ flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 999, background: "rgba(255,255,255,0.14)", border: 0, color: "#fff", cursor: "pointer", opacity: 0.9, padding: 0, marginRight: -2 }}
+          style={{ flex: "none", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 26, height: 26, borderRadius: 999, background: "transparent", border: 0, color: "#94a3b8", cursor: "pointer", padding: 0, marginRight: -2 }}
         >
           <X size={15} />
         </button>
