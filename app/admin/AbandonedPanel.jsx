@@ -27,6 +27,7 @@ export default function AbandonedPanel() {
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState(null); // { type: "ok"|"error", text }
   const [selected, setSelected] = useState(() => new Set());
+  const [reloadFlag, setReloadFlag] = useState(0);
   const ok = (text) => setMsg({ type: "ok", text });
   const err = (text) => setMsg({ type: "error", text });
 
@@ -35,12 +36,16 @@ export default function AbandonedPanel() {
     try {
       const r = await fetch(`/api/admin/abandoned?offset=${offset}&limit=${LIMIT}`, { credentials: "same-origin", cache: "no-store" });
       const d = await r.json();
-      if (d && d.ok) { setRows(d.rows || []); setTotal(Number(d.total || 0)); }
+      // offset===0 替换，否则追加（滚动加载更多，替代分页）
+      if (d && d.ok) { setRows((prev) => (offset === 0 ? (d.rows || []) : [...prev, ...(d.rows || [])])); setTotal(Number(d.total || 0)); }
       else if (r.status === 401) err("无权限（仅超级管理员）");
     } catch (e) { err("加载失败"); }
-    setLoading(false); setSelected(new Set());
-  }, [offset]);
+    setLoading(false); if (offset === 0) setSelected(new Set());
+  }, [offset, reloadFlag]);
   useEffect(() => { load(); }, [load]);
+  // 从头刷新（刷新/操作/删除后）：offset 非 0 归零触发，否则递增 reloadFlag
+  const refresh = () => { if (offset !== 0) setOffset(0); else setReloadFlag((f) => f + 1); };
+  const hasMore = rows.length < total;
 
   const toggleOne = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleAll = () => setSelected((s) => (s.size === rows.length ? new Set() : new Set(rows.map((r) => r.id))));
@@ -50,7 +55,7 @@ export default function AbandonedPanel() {
     try {
       const r = await fetch("/api/admin/abandoned", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, action }) });
       const d = await r.json();
-      if (d && d.ok) { ok(action === "email" ? "召回邮件已发送" : "已标记成交"); load(); }
+      if (d && d.ok) { ok(action === "email" ? "召回邮件已发送" : "已标记成交"); refresh(); }
       else err(d.error === "no_email" ? "该弃单没有邮箱，无法发信召回" : (d.error === "send_failed" ? "发信失败，请重试" : "操作失败"));
     } catch (e) { err("操作失败"); }
     setBusy("");
@@ -60,10 +65,9 @@ export default function AbandonedPanel() {
     if (typeof window !== "undefined" && !window.confirm(`确认删除选中的 ${selected.size} 条弃单记录？`)) return;
     setBusy("del"); setMsg(null);
     try { const r = await fetch("/api/admin/abandoned", { method: "DELETE", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [...selected] }) }); const d = await r.json(); d && d.ok ? ok(`已删除 ${d.deleted} 条`) : err("删除失败"); } catch (e) { err("删除失败"); }
-    setBusy(""); load();
+    setBusy(""); refresh();
   }
 
-  const page = Math.floor(offset / LIMIT) + 1, pages = Math.max(1, Math.ceil(total / LIMIT));
   const th = { textAlign: "left", padding: "6px 9px", fontSize: 12.5, color: C.muted, fontWeight: 600, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" };
   const td = { padding: "5px 9px", fontSize: 13, color: C.text, borderBottom: `1px solid ${C.border}`, verticalAlign: "middle" };
   const ellip = { whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
@@ -75,7 +79,7 @@ export default function AbandonedPanel() {
         <h2 style={{ fontSize: 18, margin: 0 }}>弃单召回</h2>
         <span style={{ color: C.muted, fontSize: 12.5 }}>到结算页但未完成下单 · 共 {total} 条</span>
         <span style={{ flex: 1 }} />
-        <button type="button" style={btn(false)} onClick={load} disabled={loading}>刷新</button>
+        <button type="button" style={btn(false)} onClick={refresh} disabled={loading}>刷新</button>
         <button type="button" style={{ ...btn(false), opacity: selected.size ? 1 : 0.5 }} onClick={delSelected} disabled={busy === "del" || !selected.size}>删除选中{selected.size ? `（${selected.size}）` : ""}</button>
       </div>
       {msg && (
@@ -137,11 +141,17 @@ export default function AbandonedPanel() {
         </table>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, fontSize: 13, color: C.muted }}>
-        <button type="button" style={{ ...btn(false), opacity: offset > 0 ? 1 : 0.5 }} onClick={() => setOffset(Math.max(0, offset - LIMIT))} disabled={offset <= 0 || loading}>上一页</button>
-        <span>第 {page} / {pages} 页</span>
-        <button type="button" style={{ ...btn(false), opacity: offset + LIMIT < total ? 1 : 0.5 }} onClick={() => setOffset(offset + LIMIT)} disabled={offset + LIMIT >= total || loading}>下一页</button>
-      </div>
+      {rows.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, marginTop: 14, fontSize: 12.5, color: C.muted }}>
+          {hasMore ? (
+            <button type="button" style={{ ...btn(false), padding: "9px 22px", display: "inline-flex", alignItems: "center", gap: 8 }} onClick={() => setOffset(offset + LIMIT)} disabled={loading}>
+              {loading ? <LoaderCircle size={14} className="spin-icon" /> : null}
+              {loading ? "加载中…" : `加载更多（还有 ${total - rows.length} 条）`}
+            </button>
+          ) : null}
+          <span>已显示 {rows.length} / {total} 条</span>
+        </div>
+      )}
     </div>
   );
 }
