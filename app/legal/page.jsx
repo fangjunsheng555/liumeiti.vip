@@ -188,7 +188,7 @@ const POLICY_SECTIONS_EN = {
   },
   "after-sale": {
     title: "After-sales", kicker: "After-Sales",
-    lead: "If an account, Profile, node or subscription has issues, reach our online support and we'll help based on your order.",
+    lead: "If an account, seat, node or subscription has issues, reach our online support and we'll help based on your order.",
     items: [
       ["Contact channels", "Submit order info and your issue via QQ, WhatsApp, Telegram or the Service Center"],
       ["How we help", "We first confirm the service type and scenario, aiming to restore use or give a clear outcome"],
@@ -209,7 +209,7 @@ const POLICY_SECTIONS_EN = {
   },
   refund: {
     title: "Refund rules", kicker: "Refund Rules",
-    lead: "If an account, Profile or node can't be used due to the service itself and can't be recovered after help, a refund can be handled within 7 days per the rules.",
+    lead: "If an account, seat or node can't be used due to the service itself and can't be recovered after help, a refund can be handled within 7 days per the rules.",
     items: [
       ["Eligible cases", "Not delivered after payment, delivery inconsistent with the order, or the service itself fails and can't be recovered — eligible for a refund or equivalent replacement"],
       ["Process", "Provide the order number, order email and a screenshot or error; after verification we restore use first, then process a refund if it can't be recovered"],

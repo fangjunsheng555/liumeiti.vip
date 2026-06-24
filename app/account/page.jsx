@@ -299,7 +299,7 @@ export default function AccountPage() {
           <div className="account-modal-head">
             <div>
               <div className="account-modal-id">Maoyang X CASETiFY</div>
-              <div className="account-modal-status status-completed">{L("活动至 2026.12.31", "Until 2026.12.31")}</div>
+              <div className="account-modal-status">{L("活动至 2026.12.31", "Until 2026.12.31")}</div>
             </div>
             <button type="button" className="account-modal-close" onClick={() => setCasetifyModal(false)}>
               <X size={16} />
@@ -380,7 +380,7 @@ export default function AccountPage() {
 
   function updateMoneyField(field, value) {
     setMoneyForm((cur) => ({ ...cur, [field]: value }));
-    if (moneyStatus?.type === "error") setMoneyStatus(null);
+    if (moneyStatus) setMoneyStatus(null);
   }
 
   async function submitMoneyAction(action, endpoint, payload, resetFields = []) {
@@ -543,7 +543,7 @@ export default function AccountPage() {
               <div className="account-modal-head">
                 <div>
                   <div className="account-modal-id">{L("合伙人计划", "Partner program")}</div>
-                  <div className="account-modal-status status-completed">{L("最高 15% 佣金，活动长期有效", "Up to 15% commission · always on")}</div>
+                  <div className="account-modal-status">{L("最高 15% 佣金，活动长期有效", "Up to 15% commission · always on")}</div>
                 </div>
                 <button type="button" className="account-modal-close" onClick={() => setActivityModal(false)}>
                   <X size={16} />
@@ -901,7 +901,7 @@ export default function AccountPage() {
             <div className="account-modal-head">
               <div>
                 <div className="account-modal-id">{L("更换头像", "Change avatar")}</div>
-                <div className="account-modal-status status-received">{L("选择一个卡通头像", "Pick a cartoon avatar")}</div>
+                <div className="account-modal-status">{L("选择一个卡通头像", "Pick a cartoon avatar")}</div>
               </div>
               <button type="button" className="account-modal-close" onClick={() => setAvatarModal(false)} disabled={!!avatarSaving}>
                 <X size={16} />
@@ -974,7 +974,7 @@ export default function AccountPage() {
             <div className="account-modal-head">
               <div>
                 <div className="account-modal-id">{L("合伙人计划", "Partner program")}</div>
-                <div className="account-modal-status status-completed">{L("最高 15% 佣金，活动长期有效", "Up to 15% commission · always on")}</div>
+                <div className="account-modal-status">{L("最高 15% 佣金，活动长期有效", "Up to 15% commission · always on")}</div>
               </div>
               <button type="button" className="account-modal-close" onClick={() => setInviteModal(false)}>
                 <X size={16} />
