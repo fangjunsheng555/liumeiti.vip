@@ -27,6 +27,19 @@ const SIZE = process.env.IMAGE_SIZE || "1024x1024";
 const DAILY = Math.max(1, Number(process.env.IMAGE_DAILY_LIMIT || 2));            // 每账号每日
 const IP_LIMIT = Math.max(DAILY, Number(process.env.IMAGE_IP_DAILY_LIMIT || DAILY * 2)); // 每 IP 每日（默认 2 个账号份）
 const MAX_PROMPT = 1000;
+const MAX_EDIT_IMAGES = 4;                 // 改图/合成最多带几张参考图
+const MAX_IMG_BYTES = 5 * 1024 * 1024;     // 单张解码后上限
+const MAX_TOTAL_IMG_BYTES = 9 * 1024 * 1024; // 全部图片总上限(留余量给 Vercel 4.5MB? 注:前端已压;此为兜底)
+
+// base64 → Blob(给 multipart 上传用)。返回 {blob,size} 或 null。
+function decodeImage(im) {
+  if (!im || typeof im.data !== "string") return null;
+  const mt = /^image\/(png|jpe?g|webp)$/i.test(im.media_type || "") ? im.media_type : "image/png";
+  let buf;
+  try { buf = Buffer.from(im.data, "base64"); } catch (e) { return null; }
+  if (!buf || !buf.length) return null;
+  return { blob: new Blob([buf], { type: mt }), size: buf.length };
+}
 
 function authedEmail(request) {
   const s = verifySession(getCookieFromRequest(request, "lm_user"));
@@ -94,6 +107,21 @@ export async function POST(request) {
   const prompt = typeof body.prompt === "string" ? body.prompt.trim().slice(0, MAX_PROMPT) : "";
   if (!prompt) return json({ ok: false, error: "empty_prompt" }, 400);
 
+  // ── 参考图(改图/抠图/合成):带图走 images/edits,无图走 generations(纯文生图) ──
+  const rawImages = Array.isArray(body.images) ? body.images.slice(0, MAX_EDIT_IMAGES) : [];
+  const editBlobs = [];
+  let totalImgBytes = 0;
+  for (const im of rawImages) {
+    const d = decodeImage(im);
+    if (!d) continue;
+    totalImgBytes += d.size;
+    if (d.size > MAX_IMG_BYTES || totalImgBytes > MAX_TOTAL_IMG_BYTES) {
+      return json({ ok: false, error: "image_too_large" }, 400);
+    }
+    editBlobs.push(d.blob);
+  }
+  const isEdit = editBlobs.length > 0;
+
   // ── 每用户配额覆盖(后台可设自定义/不限额) ──
   const ov = await getOverride("image", email);
   const unlimited = !!(ov && ov.daily === UNLIMITED);
@@ -107,14 +135,29 @@ export async function POST(request) {
 
   let upstream, data;
   try {
-    upstream = await fetch(BASE + "/v1/images/generations", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "authorization": "Bearer " + KEY,
-      },
-      body: JSON.stringify({ model: MODEL, prompt, n: 1, size: SIZE }),
-    });
+    if (isEdit) {
+      // 带参考图 → 图像编辑(改图/抠图/合成),multipart 上传
+      const form = new FormData();
+      form.set("model", MODEL);
+      form.set("prompt", prompt);
+      form.set("n", "1");
+      form.set("size", SIZE);
+      editBlobs.forEach((blob, i) => form.append("image[]", blob, "ref" + i + ".png"));
+      upstream = await fetch(BASE + "/v1/images/edits", {
+        method: "POST",
+        headers: { "authorization": "Bearer " + KEY }, // 不设 content-type,让 fetch 自动带 multipart boundary
+        body: form,
+      });
+    } else {
+      upstream = await fetch(BASE + "/v1/images/generations", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "authorization": "Bearer " + KEY,
+        },
+        body: JSON.stringify({ model: MODEL, prompt, n: 1, size: SIZE }),
+      });
+    }
   } catch (e) {
     await refundQuota(qk, ik);
     return json({ ok: false, error: "upstream_unreachable" }, 502);
