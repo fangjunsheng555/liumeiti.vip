@@ -6,7 +6,7 @@
 // 覆盖 = POST { action:"setOverride", email, type, daily|unlimited, maxTokens|tokensUnlimited, note }。
 // 取消 = DELETE { action:"cancelOverride", email, type }。
 import { useCallback, useEffect, useState } from "react";
-import { Inbox, LoaderCircle, CheckCircle2, AlertTriangle, Sparkles, ClipboardList, SlidersHorizontal, Settings2, Check, X, Trash2 } from "lucide-react";
+import { Inbox, LoaderCircle, CheckCircle2, AlertTriangle, Sparkles, ClipboardList, SlidersHorizontal, Settings2, Check, X, Trash2, BarChart3, Search } from "lucide-react";
 
 const UNLIMITED = "unlimited";
 const C = {
@@ -28,6 +28,7 @@ const TABS = [
   { key: "pending", label: "待审批", icon: ClipboardList },
   { key: "overrides", label: "生效覆盖", icon: SlidersHorizontal },
   { key: "manual", label: "手动设置", icon: Settings2 },
+  { key: "usage", label: "全部用量", icon: BarChart3 },
 ];
 
 // 北京时间短格式：26-06-24 21:18
@@ -56,6 +57,11 @@ export default function AIQuotaPanel() {
   // 单条申请的「通过额度微调」临时状态：{ [id]: { granted, unlimited } }
   const [tweak, setTweak] = useState({});
   const [tab, setTab] = useState("pending"); // 当前子分类栏目
+  // 全部用量看板
+  const [usage, setUsage] = useState({ items: [], grand: null, matched: 0, hasMore: false });
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [usageQ, setUsageQ] = useState("");
+  const [usagePeriod, setUsagePeriod] = useState("all"); // 排序依据:all=历史活跃 / today=今日活跃
 
   const ok = (text) => setMsg({ type: "ok", text });
   const err = (text) => setMsg({ type: "error", text });
@@ -77,6 +83,25 @@ export default function AIQuotaPanel() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // 全部用量:仅在切到该栏目时加载;搜索/排序变化防抖 300ms 重新拉取。
+  const loadUsage = useCallback(async (q, period) => {
+    setUsageLoading(true);
+    try {
+      const r = await fetch("/api/admin/ai-usage?period=" + period + "&limit=100" + (q ? "&q=" + encodeURIComponent(q) : ""), { credentials: "same-origin", cache: "no-store" });
+      const d = await r.json();
+      if (r.ok && d && d.ok) setUsage({ items: Array.isArray(d.items) ? d.items : [], grand: d.grand || null, matched: d.matched || 0, hasMore: !!d.hasMore });
+      else if (r.status === 401) setMsg({ type: "error", text: "无权限（仅超级管理员可查看用量）" });
+      else setMsg({ type: "error", text: "用量加载失败，请重试" });
+    } catch (e) { setMsg({ type: "error", text: "用量加载失败，请重试" }); }
+    setUsageLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (tab !== "usage") return;
+    const t = setTimeout(() => loadUsage(usageQ.trim(), usagePeriod), 300);
+    return () => clearTimeout(t);
+  }, [tab, usageQ, usagePeriod, loadUsage]);
 
   async function post(body, okText) {
     setBusy(true); setMsg(null);
@@ -318,6 +343,80 @@ export default function AIQuotaPanel() {
     </div>
   );
 
+  // ── (4) 全部用量 ──
+  const fmtNum = (n) => Number(n || 0).toLocaleString("en-US");
+  const StatCard = ({ label, value, sub, accent }) => (
+    <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.surface, padding: "11px 13px" }}>
+      <div style={{ fontSize: 11.5, color: C.muted, fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 19, fontWeight: 800, color: accent || C.text, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>
+        {value}{sub ? <span style={{ fontSize: 12, fontWeight: 600, color: C.faint, marginLeft: 3 }}>{sub}</span> : null}
+      </div>
+    </div>
+  );
+  const uGrid = { display: "grid", gridTemplateColumns: "minmax(0,1fr) 68px 68px 68px 68px", gap: 8, alignItems: "center", padding: "11px 14px" };
+  const numCell = { textAlign: "right", fontVariantNumeric: "tabular-nums", fontSize: 13.5 };
+
+  const UsageBody = (
+    <div style={{ display: "grid", gap: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ position: "relative", flex: "1 1 220px", minWidth: 180 }}>
+          <Search size={15} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: C.faint, pointerEvents: "none" }} />
+          <input value={usageQ} onChange={(e) => setUsageQ(e.target.value)} placeholder="按邮箱搜索…" inputMode="email" autoComplete="off" style={{ ...inp, paddingLeft: 34 }} />
+        </div>
+        <div style={{ display: "inline-flex", border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", flex: "none" }}>
+          {[{ k: "all", t: "历史活跃" }, { k: "today", t: "今日活跃" }].map((o) => {
+            const on = usagePeriod === o.k;
+            return (
+              <button key={o.k} type="button" onClick={() => setUsagePeriod(o.k)}
+                style={{ padding: "9px 14px", border: 0, cursor: "pointer", fontSize: 13, fontWeight: 700, fontFamily: "inherit", whiteSpace: "nowrap", background: on ? C.accent : "transparent", color: on ? "#fff" : C.muted }}>
+                {o.t} ↓
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {usage.grand && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px,1fr))", gap: 10 }}>
+          <StatCard label="用过 AI 的用户" value={fmtNum(usage.grand.users)} sub="人" />
+          <StatCard label="今日对话" value={fmtNum(usage.grand.chatToday)} sub="条" />
+          <StatCard label="今日生图" value={fmtNum(usage.grand.imgToday)} sub="张" accent="#7c3aed" />
+          <StatCard label="历史对话" value={fmtNum(usage.grand.chatTotal)} sub="条" />
+          <StatCard label="历史生图" value={fmtNum(usage.grand.imgTotal)} sub="张" accent="#7c3aed" />
+        </div>
+      )}
+
+      {usageLoading ? (
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 8, color: C.muted, fontSize: 13, padding: "8px 2px" }}><LoaderCircle size={16} className="spin-icon" />加载中…</div>
+      ) : usage.items.length === 0 ? (
+        <Empty text={usageQ ? "没有匹配的用户" : "暂无用量数据"} hint="用户使用 AI 对话或生图后会出现在这里。" />
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <div style={{ minWidth: 460, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", background: C.surface }}>
+            <div style={{ ...uGrid, background: C.surface2, fontWeight: 700, color: C.muted }}>
+              <span style={{ fontSize: 12 }}>邮箱（{fmtNum(usage.matched)} 人）</span>
+              <span style={{ ...numCell, fontSize: 11.5 }}>今日对话</span>
+              <span style={{ ...numCell, fontSize: 11.5 }}>今日生图</span>
+              <span style={{ ...numCell, fontSize: 11.5 }}>历史对话</span>
+              <span style={{ ...numCell, fontSize: 11.5 }}>历史生图</span>
+            </div>
+            {usage.items.map((it) => (
+              <div key={it.email} style={{ ...uGrid, borderTop: `1px solid ${C.border}` }}>
+                <span style={{ wordBreak: "break-all", fontSize: 13, fontWeight: 600, color: C.text }}>{it.email}</span>
+                <span style={{ ...numCell, color: it.chatToday ? C.text : C.faint }}>{fmtNum(it.chatToday)}</span>
+                <span style={{ ...numCell, color: it.imgToday ? "#7c3aed" : C.faint }}>{fmtNum(it.imgToday)}</span>
+                <span style={{ ...numCell, color: it.chatTotal ? C.text : C.faint }}>{fmtNum(it.chatTotal)}</span>
+                <span style={{ ...numCell, color: it.imgTotal ? "#7c3aed" : C.faint }}>{fmtNum(it.imgTotal)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {usage.hasMore && <div style={{ fontSize: 12, color: C.faint, textAlign: "center" }}>仅显示前 100 名，用邮箱搜索可精确查找。</div>}
+      <p style={{ fontSize: 11.5, color: C.faint, margin: 0, lineHeight: 1.6 }}>注：历史用量自本功能上线起累计（无法回溯此前）；「今日」按北京时间 0 点起算；排序依所选「历史 / 今日活跃」（对话 + 生图）从多到少。</p>
+    </div>
+  );
+
   const tabBadge = (key) => (key === "pending" ? pending.length : key === "overrides" ? overrides.length : 0);
 
   return (
@@ -374,6 +473,7 @@ export default function AIQuotaPanel() {
             {tab === "pending" && PendingBody}
             {tab === "overrides" && OverridesBody}
             {tab === "manual" && ManualBody}
+            {tab === "usage" && UsageBody}
           </div>
         </>
       )}

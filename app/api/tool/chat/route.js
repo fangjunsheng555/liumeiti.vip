@@ -11,7 +11,7 @@ import {
   getCookieFromRequest, verifySession, validEmail,
   checkRateLimit, rateLimitResponse, redisCmd, clientIpFromRequest,
 } from "../../_utils.js";
-import { getOverride, UNLIMITED } from "../_quota.js";
+import { getOverride, UNLIMITED, recordAiUsage } from "../_quota.js";
 
 export const runtime = "nodejs";
 
@@ -236,6 +236,9 @@ export async function POST(request) {
     try { detail = (await upstream.text()).slice(0, 300); } catch (e) {}
     return json({ ok: false, error: "upstream_error", status: upstream.status, detail }, 502);
   }
+
+  // 计一条「对话用量」(上游已确认连上,与每日配额口径一致;失败不影响流式返回)
+  await recordAiUsage("chat", email);
 
   // stream the relay's SSE straight through to the browser
   return new Response(upstream.body, {

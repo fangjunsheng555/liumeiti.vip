@@ -12,7 +12,7 @@ import {
   getCookieFromRequest, verifySession, validEmail,
   checkRateLimit, rateLimitResponse, redisCmd, clientIpFromRequest,
 } from "../../_utils.js";
-import { getOverride, UNLIMITED } from "../_quota.js";
+import { getOverride, UNLIMITED, recordAiUsage } from "../_quota.js";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // gpt-image-2 实测：简单图 ~30s，复杂图 60–80s+。给足时间别让函数掐断（需 Vercel 套餐允许，或开启 Fluid Compute）
@@ -177,6 +177,9 @@ export async function POST(request) {
   const b64 = item.b64_json || "";
   const url = item.url || "";
   if (!b64 && !url) { await refundQuota(qk, ik); return json({ ok: false, error: "no_image" }, 502); }
+
+  // 计一张「生图用量」(成功出图才计,与配额口径一致)
+  await recordAiUsage("image", email);
 
   return json({
     ok: true,
