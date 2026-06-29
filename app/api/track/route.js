@@ -17,6 +17,9 @@ export const runtime = "nodejs";
 const PREFIX = "lm:visit:";
 const INDEX = PREFIX + "index";
 const CART_INDEX = "lm:cart:index"; // 弃单索引 ZSET(score=ts, member=访客id)
+// 账号级真实活动流(用户360只读这里):只记「该账号本人已登录态」下的浏览/事件,
+// 与设备级访客记录(vid=IP+UA)解耦 —— 同 IP+UA 不同人不会再被并进同一个用户的 360。
+const UACT = "lm:uact:";
 const MAX_PAGES = 300;
 const MAX_EVENTS = 120;
 const DEDUP_SEC = 12;
@@ -105,7 +108,17 @@ export async function POST(request) {
         ["EXPIRE", "lm:ev:day:" + day, "7776000"], // 按日事件桶保留 90 天，避免孤儿 key 无界增长
         ["HINCRBY", "lm:ev:total", name, "1"], // 全局累计(给后台漏斗一次读取)
       ];
-      if (email) { cmds.push(["HSET", vkey, "email", email], ["SADD", "lm:visit:email:" + email, id]); }
+      if (email) {
+        cmds.push(["HSET", vkey, "email", email], ["SADD", "lm:visit:email:" + email, id]);
+        // 账号级活动流(用户360 来源)
+        cmds.push(
+          ["LPUSH", UACT + email + ":events", evJson],
+          ["LTRIM", UACT + email + ":events", "0", String(MAX_EVENTS - 1)],
+          ["HSET", UACT + email, "lastSeen", String(now)],
+          ["HSETNX", UACT + email, "firstSeen", String(now)],
+        );
+        if (attr) cmds.push(["HSETNX", UACT + email, "attr", JSON.stringify(attr)]);
+      }
       if (attr) cmds.push(["HSETNX", vkey, "attr", JSON.stringify(attr)]);
       if (slug && (name === "service_view" || name === "cta_click")) {
         cmds.push(["HINCRBY", "lm:svc:" + slug, name === "service_view" ? "views" : "cta", "1"]);
@@ -128,6 +141,8 @@ export async function POST(request) {
     // ── 页面浏览（默认） ──
     const path = cleanPath(body.path);
     const site = body.site === "tool" ? "tool" : "main";
+    // 后台自身浏览不计入访客统计(主站 /admin)。
+    if (site === "main" && /^\/admin(?:[/?]|$)/.test(path)) return noContent();
     const dk = PREFIX + "dedup:" + id + ":" + createHash("sha256").update(site + path).digest("hex").slice(0, 12);
     if ((await redisCmd(["SET", dk, "1", "NX", "EX", String(DEDUP_SEC)])) !== "OK") return noContent();
     const pageEntry = JSON.stringify({ site, path, ts: now });
@@ -141,7 +156,19 @@ export async function POST(request) {
       ["LPUSH", vkey + ":pages", pageEntry],
       ["LTRIM", vkey + ":pages", "0", String(MAX_PAGES - 1)],
     ];
-    if (email) cmds.push(["SADD", "lm:visit:email:" + email, id]); // 邮箱→访客 反向索引(用户360)
+    if (email) {
+      cmds.push(["SADD", "lm:visit:email:" + email, id]); // 邮箱→访客 反向索引(历史访客用)
+      // 账号级活动流(用户360 来源):只记本人已登录态下的真实浏览,带当时 IP。
+      cmds.push(
+        ["LPUSH", UACT + email + ":pages", JSON.stringify({ site, path, ts: now, ip })],
+        ["LTRIM", UACT + email + ":pages", "0", String(MAX_PAGES - 1)],
+        ["HSET", UACT + email, "lastSeen", String(now), "lastIp", ip],
+        ["HSETNX", UACT + email, "firstSeen", String(now)],
+        ["HINCRBY", UACT + email, "count", "1"],
+        ["SADD", UACT + email + ":ips", ip],
+      );
+      if (attr) cmds.push(["HSETNX", UACT + email, "attr", JSON.stringify(attr)]);
+    }
     if (attr) cmds.push(["HSETNX", vkey, "attr", JSON.stringify(attr)]);
     await redisPipeline(cmds);
   } catch (e) { /* swallow — never break the page */ }

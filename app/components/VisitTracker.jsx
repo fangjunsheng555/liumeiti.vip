@@ -41,6 +41,8 @@ export default function VisitTracker() {
   const pathname = usePathname();
   useEffect(() => {
     if (typeof window === "undefined") return;
+    // 后台自身浏览不计入访客统计(双保险,服务端 /api/track 也会忽略 /admin)。
+    if ((window.location.pathname || "").startsWith("/admin")) return;
     const attr = ensureAttr();
     const path = (window.location.pathname || "/") + (window.location.search || "");
     try {
