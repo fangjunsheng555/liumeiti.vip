@@ -8391,6 +8391,22 @@ summary:focus-visible {
   font-weight: 950;
   line-height: 1;
 }
+/* 列表骨架屏 */
+.admin-orders-skeleton { gap: 8px; }
+.admin-skeleton-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 12px; border-radius: 10px; border: 1px solid var(--line); background: #fff;
+}
+.admin-skeleton-bar {
+  height: 12px; border-radius: 6px;
+  background: linear-gradient(90deg, #eef2f7 25%, #f8fafc 37%, #eef2f7 63%);
+  background-size: 400% 100%; animation: admin-shimmer 1.4s ease infinite;
+}
+.admin-skeleton-bar.w25 { width: 18%; }
+.admin-skeleton-bar.w40 { width: 26%; }
+.admin-skeleton-bar.w70 { width: 46%; }
+@keyframes admin-shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+
 /* 全局搜索 ⌘K */
 .admin-global-search-trigger {
   display: flex; align-items: center; gap: 8px; width: 100%; margin-bottom: 12px;

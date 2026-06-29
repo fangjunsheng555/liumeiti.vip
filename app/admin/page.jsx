@@ -1717,6 +1717,8 @@ export default function AdminPage() {
       setBalResult({ type: "error", message: "请填写原因(将记入余额明细)" });
       return;
     }
+    // 改余额二次确认
+    if (typeof window !== "undefined" && !window.confirm(`确认给 ${userInfo.user.email} ${sign > 0 ? "增加" : "扣除"} ¥${num.toFixed(2)}？`)) return;
     setBalBusy(true);
     setBalResult(null);
     try {
@@ -2664,6 +2666,14 @@ export default function AdminPage() {
 
   async function saveOrder() {
     if (!activeOrder || saving) return;
+    // 作废二次确认(作废会自动退款/退券/恢复兑换码)
+    if (editForm.status === "invalid" && activeOrder.status !== "invalid") {
+      const willRefund = activeOrder.paidByBalance || activeOrder.couponId || activeOrder.paymentMethod === "redeem";
+      const msg = willRefund
+        ? `确认作废订单 ${activeOrder.orderId}？\n将自动退回余额/优惠券/兑换码，且回收已发返佣。`
+        : `确认作废订单 ${activeOrder.orderId}？`;
+      if (typeof window !== "undefined" && !window.confirm(msg)) return;
+    }
     setSaving(true);
     setSaveResult(null);
     try {
@@ -3924,7 +3934,15 @@ export default function AdminPage() {
         )}
 
         {loading ? (
-          <div className="admin-loading-inline"><LoaderCircle size={20} className="spin-icon" />加载中</div>
+          <div className="admin-orders admin-orders-skeleton">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="admin-skeleton-row">
+                <span className="admin-skeleton-bar w40" />
+                <span className="admin-skeleton-bar w70" />
+                <span className="admin-skeleton-bar w25" />
+              </div>
+            ))}
+          </div>
         ) : orders.length === 0 ? (
           <div className="admin-empty"><Inbox size={36} /><p>{tab === "abnormal" ? "暂无异常订单" : "暂无订单"}</p></div>
         ) : (
