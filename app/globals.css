@@ -8409,6 +8409,122 @@ summary:focus-visible {
 .admin-user-balance { font-size: 22px; font-weight: 900; color: #78350f; letter-spacing: -.02em; white-space: nowrap; }
 .admin-user-meta { font-size: 11px; color: #b45309; }
 
+.admin-user-referral-card {
+  margin: 12px 0;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(13, 148, 136, 0.2);
+  background: linear-gradient(135deg, rgba(236, 253, 245, 0.92), rgba(240, 253, 250, 0.78));
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+}
+.admin-user-referral-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.admin-user-referral-head strong {
+  font-size: 13px;
+  color: #0f172a;
+}
+.admin-user-referral-head span {
+  max-width: 48%;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(13, 148, 136, 0.1);
+  color: #0f766e;
+  font-size: 10.5px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-user-referral-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.admin-user-referral-grid > div {
+  min-width: 0;
+  padding: 9px;
+  border-radius: 10px;
+  border: 1px solid rgba(13, 148, 136, 0.12);
+  background: rgba(255, 255, 255, 0.78);
+}
+.admin-user-referral-grid span {
+  display: block;
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.admin-user-referral-grid b {
+  display: block;
+  min-width: 0;
+  color: #134e4a;
+  font-size: 12px;
+  font-weight: 900;
+  word-break: break-all;
+}
+.admin-user-downlines {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.admin-user-downlines button {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(13, 148, 136, 0.16);
+  background: #fff;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+.admin-user-downlines button span {
+  grid-row: span 2;
+  align-self: center;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #0f766e;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 900;
+}
+.admin-user-downlines button b {
+  min-width: 0;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-user-downlines button em {
+  min-width: 0;
+  color: #64748b;
+  font-size: 10.5px;
+  font-style: normal;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-user-downlines-empty {
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px dashed rgba(13, 148, 136, 0.24);
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.64);
+}
+
 .admin-balance-form {
   margin-top: 12px;
   display: grid;
@@ -8655,6 +8771,16 @@ summary:focus-visible {
   font-family: ui-monospace, Menlo, monospace;
   font-size: 11px;
   color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-userlist-referral {
+  grid-column: 1 / 3;
+  min-width: 0;
+  font-size: 10.5px;
+  font-weight: 800;
+  color: #0f766e;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

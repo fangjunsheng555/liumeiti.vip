@@ -4,10 +4,53 @@ import {
   addBalanceTx, getBalanceTxs, pushAdminBalanceLog,
   validEmail, formatBeijingTime, clean,
   adminSessionFromRequest, adminPermissionProfile,
+  listAllUserEmails, normalizeInviteCode,
 } from "../../_utils.js";
 
 function adminSession(request) {
   return adminSessionFromRequest(request);
+}
+
+function lowerEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+async function userReferralDetail(email, user) {
+  const lower = lowerEmail(email);
+  const emails = await listAllUserEmails();
+  const records = (await Promise.all(emails.map((item) => getUser(item)))).filter(Boolean);
+  const downlines = records
+    .map((item) => {
+      const targetEmail = lowerEmail(item.email);
+      if (!targetEmail || targetEmail === lower) return null;
+      const first = lowerEmail(item.invitedByEmail);
+      const second = lowerEmail(item.invitedBy2Email);
+      const level = first === lower ? 1 : second === lower ? 2 : 0;
+      if (!level) return null;
+      return {
+        email: targetEmail,
+        username: item.username || "",
+        level,
+        balance: Number(item.balance || 0),
+        banned: !!item.banned,
+        inviteCode: normalizeInviteCode(item.inviteCode),
+        invitedAtBeijing: item.invitedAtBeijing || item.createdAtBeijing || "",
+        createdAtBeijing: item.createdAtBeijing || "",
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.level - b.level || String(b.createdAtBeijing || "").localeCompare(String(a.createdAtBeijing || "")));
+
+  return {
+    inviteCode: normalizeInviteCode(user.inviteCode),
+    invitedByEmail: lowerEmail(user.invitedByEmail),
+    invitedByCode: normalizeInviteCode(user.invitedByCode),
+    invitedBy2Email: lowerEmail(user.invitedBy2Email),
+    invitedAtBeijing: user.invitedAtBeijing || "",
+    levelOneCount: downlines.filter((item) => item.level === 1).length,
+    levelTwoCount: downlines.filter((item) => item.level === 2).length,
+    downlines,
+  };
 }
 
 // GET /api/admin/users?email=xxx@xxx.com — fetch a user with balance + transactions
@@ -28,6 +71,7 @@ export async function GET(request) {
     return Response.json({ ok: false, error: "user_not_found" }, { status: 404 });
   }
   const txs = await getBalanceTxs(email);
+  const referral = permissions.canViewUsers ? await userReferralDetail(email, user) : null;
   return Response.json({
     ok: true,
     user: {
@@ -35,6 +79,7 @@ export async function GET(request) {
       username: user.username || "",
       balance: Number(user.balance || 0),
       createdAtBeijing: user.createdAtBeijing || "",
+      referral,
     },
     transactions: txs,
   });

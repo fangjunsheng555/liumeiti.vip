@@ -56,6 +56,16 @@ function referralCommissionLabel(order) {
   return order.status === "completed" ? "待结算" : "完成后结算";
 }
 
+function userReferralSummary(referral) {
+  if (!referral) return "";
+  const parts = [];
+  if (referral.invitedByEmail) parts.push(`上级 ${referral.invitedByEmail}`);
+  const l1 = Number(referral.levelOneCount || 0);
+  const l2 = Number(referral.levelTwoCount || 0);
+  if (l1 || l2) parts.push(`下级 ${l1} / 二级 ${l2}`);
+  return parts.join(" · ");
+}
+
 function actionDetailText(item) {
   if (typeof item?.detailText === "string" && item.detailText.trim()) return item.detailText;
   if (typeof item?.detail === "string" && item.detail.trim()) return item.detail;
@@ -2884,6 +2894,9 @@ export default function AdminPage() {
                         {u.banned && <em className="admin-userlist-banned">已封禁</em>}
                       </span>
                       <span className="admin-userlist-email">{u.email}</span>
+                      {userReferralSummary(u.referral) && (
+                        <span className="admin-userlist-referral">{userReferralSummary(u.referral)}</span>
+                      )}
                       <span className="admin-userlist-balance">¥{u.balance.toFixed(2)}</span>
                     </button>
                     <div className="admin-userlist-actions">
@@ -4286,6 +4299,31 @@ export default function AdminPage() {
                 </div>
                 <div className="admin-user-meta">注册于 {userInfo.user.createdAtBeijing || "--"}</div>
               </div>
+              {userInfo.user.referral && (
+                <div className="admin-user-referral-card">
+                  <div className="admin-user-referral-head">
+                    <strong>上下级关系</strong>
+                    <span>邀请码 {userInfo.user.referral.inviteCode || "--"}</span>
+                  </div>
+                  <div className="admin-user-referral-grid">
+                    <div><span>直属上级</span><b>{userInfo.user.referral.invitedByEmail || "无"}</b></div>
+                    <div><span>二级上级</span><b>{userInfo.user.referral.invitedBy2Email || "无"}</b></div>
+                    <div><span>一级下级</span><b>{Number(userInfo.user.referral.levelOneCount || 0)} 人</b></div>
+                    <div><span>二级下级</span><b>{Number(userInfo.user.referral.levelTwoCount || 0)} 人</b></div>
+                  </div>
+                  <div className="admin-user-downlines">
+                    {userInfo.user.referral.downlines?.length ? userInfo.user.referral.downlines.map((item) => (
+                      <button key={`${item.level}:${item.email}`} type="button" onClick={() => loadUser(item.email)}>
+                        <span>{item.level === 1 ? "一级" : "二级"}</span>
+                        <b>{item.email}</b>
+                        <em>{item.username || "未命名"} · ¥{Number(item.balance || 0).toFixed(2)}</em>
+                      </button>
+                    )) : (
+                      <div className="admin-user-downlines-empty">暂无下级用户</div>
+                    )}
+                  </div>
+                </div>
+              )}
               {canAdjustBalance && (
                 <div className="admin-balance-form">
                   <div className="admin-balance-row">
