@@ -44,6 +44,18 @@ function copyText(text) {
   }
 }
 
+function referralCommissionTotal(order) {
+  return (Array.isArray(order?.referralCommissionEntries) ? order.referralCommissionEntries : [])
+    .reduce((sum, entry) => sum + Number(entry?.amount || 0), 0);
+}
+
+function referralCommissionLabel(order) {
+  if (!order?.referral?.levelOneEmail) return "";
+  const total = referralCommissionTotal(order);
+  if (order.referralCommissionSettledAt) return `已结算 ¥${total.toFixed(2)}`;
+  return order.status === "completed" ? "待结算" : "完成后结算";
+}
+
 function actionDetailText(item) {
   if (typeof item?.detailText === "string" && item.detailText.trim()) return item.detailText;
   if (typeof item?.detail === "string" && item.detail.trim()) return item.detail;
@@ -3799,6 +3811,9 @@ export default function AdminPage() {
                       <span className="admin-order-id">{o.orderId}</span>
                       <span className="admin-card-badges">
                         {o.lastStaffId && <span className="staff-mini-badge">{o.lastStaffId}</span>}
+                        {o.referral?.levelOneEmail && (
+                          <span className="staff-mini-badge">{referralCommissionLabel(o)}</span>
+                        )}
                         <span className={`admin-order-status status-${o.status}`}>
                           {o.status === "completed" ? <CheckCircle2 size={11} /> : o.status === "invalid" ? <AlertTriangle size={11} /> : <Clock size={11} />}
                           {STATUS_LABEL[o.status]}
@@ -3956,6 +3971,17 @@ export default function AdminPage() {
                   )}
                   {activeOrder.completedAtBeijing && (
                     <div className="span-2"><span>完成时间</span><b>{activeOrder.completedAtBeijing}</b></div>
+                  )}
+                  {activeOrder.referral?.levelOneEmail && (
+                    <div className="span-2">
+                      <span>邀请返佣</span>
+                      <b className="admin-summary-remark">
+                        邀请人 {activeOrder.referral.levelOneEmail}
+                        {activeOrder.referral.inviteCode ? ` · 邀请码 ${activeOrder.referral.inviteCode}` : ""}
+                        {` · ${referralCommissionLabel(activeOrder)}`}
+                        {activeOrder.referralCommissionSettledAtBeijing ? ` · ${activeOrder.referralCommissionSettledAtBeijing}` : ""}
+                      </b>
+                    </div>
                   )}
                   {activeOrder.staffAudit?.[0] && (
                     <div className="span-2"><span>最近操作</span><b>{activeOrder.staffAudit[0].label || `#${activeOrder.staffAudit[0].staffId}`} · {activeOrder.staffAudit[0].createdAtBeijing}</b></div>

@@ -62,6 +62,15 @@ function normalizeOrder(order) {
     }];
   }
   const abnormal = abnormalInfo(order);
+  const referralEntries = Array.isArray(order.referralCommissionEntries)
+    ? order.referralCommissionEntries.map((entry) => ({
+      email: entry?.email || "",
+      level: Number(entry?.level || 0),
+      rate: Number(entry?.rate || 0),
+      amount: Number(entry?.amount || 0),
+      balanceAfter: Number(entry?.balanceAfter || 0),
+    }))
+    : [];
   return {
     orderId: order.orderId || "",
     status: order.status || "received",
@@ -85,6 +94,17 @@ function normalizeOrder(order) {
     finalUsdt: Number(order.finalUsdt || 0),
     paidAmount: Number(order.paidAmount || (order.paymentMethod === "usdt" ? order.finalUsdt : order.finalAmount) || 0),
     paidCurrency: order.paidCurrency || (order.paymentMethod === "usdt" ? "USDT" : "CNY"),
+    referral: order.referral ? {
+      source: order.referral.source || "",
+      inviteCode: order.referral.inviteCode || "",
+      levelOneEmail: order.referral.levelOneEmail || "",
+      levelOneRate: Number(order.referral.levelOneRate || 0),
+      levelTwoEmail: order.referral.levelTwoEmail || "",
+      levelTwoRate: Number(order.referral.levelTwoRate || 0),
+    } : null,
+    referralCommissionSettledAt: order.referralCommissionSettledAt || "",
+    referralCommissionSettledAtBeijing: order.referralCommissionSettledAtBeijing || "",
+    referralCommissionEntries: referralEntries,
     email: order.email || "",
     contact: order.contact || "",
     clientIp: order.clientIp || "",
