@@ -2,7 +2,7 @@ import {
   getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
   pushAdminActionLog, formatBeijingTime, isRootAdminSession, adminPermissionProfile,
-  clean, sendSimpleEmail,
+  clean, sendSimpleEmail, reverseOrderReferralCommission,
 } from "../../../_utils.js";
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
 
@@ -95,12 +95,15 @@ export async function POST(request) {
     } else if (action === "invalid") {
       const order = entry.order;
       if (order.status !== "invalid") {
+        const wasCompleted = order.status === "completed";
         const now = new Date();
         order.status = "invalid";
         order.invalidAt = now.toISOString();
         order.invalidAtBeijing = formatBeijingTime(now);
         order.completedAt = null;
         order.completedAtBeijing = null;
+        // 已完成订单被批量作废:回收已发返佣。
+        if (wasCompleted) await reverseOrderReferralCommission(order, actor);
         order.staffAudit = Array.isArray(order.staffAudit) ? order.staffAudit : [];
         order.staffAudit.unshift({
           id: "OA" + Date.now().toString(36).toUpperCase(),

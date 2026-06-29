@@ -49,21 +49,17 @@ function referralCommissionTotal(order) {
     .reduce((sum, entry) => sum + Number(entry?.amount || 0), 0);
 }
 
-function referralCommissionLabel(order) {
-  if (!order?.referral?.levelOneEmail) return "";
-  const total = referralCommissionTotal(order);
-  if (order.referralCommissionSettledAt) return `已结算 ¥${total.toFixed(2)}`;
-  return order.status === "completed" ? "待结算" : "完成后结算";
+function referralCommissionReversedTotal(order) {
+  return (Array.isArray(order?.referralCommissionReversedEntries) ? order.referralCommissionReversedEntries : [])
+    .reduce((sum, entry) => sum + Number(entry?.amount || 0), 0);
 }
 
-function userReferralSummary(referral) {
-  if (!referral) return "";
-  const parts = [];
-  if (referral.invitedByEmail) parts.push(`上级 ${referral.invitedByEmail}`);
-  const l1 = Number(referral.levelOneCount || 0);
-  const l2 = Number(referral.levelTwoCount || 0);
-  if (l1 || l2) parts.push(`下级 ${l1} / 二级 ${l2}`);
-  return parts.join(" · ");
+function referralCommissionLabel(order) {
+  if (!order?.referral?.levelOneEmail) return "";
+  if (order.referralCommissionSettledAt) return `已结算 ¥${referralCommissionTotal(order).toFixed(2)}`;
+  // 曾结算后又被作废 → 冲正回收
+  if (order.referralCommissionReversedAt) return `已冲正 ¥${referralCommissionReversedTotal(order).toFixed(2)}`;
+  return order.status === "completed" ? "待结算" : "完成后结算";
 }
 
 function actionDetailText(item) {
@@ -1117,6 +1113,7 @@ export default function AdminPage() {
   const [userInfo, setUserInfo] = useState(null); // {user, transactions}
   const [userModalOpen, setUserModalOpen] = useState(false);
   const [userModalTarget, setUserModalTarget] = useState("");
+  const [userTab, setUserTab] = useState("balance"); // balance | referral | activity
   const loadUserRequestRef = useRef(0);
   const [userLoading, setUserLoading] = useState(false);
   const [userError, setUserError] = useState("");
@@ -1614,6 +1611,7 @@ export default function AdminPage() {
     loadUserRequestRef.current += 1;
     setUserModalOpen(false);
     setUserModalTarget("");
+    setUserTab("balance"); // 下次打开默认回到「余额明细」
   }
 
   async function loadUser(email) {
@@ -2890,13 +2888,19 @@ export default function AdminPage() {
                       onClick={() => loadUser(u.email)}
                     >
                       <span className="admin-userlist-name">
-                        {u.username || "—"}
+                        <span className="admin-userlist-name-text">{u.username || "—"}</span>
                         {u.banned && <em className="admin-userlist-banned">已封禁</em>}
+                        {Number(u.referral?.levelOneCount || 0) > 0 && (
+                          <em className="admin-userlist-ref-chip down" title="一级下级人数">下级 {Number(u.referral.levelOneCount)}</em>
+                        )}
+                        {Number(u.referral?.levelTwoCount || 0) > 0 && (
+                          <em className="admin-userlist-ref-chip down2" title="二级下级人数">二级 {Number(u.referral.levelTwoCount)}</em>
+                        )}
+                        {u.referral?.invitedByEmail && (
+                          <em className="admin-userlist-ref-chip up" title={`上级 ${u.referral.invitedByEmail}`}>上级</em>
+                        )}
                       </span>
                       <span className="admin-userlist-email">{u.email}</span>
-                      {userReferralSummary(u.referral) && (
-                        <span className="admin-userlist-referral">{userReferralSummary(u.referral)}</span>
-                      )}
                       <span className="admin-userlist-balance">¥{u.balance.toFixed(2)}</span>
                     </button>
                     <div className="admin-userlist-actions">
@@ -4299,61 +4303,98 @@ export default function AdminPage() {
                 </div>
                 <div className="admin-user-meta">注册于 {userInfo.user.createdAtBeijing || "--"}</div>
               </div>
-              {userInfo.user.referral && (
-                <div className="admin-user-referral-card">
-                  <div className="admin-user-referral-head">
-                    <strong>上下级关系</strong>
-                    <span>邀请码 {userInfo.user.referral.inviteCode || "--"}</span>
-                  </div>
-                  <div className="admin-user-referral-grid">
-                    <div><span>直属上级</span><b>{userInfo.user.referral.invitedByEmail || "无"}</b></div>
-                    <div><span>二级上级</span><b>{userInfo.user.referral.invitedBy2Email || "无"}</b></div>
-                    <div><span>一级下级</span><b>{Number(userInfo.user.referral.levelOneCount || 0)} 人</b></div>
-                    <div><span>二级下级</span><b>{Number(userInfo.user.referral.levelTwoCount || 0)} 人</b></div>
-                  </div>
-                  <div className="admin-user-downlines">
-                    {userInfo.user.referral.downlines?.length ? userInfo.user.referral.downlines.map((item) => (
-                      <button key={`${item.level}:${item.email}`} type="button" onClick={() => loadUser(item.email)}>
-                        <span>{item.level === 1 ? "一级" : "二级"}</span>
-                        <b>{item.email}</b>
-                        <em>{item.username || "未命名"} · ¥{Number(item.balance || 0).toFixed(2)}</em>
-                      </button>
-                    )) : (
-                      <div className="admin-user-downlines-empty">暂无下级用户</div>
-                    )}
-                  </div>
-                </div>
-              )}
-              {canAdjustBalance && (
-                <div className="admin-balance-form">
-                  <div className="admin-balance-row">
-                    <span>金额</span>
-                    <input type="number" inputMode="decimal" step="0.01" min="0.01" value={balForm.amount} onChange={(e) => setBalForm({ ...balForm, amount: e.target.value })} placeholder="例如 100" />
-                  </div>
-                  <div className="admin-balance-row">
-                    <span>原因</span>
-                    <textarea value={balForm.reason} onChange={(e) => setBalForm({ ...balForm, reason: e.target.value })} placeholder="将写入余额明细" rows={2} />
-                  </div>
-                  {balResult && <div className={`admin-alert ${balResult.type}`}>{balResult.message}</div>}
-                  <div className="admin-balance-actions">
-                    <button type="button" className="admin-balance-add" disabled={balBusy} onClick={() => adjustBalance(+1)}><CheckCircle2 size={13} />增加</button>
-                    <button type="button" className="admin-balance-deduct" disabled={balBusy} onClick={() => adjustBalance(-1)}><AlertTriangle size={13} />扣除</button>
-                  </div>
-                </div>
-              )}
-              <div className="admin-tx-list">
-                <div className="admin-tx-list-label">余额明细 · {userInfo.transactions.length} 条</div>
-                {userInfo.transactions.map((tx) => (
-                  <div key={tx.id} className={`admin-tx-item${tx.amount > 0 ? " positive" : " negative"}`}>
-                    <div className="admin-tx-item-info">
-                      <strong>{tx.reason}</strong>
-                      <small>{tx.createdAtBeijing}{tx.staffId ? ` · #${tx.staffId}` : ""}</small>
-                    </div>
-                    <div className="admin-tx-item-amount">{tx.amount > 0 ? "+" : ""}¥{Math.abs(tx.amount).toFixed(2)}</div>
-                  </div>
-                ))}
+
+              <div className="admin-user-tabs" role="tablist">
+                <button
+                  type="button" role="tab" aria-selected={userTab === "balance"}
+                  className={userTab === "balance" ? "active" : ""}
+                  onClick={() => setUserTab("balance")}
+                >余额明细 <span className="admin-user-tab-count">{userInfo.transactions.length}</span></button>
+                {userInfo.user.referral && (
+                  <button
+                    type="button" role="tab" aria-selected={userTab === "referral"}
+                    className={userTab === "referral" ? "active" : ""}
+                    onClick={() => setUserTab("referral")}
+                  >上下级关系 <span className="admin-user-tab-count">{Number(userInfo.user.referral.levelOneCount || 0) + Number(userInfo.user.referral.levelTwoCount || 0)}</span></button>
+                )}
+                {isRootStaff && (
+                  <button
+                    type="button" role="tab" aria-selected={userTab === "activity"}
+                    className={userTab === "activity" ? "active" : ""}
+                    onClick={() => setUserTab("activity")}
+                  >访问与行为</button>
+                )}
               </div>
-              {isRootStaff && <UserActivity email={userInfo.user.email} />}
+
+              {userTab === "balance" && (
+                <div className="admin-user-tabpanel">
+                  {canAdjustBalance && (
+                    <div className="admin-balance-form">
+                      <div className="admin-balance-row">
+                        <span>金额</span>
+                        <input type="number" inputMode="decimal" step="0.01" min="0.01" value={balForm.amount} onChange={(e) => setBalForm({ ...balForm, amount: e.target.value })} placeholder="例如 100" />
+                      </div>
+                      <div className="admin-balance-row">
+                        <span>原因</span>
+                        <textarea value={balForm.reason} onChange={(e) => setBalForm({ ...balForm, reason: e.target.value })} placeholder="将写入余额明细" rows={2} />
+                      </div>
+                      {balResult && <div className={`admin-alert ${balResult.type}`}>{balResult.message}</div>}
+                      <div className="admin-balance-actions">
+                        <button type="button" className="admin-balance-add" disabled={balBusy} onClick={() => adjustBalance(+1)}><CheckCircle2 size={13} />增加</button>
+                        <button type="button" className="admin-balance-deduct" disabled={balBusy} onClick={() => adjustBalance(-1)}><AlertTriangle size={13} />扣除</button>
+                      </div>
+                    </div>
+                  )}
+                  <div className="admin-tx-list">
+                    <div className="admin-tx-list-label">余额明细 · {userInfo.transactions.length} 条</div>
+                    {userInfo.transactions.length === 0 ? (
+                      <div className="admin-tx-item"><div className="admin-tx-item-info"><small>暂无变动记录</small></div></div>
+                    ) : userInfo.transactions.map((tx) => (
+                      <div key={tx.id} className={`admin-tx-item${tx.amount > 0 ? " positive" : " negative"}`}>
+                        <div className="admin-tx-item-info">
+                          <strong>{tx.reason}</strong>
+                          <small>{tx.createdAtBeijing}{tx.staffId ? ` · #${tx.staffId}` : ""}</small>
+                        </div>
+                        <div className="admin-tx-item-amount">{tx.amount > 0 ? "+" : ""}¥{Math.abs(tx.amount).toFixed(2)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {userTab === "referral" && userInfo.user.referral && (
+                <div className="admin-user-tabpanel">
+                  <div className="admin-user-referral-card">
+                    <div className="admin-user-referral-head">
+                      <strong>上下级关系</strong>
+                      <span>邀请码 {userInfo.user.referral.inviteCode || "--"}</span>
+                    </div>
+                    <div className="admin-user-referral-grid">
+                      <div><span>直属上级</span><b>{userInfo.user.referral.invitedByEmail || "无"}</b></div>
+                      <div><span>二级上级</span><b>{userInfo.user.referral.invitedBy2Email || "无"}</b></div>
+                      <div><span>一级下级</span><b>{Number(userInfo.user.referral.levelOneCount || 0)} 人</b></div>
+                      <div><span>二级下级</span><b>{Number(userInfo.user.referral.levelTwoCount || 0)} 人</b></div>
+                    </div>
+                    <div className="admin-user-downlines">
+                      {userInfo.user.referral.downlines?.length ? userInfo.user.referral.downlines.map((item) => (
+                        <button key={`${item.level}:${item.email}`} type="button" onClick={() => loadUser(item.email)}>
+                          <span>{item.level === 1 ? "一级" : "二级"}</span>
+                          <b>{item.email}</b>
+                          <em>{item.username || "未命名"} · ¥{Number(item.balance || 0).toFixed(2)}</em>
+                        </button>
+                      )) : (
+                        <div className="admin-user-downlines-empty">暂无下级用户</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {userTab === "activity" && isRootStaff && (
+                <div className="admin-user-tabpanel">
+                  <UserActivity email={userInfo.user.email} />
+                </div>
+              )}
               </>
               )}
             </div>

@@ -484,6 +484,9 @@ export async function deleteUser(email) {
   if (!r) return false;
   const lower = String(email).toLowerCase().trim();
   try {
+    // 删除前读出上下级,清理返佣反向索引(从上级名下移除 + 删除自身下级集合)。
+    const existing = await getUser(lower);
+    if (existing) await deindexReferralRelation(existing);
     const res = await fetch(r.url + "/pipeline", {
       method: "POST",
       headers: { Authorization: "Bearer " + r.token, "Content-Type": "application/json" },
@@ -1277,6 +1280,95 @@ export async function ensureUserReferralProfile(email, currentUser = null) {
   return user;
 }
 
+// 返佣下级反向索引 — 避免每次查「我的下级」都全表扫描全站用户。
+//   liumeiti:referral:l1:<上级邮箱> = 直属(一级)下级邮箱集合
+//   liumeiti:referral:l2:<上级邮箱> = 二级下级邮箱集合
+const REFERRAL_L1_PREFIX = "liumeiti:referral:l1:";
+const REFERRAL_L2_PREFIX = "liumeiti:referral:l2:";
+const REFERRAL_INDEX_BUILT_KEY = "liumeiti:referral:index:built";
+function referralL1Key(email) { return REFERRAL_L1_PREFIX + String(email || "").trim().toLowerCase(); }
+function referralL2Key(email) { return REFERRAL_L2_PREFIX + String(email || "").trim().toLowerCase(); }
+
+// 关系形成时把下级登记到上级名下(幂等;SADD 重复无副作用)。
+async function indexReferralRelation(downlineEmail, level1Upline, level2Upline) {
+  const down = String(downlineEmail || "").trim().toLowerCase();
+  if (!validEmail(down)) return;
+  const l1 = validEmail(level1Upline) ? String(level1Upline).toLowerCase() : "";
+  const l2 = validEmail(level2Upline) ? String(level2Upline).toLowerCase() : "";
+  const cmds = [];
+  if (l1 && l1 !== down) cmds.push(["SADD", referralL1Key(l1), down]);
+  if (l2 && l2 !== down) cmds.push(["SADD", referralL2Key(l2), down]);
+  if (cmds.length) await redisPipeline(cmds);
+}
+
+// 用户被删除时:从其上级名下移除,并清掉其自身的下级集合。
+export async function deindexReferralRelation(user) {
+  if (!user) return;
+  const lower = String(user.email || "").trim().toLowerCase();
+  if (!lower) return;
+  const cmds = [];
+  if (validEmail(user.invitedByEmail)) cmds.push(["SREM", referralL1Key(user.invitedByEmail), lower]);
+  if (validEmail(user.invitedBy2Email)) cmds.push(["SREM", referralL2Key(user.invitedBy2Email), lower]);
+  cmds.push(["DEL", referralL1Key(lower)]);
+  cmds.push(["DEL", referralL2Key(lower)]);
+  await redisPipeline(cmds);
+}
+
+// 一次性回填:把存量用户的上下级关系灌进索引(flag 保证只跑一次)。
+async function ensureReferralIndexBuilt() {
+  try {
+    const built = await redisCmd(["GET", REFERRAL_INDEX_BUILT_KEY]);
+    if (built) return;
+    const emails = await listAllUserEmails();
+    const cmds = [];
+    for (const item of emails) {
+      const lower = String(item || "").trim().toLowerCase();
+      const u = await getUser(lower);
+      if (!u) continue;
+      const a = validEmail(u.invitedByEmail) ? String(u.invitedByEmail).toLowerCase() : "";
+      const b = validEmail(u.invitedBy2Email) ? String(u.invitedBy2Email).toLowerCase() : "";
+      if (a && a !== lower) cmds.push(["SADD", referralL1Key(a), lower]);
+      if (b && b !== lower) cmds.push(["SADD", referralL2Key(b), lower]);
+    }
+    // 只有写入成功才置 flag,避免 Redis 抖动导致「半成品索引」被标记为已建。
+    if (cmds.length) {
+      const res = await redisPipeline(cmds);
+      if (res == null) return;
+    }
+    await redisCmd(["SET", REFERRAL_INDEX_BUILT_KEY, "1"]);
+  } catch (e) {}
+}
+
+// 读取某用户的下级(一级+二级):走索引,O(下级数) 次 getUser,不再全表扫描。
+// 返回已按 getUser 解析、过滤掉失效(已删)项的记录,因此即便索引含陈旧项,计数仍准确。
+export async function getReferralDownlineRecords(email) {
+  const lower = String(email || "").trim().toLowerCase();
+  if (!validEmail(lower)) return [];
+  await ensureReferralIndexBuilt();
+  const l1 = (await redisCmd(["SMEMBERS", referralL1Key(lower)])) || [];
+  const l2 = (await redisCmd(["SMEMBERS", referralL2Key(lower)])) || [];
+  const levelByEmail = new Map();
+  for (const e of l1) { const k = String(e || "").trim().toLowerCase(); if (k && k !== lower) levelByEmail.set(k, 1); }
+  for (const e of l2) { const k = String(e || "").trim().toLowerCase(); if (k && k !== lower && !levelByEmail.has(k)) levelByEmail.set(k, 2); }
+  const records = [];
+  for (const [targetEmail, level] of levelByEmail) {
+    const u = await getUser(targetEmail);
+    if (!u) continue;
+    records.push({
+      email: targetEmail,
+      level,
+      username: u.username || "",
+      balance: Number(u.balance || 0),
+      banned: !!u.banned,
+      inviteCode: normalizeInviteCode(u.inviteCode),
+      invitedAtBeijing: u.invitedAtBeijing || u.createdAtBeijing || "",
+      createdAtBeijing: u.createdAtBeijing || "",
+    });
+  }
+  records.sort((a, b) => a.level - b.level || String(b.createdAtBeijing || "").localeCompare(String(a.createdAtBeijing || "")));
+  return records;
+}
+
 export async function prepareNewUserReferralProfile(email, user, inviteCode = "") {
   const lower = String(email || "").trim().toLowerCase();
   const next = {
@@ -1295,6 +1387,8 @@ export async function prepareNewUserReferralProfile(email, user, inviteCode = ""
         : "";
       next.invitedAt = new Date().toISOString();
       next.invitedAtBeijing = formatBeijingTime(new Date());
+      // 关系成立 → 写入反向索引(上级名下登记该新用户)。
+      await indexReferralRelation(lower, next.invitedByEmail, next.invitedBy2Email);
     }
   }
   await bindInviteCode(lower, next.inviteCode);
@@ -1377,12 +1471,12 @@ export async function settleOrderReferralCommission(order, actor = null) {
   for (const item of candidates) {
     const email = String(item.email).toLowerCase();
     const existingTxs = await getBalanceTxs(email);
-    const duplicated = existingTxs.some((tx) =>
-      tx?.source === "referral" &&
-      tx?.orderId === order.orderId &&
-      Number(tx?.referralLevel || 0) === item.level
-    );
-    if (duplicated) continue;
+    // 净额去重:已发(referral)笔数 > 已冲正(referral_reversal)笔数 时视为当前已发放,跳过。
+    // 这样「完成→作废(冲正)→再次完成」可以重新发放,而重复保存不会重复发。
+    const matchLevel = (tx, src) => tx?.source === src && tx?.orderId === order.orderId && Number(tx?.referralLevel || 0) === item.level;
+    const paidCount = existingTxs.filter((tx) => matchLevel(tx, "referral")).length;
+    const reversedCount = existingTxs.filter((tx) => matchLevel(tx, "referral_reversal")).length;
+    if (paidCount > reversedCount) continue;
 
     const user = await getUser(email);
     if (!user || user.banned) continue;
@@ -1425,6 +1519,69 @@ export async function settleOrderReferralCommission(order, actor = null) {
   order.referralCommissionSettledAtBeijing = formatBeijingTime(now);
   order.referralCommissionEntries = entries;
   return { ok: true, entries };
+}
+
+// 订单从「已完成」改回其它状态(作废/未完成)时,把已发放的返佣按笔冲正回收。
+// 冲正后清空结算标记,使订单若再次完成可重新结算;按 tx 净额幂等,重复调用安全。
+export async function reverseOrderReferralCommission(order, actor = null) {
+  if (!order || !order.referralCommissionSettledAt) {
+    return { ok: true, skipped: "not_settled", reversed: [] };
+  }
+  const settledEntries = Array.isArray(order.referralCommissionEntries) ? order.referralCommissionEntries : [];
+  const now = new Date();
+  const reversed = [];
+  for (const entry of settledEntries) {
+    const email = String(entry?.email || "").toLowerCase();
+    const level = Number(entry?.level || 0);
+    const amount = roundMoney(entry?.amount || 0);
+    if (!validEmail(email) || amount <= 0) continue;
+    const existingTxs = await getBalanceTxs(email);
+    const matchLevel = (tx, src) => tx?.source === src && tx?.orderId === order.orderId && Number(tx?.referralLevel || 0) === level;
+    const paidCount = existingTxs.filter((tx) => matchLevel(tx, "referral")).length;
+    const reversedCount = existingTxs.filter((tx) => matchLevel(tx, "referral_reversal")).length;
+    if (paidCount <= reversedCount) continue; // 当前已无未冲正的发放,跳过
+
+    const user = await getUser(email);
+    if (!user) continue;
+    const prev = roundMoney(user.balance);
+    const next = roundMoney(prev - amount); // 允许为负:佣金可能已被提现/消费,负余额如实反映欠款
+    user.balance = next;
+    user.referralStats = user.referralStats && typeof user.referralStats === "object" ? user.referralStats : {};
+    user.referralStats.totalCommission = roundMoney(Math.max(0, Number(user.referralStats.totalCommission || 0) - amount));
+    await setUser(email, user);
+    const tx = {
+      id: makeId("TX"),
+      amount: -amount,
+      reason: `合伙人收益冲正 ${maskReferralOrderId(order.orderId)} · ${level === 1 ? "一级10%" : "二级5%"}(订单作废)`,
+      balanceAfter: next,
+      source: "referral_reversal",
+      orderId: order.orderId,
+      referralLevel: level,
+      commissionBase: roundMoney(entry?.amount || 0),
+      createdAt: now.toISOString(),
+      createdAtBeijing: formatBeijingTime(now),
+      staffId: Number(actor?.staffId || 1),
+      staffUsername: clean(actor?.staffUsername || "admin", 60),
+    };
+    await addBalanceTx(email, tx);
+    await pushAdminBalanceLog({
+      ...tx,
+      email,
+      balanceBefore: prev,
+      action: "referral_commission_reversal",
+      detail: { orderId: order.orderId, level, amount },
+    });
+    reversed.push({ email, level, amount, balanceAfter: next });
+  }
+
+  order.referralCommissionReversedAt = now.toISOString();
+  order.referralCommissionReversedAtBeijing = formatBeijingTime(now);
+  order.referralCommissionReversedEntries = reversed;
+  // 清空结算标记,允许重新完成时再次结算。
+  order.referralCommissionSettledAt = "";
+  order.referralCommissionSettledAtBeijing = "";
+  order.referralCommissionEntries = [];
+  return { ok: true, reversed };
 }
 
 export async function consumeBestCoupon(email, orderId, maxAmount) {

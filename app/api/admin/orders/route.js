@@ -71,6 +71,14 @@ function normalizeOrder(order) {
       balanceAfter: Number(entry?.balanceAfter || 0),
     }))
     : [];
+  const referralReversedEntries = Array.isArray(order.referralCommissionReversedEntries)
+    ? order.referralCommissionReversedEntries.map((entry) => ({
+      email: entry?.email || "",
+      level: Number(entry?.level || 0),
+      amount: Number(entry?.amount || 0),
+      balanceAfter: Number(entry?.balanceAfter || 0),
+    }))
+    : [];
   return {
     orderId: order.orderId || "",
     status: order.status || "received",
@@ -105,6 +113,9 @@ function normalizeOrder(order) {
     referralCommissionSettledAt: order.referralCommissionSettledAt || "",
     referralCommissionSettledAtBeijing: order.referralCommissionSettledAtBeijing || "",
     referralCommissionEntries: referralEntries,
+    referralCommissionReversedAt: order.referralCommissionReversedAt || "",
+    referralCommissionReversedAtBeijing: order.referralCommissionReversedAtBeijing || "",
+    referralCommissionReversedEntries: referralReversedEntries,
     email: order.email || "",
     contact: order.contact || "",
     clientIp: order.clientIp || "",

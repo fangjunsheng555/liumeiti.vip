@@ -2,7 +2,7 @@ import {
   getCookieFromRequest, verifySession, getAllOrders,
   getUser, setUser, validUsername, generateRandomUsername, clean,
   generateRandomUserAvatarId, validUserAvatarId,
-  publicCoupons, publicReferral, ensureUserReferralProfile, listAllUserEmails,
+  publicCoupons, publicReferral, ensureUserReferralProfile, getReferralDownlineRecords,
 } from "../../_utils.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../../lib/order-i18n.js";
 
@@ -79,28 +79,16 @@ function maskEmail(email) {
 }
 
 async function publicReferralDownlines(email, locale = "zh") {
-  const lower = String(email || "").trim().toLowerCase();
-  const emails = await listAllUserEmails();
-  const rows = [];
-  for (const item of emails) {
-    const targetEmail = String(item || "").trim().toLowerCase();
-    if (!targetEmail || targetEmail === lower) continue;
-    const user = await getUser(targetEmail);
-    if (!user) continue;
-    const first = String(user.invitedByEmail || "").trim().toLowerCase();
-    const second = String(user.invitedBy2Email || "").trim().toLowerCase();
-    if (first === lower || second === lower) {
-      rows.push({
-        email: maskEmail(targetEmail),
-        level: first === lower ? 1 : 2,
-        levelLabel: locale === "en"
-          ? (first === lower ? "L1 agent" : "L2 agent")
-          : (first === lower ? "一级代理" : "二级代理"),
-        joinedAtBeijing: user.createdAtBeijing || user.invitedAtBeijing || "",
-      });
-    }
-  }
-  return rows.sort((a, b) => a.level - b.level || String(b.joinedAtBeijing).localeCompare(String(a.joinedAtBeijing)));
+  // 走反向索引(getReferralDownlineRecords),不再全表扫描;已按 level→新到旧排序。
+  const records = await getReferralDownlineRecords(email);
+  return records.map((r) => ({
+    email: maskEmail(r.email),
+    level: r.level,
+    levelLabel: locale === "en"
+      ? (r.level === 1 ? "L1 agent" : "L2 agent")
+      : (r.level === 1 ? "一级代理" : "二级代理"),
+    joinedAtBeijing: r.createdAtBeijing || r.invitedAtBeijing || "",
+  }));
 }
 
 export async function GET(request) {

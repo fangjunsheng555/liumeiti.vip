@@ -8409,6 +8409,58 @@ summary:focus-visible {
 .admin-user-balance { font-size: 22px; font-weight: 900; color: #78350f; letter-spacing: -.02em; white-space: nowrap; }
 .admin-user-meta { font-size: 11px; color: #b45309; }
 
+/* 用户详情分栏:余额明细 / 上下级关系 / 访问与行为 */
+.admin-user-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 12px 0;
+  padding: 4px;
+  border-radius: 12px;
+  background: #f1f5f9;
+  border: 1px solid var(--line);
+}
+.admin-user-tabs button {
+  flex: 1 1 0;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 6px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s, border-color 0.15s;
+}
+.admin-user-tabs button:hover { color: #0f172a; }
+.admin-user-tabs button.active {
+  background: #fff;
+  color: #0f766e;
+  border-color: rgba(13, 148, 136, 0.2);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+.admin-user-tab-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.15);
+  color: inherit;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 16px;
+  text-align: center;
+}
+.admin-user-tabs button.active .admin-user-tab-count { background: rgba(13, 148, 136, 0.16); }
+.admin-user-tabpanel { min-width: 0; }
+/* 分栏后:卡片内首个元素的上外边距收掉,避免与 tab 条之间留白过大 */
+.admin-user-tabpanel > .admin-user-referral-card:first-child,
+.admin-user-tabpanel > .admin-balance-form:first-child { margin-top: 0; }
+
 .admin-user-referral-card {
   margin: 12px 0;
   padding: 12px;
@@ -8760,27 +8812,38 @@ summary:focus-visible {
   border-color: var(--accent);
 }
 .admin-userlist-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
   font-size: 12.5px;
   font-weight: 800;
   color: var(--primary);
+}
+.admin-userlist-name-text {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.admin-userlist-ref-chip {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.admin-userlist-ref-chip.down { background: rgba(13, 148, 136, 0.12); color: #0f766e; }
+.admin-userlist-ref-chip.down2 { background: rgba(13, 148, 136, 0.08); color: #0d9488; }
+.admin-userlist-ref-chip.up { background: #eef2f7; color: #64748b; }
 .admin-userlist-email {
   font-family: ui-monospace, Menlo, monospace;
   font-size: 11px;
   color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.admin-userlist-referral {
-  grid-column: 1 / 3;
-  min-width: 0;
-  font-size: 10.5px;
-  font-weight: 800;
-  color: #0f766e;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

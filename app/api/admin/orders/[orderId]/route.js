@@ -2,7 +2,7 @@ import {
   getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
   pushAdminActionLog, formatBeijingTime, clean, isRootAdminSession,
-  settleOrderReferralCommission, sendSimpleEmail, adminPermissionProfile,
+  settleOrderReferralCommission, reverseOrderReferralCommission, sendSimpleEmail, adminPermissionProfile,
   restoreAiStock,
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
@@ -192,6 +192,9 @@ export async function PATCH(request, { params }) {
   let commissionResult = null;
   if (newStatus === "completed" && !wasCompleted) {
     commissionResult = await settleOrderReferralCommission(order, actor);
+  } else if (wasCompleted && newStatus && newStatus !== "completed") {
+    // 已完成 → 作废/未完成:回收已发返佣。
+    commissionResult = await reverseOrderReferralCommission(order, actor);
   }
 
   // Save back
