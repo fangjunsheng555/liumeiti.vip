@@ -4000,6 +4000,18 @@ export default function AdminPage() {
                       </b>
                     </div>
                   )}
+                  {activeOrder.refundedAt && (
+                    <div className="span-2">
+                      <span>作废退款</span>
+                      <b className="admin-summary-remark">
+                        {Number(activeOrder.refund?.balance || 0) > 0 ? `退余额 ¥${Number(activeOrder.refund.balance).toFixed(2)}` : ""}
+                        {activeOrder.refund?.coupon ? " · 已还优惠券" : ""}
+                        {activeOrder.refund?.redeem ? " · 已恢复兑换码" : ""}
+                        {Number(activeOrder.refund?.balance || 0) <= 0 && !activeOrder.refund?.coupon && !activeOrder.refund?.redeem ? "无需退款" : ""}
+                        {activeOrder.refundedAtBeijing ? ` · ${activeOrder.refundedAtBeijing}` : ""}
+                      </b>
+                    </div>
+                  )}
                   {activeOrder.staffAudit?.[0] && (
                     <div className="span-2"><span>最近操作</span><b>{activeOrder.staffAudit[0].label || `#${activeOrder.staffAudit[0].staffId}`} · {activeOrder.staffAudit[0].createdAtBeijing}</b></div>
                   )}

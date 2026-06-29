@@ -3,7 +3,7 @@ import {
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
   pushAdminActionLog, formatBeijingTime, clean, isRootAdminSession,
   settleOrderReferralCommission, reverseOrderReferralCommission, sendSimpleEmail, adminPermissionProfile,
-  restoreAiStock,
+  restoreAiStock, refundVoidedOrder,
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
@@ -147,6 +147,7 @@ export async function PATCH(request, { params }) {
   // Status transition
   const wasCompleted = order.status === "completed";
   const wasInvalid = order.status === "invalid";
+  let refundResult = null;
   if (newStatus) {
     order.status = newStatus;
     if (newStatus === "completed" && !wasCompleted) {
@@ -169,6 +170,8 @@ export async function PATCH(request, { params }) {
           it.aiStockReserved = false;
         }
       }
+      // 退款闭环:余额支付退回余额、还优惠券、恢复兑换码(幂等)。
+      refundResult = await refundVoidedOrder(order, actor);
     }
     if (newStatus !== "invalid") {
       order.invalidAt = null;
@@ -229,6 +232,7 @@ export async function PATCH(request, { params }) {
     completion: newStatus === "completed" && !wasCompleted ? { email: emailResult } : null,
     invalidNotice: newStatus === "invalid" && !wasInvalid ? { email: invalidEmailResult } : null,
     commission: commissionResult,
+    refund: refundResult,
     statusChange: newStatus,
   });
 }

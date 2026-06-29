@@ -1622,6 +1622,61 @@ export async function restoreCoupon(email, couponId, orderId) {
   return setUser(email, user);
 }
 
+// 订单作废退款 — 退余额(余额支付)+ 还优惠券 + 恢复兑换码。幂等(order.refundedAt 守卫 + 退款流水去重)。
+// AI 库存的归还由 [orderId] 路由单独处理,这里不碰。
+export async function refundVoidedOrder(order, actor = null) {
+  if (!order || order.refundedAt) return { ok: true, skipped: "already_refunded", balance: 0, coupon: false, redeem: false };
+  const now = new Date();
+  const email = String(order.userEmail || "").trim().toLowerCase();
+  const out = { balance: 0, coupon: false, redeem: false };
+
+  // 1) 余额支付 → 退回余额
+  if (order.paidByBalance && validEmail(email)) {
+    const amount = roundMoney(order.finalAmount || 0);
+    if (amount > 0) {
+      const user = await getUser(email);
+      const txs = await getBalanceTxs(email);
+      const already = txs.some((tx) => tx?.source === "order_refund" && tx?.orderId === order.orderId);
+      if (user && !already) {
+        const prev = roundMoney(user.balance);
+        const next = roundMoney(prev + amount);
+        user.balance = next;
+        await setUser(email, user);
+        const tx = {
+          id: makeId("TX"),
+          amount,
+          reason: `订单作废退款 ${order.orderId}`,
+          balanceAfter: next,
+          source: "order_refund",
+          orderId: order.orderId,
+          createdAt: now.toISOString(),
+          createdAtBeijing: formatBeijingTime(now),
+          staffId: Number(actor?.staffId || 1),
+          staffUsername: clean(actor?.staffUsername || "admin", 60),
+        };
+        await addBalanceTx(email, tx);
+        await pushAdminBalanceLog({ ...tx, email, balanceBefore: prev, action: "order_refund", detail: { orderId: order.orderId, amount } });
+        out.balance = amount;
+      }
+    }
+  }
+
+  // 2) 优惠券 → 还回(若该订单用过)
+  if (order.couponId && validEmail(email)) {
+    out.coupon = Boolean(await restoreCoupon(email, order.couponId, order.orderId));
+  }
+
+  // 3) 兑换码支付 → 恢复为可用
+  if (order.paymentMethod === "redeem" && order.redeemCode) {
+    out.redeem = Boolean(await restoreServiceRedeemCode(order.redeemCode, order.orderId));
+  }
+
+  order.refundedAt = now.toISOString();
+  order.refundedAtBeijing = formatBeijingTime(now);
+  order.refund = out;
+  return { ok: true, ...out };
+}
+
 export async function ensureOAuthUser({ email, provider, providerId, username, inviteCode }) {
   const lower = String(email || "").trim().toLowerCase();
   if (!validEmail(lower)) return { ok: false, error: "invalid_email" };
