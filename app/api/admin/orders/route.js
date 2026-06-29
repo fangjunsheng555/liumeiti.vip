@@ -141,13 +141,33 @@ function normalizeOrder(order) {
   };
 }
 
-// GET /api/admin/orders[?q=search]
+function csvCell(v) {
+  const s = String(v == null ? "" : v).replace(/\r?\n/g, " ");
+  return /[",]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function ordersToCsv(orders) {
+  const head = ["订单号", "状态", "下单时间", "完成时间", "服务", "件数", "支付方式", "实付金额", "实付币种", "折后CNY", "优惠券抵扣", "下单邮箱", "联系方式", "用户IP", "买家备注", "客服备注"];
+  const statusLabel = { received: "未完成", completed: "已完成", invalid: "无效" };
+  const rows = orders.map((o) => [
+    o.orderId, statusLabel[o.status] || o.status, o.createdAtBeijing, o.completedAtBeijing || "",
+    o.serviceLabel, o.itemCount, o.paymentMethod, o.paidAmount, o.paidCurrency,
+    o.finalAmount, o.couponDiscount, o.email, o.contact, o.clientIp, o.remark, o.staffNotes,
+  ].map(csvCell).join(","));
+  return "﻿" + [head.map(csvCell).join(","), ...rows].join("\r\n"); // BOM 兼容 Excel 中文
+}
+
+// GET /api/admin/orders[?q=&status=&from=YYYY-MM-DD&to=YYYY-MM-DD&offset=&limit=&format=csv]
 export async function GET(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const url = new URL(request.url);
   const q = String(url.searchParams.get("q") || "").trim().toLowerCase();
   const status = String(url.searchParams.get("status") || "").trim();
+  const from = String(url.searchParams.get("from") || "").trim();   // 北京日期 起
+  const to = String(url.searchParams.get("to") || "").trim();       // 北京日期 止
+  const format = String(url.searchParams.get("format") || "").trim();
+  const offset = Math.max(0, Number(url.searchParams.get("offset") || 0));
+  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 100)));
 
   const all = await getAllOrders();
   let filtered = all.map(normalizeOrder);
@@ -155,6 +175,14 @@ export async function GET(request) {
     filtered = filtered.filter((o) => o.abnormal);
   } else if (status === "received" || status === "completed" || status === "invalid") {
     filtered = filtered.filter((o) => o.status === status);
+  }
+  if (from || to) {
+    filtered = filtered.filter((o) => {
+      const d = String(o.createdAtBeijing || "").slice(0, 10); // YYYY-MM-DD
+      if (from && d < from) return false;
+      if (to && d > to) return false;
+      return true;
+    });
   }
   if (q) {
     filtered = filtered.filter((o) => {
@@ -165,11 +193,26 @@ export async function GET(request) {
       return hay.includes(q);
     });
   }
+
+  // CSV 导出:按当前筛选导出全部匹配(不分页),仅可看订单的角色
+  if (format === "csv") {
+    const stamp = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    return new Response(ordersToCsv(filtered), {
+      headers: {
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": `attachment; filename="orders-${stamp}.csv"`,
+        "Cache-Control": "no-store",
+      },
+    });
+  }
+
   return Response.json({
     ok: true,
-    orders: filtered.slice(0, 200),
+    orders: filtered.slice(offset, offset + limit),
     total: all.length,
     filteredCount: filtered.length,
+    offset, limit,
+    hasMore: offset + limit < filtered.length,
     currentStaff: {
       id: Number(session.staffId || 1),
       username: session.staffUsername || "admin",

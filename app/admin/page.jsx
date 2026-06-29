@@ -1088,6 +1088,10 @@ export default function AdminPage() {
 
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [ordersLoadingMore, setOrdersLoadingMore] = useState(false);
+  const [ordersMeta, setOrdersMeta] = useState({ filteredCount: 0, total: 0, hasMore: false });
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [searchInput, setSearchInput] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
@@ -2275,11 +2279,19 @@ export default function AdminPage() {
   // Try fetching orders to detect if authed
   const loadOrders = useCallback(async (q, status, options = {}) => {
     const silent = Boolean(options.silent);
-    if (!silent) setLoading(true);
+    const append = Boolean(options.append);
+    const offset = Math.max(0, Number(options.offset || 0));
+    const limit = Math.min(200, Math.max(1, Number(options.limit || 100)));
+    if (!silent && !append) setLoading(true);
+    if (append) setOrdersLoadingMore(true);
     try {
       const params = new URLSearchParams();
       if (q) params.set("q", q);
       if (status && status !== "all") params.set("status", status);
+      if (options.from) params.set("from", options.from);
+      if (options.to) params.set("to", options.to);
+      params.set("offset", String(offset));
+      params.set("limit", String(limit));
       const res = await fetch("/api/admin/orders?" + params.toString(), { credentials: "same-origin" });
       if (res.status === 401) {
         setAuthed(false);
@@ -2287,31 +2299,74 @@ export default function AdminPage() {
       }
       const data = await res.json();
       if (data.ok) {
-        setOrders(data.orders || []);
+        setOrders((prev) => (append ? [...prev, ...(data.orders || [])] : (data.orders || [])));
+        setOrdersMeta({ filteredCount: Number(data.filteredCount || 0), total: Number(data.total || 0), hasMore: Boolean(data.hasMore) });
         if (data.currentStaff) applyCurrentStaff(data.currentStaff);
         setAuthed(true);
       }
     } catch (e) {
       console.error(e);
     } finally {
-      if (!silent) setLoading(false);
+      if (!silent && !append) setLoading(false);
+      if (append) setOrdersLoadingMore(false);
     }
   }, [applyCurrentStaff]);
 
   useEffect(() => {
     if (authed === true && tab !== "orders" && tab !== "abnormal") return;
-    loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus);
-  }, [authed, loadOrders, appliedSearch, filterStatus, tab]);
+    loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { from: dateFrom, to: dateTo });
+  }, [authed, loadOrders, appliedSearch, filterStatus, tab, dateFrom, dateTo]);
 
   useEffect(() => {
     if (!authed || (tab !== "orders" && tab !== "abnormal")) return;
     const timer = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
       if (activeOrder) return;
-      loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true });
+      // 原位刷新当前已加载的条数(限 200),让新订单出现而不丢失已翻页内容
+      loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, offset: 0, limit: Math.min(200, Math.max(100, orders.length)), from: dateFrom, to: dateTo });
     }, 10000);
     return () => clearInterval(timer);
-  }, [authed, tab, activeOrder, loadOrders, appliedSearch, filterStatus]);
+  }, [authed, tab, activeOrder, loadOrders, appliedSearch, filterStatus, dateFrom, dateTo, orders.length]);
+
+  function downloadOrdersCsv() {
+    const params = new URLSearchParams();
+    if (appliedSearch) params.set("q", appliedSearch);
+    const status = tab === "abnormal" ? "abnormal" : filterStatus;
+    if (status && status !== "all") params.set("status", status);
+    if (dateFrom) params.set("from", dateFrom);
+    if (dateTo) params.set("to", dateTo);
+    params.set("format", "csv");
+    const a = document.createElement("a");
+    a.href = "/api/admin/orders?" + params.toString();
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  // 通用客户端 CSV 导出(按当前已加载/筛选的数据)
+  function csvDownload(filename, headers, rows) {
+    const cell = (v) => { const s = String(v == null ? "" : v).replace(/\r?\n/g, " "); return /[",]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const csv = "﻿" + [headers, ...rows].map((r) => r.map(cell).join(",")).join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1500);
+  }
+  function csvStamp() { return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10); }
+  function exportUsersCsv() {
+    const rows = (allUsers.users || []).map((u) => [u.email, u.username, Number(u.balance || 0).toFixed(2), u.banned ? "已封禁" : "正常", u.createdAtBeijing || "", u.referral?.invitedByEmail || "", Number(u.referral?.levelOneCount || 0), Number(u.referral?.levelTwoCount || 0)]);
+    csvDownload(`users-${csvStamp()}.csv`, ["邮箱", "用户名", "余额", "状态", "注册时间", "上级", "一级下级数", "二级下级数"], rows);
+  }
+  function exportBalanceCsv() {
+    const rows = (globalLog.entries || []).map((t) => [t.createdAtBeijing || "", t.email || "", Number(t.amount || 0).toFixed(2), t.reason || "", Number(t.balanceAfter || 0).toFixed(2), t.staffId || ""]);
+    csvDownload(`balance-${csvStamp()}.csv`, ["时间", "邮箱", "变动", "原因", "变动后余额", "操作员"], rows);
+  }
+  function exportWithdrawalsCsv() {
+    const rows = (withdrawals || []).map((w) => [w.createdAtBeijing || "", w.userEmail || "", Number(w.amount || 0).toFixed(2), w.statusLabel || w.status || "", w.alipayAccount || "", w.realName || "", w.updatedByStaffId || ""]);
+    csvDownload(`withdrawals-${csvStamp()}.csv`, ["申请时间", "邮箱", "金额", "状态", "支付宝", "姓名", "操作员"], rows);
+  }
 
   useEffect(() => {
     if (!authed || tab !== "orders" || !newOrderAlert?.orderId) return;
@@ -2864,6 +2919,9 @@ export default function AdminPage() {
             <div className="admin-userlist">
               <div className="admin-userlist-head">
                 <h3>全部注册用户 <em>{allUsers.total}</em></h3>
+                {allUsers.users.length > 0 && (
+                  <button type="button" className="admin-csv-btn" onClick={exportUsersCsv} title="导出当前用户列表 CSV"><Download size={13} />导出CSV</button>
+                )}
               </div>
               <form
                 className="admin-search admin-search-mini"
@@ -2997,6 +3055,9 @@ export default function AdminPage() {
               <div className="admin-userlist-head">
                 <h3>提现申请 <em>{withdrawals.length}</em></h3>
                 <div className="admin-inline-actions">
+                  {withdrawals.length > 0 && (
+                    <button type="button" className="admin-csv-btn" onClick={exportWithdrawalsCsv} title="导出提现申请 CSV"><Download size={13} />导出CSV</button>
+                  )}
                   {canDeleteRecords && (
                     <>
                       <button
@@ -3561,6 +3622,9 @@ export default function AdminPage() {
                   <span className="stat-add">累计加 <b>+¥{globalLog.totalAdded.toFixed(2)}</b></span>
                   <span className="stat-deduct">累计减 <b>−¥{globalLog.totalDeducted.toFixed(2)}</b></span>
                 </div>
+                {globalLog.entries.length > 0 && (
+                  <button type="button" className="admin-csv-btn" onClick={exportBalanceCsv} title="导出余额变动 CSV"><Download size={13} />导出CSV</button>
+                )}
                 {canDeleteRecords && (
                   <div className="admin-inline-actions">
                     <button
@@ -3721,6 +3785,15 @@ export default function AdminPage() {
             />
             <button type="submit">搜索</button>
           </form>
+          <div className="admin-date-range">
+            <input type="date" value={dateFrom} max={dateTo || undefined} onChange={(e) => setDateFrom(e.target.value)} aria-label="起始日期" />
+            <span>—</span>
+            <input type="date" value={dateTo} min={dateFrom || undefined} onChange={(e) => setDateTo(e.target.value)} aria-label="结束日期" />
+            {(dateFrom || dateTo) && (
+              <button type="button" className="admin-date-clear" onClick={() => { setDateFrom(""); setDateTo(""); }} title="清除日期">清除</button>
+            )}
+            <button type="button" className="admin-csv-btn" onClick={downloadOrdersCsv} title="按当前筛选导出 CSV"><Download size={13} />导出CSV</button>
+          </div>
           {tab === "abnormal" ? (
             <div className="admin-abnormal-chip">
               <AlertTriangle size={13} />
@@ -3861,6 +3934,19 @@ export default function AdminPage() {
                 </div>
               );
             })}
+          </div>
+        )}
+        {orders.length > 0 && (
+          <div className="admin-orders-footer">
+            <span className="admin-orders-count">已显示 {orders.length} / 共 {ordersMeta.filteredCount} 单{(dateFrom || dateTo || appliedSearch || (filterStatus !== "all" && tab !== "abnormal")) ? "（筛选后）" : ""}</span>
+            {ordersMeta.hasMore && (
+              <button
+                type="button"
+                className="admin-loadmore-btn"
+                disabled={ordersLoadingMore}
+                onClick={() => loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { append: true, offset: orders.length, limit: 100, from: dateFrom, to: dateTo })}
+              >{ordersLoadingMore ? <><LoaderCircle size={13} className="spin-icon" />加载中</> : "加载更多"}</button>
+            )}
           </div>
         )}
         </>
