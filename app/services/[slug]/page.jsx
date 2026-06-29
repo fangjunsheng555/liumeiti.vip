@@ -9,6 +9,28 @@ import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../../socia
 import { getServerLocale } from "../../lib/i18n-server";
 import { getT } from "../../lib/i18n";
 import { getAiSoldOutMap, AI_STOCK_PLAN_IDS } from "../../api/_utils.js";
+import { getMergedCatalog } from "../../api/_catalog.js";
+
+// 把后台合并目录的价格/规格覆盖到服务页(与首页/选购/结账完全一致)。
+// 名称/说明保持本地化(中英),价格取目录权威 amount;商品下架则 404。
+function applyCatalogToService(service, catProd, locale) {
+  if (!catProd) return service;
+  const activePlans = (catProd.plans || []).filter((pl) => pl.active !== false);
+  const next = { ...service };
+  if (locale !== "en" && catProd.priceText) next.price = catProd.priceText;
+  const cycleShort = (c) => String(c || "").replace(/^1/, "");
+  if (Array.isArray(service.plans) && activePlans.length) {
+    next.plans = activePlans.map((pl, i) => {
+      const orig = service.plans[i] || [];
+      const name = locale === "en" ? (orig[0] || pl.label) : pl.label;
+      const desc = locale === "en" ? (orig[2] || pl.desc) : pl.desc;
+      return [name, `¥${pl.amount}/${cycleShort(pl.cycle)}`, desc];
+    });
+  }
+  return next;
+}
+
+export const dynamic = "force-dynamic"; // 始终读最新商品覆盖(价格/上下架),不静态缓存
 
 export function generateStaticParams() {
   return SERVICE_PAGES.map((item) => ({ slug: item.slug }));
@@ -49,7 +71,10 @@ export default async function ServiceLandingPage({ params }) {
   if (!raw) notFound();
   const locale = await getServerLocale();
   const t = getT(locale);
-  const service = localizeService(raw, locale);
+  const catalog = await getMergedCatalog();
+  const catProd = catalog.find((p) => p.key === raw.key);
+  if (catProd && catProd.active === false) notFound(); // 已下架
+  const service = applyCatalogToService(localizeService(raw, locale), catProd, locale);
 
   const aiSoldOut = service.key === "ai" ? await getAiSoldOutMap() : {};
   const aiAllSoldOut = service.key === "ai" && AI_STOCK_PLAN_IDS.length > 0 && AI_STOCK_PLAN_IDS.every((id) => aiSoldOut[id]);

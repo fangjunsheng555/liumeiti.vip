@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import {
   PRODUCTS,
+  getCatalogProducts,
+  useCatalogSync,
   PRODUCT_EN,
   DEFAULT_PRODUCT_PLANS,
   getProductPlan,
@@ -147,6 +149,8 @@ const BADGE_EN = {
 export default function ShopPage() {
   const { locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
+  const catalogVersion = useCatalogSync(); // 后台商品/价格覆盖
+  const products = getCatalogProducts();
   const [selectedKey, setSelectedKey] = useState(null);
   const [planPickerKey, setPlanPickerKey] = useState(null);
   const [planChoices, setPlanChoices] = useState(DEFAULT_PRODUCT_PLANS);
@@ -155,10 +159,10 @@ export default function ShopPage() {
   const [aiSoldOut, setAiSoldOut] = useState({});
   const { cart, cartPlans, addToCart, removeFromCart } = useCart();
 
-  const selectedProductRaw = useMemo(() => PRODUCTS.find((item) => item.key === selectedKey) || null, [selectedKey]);
-  const planPickerProduct = useMemo(() => PRODUCTS.find((item) => item.key === planPickerKey) || null, [planPickerKey]);
+  const selectedProductRaw = useMemo(() => getCatalogProducts().find((item) => item.key === selectedKey) || null, [selectedKey, catalogVersion]);
+  const planPickerProduct = useMemo(() => getCatalogProducts().find((item) => item.key === planPickerKey) || null, [planPickerKey, catalogVersion]);
   const selectedProduct = useMemo(() => localizeProduct(selectedProductRaw, locale), [selectedProductRaw, locale]);
-  const cartItems = useMemo(() => cart.map((key) => PRODUCTS.find((p) => p.key === key)).filter(Boolean), [cart]);
+  const cartItems = useMemo(() => cart.map((key) => getCatalogProducts().find((p) => p.key === key)).filter(Boolean), [cart, catalogVersion]);
   const cartCount = cartItems.length;
   const planMap = Object.fromEntries(
     cartItems
@@ -300,7 +304,7 @@ export default function ShopPage() {
 
         <section className="section container shop-products-section">
           <div className="products-grid products-grid-32">
-            {PRODUCTS.map((item) => {
+            {products.map((item) => {
               const promo = PRODUCT_PROMOS[item.key] || {};
               const BadgeIcon = promo.badgeIcon || Sparkles;
               const defaultPlan = hasProductPlans(item.key) ? localizePlan(item.key, getProductPlan(item.key, getDefaultProductPlan(item.key)), locale) : null;

@@ -10,13 +10,14 @@ import UserActivity from "./UserActivity";
 import AnnouncePanel from "./AnnouncePanel";
 import AnnouncePostsPanel from "./AnnouncePostsPanel";
 import AIQuotaPanel from "./AIQuotaPanel";
+import CatalogPanel from "./CatalogPanel";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
   CheckCircle2, Clock, Inbox, X, AlertTriangle, Trash2,
   Gift, CreditCard, Plus, UserPlus, Mail, BellRing, BarChart3, Download, FileText,
   LayoutDashboard, ClipboardList, ShoppingCart, Users, Wallet, Coins,
-  Megaphone, Footprints, Boxes, Menu, Newspaper, Gauge,
+  Megaphone, Footprints, Boxes, Menu, Newspaper, Gauge, Package,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -2705,6 +2706,7 @@ export default function AdminPage() {
     {
       title: "营销",
       items: [
+        { key: "catalog", label: "商品价格", icon: Package, show: isRootStaff },
         { key: "codes", label: "兑换码", icon: Gift, show: canViewCodes },
         { key: "mail", label: "客服发信", icon: Mail, show: canSendMail },
         { key: "announce", label: "站内公告", icon: Megaphone, show: isRootStaff },
@@ -3461,6 +3463,8 @@ export default function AdminPage() {
           <AnnouncePanel />
         ) : tab === "announce-posts" ? (
           <AnnouncePostsPanel />
+        ) : tab === "catalog" ? (
+          <CatalogPanel />
         ) : tab === "ai-quota" ? (
           <AIQuotaPanel />
         ) : tab === "staff" ? (

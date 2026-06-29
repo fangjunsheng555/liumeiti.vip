@@ -170,6 +170,79 @@ export const DEFAULT_PRODUCT_PLANS = {
 };
 export const DEFAULT_ROCKET_PLAN = DEFAULT_PRODUCT_PLANS.rocket;
 
+// ── 后台商品/价格覆盖(运行时) ──
+// useCatalogSync() 拉 /api/catalog(默认+后台覆盖的合并值)写入此处;所有价格/规格/上下架
+// 解析都会优先读它,从而首页/选购/服务页/结账与「结账实收价(服务端权威)」完全一致。
+// 未加载时(首屏/SSR)= 静态默认值,默认值已与 catalog-defaults 一一对应,故无不一致。
+let CATALOG_OVERRIDE = null; // { byKey:{[key]:{active,fields...,plans:{[id]:{...}},activePlanIds:Set}}, order:[key...] }
+
+export function applyCatalogOverride(apiProducts) {
+  if (!Array.isArray(apiProducts)) return;
+  const byKey = {};
+  const order = [];
+  for (const p of apiProducts) {
+    if (!p || !p.key) continue;
+    order.push(p.key);
+    const plans = {};
+    (p.plans || []).forEach((pl) => { plans[pl.id] = { id: pl.id, amount: Number(pl.amount), label: pl.label, desc: pl.desc, cycle: pl.cycle, unit: pl.cycle }; });
+    byKey[p.key] = {
+      active: true,
+      title: p.title, subtitle: p.subtitle, price: p.priceText, cycle: p.cycle,
+      shortIntro: p.shortIntro, highlights: p.highlights,
+      detailTitle: p.detailTitle, detailBody: p.detailBody, defaultPlan: p.defaultPlan,
+      plans, activePlanIds: new Set((p.plans || []).map((pl) => pl.id)),
+    };
+  }
+  CATALOG_OVERRIDE = { byKey, order };
+}
+
+export function catalogOverrideLoaded() { return CATALOG_OVERRIDE !== null; }
+function ovProduct(key) { return CATALOG_OVERRIDE ? (CATALOG_OVERRIDE.byKey[key] || null) : null; }
+
+// 合并后的商品列表(给首页/选购/结账用):未加载=默认全部;加载后=仅上架商品、按后台排序、字段覆盖。
+export function getCatalogProducts() {
+  if (!CATALOG_OVERRIDE) return PRODUCTS;
+  const baseByKey = {};
+  PRODUCTS.forEach((p) => { baseByKey[p.key] = p; });
+  return CATALOG_OVERRIDE.order
+    .map((key) => {
+      const base = baseByKey[key];
+      if (!base) return null;
+      const ov = CATALOG_OVERRIDE.byKey[key];
+      return {
+        ...base,
+        title: ov.title || base.title,
+        subtitle: ov.subtitle || base.subtitle,
+        price: ov.price || base.price,
+        cycle: ov.cycle || base.cycle,
+        shortIntro: ov.shortIntro || base.shortIntro,
+        highlights: Array.isArray(ov.highlights) && ov.highlights.length ? ov.highlights : base.highlights,
+        detailTitle: ov.detailTitle || base.detailTitle,
+        detailBody: ov.detailBody || base.detailBody,
+      };
+    })
+    .filter(Boolean);
+}
+
+export function getCatalogProduct(key) {
+  return getCatalogProducts().find((p) => p.key === key) || null;
+}
+
+// 拉取并应用后台覆盖;返回版本号(变化即触发组件重渲染,显示最新价格/上下架)。
+// 任何展示价格的客户端页面在顶部调用一次即可。
+export function useCatalogSync() {
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    let on = true;
+    fetch("/api/catalog", { cache: "no-store", credentials: "same-origin" })
+      .then((r) => r.json())
+      .then((j) => { if (on && j && j.ok) { applyCatalogOverride(j.products); setVersion((v) => v + 1); } })
+      .catch(() => {});
+    return () => { on = false; };
+  }, []);
+  return version;
+}
+
 // --- English localization (display only; ids/amounts unchanged) ---
 export const PRODUCT_EN = {
   spotify: {
@@ -328,12 +401,42 @@ export function getProductPlan(productKey, planId) {
   const plans = PRODUCT_PLANS[productKey];
   if (!plans) return null;
   const aliases = productKey === "rocket" ? { single: "basic" } : {};
-  const id = aliases[planId] || planId || getDefaultProductPlan(productKey);
-  return plans[id] || plans[getDefaultProductPlan(productKey)] || Object.values(plans)[0] || null;
+  const ov = ovProduct(productKey);
+  const defId = (ov && ov.defaultPlan) || getDefaultProductPlan(productKey);
+  let id = aliases[planId] || planId || defId;
+  // 覆盖加载后:被下架(不在 activePlanIds)的规格回退到默认规格
+  if (ov && id && !ov.activePlanIds.has(id)) id = defId;
+  const base = plans[id] || plans[getDefaultProductPlan(productKey)] || Object.values(plans)[0] || null;
+  if (!base) return null;
+  const po = ov && ov.plans[base.id];
+  if (!po) return base;
+  return {
+    ...base,
+    amount: Number.isFinite(po.amount) ? po.amount : base.amount,
+    label: po.label || base.label,
+    desc: po.desc != null ? po.desc : base.desc,
+    cycle: po.cycle || base.cycle,
+    unit: po.cycle || base.unit,
+  };
 }
 
 export function getProductPlanOptions(productKey) {
-  return Object.values(PRODUCT_PLANS[productKey] || {});
+  const plans = PRODUCT_PLANS[productKey] || {};
+  const ov = ovProduct(productKey);
+  if (!ov) return Object.values(plans);
+  // 仅返回上架规格(后台顺序),字段以覆盖为准
+  return Object.keys(ov.plans).map((id) => {
+    const base = plans[id] || { id };
+    const po = ov.plans[id];
+    return {
+      ...base, id,
+      amount: Number.isFinite(po.amount) ? po.amount : base.amount,
+      label: po.label || base.label,
+      desc: po.desc != null ? po.desc : base.desc,
+      cycle: po.cycle || base.cycle,
+      unit: po.cycle || base.unit,
+    };
+  });
 }
 
 export function productItemAmount(product, plan) {

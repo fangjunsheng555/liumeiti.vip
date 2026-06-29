@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { buildOrderEmailHtml, buildOrderEmailText } from "./email-template.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
+import { getMergedCatalog } from "../_catalog.js";
 import {
   consumeBestCoupon, restoreCoupon, verifySession, getUser,
   setUser, addBalanceTx, pushAdminBalanceLog, makeId, roundMoney,
@@ -14,68 +15,16 @@ import {
   reserveAiStock, restoreAiStock, getUsdtRate, redisCmd,
 } from "../_utils.js";
 
-const PRODUCTS = {
-  spotify: { label: "Spotify", amount: 128, cycle: "1年", needsAccountPassword: true, needsContact: true, hasPlan: true },
-  netflix: { label: "Netflix", amount: 168, cycle: "1年", hasPlan: true },
-  disney: { label: "Disney+", amount: 108, cycle: "1年", hasPlan: true },
-  max: { label: "HBO Max", amount: 148, cycle: "1年", hasPlan: true },
-  rocket: { label: "机场节点", amount: 128, cycle: "1年", hasPlan: true },
-  ai: { label: "AI 会员", amount: 198, cycle: "三个月", hasPlan: true },
-};
-
-const ROCKET_PLANS = {
-  basic: { id: "basic", label: "普通套餐", amount: 128 },
-  pro: { id: "pro", label: "高级套餐", amount: 198 },
-  luxury: { id: "luxury", label: "豪华套餐", amount: 398 },
-  unlimited: { id: "unlimited", label: "无限套餐", amount: 698 },
-  trial: { id: "trial", label: "5元10GB测试", amount: 5, cycle: "次", requiresLogin: false, onePerUser: false },
-};
-const PRODUCT_PLANS = {
-  spotify: {
-    member: { id: "member", label: "家庭成员", amount: 128 },
-    individual: { id: "individual", label: "个人订阅", amount: 388 },
-    duo: { id: "duo", label: "双人订阅", amount: 488 },
-    family: { id: "family", label: "家庭套餐", amount: 588 },
-  },
-  netflix: {
-    seat: { id: "seat", label: "单独车位", amount: 168 },
-    full: { id: "full", label: "整号购买", amount: 588 },
-  },
-  disney: {
-    seat: { id: "seat", label: "单独车位", amount: 108 },
-    full: { id: "full", label: "整号购买", amount: 588 },
-  },
-  max: {
-    seat: { id: "seat", label: "单独车位", amount: 148 },
-    full: { id: "full", label: "整号购买", amount: 588 },
-  },
-  rocket: ROCKET_PLANS,
-  ai: {
-    "gpt-plus": { id: "gpt-plus", label: "GPT Plus", amount: 198 },
-    "gpt-pro": { id: "gpt-pro", label: "GPT 5x Pro", amount: 998 },
-    "gpt-20x-pro": { id: "gpt-20x-pro", label: "GPT 20x Pro", amount: 1888 },
-    "claude-pro": { id: "claude-pro", label: "Claude Pro", amount: 198 },
-    "claude-max": { id: "claude-max", label: "Claude 5x Max", amount: 998 },
-    "claude-20x-max": { id: "claude-20x-max", label: "Claude 20x Max", amount: 1888 },
-  },
-};
-const DEFAULT_PRODUCT_PLANS = {
-  spotify: "member",
-  netflix: "seat",
-  disney: "seat",
-  max: "seat",
-  rocket: "basic",
-  ai: "gpt-plus",
-};
-const DEFAULT_ROCKET_PLAN = DEFAULT_PRODUCT_PLANS.rocket;
-
-function resolveProductPlan(service, value) {
-  const plans = PRODUCT_PLANS[service];
-  if (!plans) return null;
-  const id = clean(value, 20);
-  const aliases = service === "rocket" ? { single: "basic" } : {};
-  const planId = aliases[id] || id || DEFAULT_PRODUCT_PLANS[service];
-  return plans[planId] ? plans[planId] : plans[DEFAULT_PRODUCT_PLANS[service]];
+// 从合并后的目录商品里解析规格(沿用 rocket single→basic 别名 + 默认规格回退)。
+function resolveCatalogPlan(product, value) {
+  const plans = (product.plans || []).filter((p) => p.active !== false);
+  if (!plans.length) return null;
+  const id = clean(value, 30);
+  const aliases = product.key === "rocket" ? { single: "basic" } : {};
+  const wantId = aliases[id] || id;
+  return plans.find((p) => p.id === wantId)
+    || plans.find((p) => p.id === product.defaultPlan)
+    || plans[0];
 }
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
@@ -364,40 +313,40 @@ export async function POST(request) {
   });
   if (!orderGuard.ok) return rateLimitResponse(orderGuard, ORDER_LIMIT_MESSAGE);
 
+  // 价格权威:读「默认 + 后台覆盖」合并后的目录,结账实收价以此为准(站主后台改价即时生效)。
+  const catalog = await getMergedCatalog();
+  const catalogByKey = {};
+  catalog.forEach((p) => { catalogByKey[p.key] = p; });
+
   // Validate items first to determine if contact is required (Spotify only)
   const items = [];
   let needsContact = false;
   for (const raw of rawItems) {
     const service = clean(raw.service, 40);
-    const product = PRODUCTS[service];
+    const product = catalogByKey[service];
     if (!product) {
       return Response.json({ ok: false, error: "invalid_service:" + service }, { status: 400 });
+    }
+    if (product.active === false) {
+      return Response.json({ ok: false, error: "service_unavailable:" + service }, { status: 400 });
     }
     const account = clean(raw.account, 80);
     const password = clean(raw.password, 120);
     if (product.needsAccountPassword && (!account || !password)) {
-      return Response.json({ ok: false, error: "missing_credentials:" + product.label }, { status: 400 });
+      return Response.json({ ok: false, error: "missing_credentials:" + product.title }, { status: 400 });
     }
     if (product.needsContact) needsContact = true;
-    let amount = product.amount;
-    let label = product.label;
-    let cycle = product.cycle;
-    let plan = "";
-    let planLabel = "";
-    let rocketPlan = "";
-    let rocketPlanLabel = "";
-    if (product.hasPlan) {
-      const planInfo = resolveProductPlan(service, raw.plan || raw.productPlan || raw.rocketPlan);
-      plan = planInfo.id;
-      planLabel = planInfo.label;
-      amount = planInfo.amount;
-      cycle = planInfo.cycle || product.cycle;
-      label = `${product.label} · ${planInfo.label}`;
-      if (service === "rocket") {
-        rocketPlan = planInfo.id;
-        rocketPlanLabel = planInfo.label;
-      }
+    const planInfo = resolveCatalogPlan(product, raw.plan || raw.productPlan || raw.rocketPlan);
+    if (!planInfo) {
+      return Response.json({ ok: false, error: "invalid_plan:" + service }, { status: 400 });
     }
+    const amount = Number(planInfo.amount);
+    const cycle = planInfo.cycle || product.cycle;
+    const plan = planInfo.id;
+    const planLabel = planInfo.label;
+    const label = `${product.title} · ${planInfo.label}`;
+    const rocketPlan = service === "rocket" ? planInfo.id : "";
+    const rocketPlanLabel = service === "rocket" ? planInfo.label : "";
     const item = {
       service,
       label,

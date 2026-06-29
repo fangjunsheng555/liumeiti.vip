@@ -22,6 +22,8 @@ import {
 } from "lucide-react";
 import {
   PRODUCTS,
+  getCatalogProducts,
+  useCatalogSync,
   USDT_ADDRESS,
   USDT_RATE,
   useCart,
@@ -163,6 +165,8 @@ export default function CheckoutPage() {
   const router = useRouter();
   const { locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
+  const catalogVersion = useCatalogSync(); // 拉后台商品/价格覆盖,变化即重渲染
+  const products = getCatalogProducts(); // 合并后的上架商品(价格/规格/上下架与结账实收价一致)
   const { cart, cartPlans, hydrated, removeFromCart, replaceCart, clearCart, setCartPlan } = useCart();
   const [step, setStep] = useState("form");
   const [form, setForm] = useState(blankCheckoutForm);
@@ -341,7 +345,7 @@ export default function CheckoutPage() {
     if (params.get("redeem")) return;
     const rawItems = String(params.get("items") || "");
     if (!rawItems) return;
-    const valid = new Set(PRODUCTS.map((item) => item.key));
+    const valid = new Set(products.map((item) => item.key));
     const seen = new Set();
     const keys = rawItems
       .split(",")
@@ -404,7 +408,7 @@ export default function CheckoutPage() {
           setPaymentMethod(saved.paymentMethod);
         }
         if (!hasRedeem && !hasItems && cart.length === 0 && Array.isArray(saved.cart)) {
-          const valid = new Set(PRODUCTS.map((item) => item.key));
+          const valid = new Set(products.map((item) => item.key));
           const keys = saved.cart.filter((key) => valid.has(key));
           if (keys.length > 0) replaceCart(keys);
         }
@@ -431,7 +435,7 @@ export default function CheckoutPage() {
     } catch (e) {}
   }, [hydrated, draftReady, form, paymentMethod, cart, step]);
 
-  const cartItems = cart.map((key) => PRODUCTS.find((p) => p.key === key)).filter(Boolean);
+  const cartItems = cart.map((key) => products.find((p) => p.key === key)).filter(Boolean);
   const cartCount = cartItems.length;
   const cartHasRocket = cartItems.some((p) => p.key === "rocket");
   const serviceRedeemActive = Boolean(redeemMode.info && redeemMode.info.type === "service");

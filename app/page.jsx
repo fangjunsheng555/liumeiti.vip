@@ -21,6 +21,7 @@ import MobileNav from "./components/MobileNav";
 import RedeemCard from "./components/RedeemCard";
 import FloatingSupport from "./components/FloatingSupport";
 import { SERVICE_PAGES } from "./services/service-data";
+import { useCatalogSync, getCatalogProducts, catalogOverrideLoaded } from "./lib/store";
 import LanguageSwitcher from "./components/LanguageSwitcher";
 import { useLocale } from "./components/LocaleProvider";
 import { localizeMetric, localizeTime, serviceCardEn } from "./lib/i18n";
@@ -359,6 +360,12 @@ export default function Page() {
   const [metrics, setMetrics] = useState(OPERATION_INITIAL_METRICS);
   const [authUser, setAuthUser] = useState(null);
   const { locale, t } = useLocale();
+  const catalogVersion = useCatalogSync(); // 后台商品/价格覆盖(上下架/改价同步)
+  const catByKey = {};
+  getCatalogProducts().forEach((p) => { catByKey[p.key] = p; });
+  const homeServices = catalogOverrideLoaded()
+    ? SERVICE_PAGES.filter((s) => catByKey[s.slug]) // 加载后:仅上架
+    : SERVICE_PAGES;
 
   useEffect(() => {
     const update = () => setMetrics(buildOperationMetrics());
@@ -499,7 +506,7 @@ export default function Page() {
             </div>
           </div>
           <div className="home-services-grid">
-            {SERVICE_PAGES.map((s) => (
+            {homeServices.map((s) => (
               <Link key={s.slug} href={`/services/${s.slug}`} className={`home-service-card svc-${s.slug}`}>
                 <div className="home-service-logo-wrap">
                   <img src={s.image} alt={s.shortTitle} className="home-service-logo" loading="lazy" decoding="async" width="56" height="56" />
@@ -509,7 +516,7 @@ export default function Page() {
                   <div className="home-service-sub">{locale === "en" ? (serviceCardEn[s.slug]?.subtitle || s.subtitle) : s.subtitle}</div>
                 </div>
                 <div className="home-service-foot">
-                  <span className="home-service-price">{locale === "en" ? (serviceCardEn[s.slug]?.price || s.price) : s.price}</span>
+                  <span className="home-service-price">{locale === "en" ? (serviceCardEn[s.slug]?.price || s.price) : (catByKey[s.slug]?.price || s.price)}</span>
                   <ArrowRight size={16} className="home-service-arrow" />
                 </div>
               </Link>
