@@ -52,6 +52,7 @@ import { useLocale } from "../components/LocaleProvider";
 const CHECKOUT_DRAFT_KEY = "liumeiti:checkout-draft:v2";
 const CHECKOUT_PENDING_KEY = "liumeiti:checkout-pending:v1";
 const CHECKOUT_DRAFT_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
+const GOOGLE_OAUTH_START = "/api/auth/oauth/google/start";
 
 function GoogleIcon() {
   return (
@@ -144,6 +145,18 @@ function storedInviteCode() {
   } catch (e) {
     return "";
   }
+}
+
+function googleOAuthStartUrl(inviteCode) {
+  const code = String(inviteCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 24);
+  return code ? `${GOOGLE_OAUTH_START}?invite=${encodeURIComponent(code)}` : GOOGLE_OAUTH_START;
+}
+
+function handleGoogleOAuthStart(event) {
+  const href = googleOAuthStartUrl(storedInviteCode());
+  if (href === GOOGLE_OAUTH_START) return;
+  event.preventDefault();
+  window.location.href = href;
 }
 
 export default function CheckoutPage() {
@@ -1451,7 +1464,7 @@ export default function CheckoutPage() {
 
               {(authModal === "login" || authModal === "register") && (
                 <div className="oauth-login-grid bottom">
-                  <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
+                  <a href={GOOGLE_OAUTH_START} className="oauth-login-btn" onClick={handleGoogleOAuthStart}><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
                 </div>
               )}
 

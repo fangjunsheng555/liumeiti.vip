@@ -1,5 +1,8 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { clean, ensureOAuthUser, inviteCodeFromRequest, signSession, setCookieValue } from "../../_utils.js";
+import {
+  clean, ensureOAuthUser, getCookieFromRequest, inviteCodeFromRequest,
+  normalizeInviteCode, signSession, setCookieValue,
+} from "../../_utils.js";
 
 const STATE_COOKIE = "lm_oauth_state";
 
@@ -46,7 +49,9 @@ export function oauthStateCookie(request, state, maxAge = 600) {
 
 // 登录后回跳地址(给工具站等子站用):只允许 liumeiti.vip 注册域及其子域,防开放重定向。
 const RETURN_COOKIE = "lm_oauth_return";
+const INVITE_COOKIE = "lm_oauth_invite";
 export function oauthReturnCookieName() { return RETURN_COOKIE; }
+export function oauthInviteCookieName() { return INVITE_COOKIE; }
 export function safeReturnTo(value) {
   const s = String(value || "").trim();
   if (!s) return "";
@@ -67,6 +72,31 @@ export function oauthReturnCookie(request, value, maxAge = 600) {
   const domain = sharedCookieDomain(request);
   if (domain) attrs.push("Domain=" + domain);
   return attrs.join("; ");
+}
+
+export function oauthInviteCookie(request, value, maxAge = 600) {
+  const attrs = [
+    `${INVITE_COOKIE}=${encodeURIComponent(normalizeInviteCode(value))}`,
+    "Path=/", "HttpOnly", "SameSite=Lax", `Max-Age=${maxAge}`,
+  ];
+  const configured = process.env.SITE_URL || process.env.NEXT_PUBLIC_SITE_URL || "";
+  if (request.url.startsWith("https://") || configured.startsWith("https://")) attrs.push("Secure");
+  const domain = sharedCookieDomain(request);
+  if (domain) attrs.push("Domain=" + domain);
+  return attrs.join("; ");
+}
+
+export function oauthInviteCodeFromStartRequest(request) {
+  let fromQuery = "";
+  try {
+    const url = new URL(request.url);
+    fromQuery = url.searchParams.get("invite") || url.searchParams.get("ref") || "";
+  } catch (e) {}
+  return normalizeInviteCode(fromQuery || getCookieFromRequest(request, "lm_invite") || "");
+}
+
+export function oauthInviteCodeFromCallbackRequest(request) {
+  return normalizeInviteCode(getCookieFromRequest(request, INVITE_COOKIE) || inviteCodeFromRequest(request) || "");
 }
 
 export function providerConfigured(provider) {
@@ -142,7 +172,7 @@ export async function finishOAuth(provider, request, code) {
     provider,
     providerId: clean(payload.sub, 180),
     username: clean(payload.name, 40) || email.split("@")[0],
-    inviteCode: inviteCodeFromRequest(request),
+    inviteCode: oauthInviteCodeFromCallbackRequest(request),
   });
   if (!result.ok) {
     const err = new Error(result.error || "oauth_user_failed");

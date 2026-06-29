@@ -1,4 +1,7 @@
-import { finishOAuth, oauthStateCookieName, oauthStateCookie, oauthReturnCookieName, oauthReturnCookie, safeReturnTo } from "../../_shared.js";
+import {
+  finishOAuth, oauthInviteCookie, oauthStateCookieName, oauthStateCookie,
+  oauthReturnCookieName, oauthReturnCookie, safeReturnTo,
+} from "../../_shared.js";
 
 function redirectHome(request, status, cookie = "") {
   const url = new URL("/", request.url);
@@ -42,6 +45,7 @@ async function handleOAuthCallback(request, provider, values) {
     }
     response.headers.append("Set-Cookie", oauthStateCookie(request, "", 0));
     response.headers.append("Set-Cookie", oauthReturnCookie(request, "", 0));
+    response.headers.append("Set-Cookie", oauthInviteCookie(request, "", 0));
     return response;
   } catch (e) {
     return redirectHome(request, e.code || "oauth_failed");

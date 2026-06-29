@@ -14,6 +14,9 @@ import {
   Gift, Send, CreditCard, RefreshCw, Share2, BadgePercent, ShieldCheck,
 } from "lucide-react";
 
+const INVITE_LINK_ORIGIN = "https://www.liumeiti.vip";
+const GOOGLE_OAUTH_START = "/api/auth/oauth/google/start";
+
 const STATUS_LABEL = { received: "订单已收到", completed: "订单已完成", invalid: "订单无效·未收到付款" };
 const STATUS_LABEL_EN = { received: "Order received", completed: "Completed", invalid: "Invalid · unpaid" };
 const TX_STATUS_EN = { "待审核": "Pending review", "提现中": "Processing", "提现成功": "Withdrawn", "审核失败": "Rejected" };
@@ -32,10 +35,21 @@ function getStoredInviteCode() {
   }
 }
 
+function googleOAuthStartUrl(inviteCode) {
+  const code = String(inviteCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 24);
+  return code ? `${GOOGLE_OAUTH_START}?invite=${encodeURIComponent(code)}` : GOOGLE_OAUTH_START;
+}
+
+function handleGoogleOAuthStart(event) {
+  const href = googleOAuthStartUrl(getStoredInviteCode());
+  if (href === GOOGLE_OAUTH_START) return;
+  event.preventDefault();
+  window.location.href = href;
+}
+
 function inviteLink(code) {
   if (!code) return "";
-  const origin = typeof window !== "undefined" ? window.location.origin : "https://www.liumeiti.vip";
-  return `${origin}/?invite=${encodeURIComponent(code)}`;
+  return `${INVITE_LINK_ORIGIN}/?invite=${encodeURIComponent(code)}`;
 }
 
 function maskOrderId(orderId) {
@@ -519,7 +533,7 @@ export default function AccountPage() {
                 <>
                   <div className="auth-divider"><span>{L("或使用", "or")}</span></div>
                   <div className="oauth-login-grid bottom">
-                    <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
+                    <a href={GOOGLE_OAUTH_START} className="oauth-login-btn" onClick={handleGoogleOAuthStart}><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
                   </div>
                 </>
               )}
