@@ -1199,6 +1199,11 @@ export default function AdminPage() {
   const [newOrderAlert, setNewOrderAlert] = useState(null);
   const [highlightOrderIds, setHighlightOrderIds] = useState(new Set());
   const overviewRef = useRef(null);
+  // 全局搜索(⌘K)
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [gQuery, setGQuery] = useState("");
+  const [gResults, setGResults] = useState({ orders: [], users: [], codes: [] });
+  const [gLoading, setGLoading] = useState(false);
   const [aiStockMap, setAiStockMap] = useState(null);   // { planId: number|null }
   const [aiStockForm, setAiStockForm] = useState({});   // { planId: string }
   const [aiStockLabels, setAiStockLabels] = useState({});
@@ -1546,6 +1551,42 @@ export default function AdminPage() {
     }
     return () => { document.title = original; };
   }, [newOrderAlert]);
+
+  // ⌘K / Ctrl+K 打开全局搜索
+  useEffect(() => {
+    if (!authed) return;
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setSearchOpen((v) => !v);
+      } else if (e.key === "Escape") {
+        setSearchOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [authed]);
+
+  // 全局搜索:防抖查询
+  useEffect(() => {
+    if (!searchOpen) return;
+    const q = gQuery.trim();
+    if (q.length < 2) { setGResults({ orders: [], users: [], codes: [] }); setGLoading(false); return; }
+    setGLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch("/api/admin/search?q=" + encodeURIComponent(q), { credentials: "same-origin" });
+        const j = await r.json();
+        if (j.ok) setGResults({ orders: j.orders || [], users: j.users || [], codes: j.codes || [] });
+      } catch (e) {} finally { setGLoading(false); }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [gQuery, searchOpen]);
+
+  function closeSearch() { setSearchOpen(false); setGQuery(""); setGResults({ orders: [], users: [], codes: [] }); }
+  function searchGotoOrder(orderId) { closeSearch(); setTab("orders"); setFilterStatus("all"); setDateFrom(""); setDateTo(""); setSearchInput(orderId); setAppliedSearch(orderId); }
+  function searchGotoUser(email) { closeSearch(); loadUser(email); }
+  function searchGotoCode() { closeSearch(); setTab("codes"); }
 
   useEffect(() => {
     if (!pdfExportModal || typeof window === "undefined" || typeof document === "undefined") return;
@@ -2842,6 +2883,10 @@ export default function AdminPage() {
           </nav>
 
           <div className="admin-content">
+
+        <button type="button" className="admin-global-search-trigger" onClick={() => setSearchOpen(true)}>
+          <Search size={14} /><span>搜索订单 / 用户 / 兑换码…</span><kbd>⌘K</kbd>
+        </button>
 
         {newOrderAlert && (
           <button type="button" className="admin-new-order-alert" onClick={openNewOrderNotice}>
@@ -4375,6 +4420,69 @@ export default function AdminPage() {
                 <button type="button" onClick={() => copyText(activeMailLog.to)}><Copy size={12} />复制邮箱</button>
                 <button type="button" onClick={() => copyText(activeMailLog.content || activeMailLog.preview || "")}><Copy size={12} />复制正文</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {searchOpen && (
+        <div className="admin-search-mask" onClick={closeSearch}>
+          <div className="admin-search-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="admin-search-input-row">
+              <Search size={16} />
+              <input
+                autoFocus
+                value={gQuery}
+                onChange={(e) => setGQuery(e.target.value)}
+                placeholder="搜索订单号 / 邮箱 / 用户名 / 兑换码…"
+              />
+              {gLoading ? <LoaderCircle size={15} className="spin-icon" /> : <button type="button" className="admin-search-close" onClick={closeSearch}><X size={15} /></button>}
+            </div>
+            <div className="admin-search-results">
+              {gQuery.trim().length < 2 ? (
+                <div className="admin-search-hint">输入至少 2 个字符开始搜索 · Esc 关闭</div>
+              ) : (gResults.orders.length + gResults.users.length + gResults.codes.length === 0 && !gLoading) ? (
+                <div className="admin-search-hint">无匹配结果</div>
+              ) : (
+                <>
+                  {gResults.orders.length > 0 && (
+                    <div className="admin-search-group">
+                      <div className="admin-search-group-title">订单</div>
+                      {gResults.orders.map((o) => (
+                        <button key={o.orderId} type="button" className="admin-search-item" onClick={() => searchGotoOrder(o.orderId)}>
+                          <ClipboardList size={14} />
+                          <span className="admin-search-item-main">{o.orderId}<em>{o.serviceLabel}</em></span>
+                          <span className={`admin-order-status status-${o.status}`}>{o.statusLabel}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {gResults.users.length > 0 && (
+                    <div className="admin-search-group">
+                      <div className="admin-search-group-title">用户</div>
+                      {gResults.users.map((u) => (
+                        <button key={u.email} type="button" className="admin-search-item" onClick={() => searchGotoUser(u.email)}>
+                          <Users size={14} />
+                          <span className="admin-search-item-main">{u.username || "—"}<em>{u.email}</em></span>
+                          <span className="admin-search-item-side">¥{Number(u.balance || 0).toFixed(2)}{u.banned ? " · 封禁" : ""}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {gResults.codes.length > 0 && (
+                    <div className="admin-search-group">
+                      <div className="admin-search-group-title">兑换码</div>
+                      {gResults.codes.map((c) => (
+                        <button key={c.code} type="button" className="admin-search-item" onClick={searchGotoCode}>
+                          <Gift size={14} />
+                          <span className="admin-search-item-main">{c.code}<em>{c.typeLabel}{c.usedBy ? ` · ${c.usedBy}` : ""}</em></span>
+                          <span className="admin-search-item-side">{c.status}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
         </div>
