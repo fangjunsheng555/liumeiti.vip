@@ -2668,10 +2668,10 @@ export default function AdminPage() {
     if (!activeOrder || saving) return;
     // 作废二次确认(作废会自动退款/退券/恢复兑换码)
     if (editForm.status === "invalid" && activeOrder.status !== "invalid") {
-      const willRefund = activeOrder.paidByBalance || activeOrder.couponId || activeOrder.paymentMethod === "redeem";
+      const willRefund = activeOrder.paidByBalance || activeOrder.couponId;
       const msg = willRefund
-        ? `确认作废订单 ${activeOrder.orderId}？\n将自动退回余额/优惠券/兑换码，且回收已发返佣。`
-        : `确认作废订单 ${activeOrder.orderId}？`;
+        ? `确认作废订单 ${activeOrder.orderId}？\n将自动退回余额/优惠券，并回收已发返佣。\n(兑换码已兑换即失效，不返还)`
+        : `确认作废订单 ${activeOrder.orderId}？${activeOrder.paymentMethod === "redeem" ? "\n(兑换码已兑换即失效，不返还)" : ""}`;
       if (typeof window !== "undefined" && !window.confirm(msg)) return;
     }
     setSaving(true);
@@ -4158,8 +4158,7 @@ export default function AdminPage() {
                       <b className="admin-summary-remark">
                         {Number(activeOrder.refund?.balance || 0) > 0 ? `退余额 ¥${Number(activeOrder.refund.balance).toFixed(2)}` : ""}
                         {activeOrder.refund?.coupon ? " · 已还优惠券" : ""}
-                        {activeOrder.refund?.redeem ? " · 已恢复兑换码" : ""}
-                        {Number(activeOrder.refund?.balance || 0) <= 0 && !activeOrder.refund?.coupon && !activeOrder.refund?.redeem ? "无需退款" : ""}
+                        {Number(activeOrder.refund?.balance || 0) <= 0 && !activeOrder.refund?.coupon ? "无需退款" : ""}
                         {activeOrder.refundedAtBeijing ? ` · ${activeOrder.refundedAtBeijing}` : ""}
                       </b>
                     </div>

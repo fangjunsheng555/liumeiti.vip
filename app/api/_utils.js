@@ -1650,10 +1650,10 @@ export async function restoreCoupon(email, couponId, orderId) {
 // 订单作废退款 — 退余额(余额支付)+ 还优惠券 + 恢复兑换码。幂等(order.refundedAt 守卫 + 退款流水去重)。
 // AI 库存的归还由 [orderId] 路由单独处理,这里不碰。
 export async function refundVoidedOrder(order, actor = null) {
-  if (!order || order.refundedAt) return { ok: true, skipped: "already_refunded", balance: 0, coupon: false, redeem: false };
+  if (!order || order.refundedAt) return { ok: true, skipped: "already_refunded", balance: 0, coupon: false };
   const now = new Date();
   const email = String(order.userEmail || "").trim().toLowerCase();
-  const out = { balance: 0, coupon: false, redeem: false };
+  const out = { balance: 0, coupon: false };
 
   // 1) 余额支付 → 退回余额
   if (order.paidByBalance && validEmail(email)) {
@@ -1691,10 +1691,8 @@ export async function refundVoidedOrder(order, actor = null) {
     out.coupon = Boolean(await restoreCoupon(email, order.couponId, order.orderId));
   }
 
-  // 3) 兑换码支付 → 恢复为可用
-  if (order.paymentMethod === "redeem" && order.redeemCode) {
-    out.redeem = Boolean(await restoreServiceRedeemCode(order.redeemCode, order.orderId));
-  }
+  // 注:兑换码「兑换过即失效」—— 订单作废不恢复兑换码(已消耗,永久失效)。
+  // 仅下单创建失败的回滚(order/route.js)才返还,那是订单根本没成立的场景。
 
   order.refundedAt = now.toISOString();
   order.refundedAtBeijing = formatBeijingTime(now);

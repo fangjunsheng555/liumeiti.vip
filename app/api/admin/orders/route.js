@@ -121,7 +121,6 @@ function normalizeOrder(order) {
     refund: order.refund ? {
       balance: Number(order.refund.balance || 0),
       coupon: !!order.refund.coupon,
-      redeem: !!order.refund.redeem,
     } : null,
     paidByBalance: !!order.paidByBalance,
     couponId: order.couponId || "",
