@@ -847,63 +847,88 @@ export const DEFAULT_ROCKET_PLAN = DEFAULT_PRODUCT_PLANS.rocket;
 
 // ── AI 会员库存（每个规格独立整数计数键；键不存在 = 不限，存在 = 受限）──
 export const AI_STOCK_PLAN_IDS = ["gpt-plus", "gpt-pro", "gpt-20x-pro", "claude-pro", "claude-max", "claude-20x-max"];
-const AI_STOCK_KEY_PREFIX = "liumeiti:stock:ai:";
-function aiStockKey(planId) { return AI_STOCK_KEY_PREFIX + clean(planId, 40); }
 
-// 返回 { planId: number|null }，null = 未配置/不限
+// ── 通用库存(任意 service+plan) ──
+// Redis 键 liumeiti:stock:<service>:<planId>;null/无键 = 不限;整数≥0 = 受限剩余。
+// 注:AI 的键 liumeiti:stock:ai:<plan> 正是该方案的特例 → 历史 AI 库存数据零迁移直接沿用。
+function stockKey(service, planId) { return "liumeiti:stock:" + clean(service, 40) + ":" + clean(planId, 40); }
+
+// value: ""/null → 删键(不限);整数≥0 → 设值
+export async function setStock(service, planId, value) {
+  const key = stockKey(service, planId);
+  if (value === "" || value == null) { await redisCmd(["DEL", key]); return true; }
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 0) return false;
+  await redisCmd(["SET", key, String(n)]);
+  return true;
+}
+
+// 原子占用一个库存:未配置/Redis 不可用 → 放行(fail-soft);售罄 → 回滚并拒绝
+export async function reserveStock(service, planId) {
+  const key = stockKey(service, planId);
+  const cur = await redisCmd(["GET", key]);
+  if (cur == null) return { ok: true, unlimited: true };
+  const next = await redisCmd(["DECRBY", key, "1"]);
+  if (next == null) return { ok: true, unlimited: true };
+  if (Number(next) < 0) { await redisCmd(["INCRBY", key, "1"]); return { ok: false, soldOut: true, remaining: 0 }; }
+  return { ok: true, remaining: Number(next) };
+}
+
+// 返还一个库存(仅对受限规格生效)
+export async function restoreStock(service, planId) {
+  const key = stockKey(service, planId);
+  const cur = await redisCmd(["GET", key]);
+  if (cur == null) return false;
+  await redisCmd(["INCRBY", key, "1"]);
+  return true;
+}
+
+// 给定目录,批量读每个规格的库存数。返回 { "<service>:<planId>": number|null }(null=不限)。
+export async function getCatalogStockMap(catalog) {
+  const out = {};
+  const pairs = [];
+  for (const p of (catalog || [])) for (const pl of (p.plans || [])) pairs.push([p.key, pl.id]);
+  await Promise.all(pairs.map(async ([svc, pid]) => {
+    const raw = await redisCmd(["GET", stockKey(svc, pid)]);
+    out[svc + ":" + pid] = raw == null ? null : Math.max(0, Math.floor(Number(raw) || 0));
+  }));
+  return out;
+}
+
+// 售罄表 { "<service>:<planId>": true }(仅受限且<=0)
+export async function getCatalogSoldOutMap(catalog) {
+  const stock = await getCatalogStockMap(catalog);
+  const out = {};
+  for (const [k, v] of Object.entries(stock)) if (v != null && v <= 0) out[k] = true;
+  return out;
+}
+
+// ── AI 库存:保留为通用库存(service="ai")的封装,旧调用方不变 ──
 export async function getAiStockMap() {
   const map = {};
   await Promise.all(AI_STOCK_PLAN_IDS.map(async (id) => {
-    const raw = await redisCmd(["GET", aiStockKey(id)]);
+    const raw = await redisCmd(["GET", stockKey("ai", id)]);
     map[id] = raw == null ? null : Math.max(0, Math.floor(Number(raw) || 0));
   }));
   return map;
 }
-
-// 返回 { planId: boolean } —— 仅当受限且剩余<=0 时为售罄
 export async function getAiSoldOutMap() {
   const stock = await getAiStockMap();
   const out = {};
   AI_STOCK_PLAN_IDS.forEach((id) => { out[id] = stock[id] != null && stock[id] <= 0; });
   return out;
 }
-
-// value: 空字符串/null → 删除键（不限）；整数 ≥0 → 设为该值
 export async function setAiStock(planId, value) {
   if (!AI_STOCK_PLAN_IDS.includes(planId)) return false;
-  if (value === "" || value == null) {
-    await redisCmd(["DEL", aiStockKey(planId)]);
-    return true;
-  }
-  const n = Math.floor(Number(value));
-  if (!Number.isFinite(n) || n < 0) return false;
-  await redisCmd(["SET", aiStockKey(planId), String(n)]);
-  return true;
+  return setStock("ai", planId, value);
 }
-
-// 原子占用一个库存：未配置/Redis 不可用 → 放行（与全站 fail-soft 一致）；售罄 → 回滚并拒绝
 export async function reserveAiStock(planId) {
   if (!AI_STOCK_PLAN_IDS.includes(planId)) return { ok: true, unlimited: true };
-  const key = aiStockKey(planId);
-  const cur = await redisCmd(["GET", key]);
-  if (cur == null) return { ok: true, unlimited: true };
-  const next = await redisCmd(["DECRBY", key, "1"]);
-  if (next == null) return { ok: true, unlimited: true };
-  if (Number(next) < 0) {
-    await redisCmd(["INCRBY", key, "1"]);
-    return { ok: false, soldOut: true, remaining: 0 };
-  }
-  return { ok: true, remaining: Number(next) };
+  return reserveStock("ai", planId);
 }
-
-// 返还一个库存（仅对受限规格生效）
 export async function restoreAiStock(planId) {
   if (!AI_STOCK_PLAN_IDS.includes(planId)) return false;
-  const key = aiStockKey(planId);
-  const cur = await redisCmd(["GET", key]);
-  if (cur == null) return false;
-  await redisCmd(["INCRBY", key, "1"]);
-  return true;
+  return restoreStock("ai", planId);
 }
 
 // ── USDT 结算汇率：美元兑人民币，每日自动更新，保留两位小数；失败回退 6.85 ──

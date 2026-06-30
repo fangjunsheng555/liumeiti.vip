@@ -209,13 +209,14 @@ export default function ShopPage() {
   }
 
   function isPlanSoldOut(key, planId) {
-    return key === "ai" && Boolean(aiSoldOut[planId]);
+    // 通用:合并目录的库存售罄(任意商品);AI 旧接口作首屏兜底
+    const opt = getProductPlanOptions(key).find((p) => p.id === planId);
+    return Boolean(opt?.soldOut) || (key === "ai" && Boolean(aiSoldOut[planId]));
   }
 
   function allPlansSoldOut(key) {
-    if (key !== "ai") return false;
     const opts = getProductPlanOptions(key);
-    return opts.length > 0 && opts.every((p) => aiSoldOut[p.id]);
+    return opts.length > 0 && opts.every((p) => isPlanSoldOut(key, p.id));
   }
 
   function goCheckout() {

@@ -184,7 +184,7 @@ export function applyCatalogOverride(apiProducts) {
     if (!p || !p.key) continue;
     order.push(p.key);
     const plans = {};
-    (p.plans || []).forEach((pl) => { plans[pl.id] = { id: pl.id, amount: Number(pl.amount), label: pl.label, desc: pl.desc, cycle: pl.cycle, unit: pl.cycle }; });
+    (p.plans || []).forEach((pl) => { plans[pl.id] = { id: pl.id, amount: Number(pl.amount), label: pl.label, desc: pl.desc, cycle: pl.cycle, unit: pl.cycle, soldOut: !!pl.soldOut }; });
     byKey[p.key] = {
       active: true,
       title: p.title, subtitle: p.subtitle, price: p.priceText, cycle: p.cycle,
@@ -417,6 +417,7 @@ export function getProductPlan(productKey, planId) {
     desc: po.desc != null ? po.desc : base.desc,
     cycle: po.cycle || base.cycle,
     unit: po.cycle || base.unit,
+    soldOut: !!po.soldOut,
   };
 }
 
@@ -435,8 +436,23 @@ export function getProductPlanOptions(productKey) {
       desc: po.desc != null ? po.desc : base.desc,
       cycle: po.cycle || base.cycle,
       unit: po.cycle || base.unit,
+      soldOut: !!po.soldOut,
     };
   });
+}
+
+// 某规格是否售罄(后台库存=0)。未加载覆盖时一律 false(不误报)。
+export function isPlanSoldOut(productKey, planId) {
+  const ov = ovProduct(productKey);
+  if (!ov) return false;
+  return Boolean(ov.plans[planId]?.soldOut);
+}
+// 某商品是否全规格售罄
+export function isProductSoldOut(productKey) {
+  const ov = ovProduct(productKey);
+  if (!ov) return false;
+  const ids = Object.keys(ov.plans);
+  return ids.length > 0 && ids.every((id) => ov.plans[id].soldOut);
 }
 
 export function productItemAmount(product, plan) {

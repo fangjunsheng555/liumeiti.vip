@@ -12,7 +12,7 @@ import {
   inviteCodeFromRequest, normalizeInviteCode, resolveReferralForOrder,
   pushAdminActionLog,
   saveOrderRecord, verifyPaymentQuote, getCookieFromRequest,
-  reserveAiStock, restoreAiStock, getUsdtRate, redisCmd,
+  reserveStock, restoreStock, getUsdtRate, redisCmd,
 } from "../_utils.js";
 
 // 从合并后的目录商品里解析规格(沿用 rocket single→basic 别名 + 默认规格回退)。
@@ -573,16 +573,15 @@ export async function POST(request) {
     await clearRedeemRateLimit(redeemGuard);
   }
 
-  // AI 会员库存占用（原子扣减；售罄则回滚本次订单所有副作用并拒绝）
-  const aiReserved = [];
+  // 库存占用（任意商品规格;原子扣减;售罄则回滚本次订单所有副作用并拒绝。未配库存的规格=不限,放行）
+  const stockReserved = [];
   for (const it of order.items) {
-    if (it.service !== "ai") continue;
-    const res = await reserveAiStock(it.plan);
+    const res = await reserveStock(it.service, it.plan);
     if (res.ok) {
-      if (!res.unlimited) { it.aiStockReserved = true; aiReserved.push(it.plan); }
+      if (!res.unlimited) { it.stockReserved = true; stockReserved.push({ service: it.service, plan: it.plan }); }
       continue;
     }
-    for (const pid of aiReserved) await restoreAiStock(pid);
+    for (const r of stockReserved) await restoreStock(r.service, r.plan);
     await restoreCoupon(userEmail, coupon.couponId, orderId);
     if (paymentMethod === "redeem") await restoreServiceRedeemCode(redeemCode, orderId);
     await refundFailedBalanceOrder(order, userEmail, finalAmount, now);
@@ -592,6 +591,7 @@ export async function POST(request) {
       message: order.locale === "en"
         ? "This plan is sold out. Please pick another plan or contact support."
         : "该规格库存不足，请选择其他规格或联系在线客服",
+      soldOutService: it.service,
       soldOutPlan: it.plan,
     }, { status: 409 });
   }
@@ -608,7 +608,7 @@ export async function POST(request) {
     } catch (e) {}
   }
   if (!stored) {
-    for (const pid of aiReserved) await restoreAiStock(pid);
+    for (const r of stockReserved) await restoreStock(r.service, r.plan);
     await restoreCoupon(userEmail, coupon.couponId, orderId);
     if (paymentMethod === "redeem") await restoreServiceRedeemCode(redeemCode, orderId);
     await refundFailedBalanceOrder(order, userEmail, finalAmount, now);

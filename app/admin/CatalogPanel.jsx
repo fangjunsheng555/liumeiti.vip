@@ -19,13 +19,14 @@ export default function CatalogPanel() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [stockEdits, setStockEdits] = useState({}); // { "<key>:<planId>": "" | "整数" }
 
   const load = useCallback(async () => {
     setLoading(true); setMsg(null);
     try {
       const r = await fetch("/api/admin/catalog", { credentials: "same-origin", cache: "no-store" });
       const j = await r.json();
-      if (j.ok) setCatalog(j.catalog);
+      if (j.ok) { setCatalog(j.catalog); setStockEdits({}); }
       else setMsg({ type: "error", text: j.error === "unauthorized" ? "仅超级管理员可管理商品" : (j.error || "加载失败") });
     } catch (e) { setMsg({ type: "error", text: "网络错误" }); }
     finally { setLoading(false); }
@@ -40,6 +41,16 @@ export default function CatalogPanel() {
       ? { ...p, plans: p.plans.map((pl) => (pl.id === planId ? { ...pl, [field]: value } : pl)) }
       : p)));
   }
+  const skey = (pKey, plId) => pKey + ":" + plId;
+  function stockVal(p, pl) {
+    const k = skey(p.key, pl.id);
+    if (k in stockEdits) return stockEdits[k];
+    return pl.stock == null ? "" : String(pl.stock);
+  }
+  function setStockVal(p, pl, v) {
+    const cleaned = v === "" ? "" : v.replace(/[^\d]/g, "");
+    setStockEdits((s) => ({ ...s, [skey(p.key, pl.id)]: cleaned }));
+  }
 
   async function save() {
     setSaving(true); setMsg(null);
@@ -47,10 +58,10 @@ export default function CatalogPanel() {
       const r = await fetch("/api/admin/catalog", {
         method: "PUT", credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ catalog }),
+        body: JSON.stringify({ catalog, stockEdits }),
       });
       const j = await r.json();
-      if (j.ok) { setCatalog(j.catalog); setMsg({ type: "ok", text: "已保存 · 前端与结账价格已即时更新" }); }
+      if (j.ok) { setCatalog(j.catalog); setStockEdits({}); setMsg({ type: "ok", text: "已保存 · 前端/结账价格与库存已即时更新" }); }
       else setMsg({ type: "error", text: j.error || "保存失败" });
     } catch (e) { setMsg({ type: "error", text: "网络错误" }); }
     finally { setSaving(false); }
@@ -94,21 +105,26 @@ export default function CatalogPanel() {
             <div style={{ marginBottom: 12 }}><span style={lbl}>短简介</span><input style={inp} value={p.shortIntro || ""} onChange={(e) => patchProduct(p.key, "shortIntro", e.target.value)} /></div>
             <div style={{ marginBottom: 14 }}><span style={lbl}>卖点(用 ｜ 分隔)</span><input style={inp} value={(p.highlights || []).join("｜")} onChange={(e) => patchProduct(p.key, "highlights", e.target.value.split("｜").map((s) => s.trim()).filter(Boolean))} /></div>
 
-            <div style={{ fontSize: 12.5, fontWeight: 800, color: C.muted, margin: "0 0 8px" }}>规格 / 价格（¥amount = 结账实收价）</div>
+            <div style={{ fontSize: 12.5, fontWeight: 800, color: C.muted, margin: "0 0 8px" }}>规格 / 价格 / 库存（¥amount = 结账实收价 · 库存留空 = 不限 · 0 = 售罄）</div>
             <div style={{ display: "grid", gap: 8 }}>
-              {p.plans.map((pl) => (
-                <div key={pl.id} style={{ display: "grid", gridTemplateColumns: "minmax(90px,1.1fr) 92px minmax(70px,0.7fr) minmax(120px,2fr) auto", gap: 8, alignItems: "center", padding: "8px 10px", borderRadius: 10, background: C.surface2, border: `1px solid ${C.border}`, opacity: pl.active === false ? 0.55 : 1 }}>
+              {p.plans.map((pl) => {
+                const sv = stockVal(p, pl);
+                const sold = sv === "0";
+                return (
+                <div key={pl.id} style={{ display: "grid", gridTemplateColumns: "minmax(78px,1fr) 78px 70px 58px minmax(96px,1.4fr) auto", gap: 8, alignItems: "center", padding: "8px 10px", borderRadius: 10, background: sold ? "#fef2f2" : C.surface2, border: `1px solid ${sold ? "#fecaca" : C.border}`, opacity: pl.active === false ? 0.55 : 1 }}>
                   <input style={{ ...inp, fontWeight: 700 }} value={pl.label || ""} onChange={(e) => patchPlan(p.key, pl.id, "label", e.target.value)} title="规格名" />
                   <div style={{ display: "inline-flex", alignItems: "center", gap: 2 }}><span style={{ color: C.muted, fontWeight: 800 }}>¥</span><input type="number" step="0.01" min="0" style={{ ...inp, fontWeight: 800, color: C.accent }} value={pl.amount} onChange={(e) => patchPlan(p.key, pl.id, "amount", Number(e.target.value))} title="实收价" /></div>
+                  <input inputMode="numeric" placeholder="不限" style={{ ...inp, fontWeight: 800, textAlign: "center", color: sold ? "#dc2626" : (sv === "" ? C.faint : "#0f172a"), borderColor: sold ? "#fecaca" : C.border }} value={sv} onChange={(e) => setStockVal(p, pl, e.target.value)} title="库存(留空=不限,0=售罄)" />
                   <input style={inp} value={pl.cycle || ""} onChange={(e) => patchPlan(p.key, pl.id, "cycle", e.target.value)} title="周期" />
                   <input style={inp} value={pl.desc || ""} onChange={(e) => patchPlan(p.key, pl.id, "desc", e.target.value)} title="规格说明" />
                   <label style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11.5, color: C.muted, whiteSpace: "nowrap" }} title="该规格上/下架">
                     <input type="checkbox" checked={pl.active !== false} onChange={(e) => patchPlan(p.key, pl.id, "active", e.target.checked)} />上架
                   </label>
                 </div>
-              ))}
+                );
+              })}
             </div>
-            <code style={{ fontSize: 10.5, color: C.faint, display: "block", marginTop: 6 }}>规格 id：{p.plans.map((pl) => pl.id).join(" · ")}</code>
+            <code style={{ fontSize: 10.5, color: C.faint, display: "block", marginTop: 6 }}>列:规格名 · ¥实收价 · 库存 · 周期 · 说明 · 上架　|　规格 id：{p.plans.map((pl) => pl.id).join(" · ")}</code>
           </div>
         ))}
       </div>

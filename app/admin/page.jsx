@@ -2829,7 +2829,6 @@ export default function AdminPage() {
     {
       title: "系统",
       items: [
-        { key: "aistock", label: "AI 库存", icon: Boxes, show: canManageStock },
         { key: "ai-quota", label: "AI 限额", icon: Gauge, show: isRootStaff },
         { key: "staff", label: "工作人员", icon: ShieldCheck, show: isRootStaff },
       ],

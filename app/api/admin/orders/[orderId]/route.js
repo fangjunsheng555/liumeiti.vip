@@ -3,7 +3,7 @@ import {
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
   pushAdminActionLog, formatBeijingTime, clean, isRootAdminSession,
   settleOrderReferralCommission, reverseOrderReferralCommission, sendSimpleEmail, adminPermissionProfile,
-  restoreAiStock, refundVoidedOrder,
+  restoreStock, refundVoidedOrder,
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
@@ -165,9 +165,9 @@ export async function PATCH(request, { params }) {
       order.invalidAtBeijing = formatBeijingTime(now);
       // 订单作废：返还此前占用的 AI 会员库存
       for (const it of (order.items || [])) {
-        if (it.service === "ai" && it.aiStockReserved) {
-          await restoreAiStock(it.plan);
-          it.aiStockReserved = false;
+        if (it.stockReserved || it.aiStockReserved) {
+          await restoreStock(it.service, it.plan);
+          it.stockReserved = false; it.aiStockReserved = false;
         }
       }
       // 退款闭环:余额支付退回余额、还优惠券、恢复兑换码(幂等)。
@@ -293,7 +293,7 @@ export async function DELETE(request, { params }) {
   if (!ok) return Response.json({ ok: false, error: "delete_failed" }, { status: 500 });
   // 软删订单：返还此前占用的 AI 会员库存
   for (const it of (target.order.items || [])) {
-    if (it.service === "ai" && it.aiStockReserved) await restoreAiStock(it.plan);
+    if (it.stockReserved || it.aiStockReserved) await restoreStock(it.service, it.plan);
   }
   await pushAdminActionLog({
     action: "order_delete",

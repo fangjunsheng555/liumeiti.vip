@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import { Headphones, ShoppingBag, X } from "lucide-react";
-import { getDefaultProductPlan, getProductPlan, getProductPlanOptions, localizePlan } from "../lib/store";
+import { getDefaultProductPlan, getProductPlan, getProductPlanOptions, localizePlan, useCatalogSync } from "../lib/store";
 import { useLocale } from "../components/LocaleProvider";
 
 // 轻量事件埋点（service_view / cta_click），失败静默，无隐私提示。
@@ -21,6 +21,7 @@ function trackEvent(name, slug, label) {
 
 export default function ServiceOrderActions({ service, soldOut = {} }) {
   const { t, locale } = useLocale();
+  const catalogVersion = useCatalogSync(); // 拉后台商品/价格/库存覆盖
   const [pickerOpen, setPickerOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(() => {
@@ -29,10 +30,11 @@ export default function ServiceOrderActions({ service, soldOut = {} }) {
     const firstAvail = getProductPlanOptions(service?.key).find((p) => !soldOut?.[p.id]);
     return firstAvail?.id || def;
   });
-  const planOptions = useMemo(() => getProductPlanOptions(service?.key), [service?.key]);
+  // 价格/规格/库存以合并目录为准(catalogVersion 变化即重算);售罄 = 目录 soldOut 或服务端首屏传入。
+  const planOptions = useMemo(() => getProductPlanOptions(service?.key), [service?.key, catalogVersion]);
   const productKey = service?.key || "";
   const currentPlan = getProductPlan(productKey, selectedPlan) || planOptions[0] || null;
-  const isSoldOut = (planId) => Boolean(soldOut?.[planId]);
+  const isSoldOut = (planId) => Boolean(planOptions.find((p) => p.id === planId)?.soldOut) || Boolean(soldOut?.[planId]);
   const allSoldOut = planOptions.length > 0 && planOptions.every((p) => isSoldOut(p.id));
 
   useEffect(() => {

@@ -8,24 +8,26 @@ import ServiceOrderActions from "../ServiceOrderActions";
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../../social-meta";
 import { getServerLocale } from "../../lib/i18n-server";
 import { getT } from "../../lib/i18n";
-import { getAiSoldOutMap, AI_STOCK_PLAN_IDS } from "../../api/_utils.js";
+import { getCatalogSoldOutMap } from "../../api/_utils.js";
 import { getMergedCatalog } from "../../api/_catalog.js";
 
 // 把后台合并目录的价格/规格覆盖到服务页(与首页/选购/结账完全一致)。
 // 名称/说明保持本地化(中英),价格取目录权威 amount;商品下架则 404。
-function applyCatalogToService(service, catProd, locale) {
+function applyCatalogToService(service, catProd, locale, soldOutMap = {}) {
   if (!catProd) return service;
   const activePlans = (catProd.plans || []).filter((pl) => pl.active !== false);
   const next = { ...service };
   if (locale !== "en" && catProd.priceText) next.price = catProd.priceText;
   const cycleShort = (c) => String(c || "").replace(/^1/, "");
   if (Array.isArray(service.plans) && activePlans.length) {
+    // 第4位 = 该规格是否售罄(库存0),供下方规格卡用
     next.plans = activePlans.map((pl, i) => {
       const orig = service.plans[i] || [];
       const name = locale === "en" ? (orig[0] || pl.label) : pl.label;
       const desc = locale === "en" ? (orig[2] || pl.desc) : pl.desc;
-      return [name, `¥${pl.amount}/${cycleShort(pl.cycle)}`, desc];
+      return [name, `¥${pl.amount}/${cycleShort(pl.cycle)}`, desc, !!soldOutMap[catProd.key + ":" + pl.id]];
     });
+    next.planIds = activePlans.map((pl) => pl.id);
   }
   return next;
 }
@@ -74,10 +76,14 @@ export default async function ServiceLandingPage({ params }) {
   const catalog = await getMergedCatalog();
   const catProd = catalog.find((p) => p.key === raw.key);
   if (catProd && catProd.active === false) notFound(); // 已下架
-  const service = applyCatalogToService(localizeService(raw, locale), catProd, locale);
+  const soldOutMap = await getCatalogSoldOutMap(catProd ? [catProd] : []); // { "<key>:<planId>": true }
+  const service = applyCatalogToService(localizeService(raw, locale), catProd, locale, soldOutMap);
 
-  const aiSoldOut = service.key === "ai" ? await getAiSoldOutMap() : {};
-  const aiAllSoldOut = service.key === "ai" && AI_STOCK_PLAN_IDS.length > 0 && AI_STOCK_PLAN_IDS.every((id) => aiSoldOut[id]);
+  // 该商品的 { planId: 售罄 } 映射(传给下单 CTA;与库存0即时一致)
+  const planSoldOut = {};
+  (catProd?.plans || []).forEach((pl) => { if (soldOutMap[catProd.key + ":" + pl.id]) planSoldOut[pl.id] = true; });
+  const allSoldOut = Boolean(catProd) && (catProd.plans || []).filter((pl) => pl.active !== false).length > 0
+    && (catProd.plans || []).filter((pl) => pl.active !== false).every((pl) => soldOutMap[catProd.key + ":" + pl.id]);
 
   const jsonLd = [
     {
@@ -91,7 +97,7 @@ export default async function ServiceLandingPage({ params }) {
         "@type": "AggregateOffer",
         priceCurrency: "CNY",
         lowPrice: String(service.plans[0]?.[1] || service.price).replace(/[^\d.]/g, "") || "0",
-        availability: aiAllSoldOut ? "https://schema.org/OutOfStock" : "https://schema.org/InStock",
+        availability: allSoldOut ? "https://schema.org/OutOfStock" : "https://schema.org/InStock",
         url: `https://www.liumeiti.vip/services/${service.slug}`,
       },
     },
@@ -151,7 +157,7 @@ export default async function ServiceLandingPage({ params }) {
                 <span key={item}><BadgeCheck size={14} />{item}</span>
               ))}
             </div>
-            <ServiceOrderActions service={service} soldOut={aiSoldOut} />
+            <ServiceOrderActions service={service} soldOut={planSoldOut} />
           </div>
           <div className="service-seo-visual">
             <img src={service.image} alt={service.title} />
@@ -170,11 +176,10 @@ export default async function ServiceLandingPage({ params }) {
             </div>
           </div>
           <div className="service-plan-grid">
-            {service.plans.map(([name, price, desc], i) => {
-              const planSoldOut = service.key === "ai" && aiSoldOut[AI_STOCK_PLAN_IDS[i]];
+            {service.plans.map(([name, price, desc, planOut], i) => {
               return (
-              <article key={name} className={`service-plan-card${planSoldOut ? " sold-out" : ""}`}>
-                <span>{name}{planSoldOut ? ` · ${locale === "en" ? "Sold out" : "已售罄"}` : ""}</span>
+              <article key={name} className={`service-plan-card${planOut ? " sold-out" : ""}`}>
+                <span>{name}{planOut ? ` · ${locale === "en" ? "Sold out" : "已售罄"}` : ""}</span>
                 <b>{price}</b>
                 <p>{desc}</p>
               </article>

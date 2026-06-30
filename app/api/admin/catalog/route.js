@@ -1,7 +1,7 @@
 // 后台商品/价格管理(仅超级管理员)。读:默认+覆盖+合并结果;写:保存覆盖到 Redis。
 import {
   adminSessionFromRequest, isRootAdminSession, adminActorFromRequest,
-  pushAdminActionLog, roundMoney, clean,
+  pushAdminActionLog, roundMoney, clean, getCatalogStockMap, setStock,
 } from "../../_utils.js";
 import { getMergedCatalog, getCatalogOverrides, saveCatalogOverrides } from "../../_catalog.js";
 import { CATALOG_DEFAULTS } from "../../../lib/catalog-defaults.js";
@@ -13,10 +13,20 @@ function gate(request) {
   return s && isRootAdminSession(s) ? s : null;
 }
 
+// 合并后的目录,每个规格附当前库存(null=不限)
+async function catalogWithStock(overrides) {
+  const catalog = await getMergedCatalog(overrides);
+  const stock = await getCatalogStockMap(catalog);
+  return catalog.map((p) => ({
+    ...p,
+    plans: (p.plans || []).map((pl) => ({ ...pl, stock: stock[p.key + ":" + pl.id] ?? null })),
+  }));
+}
+
 export async function GET(request) {
   if (!gate(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const overrides = await getCatalogOverrides();
-  const catalog = await getMergedCatalog(overrides);
+  const catalog = await catalogWithStock(overrides);
   return Response.json({ ok: true, defaults: CATALOG_DEFAULTS, overrides, catalog });
 }
 
@@ -69,11 +79,25 @@ export async function PUT(request) {
   const overrides = diffToOverrides(body.catalog);
   const ok = await saveCatalogOverrides(overrides);
   if (!ok) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
+
+  // 库存编辑(只对面板里实际改过的规格生效,key 形如 "<service>:<planId>",值 ""=不限/整数≥0)
+  const stockEdits = (body.stockEdits && typeof body.stockEdits === "object") ? body.stockEdits : {};
+  let stockChanged = 0;
+  for (const [k, v] of Object.entries(stockEdits)) {
+    const i = String(k).indexOf(":");
+    if (i <= 0) continue;
+    const svc = clean(k.slice(0, i), 40);
+    const pid = clean(k.slice(i + 1), 40);
+    const val = (v === "" || v == null) ? "" : Math.max(0, Math.floor(Number(v)));
+    if (v !== "" && v != null && !Number.isFinite(Number(v))) continue;
+    if (await setStock(svc, pid, val)) stockChanged += 1;
+  }
+
   const actor = adminActorFromRequest(request);
   await pushAdminActionLog({
     action: "catalog_update", actor, target: "catalog",
-    detail: { changedProducts: Object.keys(overrides.products) },
+    detail: { changedProducts: Object.keys(overrides.products), stockChanged },
   });
-  const catalog = await getMergedCatalog(overrides);
+  const catalog = await catalogWithStock(overrides);
   return Response.json({ ok: true, overrides, catalog });
 }

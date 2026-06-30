@@ -2,7 +2,7 @@ import {
   getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
   pushAdminActionLog, formatBeijingTime, isRootAdminSession, adminPermissionProfile,
-  clean, sendSimpleEmail, reverseOrderReferralCommission, refundVoidedOrder, restoreAiStock,
+  clean, sendSimpleEmail, reverseOrderReferralCommission, refundVoidedOrder, restoreStock,
 } from "../../../_utils.js";
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
 
@@ -104,7 +104,7 @@ export async function POST(request) {
         order.completedAtBeijing = null;
         // 返还占用的 AI 库存
         for (const it of (order.items || [])) {
-          if (it.service === "ai" && it.aiStockReserved) { await restoreAiStock(it.plan); it.aiStockReserved = false; }
+          if (it.stockReserved || it.aiStockReserved) { await restoreStock(it.service, it.plan); it.stockReserved = false; it.aiStockReserved = false; }
         }
         // 已完成订单被批量作废:回收已发返佣。
         if (wasCompleted) await reverseOrderReferralCommission(order, actor);
