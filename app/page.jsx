@@ -364,7 +364,7 @@ export default function Page() {
   const catByKey = {};
   getCatalogProducts().forEach((p) => { catByKey[p.key] = p; });
   const homeServices = catalogOverrideLoaded()
-    ? SERVICE_PAGES.filter((s) => catByKey[s.slug]) // 加载后:仅上架
+    ? SERVICE_PAGES.filter((s) => catByKey[s.key]) // 加载后:仅上架(按 catalog key 匹配,注意 slug≠key,如 hbo-max/max)
     : SERVICE_PAGES;
 
   useEffect(() => {
@@ -516,7 +516,7 @@ export default function Page() {
                   <div className="home-service-sub">{locale === "en" ? (serviceCardEn[s.slug]?.subtitle || s.subtitle) : s.subtitle}</div>
                 </div>
                 <div className="home-service-foot">
-                  <span className="home-service-price">{locale === "en" ? (serviceCardEn[s.slug]?.price || s.price) : (catByKey[s.slug]?.price || s.price)}</span>
+                  <span className="home-service-price">{locale === "en" ? (serviceCardEn[s.slug]?.price || s.price) : (catByKey[s.key]?.price || s.price)}</span>
                   <ArrowRight size={16} className="home-service-arrow" />
                 </div>
               </Link>
