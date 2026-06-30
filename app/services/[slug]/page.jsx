@@ -10,6 +10,7 @@ import { getServerLocale } from "../../lib/i18n-server";
 import { getT } from "../../lib/i18n";
 import { getCatalogSoldOutMap } from "../../api/_utils.js";
 import { getMergedCatalog } from "../../api/_catalog.js";
+import { getSettings } from "../../api/_settings.js";
 
 // 把后台合并目录的价格/规格覆盖到服务页(与首页/选购/结账完全一致)。
 // 名称/说明保持本地化(中英),价格取目录权威 amount;商品下架则 404。
@@ -74,6 +75,8 @@ export default async function ServiceLandingPage({ params }) {
   const locale = await getServerLocale();
   const t = getT(locale);
   const catalog = await getMergedCatalog();
+  const settings = await getSettings(); // 站点设置(页脚同步)
+  const footerCfg = settings.footer;
   const catProd = catalog.find((p) => p.key === raw.key);
   if (catProd && catProd.active === false) notFound(); // 已下架
   const soldOutMap = await getCatalogSoldOutMap(catProd ? [catProd] : []); // { "<key>:<planId>": true }
@@ -221,15 +224,15 @@ export default async function ServiceLandingPage({ params }) {
       <footer className="site-footer home-footer">
         <div className="container footer-inner">
           <div className="footer-company">
-            <div className="footer-brand">{t("footer.brand")}</div>
+            <div className="footer-brand">{locale === "en" ? footerCfg.brandEn : footerCfg.brand}</div>
             <div className="footer-links">
               <Link href="/legal">{t("footer.legal")}</Link>
               <Link href="/shop">{t("svc.back")}</Link>
             </div>
           </div>
           <div className="footer-legal">
-            <div className="footer-pill">{t("footer.address")}</div>
-            <div className="footer-pill">{t("footer.copyright")}</div>
+            <div className="footer-pill">{locale === "en" ? footerCfg.addressEn : footerCfg.address}</div>
+            <div className="footer-pill">{footerCfg.copyright}</div>
           </div>
         </div>
       </footer>

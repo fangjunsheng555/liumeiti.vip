@@ -43,7 +43,7 @@ export default function FloatingSupport() {
               <TelegramBrandIcon />
             </a>
           </div>
-          <div className="floating-hours-line">{L("在线时间:9:00 - 23:00", "Online: 9:00 - 23:00")}</div>
+          <div className="floating-hours-line">{L("在线时间:" + s.hours, "Online: " + s.hours)}</div>
         </div>
       )}
       <button

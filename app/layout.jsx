@@ -16,16 +16,19 @@ const socialImage = SOCIAL_IMAGE;
 export async function generateMetadata() {
   const locale = await getServerLocale();
   const en = locale === 'en';
-  const siteTitle = en ? siteTitleEn : siteTitleZh;
+  const { getSettings } = await import('./api/_settings.js');
+  const settings = await getSettings();
+  const brandName = (en ? settings.brand.nameEn : settings.brand.name) || (en ? 'Maoyang Taiwan Inc' : '冒央会社');
+  const siteTitle = (en ? settings.brand.siteTitleEn : settings.brand.siteTitle) || (en ? siteTitleEn : siteTitleZh);
   const description = en ? siteDescEn : SOCIAL_DESCRIPTION;
   return {
     metadataBase: new URL(siteUrl),
     title: {
       default: siteTitle,
-      template: en ? '%s | Maoyang Taiwan Inc' : '%s | 冒央会社',
+      template: `%s | ${brandName}`,
     },
     description,
-    applicationName: en ? 'Maoyang Taiwan Inc' : '冒央会社',
+    applicationName: brandName,
     keywords: en
       ? ['Maoyang Taiwan Inc', 'liumeiti.vip', 'streaming membership', 'Spotify', 'Netflix', 'Disney+', 'HBO Max', 'VPN', 'ChatGPT', 'Claude', 'AI membership', 'membership sharing']
       : ['冒央会社', 'liumeiti.vip', '流媒体会员', 'Spotify会员', 'Netflix会员', 'Disney+会员', 'HBO Max会员', '机场节点', 'ChatGPT会员', 'Claude会员', 'AI会员', '流媒体合租'],

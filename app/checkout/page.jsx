@@ -470,7 +470,10 @@ export default function CheckoutPage() {
   const couponDiscount = !serviceRedeemActive && activeCoupon ? Math.min(Number(activeCoupon.amount || 0), couponEligibleCny) : 0;
   const finalCny = Math.max(0, Math.round((bundleFinalCny - couponDiscount) * 100) / 100);
   const alipayPayableCny = Math.max(0.01, Math.round((finalCny + paymentAdjustment) * 100) / 100);
-  const finalUsdt = Math.round((finalCny * 0.9 / usdtRate) * 100) / 100;
+  // USDT 折扣/汇率以站点设置为准(与服务端实收一致)
+  const usdtDiscount = Number(siteSettings.usdt.discount) || 0.9;
+  const effectiveUsdtRate = siteSettings.usdt.rateOverride ? Number(siteSettings.usdt.rateOverride) : usdtRate;
+  const finalUsdt = Math.round((finalCny * usdtDiscount / effectiveUsdtRate) * 100) / 100;
   const savings = subtotal - bundleFinalCny;
 
   // 余额付款变得不足时（加购/优惠变化抬高总价）自动切回支付宝，避免停留在会被服务端拒绝的余额选项。
@@ -1139,7 +1142,7 @@ export default function CheckoutPage() {
                 {paymentMethod === "usdt" ? (
                   <>
                     <b>{finalUsdt} <em>USDT</em></b>
-                    <small>¥{finalCny}{L("(支付宝应付)", " (Alipay due)")} × 0.9 ÷ {usdtRate}</small>
+                    <small>¥{finalCny}{L("(支付宝应付)", " (Alipay due)")} × {usdtDiscount} ÷ {effectiveUsdtRate}</small>
                   </>
                 ) : paymentMethod === "alipay" ? (
                   <>
@@ -1164,7 +1167,7 @@ export default function CheckoutPage() {
               {paymentMethod !== "balance" && (
                 <div className="qr-display compact">
                   <img
-                    src={paymentMethod === "usdt" ? "/payment/usdt.png" : (siteSettings.payment.alipayQr || cartItems[0]?.qrImage || "/payment/alipay.jpg")}
+                    src={paymentMethod === "usdt" ? (siteSettings.payment.usdtQr || "/payment/usdt.png") : (siteSettings.payment.alipayQr || cartItems[0]?.qrImage || "/payment/alipay.jpg")}
                     alt={paymentMethod === "usdt" ? L("USDT 收款码", "USDT QR code") : L("支付宝收款码", "Alipay QR code")}
                   />
                   <div className="qr-display-label">

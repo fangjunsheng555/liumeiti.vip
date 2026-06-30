@@ -21,7 +21,7 @@ import MobileNav from "./components/MobileNav";
 import RedeemCard from "./components/RedeemCard";
 import FloatingSupport from "./components/FloatingSupport";
 import { SERVICE_PAGES } from "./services/service-data";
-import { useCatalogSync, getCatalogProducts, catalogOverrideLoaded } from "./lib/store";
+import { useCatalogSync, getCatalogProducts, catalogOverrideLoaded, useSiteSettings } from "./lib/store";
 import LanguageSwitcher from "./components/LanguageSwitcher";
 import { useLocale } from "./components/LocaleProvider";
 import { localizeMetric, localizeTime, serviceCardEn } from "./lib/i18n";
@@ -361,6 +361,8 @@ export default function Page() {
   const [authUser, setAuthUser] = useState(null);
   const { locale, t } = useLocale();
   const catalogVersion = useCatalogSync(); // 后台商品/价格覆盖(上下架/改价同步)
+  const siteSettings = useSiteSettings();   // 站点设置(页脚公司信息/版权同步)
+  const footerCfg = siteSettings.footer;
   const catByKey = {};
   getCatalogProducts().forEach((p) => { catByKey[p.key] = p; });
   const homeServices = catalogOverrideLoaded()
@@ -571,7 +573,7 @@ export default function Page() {
       <footer className="site-footer home-footer">
         <div className="container footer-inner">
           <div className="footer-company">
-            <div className="footer-brand">{t("footer.brand")}</div>
+            <div className="footer-brand">{locale === "en" ? footerCfg.brandEn : footerCfg.brand}</div>
             <div className="footer-links">
               <Link href="/legal">{t("footer.legal")}</Link>
               <Link href="/announcements">{locale === "en" ? "Announcements" : "公告中心"}</Link>
@@ -584,8 +586,8 @@ export default function Page() {
             </div>
           </div>
           <div className="footer-legal">
-            <div className="footer-pill">{t("footer.address")}</div>
-            <div className="footer-pill">{t("footer.copyright")}</div>
+            <div className="footer-pill">{locale === "en" ? footerCfg.addressEn : footerCfg.address}</div>
+            <div className="footer-pill">{footerCfg.copyright}</div>
           </div>
         </div>
       </footer>
