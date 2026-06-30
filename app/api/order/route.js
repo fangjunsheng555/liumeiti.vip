@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { buildOrderEmailHtml, buildOrderEmailText } from "./email-template.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { getMergedCatalog } from "../_catalog.js";
+import { getSettings } from "../_settings.js";
+import { supportText } from "../../lib/settings-defaults.js";
 import {
   consumeBestCoupon, restoreCoupon, verifySession, getUser,
   setUser, addBalanceTx, pushAdminBalanceLog, makeId, roundMoney,
@@ -209,12 +211,16 @@ async function sendOrderEmail(order) {
   const port = Number(process.env.SMTP_PORT) || 587;
   const secure = port === 465;
   const emailLocale = order.locale === "en" ? "en" : "zh";
+  // 客服联系方式 / 品牌以站点设置为准(与站点显示一致)
+  const settings = await getSettings();
+  const brandName = settings.brand.name || BRAND_NAME;
+  const supportContact = supportText(settings.support, emailLocale);
   const html = buildOrderEmailHtml({
-    order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL,
-    supportContact: emailLocale === "en" ? SUPPORT_CONTACT_EN : SUPPORT_CONTACT, usdtRate: order.usdtRate || USDT_RATE, locale: emailLocale,
+    order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL,
+    supportContact, usdtRate: order.usdtRate || USDT_RATE, locale: emailLocale,
   });
   const text = buildOrderEmailText({
-    order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, usdtRate: order.usdtRate || USDT_RATE, locale: emailLocale,
+    order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, usdtRate: order.usdtRate || USDT_RATE, locale: emailLocale,
   });
   const confirmWord = emailLocale === "en" ? "Order confirmation" : "订单确认";
   const subjItem = order.items[0]
@@ -317,6 +323,8 @@ export async function POST(request) {
   const catalog = await getMergedCatalog();
   const catalogByKey = {};
   catalog.forEach((p) => { catalogByKey[p.key] = p; });
+  // 站点设置(组合优惠档位 / USDT 折扣·汇率 / Telegram 通知开关)——后台可改,这里是权威。
+  const settings = await getSettings();
 
   // Validate items first to determine if contact is required (Spotify only)
   const items = [];
@@ -407,9 +415,10 @@ export async function POST(request) {
   const hasRocketTrial = items.some((item) => item.service === "rocket" && (item.plan === "trial" || item.rocketPlan === "trial"));
   const orderId = makeId("LM");
 
-  // Compute totals
+  // Compute totals(组合优惠档位以站点设置为准)
   const subtotal = items.reduce((s, i) => s + i.amount, 0);
-  const discountRate = bundleDiscountRate(items.length);
+  const discountRate = items.length >= 3 ? Number(settings.bundle.tier3Rate)
+    : items.length >= 2 ? Number(settings.bundle.tier2Rate) : 0;
   const discountLabel = bundleDiscountLabel(items.length);
   const bundleFinalAmount = Math.round(subtotal * (1 - discountRate));
   const rocketTrialAmount = items
@@ -421,8 +430,10 @@ export async function POST(request) {
   const coupon = userEmail && paymentMethod !== "redeem" ? await consumeBestCoupon(userEmail, orderId, couponMaxAmount) : { discount: 0 };
   const couponDiscount = roundMoney(coupon.discount || 0);
   const finalAmount = paymentMethod === "redeem" ? 0 : Math.max(0, Math.round((bundleFinalAmount - couponDiscount) * 100) / 100);
-  const usdtRate = await getUsdtRate();
-  const finalUsdt = Math.round((finalAmount * USDT_DISCOUNT / usdtRate) * 100) / 100;
+  // USDT:汇率取后台固定值(若设)否则每日自动;折扣取站点设置。
+  const usdtRate = settings.usdt.rateOverride ? Number(settings.usdt.rateOverride) : await getUsdtRate();
+  const usdtDiscount = Number(settings.usdt.discount) || USDT_DISCOUNT;
+  const finalUsdt = Math.round((finalAmount * usdtDiscount / usdtRate) * 100) / 100;
   const quote = paymentMethod === "alipay" && finalAmount > 0 ? verifyPaymentQuote(body.paymentQuoteToken) : null;
   if (paymentMethod === "alipay" && finalAmount > 0 && !quote) {
     await restoreCoupon(userEmail, coupon.couponId, orderId);
@@ -623,7 +634,7 @@ export async function POST(request) {
 
   const text = orderText(order);
   const tasks = [
-    sendTelegram(text)
+    (settings.notify.telegramEnabled ? sendTelegram(text) : Promise.resolve(null))
       .then((sent) => sent !== null && deliveries.push({ channel: "telegram", ok: sent }))
       .catch(() => deliveries.push({ channel: "telegram", ok: false })),
     sendWebhook(order)

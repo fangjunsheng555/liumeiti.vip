@@ -4,11 +4,13 @@ import { useState } from "react";
 import { Headphones, X } from "lucide-react";
 import { QQBrandIcon, TelegramBrandIcon, WhatsAppBrandIcon } from "./BrandIcons";
 import { useLocale } from "./LocaleProvider";
+import { useSiteSettings } from "../lib/store";
 
 export default function FloatingSupport() {
   const [open, setOpen] = useState(false);
   const { locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
+  const s = useSiteSettings().support; // 客服联系方式以后台设置为准
 
   return (
     <div className="floating-wrap">
@@ -16,14 +18,14 @@ export default function FloatingSupport() {
         <div className="floating-panel floating-panel-icons">
           <div className="floating-icons-row">
             <a
-              href="mqq://im/chat?chat_type=wpa&uin=2802632995&version=1&src_type=web"
+              href={s.qq.href}
               className="floating-icon-btn qq"
               aria-label={L("QQ 客服", "QQ support")}
             >
               <QQBrandIcon />
             </a>
             <a
-              href="https://wa.me/message/4ISUO4RPBYSSJ1"
+              href={s.whatsapp.href}
               target="_blank"
               rel="noopener noreferrer"
               className="floating-icon-btn whatsapp"
@@ -32,7 +34,7 @@ export default function FloatingSupport() {
               <WhatsAppBrandIcon />
             </a>
             <a
-              href="https://t.me/MaoyangSupport"
+              href={s.telegram.href}
               target="_blank"
               rel="noopener noreferrer"
               className="floating-icon-btn telegram"

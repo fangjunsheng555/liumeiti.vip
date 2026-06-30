@@ -5,6 +5,8 @@ import {
   clean, sendSimpleEmail, reverseOrderReferralCommission, refundVoidedOrder, restoreStock,
 } from "../../../_utils.js";
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
+import { getSettings } from "../../../_settings.js";
+import { supportText } from "../../../../lib/settings-defaults.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
@@ -21,10 +23,12 @@ function adminSession(request) {
 
 async function sendInvalidOrderEmail(order) {
   const emailLocale = order.locale === "en" ? "en" : "zh";
-  const supportContact = emailLocale === "en" ? SUPPORT_CONTACT_EN : SUPPORT_CONTACT;
+  const settings = await getSettings();
+  const brandName = settings.brand.name || BRAND_NAME;
+  const supportContact = supportText(settings.support, emailLocale);
   const html = buildInvalidOrderEmailHtml({
     order,
-    brandName: BRAND_NAME,
+    brandName,
     siteDomain: SITE_DOMAIN,
     siteUrl: SITE_URL,
     supportContact,
@@ -32,7 +36,7 @@ async function sendInvalidOrderEmail(order) {
   });
   const text = buildInvalidOrderEmailText({
     order,
-    brandName: BRAND_NAME,
+    brandName,
     siteDomain: SITE_DOMAIN,
     siteUrl: SITE_URL,
     supportContact,
@@ -41,8 +45,8 @@ async function sendInvalidOrderEmail(order) {
   return sendSimpleEmail({
     to: order.email,
     subject: emailLocale === "en"
-      ? `Order ${order.orderId}: payment not received, marked invalid · ${BRAND_NAME}`
-      : `订单 ${order.orderId} 未收到付款，已标记无效 · ${BRAND_NAME}`,
+      ? `Order ${order.orderId}: payment not received, marked invalid · ${brandName}`
+      : `订单 ${order.orderId} 未收到付款，已标记无效 · ${brandName}`,
     text,
     html,
     fromName: BRAND_NAME,

@@ -20,6 +20,7 @@ import {
   PRODUCTS,
   getCatalogProducts,
   useCatalogSync,
+  useSiteSettings,
   PRODUCT_EN,
   DEFAULT_PRODUCT_PLANS,
   getProductPlan,
@@ -150,6 +151,7 @@ export default function ShopPage() {
   const { locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
   const catalogVersion = useCatalogSync(); // 后台商品/价格覆盖
+  useSiteSettings(); // 站点设置(组合优惠档位等),应用到价格显示
   const products = getCatalogProducts();
   const [selectedKey, setSelectedKey] = useState(null);
   const [planPickerKey, setPlanPickerKey] = useState(null);

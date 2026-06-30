@@ -7,6 +7,8 @@ import {
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
+import { getSettings } from "../../../_settings.js";
+import { supportText } from "../../../../lib/settings-defaults.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
@@ -56,17 +58,20 @@ async function sendCompletionEmail(order) {
 
   try {
     const emailLocale = order.locale === "en" ? "en" : "zh";
+    const settings = await getSettings();
+    const brandName = settings.brand.name || BRAND_NAME;
+    const supportContact = supportText(settings.support, emailLocale);
     const html = buildCompletionEmailHtml({
-      order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, supportContact: emailLocale === "en" ? SUPPORT_CONTACT_EN : SUPPORT_CONTACT, locale: emailLocale,
+      order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, supportContact, locale: emailLocale,
     });
     const text = buildCompletionEmailText({
-      order, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale: emailLocale,
+      order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale: emailLocale,
     });
     const subject = emailLocale === "en"
-      ? `🎉 Order ${order.orderId} is ready · ${BRAND_NAME}`
-      : `🎉 订单 ${order.orderId} 已开通 · ${BRAND_NAME}`;
+      ? `🎉 Order ${order.orderId} is ready · ${brandName}`
+      : `🎉 订单 ${order.orderId} 已开通 · ${brandName}`;
     const info = await transporter.sendMail({
-      from: `"${BRAND_NAME}" <${from}>`,
+      from: `"${brandName}" <${from}>`,
       to: order.email,
       subject, text, html,
     });
@@ -239,10 +244,12 @@ export async function PATCH(request, { params }) {
 
 async function sendInvalidOrderEmail(order) {
   const emailLocale = order.locale === "en" ? "en" : "zh";
-  const supportContact = emailLocale === "en" ? SUPPORT_CONTACT_EN : SUPPORT_CONTACT;
+  const settings = await getSettings();
+  const brandName = settings.brand.name || BRAND_NAME;
+  const supportContact = supportText(settings.support, emailLocale);
   const html = buildInvalidOrderEmailHtml({
     order,
-    brandName: BRAND_NAME,
+    brandName,
     siteDomain: SITE_DOMAIN,
     siteUrl: SITE_URL,
     supportContact,
@@ -250,7 +257,7 @@ async function sendInvalidOrderEmail(order) {
   });
   const text = buildInvalidOrderEmailText({
     order,
-    brandName: BRAND_NAME,
+    brandName,
     siteDomain: SITE_DOMAIN,
     siteUrl: SITE_URL,
     supportContact,
@@ -259,11 +266,11 @@ async function sendInvalidOrderEmail(order) {
   return sendSimpleEmail({
     to: order.email,
     subject: emailLocale === "en"
-      ? `Order ${order.orderId}: payment not received, marked invalid · ${BRAND_NAME}`
-      : `订单 ${order.orderId} 未收到付款，已标记无效 · ${BRAND_NAME}`,
+      ? `Order ${order.orderId}: payment not received, marked invalid · ${brandName}`
+      : `订单 ${order.orderId} 未收到付款，已标记无效 · ${brandName}`,
     text,
     html,
-    fromName: BRAND_NAME,
+    fromName: brandName,
   });
 }
 

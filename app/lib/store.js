@@ -1,10 +1,30 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { SETTINGS_DEFAULTS } from "./settings-defaults.js";
 
 export const USDT_ADDRESS = "TDoUMF4nF244o5GZvBBwX5t9axvnSoP1Cm";
 export const USDT_DISCOUNT = 0.9;
 export const USDT_RATE = 6.85;
+
+// ── 站点设置(运行时覆盖) ──
+// useSiteSettings() 拉 /api/settings(默认+后台覆盖的合并值)写入;组合优惠档位、USDT 折扣、
+// 收款地址/二维码、客服联系方式等都读合并后的值,保证站点显示与结账实收一致。未加载=默认。
+let SITE_SETTINGS = SETTINGS_DEFAULTS;
+export function applySiteSettings(s) { if (s && typeof s === "object") SITE_SETTINGS = s; }
+export function getSiteSettings() { return SITE_SETTINGS; }
+export function useSiteSettings() {
+  const [settings, setSettings] = useState(SITE_SETTINGS);
+  useEffect(() => {
+    let on = true;
+    fetch("/api/settings", { cache: "no-store", credentials: "same-origin" })
+      .then((r) => r.json())
+      .then((j) => { if (on && j && j.ok && j.settings) { applySiteSettings(j.settings); setSettings(j.settings); } })
+      .catch(() => {});
+    return () => { on = false; };
+  }, []);
+  return settings;
+}
 
 export const PRODUCTS = [
   {
@@ -503,9 +523,16 @@ export function productNeedsAccountPassword(product) {
 }
 
 export function bundleDiscountRate(itemCount) {
-  if (itemCount >= 3) return 0.10;
-  if (itemCount >= 2) return 0.05;
+  const b = SITE_SETTINGS?.bundle || {};
+  const t3 = Number.isFinite(b.tier3Rate) ? b.tier3Rate : 0.10;
+  const t2 = Number.isFinite(b.tier2Rate) ? b.tier2Rate : 0.05;
+  if (itemCount >= 3) return t3;
+  if (itemCount >= 2) return t2;
   return 0;
+}
+function siteUsdtDiscount() {
+  const d = Number(SITE_SETTINGS?.usdt?.discount);
+  return Number.isFinite(d) && d > 0 ? d : USDT_DISCOUNT;
 }
 
 export function bundleDiscountLabel(itemCount, locale) {
@@ -526,11 +553,11 @@ export function cartFinalCny(items, planMap = {}) {
 
 export function cartFinalUsdt(items, planMap = {}) {
   const cny = cartFinalCny(items, planMap);
-  return Math.round((cny * USDT_DISCOUNT / USDT_RATE) * 100) / 100;
+  return Math.round((cny * siteUsdtDiscount() / USDT_RATE) * 100) / 100;
 }
 
 export function usdtAmount(rmb) {
-  return Math.round((Number(rmb || 0) * USDT_DISCOUNT / USDT_RATE) * 100) / 100;
+  return Math.round((Number(rmb || 0) * siteUsdtDiscount() / USDT_RATE) * 100) / 100;
 }
 
 export function subscriptionLinks(username) {

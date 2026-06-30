@@ -11,13 +11,14 @@ import AnnouncePanel from "./AnnouncePanel";
 import AnnouncePostsPanel from "./AnnouncePostsPanel";
 import AIQuotaPanel from "./AIQuotaPanel";
 import CatalogPanel from "./CatalogPanel";
+import SettingsPanel from "./SettingsPanel";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
   CheckCircle2, Clock, Inbox, X, AlertTriangle, Trash2,
   Gift, CreditCard, Plus, UserPlus, Mail, BellRing, BarChart3, Download, FileText,
   LayoutDashboard, ClipboardList, ShoppingCart, Users, Wallet, Coins,
-  Megaphone, Footprints, Boxes, Menu, Newspaper, Gauge, Package,
+  Megaphone, Footprints, Boxes, Menu, Newspaper, Gauge, Package, SlidersHorizontal,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -2829,6 +2830,7 @@ export default function AdminPage() {
     {
       title: "系统",
       items: [
+        { key: "settings", label: "站点设置", icon: SlidersHorizontal, show: isRootStaff },
         { key: "ai-quota", label: "AI 限额", icon: Gauge, show: isRootStaff },
         { key: "staff", label: "工作人员", icon: ShieldCheck, show: isRootStaff },
       ],
@@ -3580,6 +3582,8 @@ export default function AdminPage() {
           <AnnouncePostsPanel />
         ) : tab === "catalog" ? (
           <CatalogPanel />
+        ) : tab === "settings" ? (
+          <SettingsPanel />
         ) : tab === "ai-quota" ? (
           <AIQuotaPanel />
         ) : tab === "staff" ? (

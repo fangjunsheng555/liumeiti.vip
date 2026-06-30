@@ -24,6 +24,7 @@ import {
   PRODUCTS,
   getCatalogProducts,
   useCatalogSync,
+  useSiteSettings,
   USDT_ADDRESS,
   USDT_RATE,
   useCart,
@@ -166,6 +167,7 @@ export default function CheckoutPage() {
   const { locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
   const catalogVersion = useCatalogSync(); // 拉后台商品/价格覆盖,变化即重渲染
+  const siteSettings = useSiteSettings();   // 拉站点设置(USDT地址/折扣、组合优惠、收款码),应用到价格与展示
   const products = getCatalogProducts(); // 合并后的上架商品(价格/规格/上下架与结账实收价一致)
   const { cart, cartPlans, hydrated, removeFromCart, replaceCart, clearCart, setCartPlan } = useCart();
   const [step, setStep] = useState("form");
@@ -1162,7 +1164,7 @@ export default function CheckoutPage() {
               {paymentMethod !== "balance" && (
                 <div className="qr-display compact">
                   <img
-                    src={paymentMethod === "usdt" ? "/payment/usdt.png" : (cartItems[0]?.qrImage || "/payment/alipay.jpg")}
+                    src={paymentMethod === "usdt" ? "/payment/usdt.png" : (siteSettings.payment.alipayQr || cartItems[0]?.qrImage || "/payment/alipay.jpg")}
                     alt={paymentMethod === "usdt" ? L("USDT 收款码", "USDT QR code") : L("支付宝收款码", "Alipay QR code")}
                   />
                   <div className="qr-display-label">
@@ -1176,11 +1178,11 @@ export default function CheckoutPage() {
                 <div className="usdt-address-box">
                   <span className="usdt-address-label">{L("TRON / TRC20 收款地址", "TRON / TRC20 address")}</span>
                   <div className="usdt-address-field">
-                    <code className="usdt-address-value">{USDT_ADDRESS}</code>
+                    <code className="usdt-address-value">{siteSettings.usdt.address || USDT_ADDRESS}</code>
                     <button
                       type="button"
                       className={`usdt-address-copy${copiedKey === "usdt-addr" ? " copied" : ""}`}
-                      onClick={() => handleCopy(USDT_ADDRESS, "usdt-addr")}
+                      onClick={() => handleCopy(siteSettings.usdt.address || USDT_ADDRESS, "usdt-addr")}
                       aria-label={copiedKey === "usdt-addr" ? L("已复制", "Copied") : L("复制地址", "Copy address")}
                       title={copiedKey === "usdt-addr" ? L("已复制", "Copied") : L("复制地址", "Copy address")}
                     >

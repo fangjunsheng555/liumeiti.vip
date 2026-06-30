@@ -18,7 +18,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { copyText } from "../lib/store";
+import { copyText, useSiteSettings } from "../lib/store";
 import MobileNav from "../components/MobileNav";
 import FloatingSupport from "../components/FloatingSupport";
 import { QQBrandIcon, TelegramBrandIcon, WhatsAppBrandIcon } from "../components/BrandIcons";
@@ -175,6 +175,12 @@ export default function ServiceCenterPage() {
   const [copiedKey, setCopiedKey] = useState("");
   const { locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
+  const support = useSiteSettings().support; // 客服联系方式以后台设置为准
+  const supportChannels = [
+    { label: "QQ", value: support.qq.value, copyValue: support.qq.value },
+    { label: "WhatsApp", value: support.whatsapp.value, copyValue: support.whatsapp.value },
+    { label: "Telegram", value: support.telegram.value, copyValue: support.telegram.value },
+  ];
   const assuranceCards = ASSURANCE_CARDS.map((c, i) => (locale === "en" ? { ...c, ...ASSURANCE_CARDS_EN[i] } : c));
   const faqList = locale === "en" ? FAQ_EN : FAQ;
   const statusLabel = locale === "en" ? STATUS_LABEL_EN : STATUS_LABEL;
@@ -607,7 +613,7 @@ export default function ServiceCenterPage() {
                 </div>
               </div>
               <div className="channels-grid channels-row">
-                {SUPPORT_CHANNELS.map((ch) => {
+                {supportChannels.map((ch) => {
                   const kind = ch.label.toLowerCase();
                   const BrandIcon = kind === "qq" ? QQBrandIcon : kind === "whatsapp" ? WhatsAppBrandIcon : TelegramBrandIcon;
                   return (
