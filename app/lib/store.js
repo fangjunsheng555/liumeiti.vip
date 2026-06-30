@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { SETTINGS_DEFAULTS } from "./settings-defaults.js";
+import { SETTINGS_DEFAULTS, discountLabel } from "./settings-defaults.js";
 
 export const USDT_ADDRESS = "TDoUMF4nF244o5GZvBBwX5t9axvnSoP1Cm";
 export const USDT_DISCOUNT = 0.9;
@@ -536,9 +536,21 @@ function siteUsdtDiscount() {
 }
 
 export function bundleDiscountLabel(itemCount, locale) {
-  if (itemCount >= 3) return locale === "en" ? "10% off (3+)" : "3 件起 9 折";
-  if (itemCount === 2) return locale === "en" ? "5% off (2)" : "2 件 9.5 折";
+  const rate = bundleDiscountRate(itemCount);
+  if (rate <= 0) return "";
+  const dl = discountLabel(rate, locale);
+  if (itemCount >= 3) return locale === "en" ? `${dl} (3+)` : `3 件起 ${dl}`;
+  if (itemCount >= 2) return locale === "en" ? `${dl} (2)` : `2 件 ${dl}`;
   return "";
+}
+// 组合优惠某档位的折扣文案(给升级提示用),itemCount=2/3
+export function bundleTierLabel(itemCount, locale) {
+  return discountLabel(bundleDiscountRate(itemCount), locale);
+}
+// USDT 支付折扣文案("9 折" / "10% off"),随设置变。
+// 注:usdt.discount 是「实付倍率」(0.9=付9成),换算成 amount-off = 1-0.9 才是折扣额。
+export function usdtDiscountLabel(locale) {
+  return discountLabel(1 - siteUsdtDiscount(), locale);
 }
 
 export function cartSubtotalCny(items, planMap = {}) {

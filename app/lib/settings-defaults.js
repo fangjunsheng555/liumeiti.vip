@@ -82,6 +82,16 @@ export function mergeSettings(overrides) {
   };
 }
 
+// 折扣文案:把折扣率转成展示文案("9 折" / "10% off")。rate 0.1 = 9折;<=0 返回空。
+// 全站凡是显示折扣的文案都用它,改设置后文字随之变。
+export function discountLabel(rate, locale) {
+  const r = Number(rate);
+  if (!Number.isFinite(r) || r <= 0) return "";
+  const zhe = (10 * (1 - r)).toFixed(1).replace(/\.0$/, "");
+  const pct = Math.round(r * 100);
+  return locale === "en" ? `${pct}% off` : `${zhe} 折`;
+}
+
 // 客服文案(纯文本 / HTML),供邮件与站点共用,基于合并后的 support。
 export function supportText(support, locale) {
   const body = `QQ ${support.qq.value} / WhatsApp ${support.whatsapp.value} / Telegram ${support.telegram.value}`;

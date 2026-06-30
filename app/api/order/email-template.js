@@ -15,7 +15,7 @@ function formatMoney(value) {
   return "¥" + Number(value || 0).toFixed(0);
 }
 
-export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, supportContact, usdtRate, locale }) {
+export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, supportContact, usdtRate, locale, usdtDiscountLabel = "9 折" }) {
   const en = locale === "en";
   const L = (zh, e) => (en ? e : zh);
   const isUsdt = order.paymentMethod === "usdt";
@@ -100,7 +100,7 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
   const paidNote = isRedeem
     ? L("已通过服务兑换码免支付兑换", "Redeemed with a service code — no payment")
     : isUsdt
-    ? L("已通过 USDT-TRC20 网络支付(已享 9 折)", "Paid via USDT-TRC20 (10% off applied)")
+    ? L(`已通过 USDT-TRC20 网络支付(已享 ${usdtDiscountLabel})`, `Paid via USDT-TRC20 (${usdtDiscountLabel} applied)`)
     : L("已通过支付宝担保支付", "Paid via Alipay escrow");
 
   return `<!DOCTYPE html>
@@ -184,7 +184,7 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
                   <td style="padding:4px 16px;color:#0f172a;font-size:13px;font-weight:600;text-align:right;">${formatMoney(order.finalAmount)}</td>
                 </tr>
                 <tr>
-                  <td style="padding:4px 16px;color:#64748b;font-size:13px;">${L("USDT 9 折 ÷", "USDT 10% off ÷")} ${usdtRate || 6.85}</td>
+                  <td style="padding:4px 16px;color:#64748b;font-size:13px;">${L(`USDT ${usdtDiscountLabel} ÷`, `USDT ${usdtDiscountLabel} ÷`)} ${usdtRate || 6.85}</td>
                   <td style="padding:4px 16px;color:#0f172a;font-size:13px;font-weight:600;text-align:right;">→ ${order.paidAmount} USDT</td>
                 </tr>` : ""}
                 <tr>

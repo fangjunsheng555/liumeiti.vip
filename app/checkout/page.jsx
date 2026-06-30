@@ -31,6 +31,8 @@ import {
   copyText,
   bundleDiscountRate,
   bundleDiscountLabel,
+  bundleTierLabel,
+  usdtDiscountLabel,
   localizeProduct,
   localizePlan,
   cartSubtotalCny,
@@ -1018,12 +1020,12 @@ export default function CheckoutPage() {
                   </div>
                   {cartCount === 1 && (
                     <div className="cart-bundle-hint">
-                      <Gift size={12} />{L("再加 1 件享 9.5 折,加满 3 件享 9 折", "Add 1 more for 5% off, 3 items for 10% off")}
+                      <Gift size={12} />{L(`再加 1 件享 ${bundleTierLabel(2, "zh")},加满 3 件享 ${bundleTierLabel(3, "zh")}`, `Add 1 more for ${bundleTierLabel(2, "en")}, 3 items for ${bundleTierLabel(3, "en")}`)}
                     </div>
                   )}
                   {cartCount === 2 && (
                     <div className="cart-bundle-hint">
-                      <Gift size={12} />{L("再加 1 件升级到 9 折", "Add 1 more for 10% off")}
+                      <Gift size={12} />{L(`再加 1 件升级到 ${bundleTierLabel(3, "zh")}`, `Add 1 more for ${bundleTierLabel(3, "en")}`)}
                     </div>
                   )}
                 </div>
@@ -1057,9 +1059,9 @@ export default function CheckoutPage() {
                       <div className="payment-method-icon usdt"><UsdtIcon /></div>
                       <div className="payment-method-detail">
                         <strong>{finalUsdt} USDT</strong>
-                        <small>{L("9 折优惠 · TRC20", "10% off · TRC20")}</small>
+                        <small>{L(`${usdtDiscountLabel("zh")}优惠 · TRC20`, `${usdtDiscountLabel("en")} · TRC20`)}</small>
                       </div>
-                      <div className="payment-method-badge">{L("9 折", "10% off")}</div>
+                      <div className="payment-method-badge">{L(usdtDiscountLabel("zh"), usdtDiscountLabel("en"))}</div>
                     </label>
                     {authedUser && (
                       <label className={`payment-method-option${paymentMethod === "balance" ? " selected" : ""}${authedUser.balance < finalCny ? " low-balance" : ""}`}>

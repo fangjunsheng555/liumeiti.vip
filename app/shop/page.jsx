@@ -33,6 +33,7 @@ import {
   cartSubtotalCny,
   cartFinalCny,
   bundleDiscountLabel,
+  usdtDiscountLabel,
   productItemAmount,
 } from "../lib/store";
 import MobileNav from "../components/MobileNav";
@@ -353,7 +354,7 @@ export default function ShopPage() {
                     </div>
                     <div className="price-meta">
                       {saved > 0 && <span className="price-save">{L("立省", "Save")} ¥{saved}</span>}
-                      <span className="price-usdt-hint">{L("USDT支付 9 折", "10% off with USDT")}</span>
+                      <span className="price-usdt-hint">{L("USDT支付 " + usdtDiscountLabel("zh"), usdtDiscountLabel("en") + " with USDT")}</span>
                     </div>
                   </div>
                   <div className="product-social-proof">

@@ -65,7 +65,9 @@ export default function SettingsPanel() {
   if (loading && !s) return <div style={{ display: "inline-flex", gap: 8, alignItems: "center", color: "var(--muted)", fontSize: 13 }}><LoaderCircle size={16} className="spin-icon" />加载设置…</div>;
   if (!s) return msg ? <div className="admin-settings-alert error"><AlertTriangle size={15} />{msg.text}</div> : null;
 
-  const pct = (v) => `${Math.round((1 - Number(v || 0)) * 100)}% off · ${(10 * (1 - Number(v || 0))).toFixed(1)}折`;
+  // 组合优惠 tier 是「折扣额」(0.05=5% off=9.5折);USDT discount 是「实付倍率」(0.9=付9成=10% off=9折)
+  const bundlePct = (v) => `${Math.round(Number(v || 0) * 100)}% off · ${(10 * (1 - Number(v || 0))).toFixed(1)}折`;
+  const usdtPct = (v) => `${Math.round((1 - Number(v || 0)) * 100)}% off · ${(10 * Number(v || 0)).toFixed(1)}折`;
 
   return (
     <div className="admin-settings">
@@ -95,17 +97,17 @@ export default function SettingsPanel() {
       <Section icon={<Coins size={15} />} title="USDT 结算" sub="收款地址、支付折扣、汇率(留空=每日自动)">
         <div className="admin-settings-grid">
           <Field full label="TRC20 收款地址">{I("usdt.address")}</Field>
-          <Field label={`USDT 折扣率(${pct(s.usdt.discount)})`}><input type="number" step="0.01" min="0.1" max="1" value={s.usdt.discount} onChange={(e) => set("usdt.discount", Number(e.target.value))} /></Field>
+          <Field label={`USDT 折扣率 实付倍率(${usdtPct(s.usdt.discount)})`}><input type="number" step="0.01" min="0.1" max="1" value={s.usdt.discount} onChange={(e) => set("usdt.discount", Number(e.target.value))} /></Field>
           <Field label="固定汇率(留空=每日自动)">{I("usdt.rateOverride", { placeholder: "自动", inputMode: "decimal" })}</Field>
         </div>
       </Section>
 
       <Section icon={<Layers size={15} />} title="组合优惠档位" sub="多件下单自动打折,结账实收价即时跟随">
         <div className="admin-settings-grid">
-          <Field label={`满 2 件折扣(${pct(s.bundle.tier2Rate)})`}><input type="number" step="0.01" min="0" max="0.9" value={s.bundle.tier2Rate} onChange={(e) => set("bundle.tier2Rate", Number(e.target.value))} /></Field>
-          <Field label={`满 3 件折扣(${pct(s.bundle.tier3Rate)})`}><input type="number" step="0.01" min="0" max="0.9" value={s.bundle.tier3Rate} onChange={(e) => set("bundle.tier3Rate", Number(e.target.value))} /></Field>
+          <Field label={`满 2 件折扣(${bundlePct(s.bundle.tier2Rate)})`}><input type="number" step="0.01" min="0" max="0.9" value={s.bundle.tier2Rate} onChange={(e) => set("bundle.tier2Rate", Number(e.target.value))} /></Field>
+          <Field label={`满 3 件折扣(${bundlePct(s.bundle.tier3Rate)})`}><input type="number" step="0.01" min="0" max="0.9" value={s.bundle.tier3Rate} onChange={(e) => set("bundle.tier3Rate", Number(e.target.value))} /></Field>
         </div>
-        <div className="admin-settings-hint">折扣率 0.05 = 5% off = 95折;0.10 = 9折;0 = 无折扣。</div>
+        <div className="admin-settings-hint">填「折扣额」:0.05 = 5% off = 9.5 折;0.10 = 10% off = 9 折;0 = 无折扣。</div>
       </Section>
 
       <Section icon={<QrCode size={15} />} title="收款二维码" sub="支付宝 + USDT 收款码,可换图(路径或图片 URL)">

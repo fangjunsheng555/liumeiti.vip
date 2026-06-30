@@ -3,7 +3,7 @@ import { buildOrderEmailHtml, buildOrderEmailText } from "./email-template.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { getMergedCatalog } from "../_catalog.js";
 import { getSettings } from "../_settings.js";
-import { supportText } from "../../lib/settings-defaults.js";
+import { supportText, discountLabel as fmtDiscount } from "../../lib/settings-defaults.js";
 import {
   consumeBestCoupon, restoreCoupon, verifySession, getUser,
   setUser, addBalanceTx, pushAdminBalanceLog, makeId, roundMoney,
@@ -63,11 +63,6 @@ function bundleDiscountRate(itemCount) {
   return 0;
 }
 
-function bundleDiscountLabel(itemCount) {
-  if (itemCount >= 3) return "3 件起 9 折";
-  if (itemCount === 2) return "2 件 9.5 折";
-  return "";
-}
 
 function normalizePaymentAdjustment(value) {
   const amount = Math.round(Number(value || 0) * 100) / 100;
@@ -218,6 +213,7 @@ async function sendOrderEmail(order) {
   const html = buildOrderEmailHtml({
     order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL,
     supportContact, usdtRate: order.usdtRate || USDT_RATE, locale: emailLocale,
+    usdtDiscountLabel: fmtDiscount(1 - settings.usdt.discount, emailLocale),
   });
   const text = buildOrderEmailText({
     order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, usdtRate: order.usdtRate || USDT_RATE, locale: emailLocale,
@@ -419,7 +415,9 @@ export async function POST(request) {
   const subtotal = items.reduce((s, i) => s + i.amount, 0);
   const discountRate = items.length >= 3 ? Number(settings.bundle.tier3Rate)
     : items.length >= 2 ? Number(settings.bundle.tier2Rate) : 0;
-  const discountLabel = bundleDiscountLabel(items.length);
+  const discountLabel = discountRate > 0
+    ? `${items.length >= 3 ? "3 件起" : "2 件"} ${fmtDiscount(discountRate, "zh")}`
+    : "";
   const bundleFinalAmount = Math.round(subtotal * (1 - discountRate));
   const rocketTrialAmount = items
     .filter((item) => item.service === "rocket" && (item.plan === "trial" || item.rocketPlan === "trial"))

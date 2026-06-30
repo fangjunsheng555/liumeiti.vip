@@ -18,7 +18,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { copyText, useSiteSettings } from "../lib/store";
+import { copyText, useSiteSettings, usdtDiscountLabel } from "../lib/store";
 import MobileNav from "../components/MobileNav";
 import FloatingSupport from "../components/FloatingSupport";
 import { QQBrandIcon, TelegramBrandIcon, WhatsAppBrandIcon } from "../components/BrandIcons";
@@ -34,7 +34,7 @@ const ASSURANCE_CARDS_EN = [
 const FAQ_EN = [
   { q: "How soon can I use it after ordering?", a: "Usually 5–10 minutes after payment, and within 1 hour at peak. Every order is checked for service and details to stay accurate and stable." },
   { q: "Is the account safe? Could it get banned?", a: "We use first-hand source channels, so accounts stay stable long-term. Spotify uses legitimate family invites; Netflix / Disney+ / HBO are lockable dedicated Profiles; VPN nodes use clean streaming-unlocked IPs. If anything goes wrong, just reach our online support." },
-  { q: "What payment methods are there? Is it safe?", a: "Alipay escrow (recommended) and USDT (10% off) are supported. An order confirmation email is sent so lookup and after-sales stay clear." },
+  { q: "What payment methods are there? Is it safe?", a: "Alipay escrow (recommended) and USDT ({{usdtOff}}) are supported. An order confirmation email is sent so lookup and after-sales stay clear." },
   { q: "Is after-sales supported?", a: "Yes. We support a 7-day refund for account-side issues, plus order consultation, online support and troubleshooting. Reach our online support team anytime." },
   { q: "How do I contact support?", a: "Reach us on QQ, WhatsApp or Telegram. Online hours are 9am–11pm Beijing time. Contact our online support team anytime." },
   { q: "About us?", a: "Maoyang Taiwan Inc is based in Taiwan, China and has focused on streaming memberships, usage guidance and after-sales since 2020. We value response speed, service experience and long-term reputation." },
@@ -88,7 +88,7 @@ const FAQ = [
   },
   {
     q: "支付方式有哪些？支付安全吗？",
-    a: "支持支付宝担保支付（推荐）及 USDT 支付（9折）。订单确认邮件会同步发送，后续查询和售后都更清晰",
+    a: "支持支付宝担保支付（推荐）及 USDT 支付（{{usdtOff}}）。订单确认邮件会同步发送，后续查询和售后都更清晰",
   },
   {
     q: "是否支持售后服务？",
@@ -182,7 +182,8 @@ export default function ServiceCenterPage() {
     { label: "Telegram", value: support.telegram.value, copyValue: support.telegram.value },
   ];
   const assuranceCards = ASSURANCE_CARDS.map((c, i) => (locale === "en" ? { ...c, ...ASSURANCE_CARDS_EN[i] } : c));
-  const faqList = locale === "en" ? FAQ_EN : FAQ;
+  const usdtOff = usdtDiscountLabel(locale); // USDT 折扣文案,随设置变
+  const faqList = (locale === "en" ? FAQ_EN : FAQ).map((f) => ({ ...f, a: String(f.a).replace(/\{\{usdtOff\}\}/g, usdtOff) }));
   const statusLabel = locale === "en" ? STATUS_LABEL_EN : STATUS_LABEL;
 
   useEffect(() => {
