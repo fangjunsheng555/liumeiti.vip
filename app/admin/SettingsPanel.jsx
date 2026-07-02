@@ -191,11 +191,17 @@ export default function SettingsPanel() {
         </div>
       </Section>
 
-      <Section icon={<Bell size={15} />} title="通知" sub="新订单 Telegram 推送">
-        <label className="admin-settings-check">
-          <input type="checkbox" checked={!!s.notify.telegramEnabled} onChange={(e) => set("notify.telegramEnabled", e.target.checked)} />
-          新订单 Telegram 通知
-        </label>
+      <Section icon={<Bell size={15} />} title="通知" sub="Telegram 推送(bot token/chat id 在环境变量,不经前端)">
+        <div style={{ display: "flex", gap: 22, flexWrap: "wrap" }}>
+          <label className="admin-settings-check">
+            <input type="checkbox" checked={!!s.notify.telegramEnabled} onChange={(e) => set("notify.telegramEnabled", e.target.checked)} />
+            新订单 Telegram 通知
+          </label>
+          <label className="admin-settings-check">
+            <input type="checkbox" checked={!!s.notify.telegramWithdrawEnabled} onChange={(e) => set("notify.telegramWithdrawEnabled", e.target.checked)} />
+            提现申请 Telegram 通知
+          </label>
+        </div>
       </Section>
     </div>
   );

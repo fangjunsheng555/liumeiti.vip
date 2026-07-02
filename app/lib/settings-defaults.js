@@ -32,8 +32,8 @@ export const SETTINGS_DEFAULTS = {
   bundle: { tier2Rate: 0.05, tier3Rate: 0.10 },
   // 收款二维码(支付宝 + USDT 都可换图)
   payment: { alipayQr: "/payment/alipay.jpg", usdtQr: "/payment/usdt.png" },
-  // Telegram 新订单通知开关(token/chatId 仍在 env,不在前端暴露)
-  notify: { telegramEnabled: true },
+  // Telegram 通知开关(token/chatId 仍在 env,不在前端暴露)
+  notify: { telegramEnabled: true, telegramWithdrawEnabled: true },
 };
 
 // 合并工具:把覆盖深合并到默认上(只接受已知字段,防注入;非法值回退默认)。
@@ -84,7 +84,10 @@ export function mergeSettings(overrides) {
       alipayQr: img(o.payment?.alipayQr, d.payment.alipayQr),
       usdtQr: img(o.payment?.usdtQr, d.payment.usdtQr),
     },
-    notify: { telegramEnabled: typeof o.notify?.telegramEnabled === "boolean" ? o.notify.telegramEnabled : d.notify.telegramEnabled },
+    notify: {
+      telegramEnabled: typeof o.notify?.telegramEnabled === "boolean" ? o.notify.telegramEnabled : d.notify.telegramEnabled,
+      telegramWithdrawEnabled: typeof o.notify?.telegramWithdrawEnabled === "boolean" ? o.notify.telegramWithdrawEnabled : d.notify.telegramWithdrawEnabled,
+    },
   };
 }
 

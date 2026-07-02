@@ -1211,6 +1211,7 @@ export default function AdminPage() {
   const [activeStaffAction, setActiveStaffAction] = useState(null);
   const [staffForm, setStaffForm] = useState({ username: "", password: "", role: "operator", remark: "" });
   const [staffBusy, setStaffBusy] = useState("");
+  const [actionSearch, setActionSearch] = useState(""); // 操作日志搜索
   // 员工管理弹窗(细粒度权限/重置密码/强制下线/启停用)
   const [staffManage, setStaffManage] = useState(null); // { staff, perms, role, remark, password }
   const [staffManageBusy, setStaffManageBusy] = useState("");
@@ -1226,6 +1227,8 @@ export default function AdminPage() {
   const [selectedMailIds, setSelectedMailIds] = useState(new Set());
   const [mailDeleteBusy, setMailDeleteBusy] = useState(false);
   const [mailComposeOpen, setMailComposeOpen] = useState(false);
+  const [mailTemplates, setMailTemplates] = useState([]); // 快捷模板
+  const [mailTplBusy, setMailTplBusy] = useState(false);
   const [activeMailLog, setActiveMailLog] = useState(null);
   const [overview, setOverview] = useState(null);
   const [overviewLoading, setOverviewLoading] = useState(false);
@@ -1479,7 +1482,7 @@ export default function AdminPage() {
       }
     }
     if (tab === "mail") {
-      if (canSendMail) loadMailLogs();
+      if (canSendMail) { loadMailLogs(); loadMailTemplates(); }
       else setTab("orders");
     }
     if (tab === "staff") {
@@ -1488,7 +1491,7 @@ export default function AdminPage() {
     }
   }, [
     authed, permissionsReady, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes,
-    loadRedeemHistory, loadMailLogs, loadStaff, logFilter, logSource, isRootStaff,
+    loadRedeemHistory, loadMailLogs, loadMailTemplates, loadStaff, logFilter, logSource, isRootStaff,
     currentStaff?.id, canViewUsers, canViewBalanceLog, canReviewWithdrawals,
     canViewCodes, canManageCodes, canSendMail, canManageStock,
   ]);
@@ -1843,6 +1846,50 @@ export default function AdminPage() {
       else next.add(id);
       return next;
     });
+  }
+
+  // ── 客服发信快捷模板 ──
+  const loadMailTemplates = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/mail-templates", { credentials: "same-origin", cache: "no-store" });
+      const data = await res.json();
+      if (data.ok) setMailTemplates(data.templates || []);
+    } catch (e) {}
+  }, []);
+
+  async function saveMailTemplate() {
+    if (mailTplBusy) return;
+    if (!mailForm.content.trim()) { setMailResult({ type: "error", message: "先填写正文再存为模板" }); return; }
+    const name = typeof window !== "undefined" ? window.prompt("模板名称(如:发货通知/售后跟进):", mailForm.subject.slice(0, 20)) : "";
+    if (!name || !name.trim()) return;
+    setMailTplBusy(true);
+    try {
+      const res = await fetch("/api/admin/mail-templates", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), subject: mailForm.subject, content: mailForm.content }),
+      });
+      const data = await res.json();
+      if (data.ok) setMailTemplates(data.templates || []);
+      else setMailResult({ type: "error", message: data.error || "保存模板失败" });
+    } catch (e) {} finally { setMailTplBusy(false); }
+  }
+
+  async function deleteMailTemplate(id, name) {
+    if (mailTplBusy) return;
+    if (typeof window !== "undefined" && !window.confirm(`删除模板「${name}」?`)) return;
+    setMailTplBusy(true);
+    try {
+      const res = await fetch("/api/admin/mail-templates", {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const data = await res.json();
+      if (data.ok) setMailTemplates(data.templates || []);
+    } catch (e) {} finally { setMailTplBusy(false); }
   }
 
   async function sendCustomerMail(e) {
@@ -2864,6 +2911,12 @@ export default function AdminPage() {
     const id = Number(item.staffId || 1);
     staffActionCounts.set(id, (staffActionCounts.get(id) || 0) + 1);
   });
+  // 操作日志搜索(动作/对象/操作人/详情;导出 CSV 用同一份过滤结果)
+  const actionQ = actionSearch.trim().toLowerCase();
+  const filteredStaffActions = actionQ
+    ? staffPane.actions.filter((a) =>
+        [a.action, a.target, a.staffUsername, JSON.stringify(a.detail || {})].join(" ").toLowerCase().includes(actionQ))
+    : staffPane.actions;
   const activeStaffActionIds = (activeStaffAction?.actions || []).map((item) => item.id).filter(Boolean);
   const activeStaffSelectedCount = activeStaffActionIds.filter((id) => selectedActionIds.has(id)).length;
   const activeStaffAllSelected = activeStaffActionIds.length > 0 && activeStaffSelectedCount === activeStaffActionIds.length;
@@ -3778,7 +3831,44 @@ export default function AdminPage() {
             <div className="admin-action-log-panel">
               <div className="admin-action-log-head">
                 <div className="admin-card-title"><ShieldCheck size={15} />后台操作记录</div>
+                <div className="admin-inline-actions">
+                  {staffPane.actions.length > 0 && (
+                    <button
+                      type="button"
+                      className="admin-csv-btn"
+                      onClick={() => csvDownload(
+                        `actions-${csvStamp()}.csv`,
+                        ["时间", "操作人", "动作", "对象", "详情"],
+                        filteredStaffActions.map((a) => [a.createdAtBeijing || "", a.staffUsername || `#${a.staffId}`, a.action || "", a.target || "", JSON.stringify(a.detail || {})]),
+                      )}
+                    ><Download size={13} />导出CSV</button>
+                  )}
+                </div>
               </div>
+              <div className="admin-search admin-search-mini" style={{ marginBottom: 10 }}>
+                <Search size={13} />
+                <input
+                  value={actionSearch}
+                  onChange={(e) => setActionSearch(e.target.value)}
+                  placeholder="搜索动作 / 对象 / 操作人(如 refund、staff:2、order_)"
+                />
+              </div>
+              {actionSearch.trim() && (
+                <div className="admin-tx-list" style={{ marginBottom: 12 }}>
+                  <div className="admin-tx-list-label">匹配 {filteredStaffActions.length} 条{filteredStaffActions.length > 50 ? " · 显示前 50" : ""}</div>
+                  {filteredStaffActions.slice(0, 50).map((a) => (
+                    <div key={a.id} className="admin-tx-item">
+                      <div className="admin-tx-item-info">
+                        <strong>{a.action} · {a.target}</strong>
+                        <small>{a.createdAtBeijing} · {a.staffUsername || `#${a.staffId}`}{a.detail && Object.keys(a.detail).length ? ` · ${JSON.stringify(a.detail).slice(0, 120)}` : ""}</small>
+                      </div>
+                    </div>
+                  ))}
+                  {filteredStaffActions.length === 0 && (
+                    <div className="admin-tx-item"><div className="admin-tx-item-info"><small>无匹配记录</small></div></div>
+                  )}
+                </div>
+              )}
               <div className="admin-action-staff-summary" aria-label="工作人员操作记录">
                 {staffPane.staff.map((staff) => {
                   const actions = staffPane.actions.filter((action) => Number(action.staffId || 1) === Number(staff.id));
@@ -4448,6 +4538,17 @@ export default function AdminPage() {
               <button type="button" className="admin-modal-close" onClick={() => setMailComposeOpen(false)} disabled={mailBusy}><X size={16} /></button>
             </div>
             <div className="admin-modal-body">
+              <div className="admin-mail-tpl-row">
+                <span className="admin-mail-tpl-label">快捷模板</span>
+                {mailTemplates.length === 0 && <em className="admin-mail-tpl-empty">暂无 · 填好正文后点「存为模板」</em>}
+                {mailTemplates.map((t) => (
+                  <span key={t.id} className="admin-mail-tpl-chip">
+                    <button type="button" title={t.subject} onClick={() => setMailForm((f) => ({ ...f, subject: t.subject || f.subject, content: t.content }))}>{t.name}</button>
+                    <button type="button" className="tpl-del" aria-label="删除模板" onClick={() => deleteMailTemplate(t.id, t.name)}>×</button>
+                  </span>
+                ))}
+                <button type="button" className="admin-mail-tpl-save" onClick={saveMailTemplate} disabled={mailTplBusy}>+ 存为模板</button>
+              </div>
               <form className="admin-mail-form" onSubmit={sendCustomerMail}>
                 <div className="admin-mail-form-grid">
                   <label>
