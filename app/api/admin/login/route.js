@@ -31,6 +31,8 @@ export async function POST(request) {
     staffUsername: login.staff.username,
     staffRole: login.staff.role || (login.staff.root ? "owner" : "operator"),
     staffRoot: Boolean(login.staff.root),
+    staffPerms: login.staff.perms || undefined, // 细粒度权限覆盖(登录时嵌入,改权限后踢下线重登生效)
+    iat: Date.now(), // 签发时间:配合 lm:staff:kick:<id> 实现强制下线
     exp: Date.now() + ADMIN_SESSION_SECONDS * 1000,
   };
   const token = signSession(sessionPayload);

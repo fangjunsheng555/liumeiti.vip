@@ -1182,6 +1182,10 @@ export default function AdminPage() {
   const [activeStaffAction, setActiveStaffAction] = useState(null);
   const [staffForm, setStaffForm] = useState({ username: "", password: "", role: "operator", remark: "" });
   const [staffBusy, setStaffBusy] = useState("");
+  // 员工管理弹窗(细粒度权限/重置密码/强制下线/启停用)
+  const [staffManage, setStaffManage] = useState(null); // { staff, perms, role, remark, password }
+  const [staffManageBusy, setStaffManageBusy] = useState("");
+  const [staffManageMsg, setStaffManageMsg] = useState(null);
   const [staffResult, setStaffResult] = useState(null);
   const [mailLogs, setMailLogs] = useState([]);
   const [mailSearch, setMailSearch] = useState("");
@@ -2209,6 +2213,79 @@ export default function AdminPage() {
       setStaffResult({ type: "error", message: "网络错误" });
     } finally {
       setStaffBusy("");
+    }
+  }
+
+  const STAFF_PERM_LABELS = [
+    ["canEditOrders", "处理订单"], ["canViewUsers", "查看用户"], ["canBanUsers", "封禁用户"],
+    ["canAdjustBalance", "调整余额"], ["canViewBalanceLog", "余额变动"], ["canViewCodes", "查看兑换码"],
+    ["canManageCodes", "管理兑换码"], ["canSendRedeemCodes", "发送兑换码"], ["canReviewWithdrawals", "提现审核"],
+    ["canSendMail", "客服发信"], ["canManageStock", "管理库存"],
+  ];
+
+  function openStaffManage(item) {
+    const perms = {};
+    STAFF_PERM_LABELS.forEach(([key]) => { perms[key] = Boolean(item.permissions?.[key]); });
+    setStaffManage({ staff: item, perms, role: item.role || "operator", remark: item.remark || "", password: "", active: item.active !== false });
+    setStaffManageMsg(null);
+  }
+
+  async function saveStaffManage() {
+    if (!staffManage || staffManageBusy) return;
+    if (staffManage.password && staffManage.password.length < 6) {
+      setStaffManageMsg({ type: "error", message: "新密码至少 6 位(留空则不改密)" });
+      return;
+    }
+    setStaffManageBusy("save");
+    setStaffManageMsg(null);
+    try {
+      const res = await fetch(`/api/admin/staff/${encodeURIComponent(staffManage.staff.id)}`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          perms: staffManage.perms,
+          role: staffManage.role,
+          remark: staffManage.remark,
+          password: staffManage.password || undefined,
+          active: staffManage.active,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        await loadStaff();
+        setStaffManageMsg({ type: "success", message: "已保存并踢下线,该员工需重新登录(新权限即刻生效)" });
+        setStaffManage((cur) => (cur ? { ...cur, password: "" } : cur));
+      } else {
+        setStaffManageMsg({ type: "error", message: data.error || "保存失败" });
+      }
+    } catch (e) {
+      setStaffManageMsg({ type: "error", message: "网络错误" });
+    } finally {
+      setStaffManageBusy("");
+    }
+  }
+
+  async function kickStaff() {
+    if (!staffManage || staffManageBusy) return;
+    if (typeof window !== "undefined" && !window.confirm(`确认把 ${staffManage.staff.username} 强制下线？其当前登录将立即失效。`)) return;
+    setStaffManageBusy("kick");
+    setStaffManageMsg(null);
+    try {
+      const res = await fetch(`/api/admin/staff/${encodeURIComponent(staffManage.staff.id)}`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "kick" }),
+      });
+      const data = await res.json();
+      setStaffManageMsg(data.ok
+        ? { type: "success", message: "已强制下线,该员工当前会话立即失效" }
+        : { type: "error", message: data.error || "操作失败" });
+    } catch (e) {
+      setStaffManageMsg({ type: "error", message: "网络错误" });
+    } finally {
+      setStaffManageBusy("");
     }
   }
 
@@ -3578,9 +3655,12 @@ export default function AdminPage() {
                     <small>{item.roleLabel || (item.root ? "主账号" : "运营")} · {item.root ? "环境变量主账号" : (item.remark || "无备注")} · {item.createdAtBeijing || ""}</small>
                   </span>
                   {!item.root && (
-                    <button type="button" className="admin-userlist-action delete" onClick={() => deleteStaff(item.id)} disabled={staffBusy === "delete" + item.id}>
-                      <Trash2 size={11} />
-                    </button>
+                    <>
+                      <button type="button" className="admin-userlist-action ban" onClick={() => openStaffManage(item)} title="权限 / 密码 / 会话管理">管理</button>
+                      <button type="button" className="admin-userlist-action delete" onClick={() => deleteStaff(item.id)} disabled={staffBusy === "delete" + item.id}>
+                        <Trash2 size={11} />
+                      </button>
+                    </>
                   )}
                 </div>
               ))}
@@ -4335,6 +4415,79 @@ export default function AdminPage() {
               <div className="admin-mail-detail-actions">
                 <button type="button" onClick={() => copyText(activeMailLog.to)}><Copy size={12} />复制邮箱</button>
                 <button type="button" onClick={() => copyText(activeMailLog.content || activeMailLog.preview || "")}><Copy size={12} />复制正文</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {staffManage && (
+        <div className="admin-modal-mask" onClick={() => !staffManageBusy && setStaffManage(null)}>
+          <div className="admin-modal admin-compact-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="admin-modal-head">
+              <div>
+                <div className="admin-modal-id">{staffManage.staff.username}</div>
+                <div className="admin-modal-status status-received">#{staffManage.staff.id} · 权限 / 密码 / 会话管理</div>
+              </div>
+              <button type="button" className="admin-modal-close" onClick={() => setStaffManage(null)} disabled={Boolean(staffManageBusy)}><X size={16} /></button>
+            </div>
+            <div className="admin-modal-body">
+              <div className="admin-settings-grid" style={{ marginBottom: 4 }}>
+                <div className="admin-settings-field">
+                  <label>角色预设</label>
+                  <select
+                    value={staffManage.role}
+                    onChange={(e) => setStaffManage({ ...staffManage, role: e.target.value })}
+                    style={{ width: "100%", padding: "9px 11px", border: "1px solid var(--line)", borderRadius: 9, fontSize: 13 }}
+                  >
+                    <option value="operator">运营</option>
+                    <option value="support">客服</option>
+                    <option value="finance">财务</option>
+                  </select>
+                </div>
+                <div className="admin-settings-field">
+                  <label>备注</label>
+                  <input value={staffManage.remark} maxLength={80} onChange={(e) => setStaffManage({ ...staffManage, remark: e.target.value })} />
+                </div>
+              </div>
+
+              <div className="admin-staff-perms">
+                <div className="admin-staff-perms-title">细粒度权限(逐项覆盖角色预设)</div>
+                <div className="admin-staff-perms-grid">
+                  {STAFF_PERM_LABELS.map(([key, label]) => (
+                    <label key={key} className={`admin-staff-perm${staffManage.perms[key] ? " on" : ""}`}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(staffManage.perms[key])}
+                        onChange={(e) => setStaffManage({ ...staffManage, perms: { ...staffManage.perms, [key]: e.target.checked } })}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="admin-settings-grid">
+                <div className="admin-settings-field">
+                  <label>重置密码(留空不改)</label>
+                  <input type="password" autoComplete="new-password" placeholder="至少 6 位" value={staffManage.password} onChange={(e) => setStaffManage({ ...staffManage, password: e.target.value })} />
+                </div>
+                <div className="admin-settings-field" style={{ display: "flex", alignItems: "flex-end" }}>
+                  <label className="admin-settings-check" style={{ color: staffManage.active ? "var(--accent)" : "#b91c1c" }}>
+                    <input type="checkbox" checked={staffManage.active} onChange={(e) => setStaffManage({ ...staffManage, active: e.target.checked })} />
+                    {staffManage.active ? "账号启用中" : "已停用(无法登录)"}
+                  </label>
+                </div>
+              </div>
+
+              {staffManageMsg && <div className={`admin-alert ${staffManageMsg.type}`}>{staffManageMsg.message}</div>}
+              <div className="admin-staff-manage-actions">
+                <button type="button" className="admin-settings-btn" onClick={kickStaff} disabled={Boolean(staffManageBusy)}>
+                  {staffManageBusy === "kick" ? <LoaderCircle size={13} className="spin-icon" /> : <ShieldCheck size={13} />}强制下线
+                </button>
+                <button type="button" className="admin-settings-btn primary" onClick={saveStaffManage} disabled={Boolean(staffManageBusy)}>
+                  {staffManageBusy === "save" ? <LoaderCircle size={13} className="spin-icon" /> : <CheckCircle2 size={13} />}保存(保存后其需重新登录)
+                </button>
               </div>
             </div>
           </div>

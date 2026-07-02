@@ -403,13 +403,20 @@ export function adminRoleFromSession(session) {
   return role === "support" || role === "finance" ? role : "operator";
 }
 
+// 可按员工逐项覆盖的权限键(root 专属的 canManageStaff/canDeleteRecords 等不开放覆盖)。
+export const STAFF_PERMISSION_KEYS = [
+  "canEditOrders", "canViewUsers", "canBanUsers", "canAdjustBalance", "canViewBalanceLog",
+  "canViewCodes", "canManageCodes", "canSendRedeemCodes", "canReviewWithdrawals",
+  "canSendMail", "canManageStock",
+];
+
 export function adminPermissionProfile(session) {
   const role = adminRoleFromSession(session);
   const root = role === "owner";
   const operator = role === "operator";
   const support = role === "support";
   const finance = role === "finance";
-  return {
+  const profile = {
     role,
     root,
     canViewOrders: true,
@@ -429,6 +436,37 @@ export function adminPermissionProfile(session) {
     canDeleteRecords: root,
     canManageStock: root,
   };
+  // 细粒度覆盖:登录时把员工记录里的 perms 覆盖嵌入会话(staffPerms);root 永远全权限不受覆盖。
+  const overrides = session?.staffPerms;
+  if (!root && overrides && typeof overrides === "object") {
+    for (const key of STAFF_PERMISSION_KEYS) {
+      if (typeof overrides[key] === "boolean") profile[key] = overrides[key];
+    }
+  }
+  return profile;
+}
+
+// 只保留合法覆盖键(布尔),其余丢弃。
+export function sanitizeStaffPerms(input) {
+  const out = {};
+  if (input && typeof input === "object") {
+    for (const key of STAFF_PERMISSION_KEYS) {
+      if (typeof input[key] === "boolean") out[key] = input[key];
+    }
+  }
+  return out;
+}
+
+// ── 会话管理:强制下线(踢下线) ──
+// lm:staff:kick:<id> = 毫秒时间戳;签发时间(iat)早于它的会话一律失效(middleware 对 /api/admin/* 强制)。
+function staffKickKey(id) { return "lm:staff:kick:" + Number(id); }
+export async function kickAdminStaff(id) {
+  const ok = await redisCmd(["SET", staffKickKey(id), String(Date.now())]);
+  return ok === "OK";
+}
+export async function getStaffKickTs(id) {
+  const raw = await redisCmd(["GET", staffKickKey(id)]);
+  return raw == null ? 0 : Number(raw) || 0;
 }
 
 export function adminActorLabel(actor) {
@@ -1830,7 +1868,7 @@ export async function verifyAdminLogin(username, password) {
     item && item.active !== false && String(item.username || "").toLowerCase() === inputUsername.toLowerCase()
   );
   if (staff && verifyPassword(password, staff.passwordHash)) {
-    return { ok: true, staff: { id: Number(staff.id), username: staff.username, role: staff.role || "operator", remark: staff.remark || "", root: false } };
+    return { ok: true, staff: { id: Number(staff.id), username: staff.username, role: staff.role || "operator", remark: staff.remark || "", root: false, perms: sanitizeStaffPerms(staff.perms) } };
   }
 
   return { ok: false, error: "invalid_credentials" };
@@ -1855,7 +1893,8 @@ export async function listAdminStaff() {
       username: item.username || "",
       role: item.role || "operator",
       roleLabel: item.role === "support" ? "客服" : item.role === "finance" ? "财务" : "运营",
-      permissions: adminPermissionProfile({ staffId: Number(item.id), staffRole: item.role || "operator" }),
+      perms: sanitizeStaffPerms(item.perms),
+      permissions: adminPermissionProfile({ staffId: Number(item.id), staffRole: item.role || "operator", staffPerms: sanitizeStaffPerms(item.perms) }),
       active: item.active !== false,
       root: false,
       remark: item.remark || "",
@@ -1906,6 +1945,54 @@ export async function createAdminStaff(input, actor) {
   return { ok: true, staff: { ...staff, passwordHash: undefined } };
 }
 
+// 更新员工:细粒度权限覆盖(perms)/角色/备注/重置密码/启停用。改动后自动踢下线,
+// 使其重新登录拿到嵌入新权限的会话(会话是无状态 JWT,权限在登录时写入)。
+export async function updateAdminStaff(id, patch, actor) {
+  const staffId = Number(id);
+  if (!Number.isFinite(staffId) || staffId <= 1) return { ok: false, error: "cannot_edit_root" };
+  const records = await adminStaffRecords();
+  const index = records.findIndex((item) => Number(item.id) === staffId);
+  if (index < 0) return { ok: false, error: "staff_not_found" };
+  const staff = { ...records[index] };
+  const changed = {};
+
+  if (patch && typeof patch.perms === "object" && patch.perms !== null) {
+    staff.perms = sanitizeStaffPerms(patch.perms);
+    changed.perms = staff.perms;
+  }
+  if (typeof patch?.role === "string" && ["operator", "support", "finance"].includes(patch.role.toLowerCase())) {
+    staff.role = patch.role.toLowerCase();
+    changed.role = staff.role;
+  }
+  if (typeof patch?.remark === "string") {
+    staff.remark = clean(patch.remark, 160);
+    changed.remark = staff.remark;
+  }
+  if (typeof patch?.password === "string" && patch.password) {
+    if (patch.password.length < 6 || patch.password.length > 64) return { ok: false, error: "invalid_password" };
+    staff.passwordHash = hashPassword(patch.password);
+    changed.passwordReset = true;
+  }
+  if (typeof patch?.active === "boolean") {
+    staff.active = patch.active;
+    changed.active = staff.active;
+  }
+  if (!Object.keys(changed).length) return { ok: false, error: "nothing_to_update" };
+
+  records[index] = staff;
+  const saved = await saveAdminStaffRecords(records);
+  if (!saved) return { ok: false, error: "storage_failed" };
+  // 权限/密码/启停变化 → 立即踢下线,强制重新登录生效。
+  await kickAdminStaff(staffId);
+  await pushAdminActionLog({
+    action: "staff_update",
+    actor,
+    target: "staff:" + staffId,
+    detail: { username: staff.username || "", ...changed, passwordReset: changed.passwordReset ? true : undefined },
+  });
+  return { ok: true, staff: { ...staff, passwordHash: undefined } };
+}
+
 export async function deleteAdminStaff(id, actor) {
   const staffId = Number(id);
   if (!Number.isFinite(staffId) || staffId <= 1) return { ok: false, error: "cannot_delete_root" };
@@ -1916,6 +2003,7 @@ export async function deleteAdminStaff(id, actor) {
   const [removed] = records.splice(index, 1);
   const saved = await saveAdminStaffRecords(records);
   if (!saved) return { ok: false, error: "storage_failed" };
+  await kickAdminStaff(staffId); // 删除即踢下线,残留会话立即失效
   await pushAdminActionLog({
     action: "staff_delete",
     actor,

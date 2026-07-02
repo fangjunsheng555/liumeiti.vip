@@ -8391,6 +8391,20 @@ summary:focus-visible {
   font-weight: 950;
   line-height: 1;
 }
+/* 员工管理弹窗:细粒度权限 */
+.admin-staff-perms { margin: 12px 0; }
+.admin-staff-perms-title { font-size: 12px; font-weight: 800; color: var(--muted); margin-bottom: 8px; }
+.admin-staff-perms-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 7px; }
+.admin-staff-perm {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 10px; border-radius: 9px; border: 1px solid var(--line);
+  background: #f8fafc; color: var(--muted); font-size: 12px; font-weight: 700; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.admin-staff-perm.on { background: rgba(13, 148, 136, 0.08); border-color: rgba(13, 148, 136, 0.3); color: #0f766e; }
+.admin-staff-perm input { accent-color: #0f766e; }
+.admin-staff-manage-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; margin-top: 10px; }
+
 /* 商品面板 规格行 */
 .admin-catalog-plan-row {
   display: grid;
