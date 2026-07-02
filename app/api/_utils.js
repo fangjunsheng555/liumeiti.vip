@@ -2030,6 +2030,10 @@ export async function verifyAdminLogin(username, password) {
 
 export async function listAdminStaff() {
   const records = await adminStaffRecords();
+  // 各账号 2FA 绑定状态(含 root),给列表显示徽章
+  const ids = [1, ...records.map((item) => Number(item.id))];
+  const twoFaFlags = await Promise.all(ids.map(async (id) => Boolean(await getStaff2fa(id))));
+  const twoFaById = new Map(ids.map((id, i) => [id, twoFaFlags[i]]));
   return [
     {
       id: 1,
@@ -2041,8 +2045,10 @@ export async function listAdminStaff() {
       active: Boolean(process.env.ADMIN_PASSWORD),
       createdAtBeijing: "环境变量主账号",
       remark: "主账号",
+      totpEnabled: Boolean(twoFaById.get(1)),
     },
     ...records.map((item) => ({
+      totpEnabled: Boolean(twoFaById.get(Number(item.id))),
       id: Number(item.id),
       username: item.username || "",
       role: item.role || "operator",

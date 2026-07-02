@@ -3,7 +3,62 @@
 // 站点设置 — 仅超级管理员。读写 /api/admin/settings。
 // 改任何项,保存后前端站点(客服/服务中心/页脚/收款码/结账)与订单邮件即时同步。
 import { useEffect, useState, useCallback } from "react";
-import { LoaderCircle, Save, RotateCcw, Settings as SettingsIcon, AlertTriangle, CheckCircle2, Headphones, Coins, Layers, QrCode, Tag, FileText, Bell } from "lucide-react";
+import { LoaderCircle, Save, RotateCcw, Settings as SettingsIcon, AlertTriangle, CheckCircle2, Headphones, Coins, Layers, QrCode, Tag, FileText, Bell, Upload } from "lucide-react";
+
+// 图片压缩:最长边 640px,白底(利于扫码),优先 PNG,超 400KB 降级 JPEG。
+async function compressImage(file) {
+  const dataUrl = await new Promise((res, rej) => {
+    const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file);
+  });
+  const img = await new Promise((res, rej) => {
+    const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = dataUrl;
+  });
+  const max = 640;
+  const scale = Math.min(1, max / Math.max(img.width, img.height));
+  const w = Math.max(1, Math.round(img.width * scale));
+  const h = Math.max(1, Math.round(img.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  let out = canvas.toDataURL("image/png");
+  if (out.length > 400000) out = canvas.toDataURL("image/jpeg", 0.88);
+  if (out.length > 480000) out = canvas.toDataURL("image/jpeg", 0.7);
+  return out;
+}
+
+// 收款码字段:预览 + 直接上传(压缩为 dataURL)+ 手填路径/URL
+function QrField({ label, path, fallback, value, set, setMsg }) {
+  const inputId = "qr-upload-" + path.replace(/\W/g, "-");
+  async function onFile(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!/^image\//.test(file.type)) { setMsg({ type: "error", text: "请选择图片文件" }); return; }
+    if (file.size > 8 * 1024 * 1024) { setMsg({ type: "error", text: "图片过大(超过 8MB)" }); return; }
+    try {
+      const out = await compressImage(file);
+      set(path, out);
+      setMsg({ type: "ok", text: `${label}已就绪(已压缩),点右上角「保存」生效` });
+    } catch (err) {
+      setMsg({ type: "error", text: "图片处理失败,请换一张试试" });
+    }
+  }
+  return (
+    <div className="admin-settings-field full">
+      <label>{label}</label>
+      <div className="admin-settings-qr">
+        <img src={value || fallback} alt={label} onError={(e) => { e.currentTarget.style.opacity = 0.3; }} />
+        <div className="grow">
+          <input value={value || ""} onChange={(e) => set(path, e.target.value)} placeholder={fallback} />
+        </div>
+        <input id={inputId} type="file" accept="image/*" style={{ display: "none" }} onChange={onFile} />
+        <label htmlFor={inputId} className="admin-settings-btn" style={{ cursor: "pointer" }}><Upload size={13} />上传图片</label>
+      </div>
+    </div>
+  );
+}
 
 function Section({ icon, title, sub, children }) {
   return (
@@ -110,20 +165,10 @@ export default function SettingsPanel() {
         <div className="admin-settings-hint">填「折扣额」:0.05 = 5% off = 9.5 折;0.10 = 10% off = 9 折;0 = 无折扣。</div>
       </Section>
 
-      <Section icon={<QrCode size={15} />} title="收款二维码" sub="支付宝 + USDT 收款码,可换图(路径或图片 URL)">
+      <Section icon={<QrCode size={15} />} title="收款二维码" sub="支付宝 + USDT 收款码 — 点「上传图片」直接换图(自动压缩),或填路径/URL">
         <div className="admin-settings-grid">
-          <Field full label="支付宝收款码">
-            <div className="admin-settings-qr">
-              <img src={s.payment.alipayQr || "/payment/alipay.jpg"} alt="支付宝收款码" onError={(e) => { e.currentTarget.style.opacity = 0.3; }} />
-              <div className="grow">{I("payment.alipayQr", { placeholder: "/payment/alipay.jpg" })}</div>
-            </div>
-          </Field>
-          <Field full label="USDT 收款码">
-            <div className="admin-settings-qr">
-              <img src={s.payment.usdtQr || "/payment/usdt.png"} alt="USDT 收款码" onError={(e) => { e.currentTarget.style.opacity = 0.3; }} />
-              <div className="grow">{I("payment.usdtQr", { placeholder: "/payment/usdt.png" })}</div>
-            </div>
-          </Field>
+          <QrField label="支付宝收款码" path="payment.alipayQr" fallback="/payment/alipay.jpg" value={s.payment.alipayQr} set={set} setMsg={setMsg} />
+          <QrField label="USDT 收款码" path="payment.usdtQr" fallback="/payment/usdt.png" value={s.payment.usdtQr} set={set} setMsg={setMsg} />
         </div>
       </Section>
 

@@ -42,6 +42,11 @@ export function mergeSettings(overrides) {
   const o = overrides && typeof overrides === "object" ? overrides : {};
   const str = (v, fb) => (typeof v === "string" && v.trim() ? v.trim() : fb);
   const num = (v, fb, lo, hi) => { const n = Number(v); return Number.isFinite(n) && n >= lo && n <= hi ? n : fb; };
+  const img = (v, fb) => {
+    const s = typeof v === "string" ? v.trim() : "";
+    if (!s || s.length > 500000) return fb;
+    return s;
+  };
   const link = (key) => {
     const ov = o.support && o.support[key];
     return { value: str(ov?.value, d.support[key].value), href: str(ov?.href, d.support[key].href) };
@@ -75,8 +80,9 @@ export function mergeSettings(overrides) {
       tier3Rate: num(o.bundle?.tier3Rate, d.bundle.tier3Rate, 0, 0.9),
     },
     payment: {
-      alipayQr: str(o.payment?.alipayQr, d.payment.alipayQr),
-      usdtQr: str(o.payment?.usdtQr, d.payment.usdtQr),
+      // 支持路径/URL/dataURL(后台直接上传的压缩图);超大值拒收回退默认,防撑爆存储。
+      alipayQr: img(o.payment?.alipayQr, d.payment.alipayQr),
+      usdtQr: img(o.payment?.usdtQr, d.payment.usdtQr),
     },
     notify: { telegramEnabled: typeof o.notify?.telegramEnabled === "boolean" ? o.notify.telegramEnabled : d.notify.telegramEnabled },
   };

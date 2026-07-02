@@ -102,6 +102,46 @@ export async function GET(request) {
     usersTotal: userEmails.length,
   };
 
+  // 近 14 天订单/营收趋势(总览迷你趋势图 + 今日环比昨日)——直接用已加载的订单算,零额外 IO。
+  const dayKeys = [];
+  for (let i = 13; i >= 0; i -= 1) {
+    dayKeys.push(beijingDateKey(new Date(Date.now() - i * 86400000)));
+  }
+  const trendIdx = {};
+  const trend = dayKeys.map((date, i) => { trendIdx[date] = i; return { date, orders: 0, revenue: 0 }; });
+  for (const order of orders) {
+    const i = trendIdx[orderBeijingDateKey(order)];
+    if (i == null) continue;
+    trend[i].orders += 1;
+    if (order.status !== "invalid") trend[i].revenue = Math.round((trend[i].revenue + Number(order.revenueAmount || 0)) * 100) / 100;
+  }
+  overview.trend = trend;
+  const yesterday = trend[trend.length - 2] || { orders: 0, revenue: 0 };
+  overview.yesterdayOrders = yesterday.orders;
+  overview.yesterdayRevenue = yesterday.revenue;
+
+  // 低库存预警(可管库存的角色):受限库存 ≤3 的规格(0=售罄)。
+  if (adminPermissionProfile(session).canManageStock) {
+    try {
+      const { getMergedCatalog } = await import("../../_catalog.js");
+      const { getCatalogStockMap } = await import("../../_utils.js");
+      const catalog = await getMergedCatalog();
+      const stockMap = await getCatalogStockMap(catalog);
+      const low = [];
+      for (const p of catalog) {
+        if (p.active === false) continue;
+        for (const pl of (p.plans || [])) {
+          if (pl.active === false) continue;
+          const stock = stockMap[p.key + ":" + pl.id];
+          if (stock != null && stock <= 3) {
+            low.push({ key: p.key, title: p.title, planId: pl.id, planLabel: pl.label, stock });
+          }
+        }
+      }
+      overview.lowStock = low.sort((a, b) => a.stock - b.stock).slice(0, 12);
+    } catch (e) {}
+  }
+
   // 弃单待召回计数（仅超管，给 tab 徽章用；ZCARD 廉价单次调用）
   if (isRootAdminSession(session)) {
     try { overview.abandonedTotal = Number((await redisCmd(["ZCARD", "lm:cart:index"])) || 0); } catch (e) {}

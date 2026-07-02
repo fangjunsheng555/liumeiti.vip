@@ -1078,6 +1078,32 @@ function exportOrderPdf(order, note = "") {
   });
 }
 
+// 迷你趋势图(总览用):纯内联 SVG,无依赖
+function Sparkline({ data, height = 46, stroke = "#0f766e", fill = "rgba(13,148,136,0.12)" }) {
+  const width = 220;
+  const vals = (data || []).map((v) => Number(v) || 0);
+  if (!vals.length) return null;
+  const max = Math.max(1, ...vals);
+  const stepX = vals.length > 1 ? width / (vals.length - 1) : width;
+  const pts = vals.map((v, i) => `${(i * stepX).toFixed(1)},${(height - 4 - (v / max) * (height - 8)).toFixed(1)}`);
+  const line = pts.join(" ");
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} preserveAspectRatio="none" aria-hidden="true">
+      <polygon points={`0,${height} ${line} ${width},${height}`} fill={fill} />
+      <polyline points={line} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// 环比徽章(今日 vs 昨日)
+function DeltaBadge({ cur, prev }) {
+  const c = Number(cur || 0), p = Number(prev || 0);
+  if (!p && !c) return null;
+  const up = c >= p;
+  const pct = p > 0 ? Math.round(((c - p) / p) * 100) : 100;
+  return <em className={`admin-delta ${up ? "up" : "down"}`}>{up ? "↑" : "↓"}{Math.abs(pct)}%</em>;
+}
+
 export default function AdminPage() {
   const [authed, setAuthed] = useState(null); // null=loading, false=login, true=ok
   const [loginName, setLoginName] = useState("");
@@ -3004,11 +3030,11 @@ export default function AdminPage() {
                 </button>
               )}
               <div className="admin-overview-mini">
-                <span>今日订单</span>
+                <span>今日订单 <DeltaBadge cur={overview?.todayOrders} prev={overview?.yesterdayOrders} /></span>
                 <b>{overview?.todayOrders ?? 0}</b>
               </div>
               <div className="admin-overview-mini money">
-                <span>今日营收</span>
+                <span>今日营收 <DeltaBadge cur={overview?.todayRevenue} prev={overview?.yesterdayRevenue} /></span>
                 <b>¥{Number(overview?.todayRevenue || 0).toFixed(2)}</b>
               </div>
               <div className="admin-overview-mini">
@@ -3025,6 +3051,43 @@ export default function AdminPage() {
                 {overview?.latestOrderService && <small>{overview.latestOrderService}</small>}
               </div>
             </div>
+
+            {Array.isArray(overview?.lowStock) && overview.lowStock.length > 0 && (
+              <div className="admin-overview-lowstock">
+                <div className="admin-overview-trend-head">
+                  <AlertTriangle size={13} />库存预警
+                  <small>受限库存 ≤3 的规格,点击去补货</small>
+                </div>
+                <div className="admin-overview-lowstock-chips">
+                  {overview.lowStock.map((it) => (
+                    <button
+                      key={`${it.key}:${it.planId}`}
+                      type="button"
+                      className={`admin-lowstock-chip${it.stock <= 0 ? " out" : ""}`}
+                      onClick={() => setTab("catalog")}
+                    >
+                      {it.title} · {it.planLabel}
+                      <b>{it.stock <= 0 ? "售罄" : `剩 ${it.stock}`}</b>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {Array.isArray(overview?.trend) && overview.trend.length > 1 && (
+              <div className="admin-overview-trends">
+                <div className="admin-overview-trend-card">
+                  <div className="admin-overview-trend-head">近 14 天订单<b>{overview.trend.reduce((s, d) => s + d.orders, 0)} 单</b></div>
+                  <Sparkline data={overview.trend.map((d) => d.orders)} />
+                  <div className="admin-overview-trend-foot"><span>{overview.trend[0].date.slice(5)}</span><span>今天</span></div>
+                </div>
+                <div className="admin-overview-trend-card">
+                  <div className="admin-overview-trend-head">近 14 天营收<b>¥{overview.trend.reduce((s, d) => s + d.revenue, 0).toFixed(0)}</b></div>
+                  <Sparkline data={overview.trend.map((d) => d.revenue)} stroke="#b45309" fill="rgba(217,119,6,0.12)" />
+                  <div className="admin-overview-trend-foot"><span>{overview.trend[0].date.slice(5)}</span><span>今天</span></div>
+                </div>
+              </div>
+            )}
           </div>
         ) : tab === "users" ? (
           <div className="admin-users-pane">
@@ -3696,6 +3759,7 @@ export default function AdminPage() {
                       onClick={() => openStaffActionModal(item)}
                     >
                       {item.username}
+                      <em className={`admin-staff-2fa-badge${item.totpEnabled ? " on" : ""}`}>{item.totpEnabled ? "2FA ✓" : "未开2FA"}</em>
                       <em>{staffActionCounts.get(Number(item.id)) || 0} 条记录</em>
                     </button>
                     <small>{item.roleLabel || (item.root ? "主账号" : "运营")} · {item.root ? "环境变量主账号" : (item.remark || "无备注")} · {item.createdAtBeijing || ""}</small>

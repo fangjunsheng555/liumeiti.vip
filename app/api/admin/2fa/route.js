@@ -61,6 +61,19 @@ export async function POST(request) {
     return Response.json({ ok: true, enabled: true, backupCodes: codes });
   }
 
+  // 重新生成备用码(验证动态码后,旧备用码全部作废)
+  if (action === "regen") {
+    const rec = await getStaff2fa(id);
+    if (!rec) return Response.json({ ok: false, error: "not_enabled" }, { status: 400 });
+    const check = await verifyStaff2faCode(id, String(body.code || ""));
+    if (!check.ok) return Response.json({ ok: false, error: "invalid_code" }, { status: 400 });
+    const fresh = await getStaff2fa(id); // 若上面消耗了备用码,取最新记录
+    const { codes, hashes } = generateBackupCodes();
+    await setStaff2fa(id, { ...(fresh || rec), backupHashes: hashes });
+    await pushAdminActionLog({ action: "2fa_backup_regen", actor, target: "staff:" + id, detail: {} });
+    return Response.json({ ok: true, backupCodes: codes });
+  }
+
   if (action === "disable") {
     const rec = await getStaff2fa(id);
     if (!rec) return Response.json({ ok: false, error: "not_enabled" }, { status: 400 });

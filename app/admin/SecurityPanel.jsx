@@ -2,7 +2,8 @@
 
 // 安全中心 — 所有后台账号可用:绑定/解绑自己的两步验证(TOTP);超管另见登录日志。
 import { useEffect, useState, useCallback } from "react";
-import { LoaderCircle, ShieldCheck, KeyRound, Copy, CheckCircle2, AlertTriangle, ScrollText } from "lucide-react";
+import { LoaderCircle, ShieldCheck, KeyRound, Copy, CheckCircle2, AlertTriangle, ScrollText, RefreshCw } from "lucide-react";
+import QRCode from "qrcode";
 
 function copy(text) {
   try { navigator.clipboard?.writeText(text); } catch (e) {}
@@ -13,10 +14,25 @@ export default function SecurityPanel({ isRoot }) {
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState(null);
   const [pending, setPending] = useState(null); // { secret, otpauth }
+  const [qrUrl, setQrUrl] = useState("");       // otpauth 二维码 dataURL
   const [code, setCode] = useState("");
+  const [regenCode, setRegenCode] = useState(""); // 重新生成备用码用的动态码
   const [backupCodes, setBackupCodes] = useState(null); // 一次性展示
   const [copied, setCopied] = useState("");
   const [loginLog, setLoginLog] = useState(null);
+
+  // 绑定流程:otpauth 链接生成扫码二维码
+  useEffect(() => {
+    let on = true;
+    if (pending?.otpauth) {
+      QRCode.toDataURL(pending.otpauth, { width: 220, margin: 1, errorCorrectionLevel: "M" })
+        .then((url) => { if (on) setQrUrl(url); })
+        .catch(() => { if (on) setQrUrl(""); });
+    } else {
+      setQrUrl("");
+    }
+    return () => { on = false; };
+  }, [pending?.otpauth]);
 
   const load = useCallback(async () => {
     try {
@@ -70,6 +86,14 @@ export default function SecurityPanel({ isRoot }) {
     const j = await act("disable", { code });
     if (j) { setCode(""); setBackupCodes(null); setMsg({ type: "ok", text: "两步验证已关闭" }); load(); }
   }
+  async function regen() {
+    const j = await act("regen", { code: regenCode });
+    if (j) {
+      setRegenCode(""); setBackupCodes(j.backupCodes || []);
+      setMsg({ type: "ok", text: "新备用码已生成(旧备用码全部作废)· 只显示这一次,请立即保存" });
+      load();
+    }
+  }
   function doCopy(key, text) { copy(text); setCopied(key); setTimeout(() => setCopied(""), 1500); }
 
   return (
@@ -90,8 +114,17 @@ export default function SecurityPanel({ isRoot }) {
           <div className="admin-settings-alert error"><AlertTriangle size={15} />环境变量 ADMIN_2FA_DISABLE=1 生效中,两步验证被全局跳过(紧急兜底模式)。</div>
         ) : status.enabled && !backupCodes ? (
           <>
-            <div className="admin-2fa-status on"><CheckCircle2 size={15} />已启用 · 剩余备用恢复码 {status.remainingBackup} 个</div>
+            <div className="admin-2fa-status on"><CheckCircle2 size={15} />已启用 · 剩余备用恢复码 {status.remainingBackup} 个{status.remainingBackup <= 3 ? "(偏少,建议重新生成)" : ""}</div>
             <div className="admin-settings-grid" style={{ marginTop: 10 }}>
+              <div className="admin-settings-field">
+                <label>重新生成备用码(输入动态码验证)</label>
+                <input inputMode="numeric" value={regenCode} onChange={(e) => setRegenCode(e.target.value.slice(0, 12))} placeholder="6 位动态码" />
+              </div>
+              <div className="admin-settings-field" style={{ display: "flex", alignItems: "flex-end" }}>
+                <button type="button" className="admin-settings-btn" onClick={regen} disabled={busy || !regenCode}>
+                  {busy === "regen" ? <LoaderCircle size={13} className="spin-icon" /> : <RefreshCw size={13} />}重新生成备用码
+                </button>
+              </div>
               <div className="admin-settings-field">
                 <label>输入动态码(或备用码)以关闭</label>
                 <input inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value.slice(0, 12))} placeholder="6 位动态码" />
@@ -116,15 +149,23 @@ export default function SecurityPanel({ isRoot }) {
         ) : pending ? (
           <>
             <div className="admin-2fa-bind">
-              <div className="admin-2fa-step">1. 打开验证器 App(Google Authenticator / 本站工具箱 2FA),选择「手动输入密钥」:</div>
-              <div className="admin-2fa-secret">
-                <code>{pending.secret}</code>
-                <button type="button" className="admin-settings-btn" onClick={() => doCopy("secret", pending.secret)}><Copy size={13} />{copied === "secret" ? "已复制" : "复制密钥"}</button>
-              </div>
-              <div className="admin-2fa-step">或复制 otpauth 链接到支持的验证器:</div>
-              <div className="admin-2fa-secret">
-                <code style={{ fontSize: 10.5 }}>{pending.otpauth}</code>
-                <button type="button" className="admin-settings-btn" onClick={() => doCopy("uri", pending.otpauth)}><Copy size={13} />{copied === "uri" ? "已复制" : "复制链接"}</button>
+              <div className="admin-2fa-step">1. 打开验证器 App(Google Authenticator / 本站工具箱 2FA)扫描二维码,或手动输入密钥:</div>
+              <div className="admin-2fa-qr-row">
+                {qrUrl ? (
+                  <img className="admin-2fa-qr" src={qrUrl} alt="2FA 绑定二维码" width={170} height={170} />
+                ) : (
+                  <div className="admin-2fa-qr admin-2fa-qr-loading"><LoaderCircle size={18} className="spin-icon" /></div>
+                )}
+                <div className="admin-2fa-qr-side">
+                  <div className="admin-2fa-secret">
+                    <code>{pending.secret}</code>
+                    <button type="button" className="admin-settings-btn" onClick={() => doCopy("secret", pending.secret)}><Copy size={13} />{copied === "secret" ? "已复制" : "复制密钥"}</button>
+                  </div>
+                  <div className="admin-2fa-secret">
+                    <code style={{ fontSize: 10.5 }}>{pending.otpauth}</code>
+                    <button type="button" className="admin-settings-btn" onClick={() => doCopy("uri", pending.otpauth)}><Copy size={13} />{copied === "uri" ? "已复制" : "复制链接"}</button>
+                  </div>
+                </div>
               </div>
               <div className="admin-2fa-step">2. 输入验证器显示的 6 位动态码完成绑定:</div>
               <div className="admin-settings-grid">
