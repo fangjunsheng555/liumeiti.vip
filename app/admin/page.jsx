@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
-import { PRODUCTS, getProductPlan, getProductPlanOptions, hasProductPlans } from "../lib/store";
+import { PRODUCTS, getProductPlan, getProductPlanOptions, hasProductPlans, useSiteSettings, getSiteSettings } from "../lib/store";
 import VisitorsPanel from "./VisitorsPanel";
 import AbandonedPanel from "./AbandonedPanel";
 import InsightsPanel from "./InsightsPanel";
@@ -18,7 +18,7 @@ import {
   CheckCircle2, Clock, Inbox, X, AlertTriangle, Trash2,
   Gift, CreditCard, Plus, UserPlus, Mail, BellRing, BarChart3, Download, FileText,
   LayoutDashboard, ClipboardList, ShoppingCart, Users, Wallet, Coins,
-  Megaphone, Footprints, Boxes, Menu, Newspaper, Gauge, Package, SlidersHorizontal,
+  Megaphone, Footprints, Menu, Newspaper, Gauge, Package, SlidersHorizontal,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -425,7 +425,7 @@ function exportRedeemHistoryPdfLegacy(record) {
           <header class="topbar">
             <div class="brand">
               <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
-              <div class="name">冒央会社 · Maoyang Taiwan Inc</div>
+              <div class="name">${getSiteSettings().footer.brand}</div>
               <div class="site">网址:https://www.liumeiti.vip</div>
             </div>
             <div class="doc-meta">
@@ -496,7 +496,7 @@ function exportRedeemHistoryPdfLegacy(record) {
             <table>${inputs}</table>
           </section>
 
-          <div class="foot">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
+          <div class="foot">${getSiteSettings().footer.copyright}</div>
         </div>
       </main>
       <script>
@@ -892,7 +892,7 @@ function openVoucherPdf({
           <header class="topbar">
             <div class="brand">
               <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
-              <div class="name">冒央会社 · Maoyang Taiwan Inc</div>
+              <div class="name">${getSiteSettings().footer.brand}</div>
               <div class="site">网址:https://www.liumeiti.vip</div>
             </div>
             <div class="doc-meta">
@@ -930,7 +930,7 @@ function openVoucherPdf({
             ${noteHtml}
           </section>
 
-          <div class="foot">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
+          <div class="foot">${getSiteSettings().footer.copyright}</div>
         </div>
       </main>
       <script>
@@ -1077,8 +1077,6 @@ function exportOrderPdf(order, note = "") {
   });
 }
 
-const AI_STOCK_PLAN_ORDER = ["gpt-plus", "gpt-pro", "gpt-20x-pro", "claude-pro", "claude-max", "claude-20x-max"];
-
 export default function AdminPage() {
   const [authed, setAuthed] = useState(null); // null=loading, false=login, true=ok
   const [loginName, setLoginName] = useState("");
@@ -1087,6 +1085,7 @@ export default function AdminPage() {
   const [loginError, setLoginError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
 
+  useSiteSettings(); // 站点设置(PDF 凭证品牌/版权等随设置)
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
   const [ordersLoadingMore, setOrdersLoadingMore] = useState(false);
@@ -1205,12 +1204,6 @@ export default function AdminPage() {
   const [gQuery, setGQuery] = useState("");
   const [gResults, setGResults] = useState({ orders: [], users: [], codes: [] });
   const [gLoading, setGLoading] = useState(false);
-  const [aiStockMap, setAiStockMap] = useState(null);   // { planId: number|null }
-  const [aiStockForm, setAiStockForm] = useState({});   // { planId: string }
-  const [aiStockLabels, setAiStockLabels] = useState({});
-  const [aiStockLoading, setAiStockLoading] = useState(false);
-  const [aiStockBusy, setAiStockBusy] = useState(false);
-  const [aiStockMsg, setAiStockMsg] = useState(null);   // { type, message }
 
   const isRootStaff = Boolean(currentStaff?.root || Number(currentStaff?.id || 0) === 1);
   const staffPermissions = currentStaff?.permissions || null;
@@ -1399,59 +1392,6 @@ export default function AdminPage() {
     } catch (e) {}
   }, [applyCurrentStaff]);
 
-  const loadAiStock = useCallback(async () => {
-    setAiStockLoading(true);
-    try {
-      const res = await fetch("/api/admin/stock", { credentials: "same-origin" });
-      if (res.status === 401) { setAuthed(false); return; }
-      const data = await res.json();
-      if (data.ok) {
-        setAiStockMap(data.stock || {});
-        setAiStockLabels(data.labels || {});
-        const form = {};
-        (data.planIds || []).forEach((id) => {
-          const v = data.stock?.[id];
-          form[id] = v == null ? "" : String(v);
-        });
-        setAiStockForm(form);
-      }
-    } catch (e) {} finally {
-      setAiStockLoading(false);
-    }
-  }, []);
-
-  async function saveAiStock() {
-    if (aiStockBusy) return;
-    setAiStockBusy(true);
-    setAiStockMsg(null);
-    try {
-      const res = await fetch("/api/admin/stock", {
-        method: "PATCH",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stock: aiStockForm }),
-      });
-      if (res.status === 401) { setAuthed(false); return; }
-      const data = await res.json();
-      if (data.ok) {
-        setAiStockMap(data.stock || {});
-        const form = {};
-        Object.keys(aiStockForm).forEach((id) => {
-          const v = data.stock?.[id];
-          form[id] = v == null ? "" : String(v);
-        });
-        setAiStockForm(form);
-        setAiStockMsg({ type: "success", message: "库存已保存" });
-      } else {
-        setAiStockMsg({ type: "error", message: data.error === "invalid_value" ? "请输入 ≥0 的整数，或留空表示不限" : (data.error || "保存失败") });
-      }
-    } catch (e) {
-      setAiStockMsg({ type: "error", message: "网络错误，请重试" });
-    } finally {
-      setAiStockBusy(false);
-    }
-  }
-
   const loadMailLogs = useCallback(async () => {
     setMailLoading(true);
     try {
@@ -1513,13 +1453,9 @@ export default function AdminPage() {
       if (isRootStaff) loadStaff();
       else if (currentStaff) setTab("orders");
     }
-    if (tab === "aistock") {
-      if (canManageStock) loadAiStock();
-      else setTab("orders");
-    }
   }, [
     authed, permissionsReady, tab, loadGlobalLog, loadAllUsers, loadWithdrawals, loadCodes,
-    loadRedeemHistory, loadMailLogs, loadStaff, loadAiStock, logFilter, logSource, isRootStaff,
+    loadRedeemHistory, loadMailLogs, loadStaff, logFilter, logSource, isRootStaff,
     currentStaff?.id, canViewUsers, canViewBalanceLog, canReviewWithdrawals,
     canViewCodes, canManageCodes, canSendMail, canManageStock,
   ]);
@@ -3787,46 +3723,6 @@ export default function AdminPage() {
                 })}
               </div>
             </div>
-          </div>
-        ) : tab === "aistock" ? (
-          <div className="admin-aistock-pane">
-            <div className="admin-aistock-head">
-              <h3>AI 会员库存</h3>
-              <p>分别设置四个规格的可售库存。留空 = 不限；设为 0 = 售罄（前台显示「已售罄」且无法下单）。下单自动扣减，订单被标记「无效」时自动返还。</p>
-            </div>
-            {aiStockLoading && !aiStockMap ? (
-              <div className="admin-userlist-empty">加载中...</div>
-            ) : (
-              <>
-                <div className="admin-aistock-grid">
-                  {AI_STOCK_PLAN_ORDER.map((id) => {
-                    const cur = aiStockMap?.[id];
-                    return (
-                      <label key={id} className="admin-aistock-field">
-                        <span className="admin-aistock-label">
-                          <strong>{aiStockLabels[id] || id}</strong>
-                          <em>{cur == null ? "当前：不限" : `当前剩余：${cur}`}</em>
-                        </span>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          value={aiStockForm[id] ?? ""}
-                          placeholder="不限"
-                          onChange={(e) => setAiStockForm((f) => ({ ...f, [id]: e.target.value.replace(/[^\d]/g, "") }))}
-                        />
-                      </label>
-                    );
-                  })}
-                </div>
-                {aiStockMsg && <div className={`admin-alert ${aiStockMsg.type}`}>{aiStockMsg.message}</div>}
-                <div className="admin-aistock-actions">
-                  <button type="button" className="admin-aistock-save" onClick={saveAiStock} disabled={aiStockBusy}>
-                    {aiStockBusy ? <><LoaderCircle size={13} className="spin-icon" />保存中</> : "保存库存"}
-                  </button>
-                  <button type="button" className="admin-aistock-refresh" onClick={loadAiStock} disabled={aiStockLoading}>刷新</button>
-                </div>
-              </>
-            )}
           </div>
         ) : (
         <>

@@ -71,7 +71,10 @@ export async function POST(request) {
   }
   if (!content) return Response.json({ ok: false, error: "content_required" }, { status: 400 });
 
-  const brandName = process.env.BRAND_NAME || "冒央会社";
+  // 品牌以站点设置为准
+  const { getSettings } = await import("../../_settings.js");
+  const settings = await getSettings();
+  const brandName = settings.brand.name || process.env.BRAND_NAME || "冒央会社";
   const siteDomain = process.env.SITE_DOMAIN || "www.liumeiti.vip";
   const siteUrl = process.env.SITE_URL || "https://www.liumeiti.vip";
   const mailSubject = subject.includes(brandName) ? subject : `${brandName} · ${subject}`;
@@ -100,7 +103,7 @@ export async function POST(request) {
       subject: mailSubject,
       text,
       html,
-      fromName: "冒央会社客服",
+      fromName: `${brandName}客服`,
     });
     const reason = result.ok ? "" : (result.reason || result.error || result.code || "send_failed");
     const log = await pushAdminMailLog({

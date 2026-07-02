@@ -9,6 +9,8 @@ import {
   buildRedeemEmailText,
   buildRedeemEmailSubject,
 } from "../../redeem-email-template.js";
+import { getSettings } from "../../../../_settings.js";
+import { supportText } from "../../../../../lib/settings-defaults.js";
 
 export async function POST(request, { params }) {
   const session = adminSessionFromRequest(request);
@@ -27,12 +29,14 @@ export async function POST(request, { params }) {
   if (!info.ok) return Response.json({ ok: false, error: "code_not_found" }, { status: 404 });
   if (info.status !== "active") return Response.json({ ok: false, error: "code_unavailable" }, { status: 400 });
 
-  const brandName = process.env.BRAND_NAME || "冒央会社";
+  // 品牌/客服以站点设置为准(与全站显示一致)
+  const settings = await getSettings();
+  const locale = body.locale === "en" ? "en" : "zh"; // 管理员发送时可指定收件人语言，默认中文
+  const brandName = (locale === "en" ? settings.brand.nameEn : settings.brand.name) || "冒央会社";
   const siteDomain = process.env.SITE_DOMAIN || "www.liumeiti.vip";
   const siteUrl = process.env.SITE_URL || `https://${siteDomain}`;
-  const supportContact = process.env.SUPPORT_CONTACT || "请通过 QQ 2802632995 / WhatsApp +34 671143339 / Telegram @MaoyangSupport 联系在线客服";
+  const supportContact = supportText(settings.support, locale);
   const redeemUrl = `${siteUrl.replace(/\/+$/, "")}/?redeem=${encodeURIComponent(info.code)}#redeem`;
-  const locale = body.locale === "en" ? "en" : "zh"; // 管理员发送时可指定收件人语言，默认中文
 
   const subject = buildRedeemEmailSubject({
     code: info.code,

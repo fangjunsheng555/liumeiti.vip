@@ -6,6 +6,7 @@ import {
   redisCmd, redisPipeline, formatBeijingTime, sendSimpleEmail,
 } from "../../_utils.js";
 import { buildRecoveryEmailHtml, buildRecoveryEmailText } from "./recovery-email.js";
+import { getSettings } from "../../_settings.js";
 
 export const runtime = "nodejs";
 const CART_INDEX = "lm:cart:index";
@@ -70,12 +71,15 @@ export async function POST(request) {
     const services = h.services || "您挑选的服务";
     const locale = h.locale === "en" ? "en" : "zh";
     const en = locale === "en";
-    const params = { services, amount: h.amount, brandName: BRAND_NAME, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale };
-    const subject = en ? `Your ${BRAND_NAME} order is one step away 🛒` : `您的订单还差一步就完成啦 🛒 · ${BRAND_NAME}`;
+    // 品牌以站点设置为准
+    const settings = await getSettings();
+    const brandName = (en ? settings.brand.nameEn : settings.brand.name) || BRAND_NAME;
+    const params = { services, amount: h.amount, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale };
+    const subject = en ? `Your ${brandName} order is one step away 🛒` : `您的订单还差一步就完成啦 🛒 · ${brandName}`;
     const html = buildRecoveryEmailHtml(params);
     const text = buildRecoveryEmailText(params);
     let sent = false;
-    try { const r = await sendSimpleEmail({ to, subject, text, html, fromName: BRAND_NAME }); sent = !!(r && (r.messageId || r.ok !== false)); }
+    try { const r = await sendSimpleEmail({ to, subject, text, html, fromName: brandName }); sent = !!(r && (r.messageId || r.ok !== false)); }
     catch (e) { sent = false; }
     if (!sent) return Response.json({ ok: false, error: "send_failed" }, { status: 502 });
     await redisCmd(["HSET", ckey, "status", "contacted", "contactedAt", String(Date.now())]);

@@ -5,6 +5,7 @@ import MobileNav from "../components/MobileNav";
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../social-meta";
 import { getServerLocale } from "../lib/i18n-server";
 import { redisCmd } from "../api/_utils.js";
+import { getSettings } from "../api/_settings.js";
 
 export async function generateMetadata() {
   const locale = await getServerLocale();
@@ -82,6 +83,7 @@ export default async function AnnouncementsPage() {
   const locale = await getServerLocale();
   const en = locale === "en";
   const L = (zh, e) => (en ? e : zh);
+  const footerCfg = (await getSettings()).footer; // 页脚随站点设置
 
   let posts = [];
   try {
@@ -161,7 +163,7 @@ export default async function AnnouncementsPage() {
       <footer className="site-footer home-footer">
         <div className="container footer-inner">
           <div className="footer-company">
-            <div className="footer-brand">{L("冒央会社 · Maoyang Taiwan Inc", "Maoyang Taiwan Inc")}</div>
+            <div className="footer-brand">{en ? footerCfg.brandEn : footerCfg.brand}</div>
             <div className="footer-links">
               <Link href="/legal">{L("企业资质与服务保障", "Credentials & service assurance")}</Link>
               <Link href="/announcements">{L("公告中心", "Announcements")}</Link>
@@ -169,8 +171,8 @@ export default async function AnnouncementsPage() {
             </div>
           </div>
           <div className="footer-legal">
-            <div className="footer-pill">{L("地址：台湾新北市板桥区远东路1号3-218", "Addr: 3-218, No.1 Yuandong Rd, Banqiao, New Taipei, Taiwan")}</div>
-            <div className="footer-pill">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
+            <div className="footer-pill">{en ? footerCfg.addressEn : footerCfg.address}</div>
+            <div className="footer-pill">{footerCfg.copyright}</div>
           </div>
         </div>
       </footer>

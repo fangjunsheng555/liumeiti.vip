@@ -8391,6 +8391,31 @@ summary:focus-visible {
   font-weight: 950;
   line-height: 1;
 }
+/* 商品面板 规格行 */
+.admin-catalog-plan-row {
+  display: grid;
+  grid-template-columns: minmax(80px, 1.1fr) 96px 66px minmax(56px, 0.6fr) minmax(110px, 1.8fr) auto;
+  gap: 8px; align-items: center;
+  padding: 9px 10px; border-radius: 10px;
+  background: #f8fafc; border: 1px solid var(--line);
+}
+.admin-catalog-plan-row[data-inactive="1"] { opacity: 0.55; }
+.admin-catalog-plan-row input[type="text"], .admin-catalog-plan-row input:not([type="checkbox"]) {
+  width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px;
+  background: #fff; font-size: 12.5px; color: var(--primary); box-sizing: border-box;
+}
+.admin-catalog-plan-row input:focus { border-color: var(--accent); outline: none; }
+.admin-catalog-plan-row .plan-label { font-weight: 700; }
+.admin-catalog-plan-row .plan-amount { display: inline-flex; align-items: center; gap: 3px; min-width: 0; }
+.admin-catalog-plan-row .plan-amount span { font-weight: 800; color: var(--muted); flex: none; }
+.admin-catalog-plan-row .plan-amount input { font-weight: 800; color: var(--accent); }
+.admin-catalog-plan-row .plan-stock { font-weight: 800; text-align: center; }
+.admin-catalog-plan-row .plan-active { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+@media (max-width: 760px) {
+  .admin-catalog-plan-row { grid-template-columns: 1fr 90px 60px; }
+  .admin-catalog-plan-row .plan-cycle, .admin-catalog-plan-row .plan-desc { grid-column: span 1; }
+}
+
 /* 列表骨架屏 */
 .admin-orders-skeleton { gap: 8px; }
 .admin-skeleton-row {
