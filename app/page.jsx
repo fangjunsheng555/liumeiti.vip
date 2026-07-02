@@ -57,6 +57,18 @@ const LAYOUT_CARDS = [
 ];
 
 const TESTIMONIALS = [
+  { name: "宁波 孙**", initial: "孙", region: "宁波", service: "Netflix 整号购买", rating: 5, date: "3 分钟前", text: "整号档案分得很清楚，电视端登录一次就好了。客服把注意事项发得很细，家里人用起来没再问我。" },
+  { name: "林*", initial: "林", region: "苏州", service: "机场节点 · 高级套餐", rating: 5, date: "9 分钟前", text: "100GB 每月对我刚好，刷流媒体和临时办公都够用。订阅导入很顺，晚高峰速度也稳。" },
+  { name: "Qian**", initial: "Q", region: "上海", service: "AI 会员 · GPT 20x Pro", rating: 5, date: "16 分钟前", text: "额度比普通 Plus 宽很多，做方案和代码问题不用一直卡次数。开通后订单里能看到记录，很放心。" },
+  { name: "何*", initial: "何", region: "广州", service: "Spotify 家庭套餐", rating: 5, date: "25 分钟前", text: "家庭名额邀请步骤写得清楚，爸妈和我自己的账号都正常加入，歌单也没丢。" },
+  { name: "陈**", initial: "陈", region: "成都", service: "Disney+ 单独车位", rating: 5, date: "38 分钟前", text: "孩子看动画很稳定，4K 画质正常。客服回复速度挺快，遇到登录提示也帮忙排查了。" },
+  { name: "Leo***", initial: "L", region: "新加坡", service: "机场节点 · 无限套餐", rating: 5, date: "52 分钟前", text: "设备多所以选无限流量，手机、电脑、电视都在用，速度稳定，售后也不是机器人式回复。" },
+  { name: "赵*", initial: "赵", region: "杭州", service: "Netflix + Disney+", rating: 5, date: "1 小时前", text: "组合一起买省心很多，两边账号信息都整理在订单里，后面查状态也方便。" },
+  { name: "Wen**", initial: "W", region: "台北", service: "HBO Max 整号", rating: 5, date: "1 小时前", text: "整号档案足够一家人用，杜比和字幕都正常。付款后邮件通知很快到，体验比较正规。" },
+  { name: "郑*", initial: "郑", region: "武汉", service: "AI 会员 · Claude 5x Max", rating: 5, date: "2 小时前", text: "长文和代码场景用得多，Max 额度更稳。客服说明了使用边界，没有夸大，这点挺好。" },
+  { name: "Nora***", initial: "N", region: "温哥华", service: "Spotify + 机场节点", rating: 5, date: "2 小时前", text: "海外下单也顺，Spotify 和节点一起处理，配置好以后日常听歌、看视频都没问题。" },
+  { name: "马**", initial: "马", region: "天津", service: "机场节点 · 普通套餐", rating: 5, date: "3 小时前", text: "50GB 每月够日常使用，价格清楚，订阅链接导入后不用折腾，续费也能在订单里查。" },
+  { name: "Ivy***", initial: "I", region: "曼谷", service: "Disney+ 整号", rating: 5, date: "3 小时前", text: "整号开通很快，几个档案都能用。客服把登录地区和注意事项说得明白，省了不少时间。" },
   { name: "周**", initial: "周", region: "绍兴", service: "Spotify 家庭成员", rating: 5, date: "2小时前", text: "客服确认很快，Spotify 开通后歌单和播客都正常，家庭席位价格也合适" },
   { name: "刘*", initial: "刘", region: "洛阳", service: "Netflix 4K 杜比", rating: 5, date: "4小时前", text: "单独车位能上锁，电视端 4K 播放稳定，邮件通知和订单查询都很清楚" },
   { name: "郑**", initial: "郑", region: "南通", service: "机场节点 · 高级套餐", rating: 5, date: "6小时前", text: "晚高峰看流媒体也不卡，节点切换方便，客服把订阅链接和使用方式讲得很明白" },
@@ -117,6 +129,14 @@ const TESTIMONIALS = [
 ];
 
 const TESTIMONIALS_EN = [
+  { name: "Nathan R.", initial: "N", region: "New York", service: "Netflix full account", rating: 5, date: "4 min ago", text: "Profiles were organized clearly and the TV login worked on the first try. Support sent practical notes instead of generic replies." },
+  { name: "Claire T.", initial: "C", region: "Sydney", service: "VPN · Plus", rating: 5, date: "11 min ago", text: "100GB per month is enough for streaming and a little remote work. Importing the subscription was simple and peak-hour speed stayed steady." },
+  { name: "Ryan H.", initial: "R", region: "Toronto", service: "AI Membership · GPT 20x Pro", rating: 5, date: "22 min ago", text: "The higher quota makes daily heavy use much easier. Activation was fast, and the order page kept the records clear." },
+  { name: "Emily S.", initial: "E", region: "Los Angeles", service: "Spotify Premium Family", rating: 5, date: "35 min ago", text: "Family invites were explained clearly. Everyone joined without losing playlists, and support checked in after activation." },
+  { name: "Kenji M.", initial: "K", region: "Tokyo", service: "Disney+ Profile", rating: 5, date: "48 min ago", text: "4K playback is stable and the dedicated profile is tidy. When I had a login prompt, support helped me solve it quickly." },
+  { name: "Sofia A.", initial: "S", region: "Madrid", service: "VPN · Unlimited", rating: 5, date: "1 hour ago", text: "Multiple devices are online most of the day, so unlimited works better for me. Speed is steady and support feels real." },
+  { name: "Oliver P.", initial: "O", region: "Auckland", service: "Netflix + Disney+", rating: 5, date: "2 hours ago", text: "Buying both together saved time. Account details for each service were organized in the order, which makes later checks easy." },
+  { name: "Iris W.", initial: "I", region: "Taipei", service: "HBO Max full account", rating: 5, date: "2 hours ago", text: "A full account is enough for the whole family. Dolby and subtitles work normally, and the email update arrived quickly." },
   { name: "James W.", initial: "J", region: "London", service: "Spotify Premium Family", rating: 5, date: "2 hours ago", text: "Support confirmed quickly. Spotify worked right away — playlists and podcasts all fine, and the family plan was great value." },
   { name: "Mia C.", initial: "M", region: "Singapore", service: "Netflix 4K Dolby", rating: 5, date: "4 hours ago", text: "My own profile can be PIN-locked, 4K playback on the TV is rock solid, and order updates were clear." },
   { name: "Ethan R.", initial: "E", region: "Sydney", service: "VPN · Premium", rating: 5, date: "6 hours ago", text: "No buffering even at peak hours. Switching nodes is easy and support explained the setup clearly." },
@@ -136,9 +156,12 @@ const TESTIMONIALS_EN = [
 ];
 
 const TESTIMONIALS_PER_PAGE = 4;
+const TESTIMONIALS_STEP = 2;
 const TESTIMONIALS_INTERVAL_MS = 5500;
 
 const LIVE_ORDER_CITIES = [
+  "宁波", "嘉兴", "绍兴", "洛阳", "南通", "宜昌", "泉州", "盐城", "绵阳", "台州",
+  "桂林", "江门", "大理", "岳阳", "金华", "包头", "衡阳", "珠海", "澳门", "新加坡",
   "上海", "北京", "广州", "深圳", "杭州", "南京", "成都", "重庆", "武汉", "西安",
   "苏州", "天津", "长沙", "郑州", "青岛", "宁波", "厦门", "福州", "无锡", "合肥",
   "佛山", "东莞", "珠海", "中山", "泉州", "南昌", "贵阳", "昆明", "南宁", "哈尔滨",
@@ -147,6 +170,8 @@ const LIVE_ORDER_CITIES = [
 ];
 
 const LIVE_ORDER_NAMES = [
+  "孙**", "李*", "夜鹿3166", "林*", "钱**", "何*", "赵*", "Wen**", "郑*", "Nora***",
+  "马**", "Ivy***", "周*", "阿杰**", "小陈*", "Ray***", "Leo***", "Ari***", "H**", "Mok***",
   "陈**", "林*", "王***", "李**", "张*", "刘**", "黄***", "赵**", "吴*", "周**",
   "徐***", "孙**", "胡*", "朱**", "高***", "何**", "郭*", "马**", "罗***", "梁**",
   "宋*", "郑**", "谢***", "唐**", "韩*", "曹**", "许***", "邓**", "冯*", "曾**",
@@ -155,6 +180,12 @@ const LIVE_ORDER_NAMES = [
 ];
 
 const LIVE_ORDER_PRODUCTS = [
+  "Netflix 整号购买", "Netflix 4K 杜比车位", "Disney+ 单独车位", "Disney+ 整号购买",
+  "Spotify 家庭套餐", "Spotify 双人订阅", "Spotify 个人订阅",
+  "HBO Max 整号购买", "HBO Max 单独车位",
+  "机场节点 · 普通套餐", "机场节点 · 高级套餐", "机场节点 · 豪华套餐", "机场节点 · 无限套餐", "机场节点 · 5元10GB测试",
+  "AI 会员 · GPT Plus", "AI 会员 · GPT 5x Pro", "AI 会员 · GPT 20x Pro", "AI 会员 · Claude Pro", "AI 会员 · Claude 5x Max", "AI 会员 · Claude 20x Max",
+  "Spotify + Netflix", "Netflix + Disney+", "Spotify + 机场节点", "AI 会员 + 机场节点", "HBO Max + Netflix",
   "Spotify 家庭成员", "Spotify 个人订阅", "Spotify 双人订阅", "Spotify 家庭套餐",
   "Netflix 4K 单独车位", "Netflix 整号购买",
   "Disney+ 单独车位", "Disney+ 整号购买",
@@ -164,7 +195,10 @@ const LIVE_ORDER_PRODUCTS = [
   "Spotify + Netflix", "Netflix + Disney+", "Spotify + HBO Max", "机场节点 + Netflix", "Spotify + 机场节点", "AI 会员 + Netflix",
 ];
 
-const LIVE_ORDER_TIMES = ["刚刚", "1 分钟前", "2 分钟前", "3 分钟前", "5 分钟前", "8 分钟前", "12 分钟前", "18 分钟前", "26 分钟前", "36 分钟前"];
+const LIVE_ORDER_TIMES = [
+  "刚刚", "1 分钟前", "2 分钟前", "3 分钟前", "5 分钟前", "8 分钟前", "10 分钟前", "12 分钟前",
+  "15 分钟前", "18 分钟前", "22 分钟前", "26 分钟前", "31 分钟前", "36 分钟前", "45 分钟前", "52 分钟前",
+];
 
 function seededUnit(seed) {
   let t = seed + 0x6D2B79F5;
@@ -266,16 +300,27 @@ function buildOperationMetrics(date = new Date()) {
 }
 
 const EN_LIVE_ORDER_CITIES = [
+  "San Francisco", "Los Angeles", "Chicago", "Seattle", "Boston", "Vancouver", "Montreal", "Taipei", "Macau", "Jakarta",
+  "Ho Chi Minh City", "Hanoi", "Kuala Lumpur", "Dubai", "Doha", "Zurich", "Milan", "Stockholm", "Dublin", "Vienna",
   "London", "Singapore", "Sydney", "Toronto", "New York", "Tokyo", "Seoul", "Bangkok",
   "Vancouver", "Melbourne", "Auckland", "Hong Kong", "Kuala Lumpur", "Manila", "Dubai",
   "Berlin", "Paris", "Amsterdam", "Madrid", "Osaka", "Taipei", "New Taipei", "Macau", "Los Angeles",
 ];
 const EN_LIVE_ORDER_NAMES = [
+  "Nathan R.", "Claire T.", "Ryan H.", "Emily S.", "Kenji M.", "Sofia A.", "Oliver P.", "Iris W.",
+  "Aaron L.", "Bella K.", "Miles C.", "Nora P.", "Theo G.", "Ivy W.", "Kai S.", "Rina M.",
   "James W.", "Mia C.", "Ethan R.", "Olivia P.", "Liam H.", "Sophia L.", "Noah K.", "Ava M.",
   "Lucas B.", "Emma T.", "Daniel S.", "Grace Y.", "Henry F.", "Chloe D.", "Jack M.", "Lily Z.",
   "Owen K.", "Zoe R.", "Leo P.", "Nina S.",
 ];
 const EN_LIVE_ORDER_PRODUCTS = [
+  "Netflix full account", "Netflix 4K Dolby profile", "Disney+ dedicated profile", "Disney+ full account",
+  "Spotify Premium Family", "Spotify Premium Duo", "Spotify Premium Individual",
+  "HBO Max full account", "HBO Max dedicated profile",
+  "VPN · Standard", "VPN · Plus", "VPN · Premium", "VPN · Unlimited", "VPN · 10GB trial",
+  "AI Membership · GPT Plus", "AI Membership · GPT 5x Pro", "AI Membership · GPT 20x Pro",
+  "AI Membership · Claude Pro", "AI Membership · Claude 5x Max", "AI Membership · Claude 20x Max",
+  "Spotify + Netflix", "Netflix + Disney+", "Spotify + VPN", "AI Membership + VPN", "HBO Max + Netflix",
   "Spotify Premium Family", "Spotify Premium Individual", "Spotify Premium Duo", "Netflix 4K Profile", "Netflix full account",
   "Disney+ Profile", "Disney+ full account", "HBO Max Profile", "HBO Max full account",
   "VPN · Standard", "VPN · Plus", "VPN · Premium", "VPN · Unlimited",
@@ -283,7 +328,8 @@ const EN_LIVE_ORDER_PRODUCTS = [
   "Spotify + Netflix", "Netflix + Disney+", "Spotify + VPN", "AI Membership + Netflix",
 ];
 const EN_LIVE_ORDER_TIMES = [
-  "just now", "1 min ago", "2 min ago", "3 min ago", "5 min ago", "8 min ago", "12 min ago", "18 min ago", "26 min ago", "36 min ago",
+  "just now", "1 min ago", "2 min ago", "3 min ago", "5 min ago", "8 min ago", "10 min ago", "12 min ago",
+  "15 min ago", "18 min ago", "22 min ago", "26 min ago", "31 min ago", "36 min ago", "45 min ago", "52 min ago",
 ];
 
 function liveOrderAt(index, locale) {
@@ -304,7 +350,14 @@ function LiveOrderTicker() {
   const { t, locale } = useLocale();
   const [idx, setIdx] = useState(0);
   useEffect(() => {
-    const cycleLength = LIVE_ORDER_CITIES.length * 3;
+    const cycleLength = Math.max(
+      LIVE_ORDER_CITIES.length,
+      LIVE_ORDER_NAMES.length,
+      LIVE_ORDER_PRODUCTS.length,
+      EN_LIVE_ORDER_CITIES.length,
+      EN_LIVE_ORDER_NAMES.length,
+      EN_LIVE_ORDER_PRODUCTS.length
+    ) * 5;
     const timer = setInterval(() => setIdx((i) => (i + 1) % cycleLength), 3200);
     return () => clearInterval(timer);
   }, []);
@@ -327,7 +380,7 @@ function HomeTestimonials() {
   useEffect(() => {
     setStart(0);
     const timer = setInterval(() => {
-      setStart((value) => (value + TESTIMONIALS_PER_PAGE) % list.length);
+      setStart((value) => (value + TESTIMONIALS_STEP) % list.length);
     }, TESTIMONIALS_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [list.length]);
