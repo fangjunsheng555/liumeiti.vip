@@ -1443,6 +1443,14 @@ export default function AdminPage() {
     }
   }, [applyCurrentStaff]);
 
+  const loadMailTemplates = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/mail-templates", { credentials: "same-origin", cache: "no-store" });
+      const data = await res.json();
+      if (data.ok) setMailTemplates(data.templates || []);
+    } catch (e) {}
+  }, []);
+
   const loadAllUsers = useCallback(async (q) => {
     setUserListLoading(true);
     try {
@@ -1849,14 +1857,6 @@ export default function AdminPage() {
   }
 
   // ── 客服发信快捷模板 ──
-  const loadMailTemplates = useCallback(async () => {
-    try {
-      const res = await fetch("/api/admin/mail-templates", { credentials: "same-origin", cache: "no-store" });
-      const data = await res.json();
-      if (data.ok) setMailTemplates(data.templates || []);
-    } catch (e) {}
-  }, []);
-
   async function saveMailTemplate() {
     if (mailTplBusy) return;
     if (!mailForm.content.trim()) { setMailResult({ type: "error", message: "先填写正文再存为模板" }); return; }
