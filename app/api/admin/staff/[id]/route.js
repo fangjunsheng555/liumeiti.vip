@@ -1,6 +1,6 @@
 import {
   adminSessionFromRequest, adminActorFromSession,
-  deleteAdminStaff, updateAdminStaff, kickAdminStaff,
+  deleteAdminStaff, updateAdminStaff, kickAdminStaff, clearStaff2fa,
   listAdminStaff, getAdminActionLog, clean, isRootAdminSession, pushAdminActionLog,
 } from "../../../_utils.js";
 
@@ -21,6 +21,16 @@ export async function PATCH(request, { params }) {
     if (!ok) return Response.json({ ok: false, error: "kick_failed" }, { status: 500 });
     await pushAdminActionLog({ action: "staff_kick", actor, target: "staff:" + staffId, detail: {} });
     return Response.json({ ok: true, kicked: staffId });
+  }
+
+  // 员工丢手机等场景:超管重置其 2FA(解绑),并踢下线。
+  if (body.action === "reset2fa") {
+    const staffId = Number(id);
+    if (!Number.isFinite(staffId) || staffId <= 1) return Response.json({ ok: false, error: "cannot_reset_root" }, { status: 400 });
+    await clearStaff2fa(staffId);
+    await kickAdminStaff(staffId);
+    await pushAdminActionLog({ action: "staff_2fa_reset", actor, target: "staff:" + staffId, detail: {} });
+    return Response.json({ ok: true, reset: staffId });
   }
 
   const result = await updateAdminStaff(id, {

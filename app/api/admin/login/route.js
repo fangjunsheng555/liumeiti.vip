@@ -3,6 +3,7 @@ import {
   checkRateLimit, rateLimitResponse, pushAdminActionLog,
   clientIpFromRequest, clientUserAgentFromRequest,
   adminPermissionProfile,
+  getStaff2fa, verifyStaff2faCode, twoFaGloballyDisabled, pushAdminLoginLog,
 } from "../../_utils.js";
 
 const ADMIN_SESSION_SECONDS = 8 * 60 * 60;
@@ -12,6 +13,9 @@ export async function POST(request) {
   try { body = await request.json(); } catch (e) {}
   const username = String(body.username || "");
   const password = String(body.password || "");
+  const otp = String(body.otp || "").trim();
+  const ip = clientIpFromRequest(request);
+  const userAgent = clientUserAgentFromRequest(request);
   const guard = await checkRateLimit(request, {
     namespace: "admin:login",
     limit: 6,
@@ -22,7 +26,31 @@ export async function POST(request) {
 
   const login = await verifyAdminLogin(username, password);
   if (!login.ok) {
+    await pushAdminLoginLog({ username, ok: false, reason: "wrong_password", ip, userAgent });
     return Response.json({ ok: false, error: "invalid_credentials" }, { status: 401 });
+  }
+
+  // 两步验证:该账号已绑定 TOTP 时,要求动态码(或一次性备用码)。
+  // env ADMIN_2FA_DISABLE=1 为紧急兜底,全局跳过 2FA(防丢手机锁死)。
+  if (!twoFaGloballyDisabled()) {
+    const rec = await getStaff2fa(login.staff.id);
+    if (rec) {
+      if (!otp) {
+        return Response.json({ ok: false, need2fa: true, error: "need_2fa" }, { status: 401 });
+      }
+      const otpGuard = await checkRateLimit(request, {
+        namespace: "admin:2fa",
+        limit: 8,
+        windowSec: 15 * 60,
+        identity: username,
+      });
+      if (!otpGuard.ok) return rateLimitResponse(otpGuard, "动态码尝试过多，请稍后再试");
+      const check = await verifyStaff2faCode(login.staff.id, otp);
+      if (!check.ok) {
+        await pushAdminLoginLog({ username, staffId: login.staff.id, ok: false, reason: "wrong_2fa", ip, userAgent });
+        return Response.json({ ok: false, need2fa: true, error: "invalid_2fa" }, { status: 401 });
+      }
+    }
   }
 
   const sessionPayload = {
@@ -46,8 +74,9 @@ export async function POST(request) {
     action: "admin_login",
     actor: { staffId: login.staff.id, staffUsername: login.staff.username },
     target: "staff:" + login.staff.id,
-    detail: { ip: clientIpFromRequest(request), userAgent: clientUserAgentFromRequest(request) },
+    detail: { ip, userAgent },
   });
+  await pushAdminLoginLog({ username: login.staff.username, staffId: login.staff.id, ok: true, reason: "", ip, userAgent });
   return Response.json({ ok: true, staff }, {
     headers: { "Set-Cookie": setCookieValue("lm_admin", token, ADMIN_SESSION_SECONDS) },
   });

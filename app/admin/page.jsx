@@ -12,6 +12,7 @@ import AnnouncePostsPanel from "./AnnouncePostsPanel";
 import AIQuotaPanel from "./AIQuotaPanel";
 import CatalogPanel from "./CatalogPanel";
 import SettingsPanel from "./SettingsPanel";
+import SecurityPanel from "./SecurityPanel";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
   LoaderCircle, LogOut, Search, ShieldCheck,
@@ -1081,6 +1082,8 @@ export default function AdminPage() {
   const [authed, setAuthed] = useState(null); // null=loading, false=login, true=ok
   const [loginName, setLoginName] = useState("");
   const [password, setPassword] = useState("");
+  const [loginOtp, setLoginOtp] = useState("");        // 2FA 动态码/备用码
+  const [loginNeed2fa, setLoginNeed2fa] = useState(false);
   const [currentStaff, setCurrentStaff] = useState(null);
   const [loginError, setLoginError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
@@ -2289,6 +2292,29 @@ export default function AdminPage() {
     }
   }
 
+  async function resetStaff2fa() {
+    if (!staffManage || staffManageBusy) return;
+    if (typeof window !== "undefined" && !window.confirm(`确认解除 ${staffManage.staff.username} 的两步验证并踢下线?(用于其丢失验证器)`)) return;
+    setStaffManageBusy("reset2fa");
+    setStaffManageMsg(null);
+    try {
+      const res = await fetch(`/api/admin/staff/${encodeURIComponent(staffManage.staff.id)}`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "reset2fa" }),
+      });
+      const data = await res.json();
+      setStaffManageMsg(data.ok
+        ? { type: "success", message: "已解除其两步验证并踢下线,可仅用密码重新登录" }
+        : { type: "error", message: data.error || "操作失败" });
+    } catch (e) {
+      setStaffManageMsg({ type: "error", message: "网络错误" });
+    } finally {
+      setStaffManageBusy("");
+    }
+  }
+
   async function deleteSelectedActions() {
     if (selectedActionIds.size === 0 || actionDeleteBusy) return;
     if (typeof window !== "undefined" && !window.confirm(`确认删除 ${selectedActionIds.size} 条操作记录？`)) return;
@@ -2518,14 +2544,19 @@ export default function AdminPage() {
       const res = await fetch("/api/admin/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: loginName, password }),
+        body: JSON.stringify({ username: loginName, password, otp: loginOtp || undefined }),
       });
       const data = await res.json();
       if (data.ok) {
         setAuthed(true);
         setCurrentStaff(data.staff || null);
         setPassword("");
+        setLoginOtp("");
+        setLoginNeed2fa(false);
         loadOrders(appliedSearch, filterStatus);
+      } else if (data.need2fa) {
+        setLoginNeed2fa(true);
+        setLoginError(data.error === "invalid_2fa" ? "动态码错误,请重试(也可输入备用恢复码)" : "");
       } else {
         setLoginError(data.error === "invalid_password" ? "密码错误" : (data.error || "登录失败"));
       }
@@ -2768,8 +2799,20 @@ export default function AdminPage() {
               placeholder="管理员密码"
               required
             />
-            <button type="submit" disabled={loggingIn || !password}>
-              {loggingIn ? <><LoaderCircle size={14} className="spin-icon" />登录中</> : "登录"}
+            {loginNeed2fa && (
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={loginOtp}
+                onChange={(e) => setLoginOtp(e.target.value.replace(/[^0-9A-Za-z]/g, "").slice(0, 12))}
+                placeholder="两步验证动态码(或备用恢复码)"
+                autoFocus
+                required
+              />
+            )}
+            <button type="submit" disabled={loggingIn || !password || (loginNeed2fa && !loginOtp)}>
+              {loggingIn ? <><LoaderCircle size={14} className="spin-icon" />登录中</> : (loginNeed2fa ? "验证并登录" : "登录")}
             </button>
           </form>
           <Link href="/" className="admin-back-link"><ArrowLeft size={13} />返回首页</Link>
@@ -2846,6 +2889,7 @@ export default function AdminPage() {
         { key: "settings", label: "站点设置", icon: SlidersHorizontal, show: isRootStaff },
         { key: "ai-quota", label: "AI 限额", icon: Gauge, show: isRootStaff },
         { key: "staff", label: "工作人员", icon: ShieldCheck, show: isRootStaff },
+        { key: "security", label: "安全中心", icon: ShieldCheck, show: true },
       ],
     },
   ];
@@ -3597,6 +3641,8 @@ export default function AdminPage() {
           <CatalogPanel />
         ) : tab === "settings" ? (
           <SettingsPanel />
+        ) : tab === "security" ? (
+          <SecurityPanel isRoot={isRootStaff} />
         ) : tab === "ai-quota" ? (
           <AIQuotaPanel />
         ) : tab === "staff" ? (
@@ -4482,6 +4528,9 @@ export default function AdminPage() {
 
               {staffManageMsg && <div className={`admin-alert ${staffManageMsg.type}`}>{staffManageMsg.message}</div>}
               <div className="admin-staff-manage-actions">
+                <button type="button" className="admin-settings-btn" onClick={resetStaff2fa} disabled={Boolean(staffManageBusy)} title="员工丢失验证器时,解除其两步验证并踢下线">
+                  {staffManageBusy === "reset2fa" ? <LoaderCircle size={13} className="spin-icon" /> : <ShieldCheck size={13} />}重置2FA
+                </button>
                 <button type="button" className="admin-settings-btn" onClick={kickStaff} disabled={Boolean(staffManageBusy)}>
                   {staffManageBusy === "kick" ? <LoaderCircle size={13} className="spin-icon" /> : <ShieldCheck size={13} />}强制下线
                 </button>

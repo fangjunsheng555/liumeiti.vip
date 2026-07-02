@@ -1,6 +1,6 @@
 // Shared backend utilities: redis, password hashing, session signing
 
-import { createHmac, randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHmac, createHash, createCipheriv, createDecipheriv, randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto";
 import { USER_AVATAR_IDS, isUserAvatarId, normalizeUserAvatarId } from "../lib/avatars.js";
 
 export const ORDERS_KEY = "liumeiti:orders";
@@ -467,6 +467,160 @@ export async function kickAdminStaff(id) {
 export async function getStaffKickTs(id) {
   const raw = await redisCmd(["GET", staffKickKey(id)]);
   return raw == null ? 0 : Number(raw) || 0;
+}
+
+// ── 后台两步验证(TOTP, RFC 6238)+ 登录日志 ──
+// 防锁死三重保障:每账号自愿绑定;绑定时发一次性备用恢复码;env ADMIN_2FA_DISABLE=1 全局跳过。
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+export function generateTotpSecret() {
+  const bytes = randomBytes(20);
+  let bits = 0, value = 0, out = "";
+  for (const b of bytes) {
+    value = (value << 8) | b; bits += 8;
+    while (bits >= 5) { out += BASE32_ALPHABET[(value >>> (bits - 5)) & 31]; bits -= 5; }
+  }
+  if (bits > 0) out += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+  return out;
+}
+
+function base32Decode(input) {
+  const s = String(input || "").toUpperCase().replace(/[^A-Z2-7]/g, "");
+  let bits = 0, value = 0;
+  const bytes = [];
+  for (const ch of s) {
+    value = (value << 5) | BASE32_ALPHABET.indexOf(ch); bits += 5;
+    if (bits >= 8) { bytes.push((value >>> (bits - 8)) & 0xff); bits -= 8; }
+  }
+  return Buffer.from(bytes);
+}
+
+function totpCode(secretBase32, counter) {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64BE(BigInt(counter));
+  const hmac = createHmac("sha1", base32Decode(secretBase32)).update(buf).digest();
+  const offset = hmac[hmac.length - 1] & 0x0f;
+  const bin = ((hmac[offset] & 0x7f) << 24) | (hmac[offset + 1] << 16) | (hmac[offset + 2] << 8) | hmac[offset + 3];
+  return String(bin % 1000000).padStart(6, "0");
+}
+
+// 验证 6 位动态码,允许 ±window 个 30 秒窗口(时钟漂移)。
+export function verifyTotp(secretBase32, code, window = 1) {
+  const clean6 = String(code || "").replace(/\D/g, "");
+  if (clean6.length !== 6 || !secretBase32) return false;
+  const counter = Math.floor(Date.now() / 1000 / 30);
+  for (let i = -window; i <= window; i += 1) {
+    if (totpCode(secretBase32, counter + i) === clean6) return true;
+  }
+  return false;
+}
+
+// 2FA 秘密 AES-256-GCM 加密存储(密钥派生自 AUTH_SECRET)。
+function twoFaKey() { return createHash("sha256").update(authSecret() + "|admin-2fa").digest(); }
+export function encryptTotpSecret(secret) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", twoFaKey(), iv);
+  const ct = Buffer.concat([cipher.update(String(secret), "utf8"), cipher.final()]);
+  return ["enc", iv.toString("base64url"), cipher.getAuthTag().toString("base64url"), ct.toString("base64url")].join(":");
+}
+export function decryptTotpSecret(stored) {
+  try {
+    const [tag0, ivB64, tagB64, ctB64] = String(stored || "").split(":");
+    if (tag0 !== "enc") return "";
+    const decipher = createDecipheriv("aes-256-gcm", twoFaKey(), Buffer.from(ivB64, "base64url"));
+    decipher.setAuthTag(Buffer.from(tagB64, "base64url"));
+    return Buffer.concat([decipher.update(Buffer.from(ctB64, "base64url")), decipher.final()]).toString("utf8");
+  } catch (e) { return ""; }
+}
+
+// 2FA 状态存储:所有账号(含 root=1)统一存 lm:staff:2fa:<id> JSON
+// { secretEnc, enabledAt, backupHashes: [sha256...] }
+function staff2faKey(id) { return "lm:staff:2fa:" + Number(id); }
+function backupCodeHash(code) {
+  return createHash("sha256").update("backup|" + String(code).toUpperCase().replace(/[^A-Z0-9]/g, "")).digest("hex");
+}
+export async function getStaff2fa(id) {
+  const raw = await redisCmd(["GET", staff2faKey(id)]);
+  if (!raw) return null;
+  try { const d = JSON.parse(raw); return d && d.secretEnc ? d : null; } catch (e) { return null; }
+}
+export async function setStaff2fa(id, data) {
+  return (await redisCmd(["SET", staff2faKey(id), JSON.stringify(data)])) === "OK";
+}
+export async function clearStaff2fa(id) {
+  await redisCmd(["DEL", staff2faKey(id)]);
+  return true;
+}
+export function twoFaGloballyDisabled() {
+  return process.env.ADMIN_2FA_DISABLE === "1";
+}
+
+// 生成 10 个一次性备用恢复码(明文只返回一次,存 sha256)。
+export function generateBackupCodes() {
+  const codes = [];
+  for (let i = 0; i < 10; i += 1) {
+    codes.push(randomBytes(5).toString("hex").toUpperCase()); // 10 位十六进制
+  }
+  return { codes, hashes: codes.map(backupCodeHash) };
+}
+
+// 校验登录提供的动态码:TOTP 或备用码(备用码命中即消耗)。
+export async function verifyStaff2faCode(id, code) {
+  const rec = await getStaff2fa(id);
+  if (!rec) return { ok: true, skipped: true }; // 未绑定 → 不要求
+  const secret = decryptTotpSecret(rec.secretEnc);
+  if (secret && verifyTotp(secret, code)) return { ok: true, method: "totp" };
+  const hash = backupCodeHash(code);
+  const idx = Array.isArray(rec.backupHashes) ? rec.backupHashes.indexOf(hash) : -1;
+  if (idx >= 0) {
+    rec.backupHashes.splice(idx, 1); // 一次性:用过即废
+    await setStaff2fa(id, rec);
+    return { ok: true, method: "backup", remainingBackup: rec.backupHashes.length };
+  }
+  return { ok: false };
+}
+
+// ── 后台登录日志(成功/失败均记,含 IP/UA)──
+const ADMIN_LOGIN_LOG_KEY = "lm:admin:login-log";
+export async function pushAdminLoginLog({ username, staffId, ok, reason, ip, userAgent }) {
+  const now = new Date();
+  const entry = {
+    id: makeId("LG"),
+    username: clean(username, 60),
+    staffId: Number(staffId || 0) || undefined,
+    ok: Boolean(ok),
+    reason: clean(reason || "", 60),
+    ip: clean(ip, 80),
+    userAgent: clean(userAgent, 300),
+    createdAt: now.toISOString(),
+    createdAtBeijing: formatBeijingTime(now),
+  };
+  try {
+    const r = redisConfig();
+    if (!r) return false;
+    await fetch(r.url + "/pipeline", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + r.token, "Content-Type": "application/json" },
+      body: JSON.stringify([
+        ["LPUSH", ADMIN_LOGIN_LOG_KEY, JSON.stringify(entry)],
+        ["LTRIM", ADMIN_LOGIN_LOG_KEY, "0", "299"],
+      ]),
+    });
+    return true;
+  } catch (e) { return false; }
+}
+export async function getAdminLoginLog(limit = 100) {
+  const r = redisConfig();
+  if (!r) return [];
+  try {
+    const res = await fetch(r.url + "/lrange/" + encodeURIComponent(ADMIN_LOGIN_LOG_KEY) + "/0/" + (Math.min(300, limit) - 1), {
+      headers: { Authorization: "Bearer " + r.token },
+    });
+    const data = await res.json();
+    return Array.isArray(data.result)
+      ? data.result.map((s) => { try { return JSON.parse(s); } catch (e) { return null; } }).filter(Boolean)
+      : [];
+  } catch (e) { return []; }
 }
 
 export function adminActorLabel(actor) {

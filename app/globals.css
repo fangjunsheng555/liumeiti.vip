@@ -8391,6 +8391,43 @@ summary:focus-visible {
   font-weight: 950;
   line-height: 1;
 }
+/* 安全中心:2FA + 登录日志 */
+.admin-2fa-status { display: inline-flex; align-items: center; gap: 7px; padding: 9px 13px; border-radius: 10px; font-size: 13px; font-weight: 800; }
+.admin-2fa-status.on { background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; }
+.admin-2fa-status.off { background: #fffbeb; border: 1px solid #fde68a; color: #b45309; }
+.admin-2fa-bind { display: grid; gap: 10px; }
+.admin-2fa-step { font-size: 12.5px; font-weight: 700; color: var(--muted); }
+.admin-2fa-secret { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.admin-2fa-secret code {
+  flex: 1; min-width: 200px; padding: 9px 12px; border-radius: 9px; border: 1px dashed rgba(13, 148, 136, 0.4);
+  background: #f0fdfa; color: #134e4a; font-size: 13px; font-weight: 800; letter-spacing: 0.08em; word-break: break-all;
+}
+.admin-2fa-backup { display: grid; gap: 10px; }
+.admin-2fa-backup-title { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 800; color: #b45309; }
+.admin-2fa-backup-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 7px; }
+.admin-2fa-backup-grid code {
+  padding: 8px 10px; border-radius: 8px; background: #fffbeb; border: 1px solid #fde68a;
+  color: #92400e; font-size: 12.5px; font-weight: 800; text-align: center; letter-spacing: 0.06em;
+}
+.admin-login-log { display: grid; gap: 6px; max-height: 420px; overflow-y: auto; }
+.admin-login-log-row {
+  display: grid; grid-template-columns: auto minmax(60px, auto) auto minmax(80px, auto) 1fr;
+  gap: 10px; align-items: center; padding: 7px 10px; border-radius: 8px;
+  background: #f8fafc; border: 1px solid var(--line); font-size: 12px;
+}
+.admin-login-log-row.fail { background: #fef2f2; border-color: #fecaca; }
+.admin-login-log-row .t { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.admin-login-log-row b { color: var(--primary); }
+.admin-login-log-row .r { font-weight: 800; white-space: nowrap; }
+.admin-login-log-row .r.ok { color: #047857; }
+.admin-login-log-row .r.no { color: #dc2626; }
+.admin-login-log-row .ip { color: var(--muted); white-space: nowrap; }
+.admin-login-log-row .ua { color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 700px) {
+  .admin-login-log-row { grid-template-columns: auto 1fr auto; }
+  .admin-login-log-row .ip, .admin-login-log-row .ua { display: none; }
+}
+
 /* 员工管理弹窗:细粒度权限 */
 .admin-staff-perms { margin: 12px 0; }
 .admin-staff-perms-title { font-size: 12px; font-weight: 800; color: var(--muted); margin-bottom: 8px; }
