@@ -3,64 +3,57 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>常用会员服务，一处下单和售后</title>
+  <title>常用会员服务，立即下单开通</title>
   <style>
     * { box-sizing: border-box; }
     body {
       margin: 0;
       background: #eef2f6;
-      color: #151a27;
+      color: #111827;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
     }
     a { text-decoration: none; }
-    img { border: 0; display: block; height: auto; max-width: 100%; }
-    .wrap { width: 100%; padding: 24px 10px; }
+    img { display: block; border: 0; }
+    .wrap { width: 100%; padding: 18px 10px; }
     .email { width: 100%; max-width: 640px; margin: 0 auto; background: #fffaf2; border: 1px solid #e5dccf; border-radius: 24px; overflow: hidden; }
-    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 28px; background: #fff; border-bottom: 1px solid #e7ded0; }
-    .brand { width: 150px; flex: 0 0 auto; }
-    .toplinks { display: flex; align-items: center; gap: 9px; color: #c6b9a5; font-size: 12px; line-height: 1.2; font-weight: 900; white-space: nowrap; }
-    .toplinks a { color: #8a632d; }
-    .hero { background: #fffaf2; padding: 30px 34px 28px; }
-    .hero-grid { display: grid; grid-template-columns: minmax(0, 1fr) 148px; gap: 22px; align-items: center; }
-    .eyebrow { color: #9a6b28; font-size: 12px; line-height: 1.2; font-weight: 900; letter-spacing: .15em; }
-    h1, p { margin: 0; }
-    h1 { margin-top: 14px; color: #111827; font-size: 35px; line-height: 1.08; font-weight: 900; letter-spacing: -.01em; }
-    .hero p { margin-top: 10px; color: #475569; font-size: 15px; line-height: 1.7; }
-    .actions { margin-top: 24px; display: flex; gap: 10px; flex-wrap: wrap; }
-    .btn { display: inline-block; padding: 14px 22px; border-radius: 999px; font-size: 14px; font-weight: 900; }
-    .primary { background: #111827; color: #fffaf2; }
-    .ghost { border: 1px solid #d7ad64; color: #8a632d; }
-    .logo-wall { display: grid; grid-template-columns: repeat(2, 58px); gap: 8px; justify-content: center; padding: 12px; border-radius: 24px; background: #fff; border: 1px solid #e7ded0; }
-    .logo-wall img { width: 58px; height: 58px; border-radius: 16px; border: 1px solid #e5e7eb; background: #fff; object-fit: cover; }
-    .services { padding: 24px 34px 28px; background: #f8f3ea; }
-    .service-kicker { color: #8a632d; font-size: 12px; line-height: 1.2; font-weight: 900; letter-spacing: .14em; margin-bottom: 12px; }
-    .service { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; padding: 12px 0; border-top: 1px solid #e3d8c8; align-items: center; }
-    .service img { width: 34px; height: 34px; border-radius: 9px; border: 1px solid #e5e7eb; object-fit: cover; }
-    .service b { color: #151a27; font-size: 15px; line-height: 1.35; font-weight: 900; }
-    .service span { color: #8a632d; font-size: 14px; line-height: 1.35; font-weight: 900; white-space: nowrap; }
+    .topbar { display: flex; align-items: center; justify-content: center; padding: 18px 26px; background: #fff; border-bottom: 1px solid #e7ded0; }
+    .brand { width: 146px; height: auto; }
+    .hero { padding: 30px 28px 22px; text-align: center; }
+    .eyebrow { color: #9a6b28; font-size: 12px; line-height: 1.2; font-weight: 900; letter-spacing: .14em; }
+    h1 { margin: 14px 0 10px; color: #111827; font-size: 34px; line-height: 1.12; font-weight: 900; letter-spacing: 0; }
+    p { margin: 0; }
+    .hero-copy { width: 300px; max-width: 300px; margin: 0 auto; color: #475569; font-size: 15px; line-height: 1.72; }
+    .logo-row { display: flex; justify-content: center; gap: 10px; margin: 22px 0 18px; }
+    .logo-row img { width: 58px; height: 58px; border-radius: 16px; border: 1px solid #e5e7eb; object-fit: cover; background: #fff; }
+    .main-cta { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 42px; border-radius: 999px; background: #111827; color: #fffaf2; font-size: 15px; font-weight: 900; }
+    .trust { padding: 14px 18px; text-align: center; background: #fff; border-top: 1px solid #e7ded0; border-bottom: 1px solid #e7ded0; color: #111827; font-size: 13px; line-height: 1.5; font-weight: 900; }
+    .trust i { color: #d7ad64; font-style: normal; }
+    .services { padding: 22px 28px 24px; background: #f8f3ea; }
+    .kicker { margin-bottom: 10px; color: #8a632d; font-size: 12px; line-height: 1.2; font-weight: 900; letter-spacing: .14em; }
+    .service { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 10px; align-items: center; padding: 12px 0; border-top: 1px solid #e3d8c8; }
+    .service img { width: 36px; height: 36px; border-radius: 10px; border: 1px solid #e5e7eb; object-fit: cover; background: #fff; }
+    .service b { color: #111827; font-size: 15px; line-height: 1.35; font-weight: 900; }
+    .service span { display: block; margin-top: 4px; color: #8a632d; font-size: 14px; line-height: 1.35; font-weight: 900; }
     .service.accent span { color: #b45f20; }
-    .support { background: #fff; padding: 22px 34px; text-align: center; border-top: 1px solid #e7ded0; }
-    .support p { margin: 0 0 14px; color: #475569; font-size: 14px; line-height: 1.65; }
-    .footer { background: #f4eee5; padding: 18px 24px 22px; text-align: center; color: #667085; font-size: 12px; line-height: 1.75; }
-    .footer a { color: #d8b56f; font-weight: 850; }
-    @media (max-width: 540px) {
+    .bottom-cta { padding: 22px 26px; text-align: center; background: #fff; }
+    .footer { padding: 16px 22px 20px; text-align: center; background: #f4eee5; color: #667085; font-size: 12px; line-height: 1.75; }
+    .footer a { color: #8a632d; font-weight: 850; }
+    @media (max-width: 430px) {
       .wrap { padding: 12px; }
       .email { border-radius: 20px; }
-      .topbar { align-items: flex-start; flex-direction: column; padding: 18px 20px; gap: 10px; }
-      .toplinks { white-space: normal; }
-      .hero { padding: 24px; }
-      .hero-grid { grid-template-columns: 1fr; }
-      .logo-wall { justify-content: start; grid-template-columns: repeat(4, 50px); padding: 10px; }
-      .logo-wall img { width: 50px; height: 50px; border-radius: 14px; }
-      h1 { font-size: 31px; }
-      .hero p { max-width: 300px; }
-      .services { padding: 22px 24px 24px; }
-      .support { padding: 24px; }
-      .support p { max-width: 300px; margin-left: auto; margin-right: auto; }
-      .actions { display: grid; grid-template-columns: 1fr; }
-      .btn { display: block; width: 100%; max-width: 300px; text-align: center; padding-left: 12px; padding-right: 12px; }
-      .service { grid-template-columns: 34px minmax(0, 1fr); align-items: flex-start; }
-      .service span { grid-column: 2; white-space: normal; text-align: left; margin-top: 2px; }
+      .topbar { padding: 16px 20px; }
+      .brand { width: 132px; }
+      .hero { padding: 26px 24px 20px; }
+      h1 { font-size: 32px; }
+      .hero-copy { width: 286px; max-width: 286px; font-size: 14.5px; }
+      .logo-row { gap: 8px; }
+      .logo-row img { width: 52px; height: 52px; border-radius: 14px; }
+      .main-cta { width: 100%; max-width: 300px; padding: 0 20px; }
+      .trust { padding: 12px 14px; font-size: 12px; }
+      .services { padding: 20px 24px 22px; }
+      .service { grid-template-columns: 36px minmax(0, 1fr); align-items: flex-start; }
+      .service span { grid-column: 2; white-space: normal; }
+      .bottom-cta .main-cta { max-width: 300px; }
     }
   </style>
 </head>
@@ -68,44 +61,32 @@
   <div class="wrap">
     <main class="email">
       <div class="topbar">
-        <a href="https://liumeiti.vip/">
-          <img class="brand" src="assets/email-logo.png" alt="冒央会社">
-        </a>
-        <div class="toplinks">
-          <a href="https://liumeiti.vip/">服务目录</a>
-          <span>|</span>
-          <a href="https://liumeiti.vip/service-center">服务中心</a>
-        </div>
+        <a href="https://liumeiti.vip/"><img class="brand" src="assets/email-logo.png" alt="冒央会社"></a>
       </div>
       <section class="hero">
-        <div class="hero-grid">
-          <div>
-            <div class="eyebrow">STREAMING · AI · VPN</div>
-            <h1>常用会员服务，<br>一处下单和售后。</h1>
-            <p>影音、音乐、AI 与机场节点集中处理，购买、查单、售后不用反复换入口。</p>
-            <div class="actions">
-              <a class="btn primary" href="https://liumeiti.vip/">查看服务</a>
-              <a class="btn ghost" href="https://liumeiti.vip/service-center">查询订单</a>
-            </div>
-          </div>
-          <div class="logo-wall" aria-label="服务 logo">
-            <img src="../../public/products/spotify.jpg" alt="Spotify">
-            <img src="../../public/products/streaming-4k.jpg" alt="4K 影音会员">
-            <img src="../../public/products/ai.jpg" alt="AI">
-            <img src="../../public/products/rocket.jpg" alt="机场节点">
-          </div>
+        <div class="eyebrow">MEMBERSHIP SHOP</div>
+        <h1>会员服务<br>立即下单</h1>
+        <p class="hero-copy">四类热门服务，明码标价，付款后开通。</p>
+        <div class="logo-row">
+          <img src="../../public/products/spotify.jpg" alt="Spotify">
+          <img src="../../public/products/streaming-4k.jpg" alt="4K 影音会员">
+          <img src="../../public/products/ai.jpg" alt="AI">
+          <img src="../../public/products/rocket.jpg" alt="机场节点">
         </div>
+        <a class="main-cta" href="https://liumeiti.vip/">去网站下单</a>
+      </section>
+      <section class="trust">
+        <i>●</i> 明码标价&nbsp;&nbsp; <i>●</i> 快速开通&nbsp;&nbsp; <i>●</i> 售后保障
       </section>
       <section class="services">
-        <div class="service-kicker">POPULAR SERVICES</div>
+        <div class="kicker">HOT SERVICES</div>
         <a class="service" href="https://liumeiti.vip/services/spotify"><img src="../../public/products/spotify.jpg" alt=""><b>Spotify 高价区订阅</b><span>¥128/年起 →</span></a>
         <a class="service" href="https://liumeiti.vip/shop"><img src="../../public/products/streaming-4k.jpg" alt=""><b>4K 影音会员</b><span>¥108/年起 →</span></a>
         <a class="service" href="https://liumeiti.vip/services/ai"><img src="../../public/products/ai.jpg" alt=""><b>AI 会员</b><span>¥198/三个月起 →</span></a>
         <a class="service accent" href="https://liumeiti.vip/services/airport-node"><img src="../../public/products/rocket.jpg" alt=""><b>机场节点</b><span>¥5/次 · ¥128/年起 →</span></a>
       </section>
-      <section class="support">
-        <p>已下单用户可直接查询订单、支付状态和售后进度。</p>
-        <a class="btn primary" href="https://liumeiti.vip/service-center">进入服务中心</a>
+      <section class="bottom-cta">
+        <a class="main-cta" href="https://liumeiti.vip/">立即选择服务</a>
       </section>
       <footer class="footer">
         Maoyang Taiwan Inc · liumeiti.vip<br>

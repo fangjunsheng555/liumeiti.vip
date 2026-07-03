@@ -40,8 +40,8 @@ const WITHDRAWAL_STATUS = [
   ["failed", "审核失败"],
 ];
 const MARKETING_MAIL_TEMPLATE_ID = "membership_edm_v4";
-const MARKETING_MAIL_SUBJECT = "常用会员服务，一处下单和售后";
-const MARKETING_MAIL_PREVIEW = "Spotify、Netflix、Disney+、HBO Max、AI 与机场节点，一处下单、查询和售后。";
+const MARKETING_MAIL_SUBJECT = "常用会员服务，立即下单开通";
+const MARKETING_MAIL_PREVIEW = "Spotify、4K 影音、AI 会员与机场节点，明码标价，付款后开通。";
 const MAIL_BATCH_LIMIT = 20;
 
 function copyText(text) {
@@ -3170,7 +3170,11 @@ export default function AdminPage() {
     item?.template === MARKETING_MAIL_TEMPLATE_ID ||
     item?.category === "marketing" ||
     String(item?.subject || "").includes(MARKETING_MAIL_SUBJECT) ||
-    String(item?.content || item?.preview || "").includes(MARKETING_MAIL_PREVIEW);
+    String(item?.subject || "").includes("常用会员服务") ||
+    String(item?.subject || "").includes("数字会员服务台") ||
+    String(item?.content || item?.preview || "").includes(MARKETING_MAIL_PREVIEW) ||
+    String(item?.content || item?.preview || "").includes("Spotify、Netflix") ||
+    String(item?.content || item?.preview || "").includes("4K 影音");
   const customerMailLogs = mailLogs.filter((item) => !isMarketingMailLog(item));
   const marketingMailLogs = mailLogs.filter((item) => isMarketingMailLog(item));
   const scopedMailLogs = mailLogType === "marketing" ? marketingMailLogs : customerMailLogs;
