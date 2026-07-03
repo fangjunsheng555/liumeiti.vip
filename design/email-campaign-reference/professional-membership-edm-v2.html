@@ -3,100 +3,113 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>冒央会社 · 数字会员服务台</title>
+  <title>常用会员服务，一处下单和售后</title>
   <style>
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: #070b16;
-      color: #172033;
+      background: #080c17;
+      color: #151a27;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
     }
     a { text-decoration: none; }
     img { border: 0; display: block; height: auto; max-width: 100%; }
-    .wrap { width: 100%; padding: 28px 10px; }
-    .email { width: 100%; max-width: 640px; margin: 0 auto; background: #f5efe3; border-radius: 26px; overflow: hidden; }
-    .brand { padding: 24px 42px 20px; border-bottom: 1px solid #ded3c2; }
-    .brand img { width: 152px; }
-    .hero-copy { background: #0b1020; padding: 40px 42px 42px; }
-    .eyebrow { display: inline-block; color: #d8b56f; border-bottom: 1px solid rgba(216,181,111,.62); padding-bottom: 7px; font-size: 12px; font-weight: 900; letter-spacing: .16em; }
-    h1, h2, p { margin: 0; }
-    h1 { margin-top: 22px; color: #fff7e8; font-size: 40px; line-height: 1.1; font-weight: 900; letter-spacing: -.01em; }
-    .hero-copy p { margin-top: 15px; color: #d9deea; font-size: 15.5px; line-height: 1.85; }
-    .actions { margin-top: 30px; display: flex; gap: 10px; flex-wrap: wrap; }
-    .btn { display: inline-block; padding: 15px 24px; border-radius: 999px; font-size: 15px; font-weight: 900; }
-    .btn.primary { background: #d7ad64; color: #121019; }
-    .btn.ghost { border: 1px solid rgba(215,173,100,.7); color: #f6ddb0; }
-    .section { padding: 36px 42px 28px; }
-    .section.light { background: #fffaf2; }
-    .section.dark { background: #0b1020; }
-    .section-title { border-top: 1px solid #d9cdbb; padding-top: 24px; color: #8a632d; font-size: 12px; font-weight: 900; letter-spacing: .14em; }
-    .section h2 { margin-top: 13px; color: #121827; font-size: 29px; line-height: 1.2; font-weight: 900; }
-    .section.dark h2 { color: #fff7e8; }
-    .section p { margin-top: 8px; color: #667085; font-size: 14px; line-height: 1.75; }
-    .section.dark p { color: #d9deea; font-size: 15px; line-height: 1.8; }
-    .reason, .service { border-top: 1px solid #ded2bf; padding: 18px 0; }
-    .reason.last { border-bottom: 1px solid #ded2bf; }
-    .reason strong { display: block; color: #b9873d; font-size: 28px; line-height: 1; font-weight: 900; }
-    .reason b, .service b { display: block; margin-top: 10px; color: #121827; font-size: 18px; }
-    .reason span, .service span { display: block; margin-top: 5px; color: #667085; font-size: 14px; line-height: 1.65; }
-    .service { border-color: #e3d8c8; }
-    .service b { margin-top: 0; font-size: 17px; line-height: 1.35; }
-    .service em { display: block; margin-top: 8px; color: #8a632d; font-size: 20px; line-height: 1.2; font-style: normal; font-weight: 900; }
-    .service.accent em { color: #b45f20; }
-    .footer { background: #070b16; padding: 22px 24px 26px; text-align: center; color: #a5adbd; font-size: 12px; line-height: 1.8; }
+    .wrap { width: 100%; padding: 24px 10px; }
+    .email { width: 100%; max-width: 640px; margin: 0 auto; background: #f8f3ea; border-radius: 24px; overflow: hidden; }
+    .hero { background: #101624; padding: 28px 34px 30px; }
+    .brand-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 26px; }
+    .brand { width: 150px; flex: 0 0 auto; }
+    .desk-label { color: #d6ad64; font-size: 11px; line-height: 1.2; font-weight: 900; letter-spacing: .16em; text-align: right; white-space: nowrap; }
+    .hero-grid { display: grid; grid-template-columns: minmax(0, 1fr) 184px; gap: 22px; align-items: center; }
+    .eyebrow { color: #d6ad64; font-size: 12px; line-height: 1.2; font-weight: 900; letter-spacing: .15em; }
+    h1, p { margin: 0; }
+    h1 { margin-top: 14px; color: #fff7ea; font-size: 36px; line-height: 1.08; font-weight: 900; letter-spacing: -.01em; }
+    .hero p { margin-top: 10px; color: #dce1ec; font-size: 15px; line-height: 1.72; }
+    .actions { margin-top: 24px; display: flex; gap: 10px; flex-wrap: wrap; }
+    .btn { display: inline-block; padding: 14px 22px; border-radius: 999px; font-size: 14px; font-weight: 900; }
+    .primary { background: #d7ad64; color: #11131b; }
+    .ghost { border: 1px solid rgba(215,173,100,.72); color: #f6ddb0; }
+    .logo-wall { display: grid; grid-template-columns: repeat(3, 52px); gap: 9px 5px; justify-content: end; }
+    .logo-wall img { width: 52px; height: 52px; border-radius: 14px; border: 1px solid rgba(255,255,255,.16); background: #fff; object-fit: cover; }
+    .points { padding: 26px 34px 8px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    .point b { display: block; color: #151a27; font-size: 15px; line-height: 1.35; font-weight: 900; }
+    .point span { display: block; margin-top: 5px; color: #667085; font-size: 12.5px; line-height: 1.55; }
+    .services { padding: 8px 34px 26px; }
+    .service { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; padding: 12px 0; border-top: 1px solid #e3d8c8; align-items: center; }
+    .service img { width: 34px; height: 34px; border-radius: 9px; border: 1px solid #e5e7eb; object-fit: cover; }
+    .service b { color: #151a27; font-size: 15px; line-height: 1.35; font-weight: 900; }
+    .service span { color: #8a632d; font-size: 14px; line-height: 1.35; font-weight: 900; white-space: nowrap; }
+    .service.accent span { color: #b45f20; }
+    .support { background: #101624; padding: 24px 34px; text-align: center; }
+    .support h2 { margin: 0; color: #fff7ea; font-size: 22px; line-height: 1.28; font-weight: 900; }
+    .support p { margin: 8px 0 18px; color: #dce1ec; font-size: 14px; line-height: 1.65; }
+    .footer { background: #080c17; padding: 18px 24px 22px; text-align: center; color: #9fa8ba; font-size: 12px; line-height: 1.75; }
     .footer a { color: #d8b56f; font-weight: 850; }
-    @media (max-width: 520px) {
+    @media (max-width: 540px) {
       .wrap { padding: 12px; }
       .email { border-radius: 20px; }
-      .brand, .hero-copy, .section { padding-left: 24px; padding-right: 24px; }
-      h1 { font-size: 32px; }
-      .section h2 { font-size: 25px; }
-      .actions { display: grid; grid-template-columns: 1fr; }
-      .btn { text-align: center; }
+      .hero { padding: 24px; }
+      .brand-bar { align-items: flex-start; flex-direction: column; gap: 10px; }
+      .desk-label { text-align: left; white-space: normal; }
+      .hero-grid { grid-template-columns: 1fr; }
+      .logo-wall { justify-content: start; grid-template-columns: repeat(6, 42px); }
+      .logo-wall img { width: 42px; height: 42px; border-radius: 11px; }
+      h1 { font-size: 31px; }
+      .points { grid-template-columns: 1fr; padding: 24px 24px 6px; gap: 12px; }
+      .services { padding: 6px 24px 24px; }
+      .support { padding: 24px; }
+      .actions { display: grid; grid-template-columns: 1fr 1fr; }
+      .btn { text-align: center; padding-left: 12px; padding-right: 12px; }
     }
   </style>
 </head>
 <body>
   <div class="wrap">
     <main class="email">
-      <div class="brand"><img src="assets/email-logo.png" alt="冒央会社"></div>
-      <img src="assets/hero-concierge-v5.png" width="640" alt="数字会员服务台主视觉">
-      <section class="hero-copy">
-        <div class="eyebrow">MEMBERSHIP SERVICE DESK</div>
-        <h1>把常用会员服务，<br>交给一个稳定入口。</h1>
-        <p>音乐、4K 影音、AI 会员与机场节点，集中在同一个服务台完成选择、下单、订单查询与售后跟进。少一点临时沟通，多一点可追踪记录。</p>
-        <div class="actions">
-          <a class="btn primary" href="https://liumeiti.vip/">查看服务目录</a>
-          <a class="btn ghost" href="https://liumeiti.vip/service-center">查询订单与售后</a>
+      <section class="hero">
+        <div class="brand-bar">
+          <img class="brand" src="assets/email-logo.png" alt="冒央会社">
+          <span class="desk-label">OFFICIAL SERVICE DESK</span>
+        </div>
+        <div class="hero-grid">
+          <div>
+            <div class="eyebrow">STREAMING · AI · VPN</div>
+            <h1>常用会员服务，<br>一处下单和售后。</h1>
+            <p>Spotify、Netflix、Disney+、HBO Max、AI 会员与机场节点，统一选择、查询订单和处理问题。</p>
+            <div class="actions">
+              <a class="btn primary" href="https://liumeiti.vip/">查看服务</a>
+              <a class="btn ghost" href="https://liumeiti.vip/service-center">查询订单</a>
+            </div>
+          </div>
+          <div class="logo-wall" aria-label="服务 logo">
+            <img src="../../public/products/spotify.jpg" alt="Spotify">
+            <img src="../../public/products/netflix.jpg" alt="Netflix">
+            <img src="../../public/products/disney.jpg" alt="Disney+">
+            <img src="../../public/products/hbomax.jpg" alt="HBO Max">
+            <img src="../../public/products/ai.jpg" alt="AI">
+            <img src="../../public/products/rocket.jpg" alt="机场节点">
+          </div>
         </div>
       </section>
-      <section class="section">
-        <div class="section-title">WHY THIS MATTERS</div>
-        <h2>不是再找一次卖家，<br>而是回到同一个服务台。</h2>
-        <div class="reason"><strong>01</strong><b>规格先看清</b><span>价格、周期、套餐说明、适用场景与最终应付金额，以网站下单页展示为准。</span></div>
-        <div class="reason"><strong>02</strong><b>订单可追踪</b><span>下单后可在服务中心查询订单进度、支付状态和售后处理信息。</span></div>
-        <div class="reason last"><strong>03</strong><b>售后接得上</b><span>账号、配置、节点或会员使用问题，都可以围绕同一条订单继续处理。</span></div>
+      <section class="points">
+        <div class="point"><b>价格先看清</b><span>规格、周期、库存以下单页为准。</span></div>
+        <div class="point"><b>订单可查询</b><span>进度和售后集中到服务中心。</span></div>
+        <div class="point"><b>问题可接续</b><span>围绕同一订单继续处理。</span></div>
       </section>
-      <section class="section light">
-        <div class="section-title">SERVICE RANGE</div>
-        <h2>常用服务保持集中，<br>入口保持简单。</h2>
-        <p>下方为常用服务范围，具体规格、库存、优惠和最终价格以网站实时页面为准。</p>
-        <a class="service" href="https://liumeiti.vip/"><b>Spotify 高价区订阅</b><span>家庭成员、个人、双人、家庭套餐，适合长期稳定使用。</span><em>¥128/年起 →</em></a>
-        <a class="service" href="https://liumeiti.vip/shop"><b>4K 影音会员</b><span>Netflix、Disney+、HBO Max 等影音服务，车位或整号按页面选择。</span><em>进入 Shop 查看 →</em></a>
-        <a class="service" href="https://liumeiti.vip/"><b>AI 会员</b><span>GPT Plus / Pro、Claude Pro / Max 等高频工作服务。</span><em>¥198/三个月起 →</em></a>
-        <a class="service accent" href="https://liumeiti.vip/"><b>机场节点</b><span>真实流量套餐，支持测试后再选择长期规格。</span><em>¥5/次 · ¥128/年起 →</em></a>
+      <section class="services">
+        <a class="service" href="https://liumeiti.vip/services/spotify"><img src="../../public/products/spotify.jpg" alt=""><b>Spotify 高价区订阅</b><span>¥128/年起 →</span></a>
+        <a class="service" href="https://liumeiti.vip/shop"><img src="../../public/products/netflix.jpg" alt=""><b>4K 影音会员</b><span>进入 Shop 查看 →</span></a>
+        <a class="service" href="https://liumeiti.vip/services/ai"><img src="../../public/products/ai.jpg" alt=""><b>AI 会员</b><span>¥198/三个月起 →</span></a>
+        <a class="service accent" href="https://liumeiti.vip/services/airport-node"><img src="../../public/products/rocket.jpg" alt=""><b>机场节点</b><span>¥5/次 · ¥128/年起 →</span></a>
       </section>
-      <section class="section dark">
-        <div class="eyebrow">ORDER & SUPPORT</div>
-        <h2>已下单用户，<br>从服务中心继续处理。</h2>
-        <p>订单查询、售后沟通、使用问题和后续处理入口已集中到服务中心。需要购买新服务时，再回到服务目录选择即可。</p>
-        <div class="actions"><a class="btn primary" href="https://liumeiti.vip/service-center">进入服务中心</a></div>
+      <section class="support">
+        <h2>已下单？直接进服务中心。</h2>
+        <p>订单查询、支付状态、售后处理都放在这里。</p>
+        <a class="btn primary" href="https://liumeiti.vip/service-center">进入服务中心</a>
       </section>
       <footer class="footer">
         Maoyang Taiwan Inc · liumeiti.vip<br>
-        具体开通方式、库存、优惠与最终价格以网站订单页为准。<br>
-        <a href="https://liumeiti.vip/">访问网站</a> ·
+        <a href="https://liumeiti.vip/">服务目录</a> ·
         <a href="https://liumeiti.vip/service-center">服务中心</a> ·
         <a href="https://liumeiti.vip/account">账号中心</a>
       </footer>

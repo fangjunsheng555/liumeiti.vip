@@ -40,8 +40,8 @@ const WITHDRAWAL_STATUS = [
   ["failed", "审核失败"],
 ];
 const MARKETING_MAIL_TEMPLATE_ID = "membership_edm_v4";
-const MARKETING_MAIL_SUBJECT = "数字会员服务台｜常用会员不必重新找";
-const MARKETING_MAIL_PREVIEW = "营销邮件：数字会员服务台";
+const MARKETING_MAIL_SUBJECT = "常用会员服务，一处下单和售后";
+const MARKETING_MAIL_PREVIEW = "Spotify、Netflix、Disney+、HBO Max、AI 与机场节点，一处下单、查询和售后。";
 const MAIL_BATCH_LIMIT = 20;
 
 function copyText(text) {
