@@ -1246,6 +1246,7 @@ export default function AdminPage() {
   const [mailBusy, setMailBusy] = useState(false);
   const [mailResult, setMailResult] = useState(null);
   const [mailMode, setMailMode] = useState("customer");
+  const [mailLogType, setMailLogType] = useState("customer");
   const [mailRecipientBusy, setMailRecipientBusy] = useState(false);
   const [mailBatchProgress, setMailBatchProgress] = useState(null);
   const [mailMarketingHtml, setMailMarketingHtml] = useState("");
@@ -3165,9 +3166,17 @@ export default function AdminPage() {
   }
 
   const mailSearchText = mailSearch.trim().toLowerCase();
+  const isMarketingMailLog = (item) =>
+    item?.template === MARKETING_MAIL_TEMPLATE_ID ||
+    item?.category === "marketing" ||
+    String(item?.subject || "").includes(MARKETING_MAIL_SUBJECT) ||
+    String(item?.content || item?.preview || "").includes(MARKETING_MAIL_PREVIEW);
+  const customerMailLogs = mailLogs.filter((item) => !isMarketingMailLog(item));
+  const marketingMailLogs = mailLogs.filter((item) => isMarketingMailLog(item));
+  const scopedMailLogs = mailLogType === "marketing" ? marketingMailLogs : customerMailLogs;
   const visibleMailLogs = mailSearchText
-    ? mailLogs.filter((item) => String(item.to || "").toLowerCase().includes(mailSearchText))
-    : mailLogs;
+    ? scopedMailLogs.filter((item) => String(item.to || "").toLowerCase().includes(mailSearchText))
+    : scopedMailLogs;
   const staffActionCounts = new Map();
   staffPane.actions.forEach((item) => {
     const id = Number(item.staffId || 1);
@@ -3914,7 +3923,7 @@ export default function AdminPage() {
             <div className="admin-mail-entry-strip">
               <div className="admin-mail-entry-copy">
                 <strong><Mail size={15} />客服发信</strong>
-                <span>手动通知与会员营销邮件共用原发信记录</span>
+                <span>客服邮件与营销邮件分开记录，避免混在一起</span>
               </div>
               <div className="admin-mail-entry-actions">
                 <button type="button" onClick={() => openMailComposer("customer")}>
@@ -3930,7 +3939,7 @@ export default function AdminPage() {
 
             <div className="admin-mail-log">
               <div className="admin-userlist-head">
-                <h3>发信记录 <em>{visibleMailLogs.length}{mailSearchText ? ` / ${mailLogs.length}` : ""}</em></h3>
+                <h3>{mailLogType === "marketing" ? "营销邮件记录" : "客服邮件记录"} <em>{visibleMailLogs.length}{mailSearchText ? ` / ${scopedMailLogs.length}` : ""}</em></h3>
                 <div className="admin-inline-actions">
                   {canDeleteRecords && (
                     <>
@@ -3957,6 +3966,30 @@ export default function AdminPage() {
                   </button>
                 </div>
               </div>
+              <div className="admin-mail-log-tabs" role="tablist" aria-label="发信记录分类">
+                <button
+                  type="button"
+                  className={mailLogType === "customer" ? "active" : ""}
+                  onClick={() => {
+                    setMailLogType("customer");
+                    setSelectedMailIds(new Set());
+                    setMailBatchMode(false);
+                  }}
+                >
+                  <Mail size={12} />客服记录 <span>{customerMailLogs.length}</span>
+                </button>
+                <button
+                  type="button"
+                  className={mailLogType === "marketing" ? "active" : ""}
+                  onClick={() => {
+                    setMailLogType("marketing");
+                    setSelectedMailIds(new Set());
+                    setMailBatchMode(false);
+                  }}
+                >
+                  <Megaphone size={12} />营销记录 <span>{marketingMailLogs.length}</span>
+                </button>
+              </div>
               <div className="admin-mail-search">
                 <Search size={13} />
                 <input
@@ -3972,10 +4005,11 @@ export default function AdminPage() {
               </div>
               <div className="admin-mail-log-list">
                 {visibleMailLogs.length === 0 ? (
-                  <div className="admin-userlist-empty">{mailLoading ? "加载中..." : "暂无发信记录"}</div>
+                  <div className="admin-userlist-empty">{mailLoading ? "加载中..." : `暂无${mailLogType === "marketing" ? "营销邮件" : "客服邮件"}记录`}</div>
                 ) : visibleMailLogs.map((item) => {
                   const selected = selectedMailIds.has(item.id);
                   const ok = item.ok !== false;
+                  const itemIsMarketing = isMarketingMailLog(item);
                   return (
                     <div
                       key={item.id}
@@ -3994,6 +4028,7 @@ export default function AdminPage() {
                         <div className="admin-mail-log-row">
                           <strong>{item.to}</strong>
                           {item.staffId && <span className="staff-mini-badge">{item.staffId}</span>}
+                          <span className={`admin-mail-type ${itemIsMarketing ? "marketing" : "customer"}`}>{itemIsMarketing ? "营销" : "客服"}</span>
                           <span className={`admin-mail-status ${ok ? "ok" : "failed"}`}>{ok ? "已发送" : "失败"}</span>
                         </div>
                         <small>{item.subject || "客服服务通知"} · {item.createdAtBeijing || item.createdAt}</small>
@@ -4957,6 +4992,7 @@ export default function AdminPage() {
             </div>
             <div className="admin-modal-body">
               <div className="admin-mail-detail-grid">
+                <div><span>邮件类型</span><b>{isMarketingMailLog(activeMailLog) ? "营销邮件" : "客服邮件"}</b></div>
                 <div><span>收件邮箱</span><b>{activeMailLog.to}</b></div>
                 <div><span>工作人员</span><b>#{activeMailLog.staffId || 1}</b></div>
                 <div><span>发送时间</span><b>{activeMailLog.createdAtBeijing || activeMailLog.createdAt}</b></div>

@@ -35,51 +35,57 @@ export function buildMarketingMailHtml({ brandName, siteDomain, siteUrl }) {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${escapeHtml(MARKETING_MAIL_SUBJECT)}</title>
   </head>
-  <body style="margin:0;padding:0;background:#080c17;color:#151a27;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',Arial,sans-serif;">
+  <body style="margin:0;padding:0;background:#eef2f6;color:#151a27;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',Arial,sans-serif;">
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">${escapeHtml(MARKETING_MAIL_PREVIEW)}</div>
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;background:#080c17;padding:24px 10px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;background:#eef2f6;padding:24px 10px;">
       <tr>
         <td align="center">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;max-width:640px;background:#f8f3ea;border-radius:24px;overflow:hidden;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;max-width:640px;background:#fffaf2;border-radius:24px;overflow:hidden;border:1px solid #e5dccf;">
             <tr>
-              <td style="background:#101624;padding:28px 34px 30px;">
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;margin-bottom:26px;">
+              <td style="background:#ffffff;padding:18px 28px;border-bottom:1px solid #e7ded0;">
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
                   <tr>
                     <td valign="middle">
-                      <img src="${logoUrl}" width="150" alt="${safeBrand}" style="display:block;width:150px;max-width:150px;height:auto;border:0;" />
+                      <a href="${homeUrl}" style="display:inline-block;text-decoration:none;">
+                        <img src="${logoUrl}" width="146" alt="${safeBrand}" style="display:block;width:146px;max-width:146px;height:auto;border:0;" />
+                      </a>
                     </td>
-                    <td valign="middle" align="right" style="color:#d6ad64;font-size:11px;line-height:1.2;font-weight:900;letter-spacing:.16em;white-space:nowrap;">
-                      OFFICIAL SERVICE DESK
+                    <td valign="middle" align="right" style="font-size:12px;line-height:1.2;font-weight:900;white-space:nowrap;">
+                      <a href="${homeUrl}" style="color:#8a632d;text-decoration:none;">服务目录</a>
+                      <span style="color:#c6b9a5;">&nbsp;|&nbsp;</span>
+                      <a href="${serviceCenterUrl}" style="color:#8a632d;text-decoration:none;">服务中心</a>
                     </td>
                   </tr>
                 </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="background:#fffaf2;padding:30px 34px 28px;">
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
                   <tr>
                     <td valign="middle" style="padding-right:22px;">
-                      <div style="color:#d6ad64;font-size:12px;line-height:1.2;font-weight:900;letter-spacing:.15em;">STREAMING · AI · VPN</div>
-                      <h1 style="margin:14px 0 10px;color:#fff7ea;font-size:36px;line-height:1.08;font-weight:900;letter-spacing:-.01em;">常用会员服务，<br />一处下单和售后。</h1>
-                      <p style="margin:0;color:#dce1ec;font-size:15px;line-height:1.72;">Spotify、Netflix、Disney+、HBO Max、AI 会员与机场节点，统一选择、查询订单和处理问题。</p>
+                      <div style="color:#9a6b28;font-size:12px;line-height:1.2;font-weight:900;letter-spacing:.15em;">STREAMING · AI · VPN</div>
+                      <h1 style="margin:14px 0 10px;color:#111827;font-size:35px;line-height:1.08;font-weight:900;letter-spacing:-.01em;">常用会员服务，<br />一处下单和售后。</h1>
+                      <p style="margin:0;color:#475569;font-size:15px;line-height:1.7;">影音、音乐、AI 与机场节点集中处理，购买、查单、售后不用反复换入口。</p>
                       <table role="presentation" cellspacing="0" cellpadding="0" style="margin-top:24px;">
                         <tr>
-                          <td style="background:#d7ad64;border-radius:999px;">
-                            <a href="${homeUrl}" style="display:inline-block;padding:14px 22px;color:#11131b;font-size:14px;font-weight:900;text-decoration:none;">查看服务</a>
+                          <td style="background:#111827;border-radius:999px;">
+                            <a href="${homeUrl}" style="display:inline-block;padding:14px 22px;color:#fffaf2;font-size:14px;font-weight:900;text-decoration:none;">查看服务</a>
                           </td>
                           <td width="10"></td>
-                          <td style="border:1px solid rgba(215,173,100,.72);border-radius:999px;">
-                            <a href="${serviceCenterUrl}" style="display:inline-block;padding:13px 20px;color:#f6ddb0;font-size:14px;font-weight:900;text-decoration:none;">查询订单</a>
+                          <td style="border:1px solid #d7ad64;border-radius:999px;">
+                            <a href="${serviceCenterUrl}" style="display:inline-block;padding:13px 20px;color:#8a632d;font-size:14px;font-weight:900;text-decoration:none;">查询订单</a>
                           </td>
                         </tr>
                       </table>
                     </td>
-                    <td valign="middle" width="184" style="width:184px;">
-                      <table role="presentation" width="184" cellspacing="0" cellpadding="0" style="width:184px;">
+                    <td valign="middle" width="148" style="width:148px;">
+                      <table role="presentation" width="148" cellspacing="0" cellpadding="0" style="width:148px;background:#ffffff;border:1px solid #e7ded0;border-radius:24px;padding:12px;">
                         <tr>
                           ${heroLogo(product("spotify.jpg"), "Spotify")}
-                          ${heroLogo(product("netflix.jpg"), "Netflix")}
-                          ${heroLogo(product("disney.jpg"), "Disney+")}
+                          ${heroLogo(product("streaming-4k.jpg"), "4K 影音会员")}
                         </tr>
                         <tr>
-                          ${heroLogo(product("hbomax.jpg"), "HBO Max")}
                           ${heroLogo(product("ai.jpg"), "AI")}
                           ${heroLogo(product("rocket.jpg"), "机场节点")}
                         </tr>
@@ -90,33 +96,22 @@ export function buildMarketingMailHtml({ brandName, siteDomain, siteUrl }) {
               </td>
             </tr>
             <tr>
-              <td style="padding:26px 34px 8px;background:#f8f3ea;">
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
-                  <tr>
-                    ${pointCell("价格先看清", "规格、周期、库存以下单页为准。")}
-                    ${pointCell("订单可查询", "进度和售后集中到服务中心。")}
-                    ${pointCell("问题可接续", "围绕同一订单继续处理。")}
-                  </tr>
-                </table>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:8px 34px 26px;background:#f8f3ea;">
+              <td style="padding:24px 34px 28px;background:#f8f3ea;">
+                <div style="color:#8a632d;font-size:12px;line-height:1.2;font-weight:900;letter-spacing:.14em;margin-bottom:12px;">POPULAR SERVICES</div>
                 ${serviceLine(product("spotify.jpg"), "Spotify 高价区订阅", "¥128/年起", origin + "/services/spotify")}
-                ${serviceLine(product("netflix.jpg"), "4K 影音会员", "进入 Shop 查看", origin + "/shop")}
+                ${serviceLine(product("streaming-4k.jpg"), "4K 影音会员", "¥108/年起", origin + "/shop")}
                 ${serviceLine(product("ai.jpg"), "AI 会员", "¥198/三个月起", origin + "/services/ai")}
                 ${serviceLine(product("rocket.jpg"), "机场节点", "¥5/次 · ¥128/年起", origin + "/services/airport-node", true)}
               </td>
             </tr>
             <tr>
-              <td style="background:#101624;padding:24px 34px;text-align:center;">
-                <div style="color:#fff7ea;font-size:22px;line-height:1.28;font-weight:900;">已下单？直接进服务中心。</div>
-                <p style="margin:8px 0 18px;color:#dce1ec;font-size:14px;line-height:1.65;">订单查询、支付状态、售后处理都放在这里。</p>
-                <a href="${serviceCenterUrl}" style="display:inline-block;background:#d7ad64;border-radius:999px;padding:14px 28px;color:#11131b;font-size:14px;font-weight:900;text-decoration:none;">进入服务中心</a>
+              <td style="background:#ffffff;padding:22px 34px;text-align:center;border-top:1px solid #e7ded0;">
+                <span style="display:block;color:#475569;font-size:14px;line-height:1.65;margin-bottom:14px;">已下单用户可直接查询订单、支付状态和售后进度。</span>
+                <a href="${serviceCenterUrl}" style="display:inline-block;background:#111827;border-radius:999px;padding:13px 26px;color:#fffaf2;font-size:14px;font-weight:900;text-decoration:none;">进入服务中心</a>
               </td>
             </tr>
             <tr>
-              <td style="background:#080c17;padding:18px 24px 22px;text-align:center;color:#9fa8ba;font-size:12px;line-height:1.75;">
+              <td style="background:#f4eee5;padding:18px 24px 22px;text-align:center;color:#667085;font-size:12px;line-height:1.75;">
                 Maoyang Taiwan Inc · liumeiti.vip<br />
                 <a href="${homeUrl}" style="color:#d8b56f;font-weight:850;text-decoration:none;">服务目录</a>
                 <span style="color:#566176;"> · </span>
@@ -134,15 +129,8 @@ export function buildMarketingMailHtml({ brandName, siteDomain, siteUrl }) {
 }
 
 function heroLogo(src, alt) {
-  return `<td width="58" style="width:58px;padding:0 0 9px 5px;">
-    <img src="${src}" width="52" height="52" alt="${escapeHtml(alt)}" style="display:block;width:52px;height:52px;border-radius:14px;border:1px solid rgba(255,255,255,.16);background:#fff;object-fit:cover;" />
-  </td>`;
-}
-
-function pointCell(title, desc) {
-  return `<td valign="top" width="33.333%" style="width:33.333%;padding:0 8px 16px 0;">
-    <b style="display:block;color:#151a27;font-size:15px;line-height:1.35;font-weight:900;">${escapeHtml(title)}</b>
-    <span style="display:block;margin-top:5px;color:#667085;font-size:12.5px;line-height:1.55;">${escapeHtml(desc)}</span>
+  return `<td width="62" style="width:62px;padding:4px;">
+    <img src="${src}" width="58" height="58" alt="${escapeHtml(alt)}" style="display:block;width:58px;height:58px;border-radius:16px;border:1px solid #e5e7eb;background:#fff;object-fit:cover;" />
   </td>`;
 }
 

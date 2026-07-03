@@ -8,74 +8,81 @@
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: #080c17;
+      background: #eef2f6;
       color: #151a27;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
     }
     a { text-decoration: none; }
     img { border: 0; display: block; height: auto; max-width: 100%; }
     .wrap { width: 100%; padding: 24px 10px; }
-    .email { width: 100%; max-width: 640px; margin: 0 auto; background: #f8f3ea; border-radius: 24px; overflow: hidden; }
-    .hero { background: #101624; padding: 28px 34px 30px; }
-    .brand-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 26px; }
+    .email { width: 100%; max-width: 640px; margin: 0 auto; background: #fffaf2; border: 1px solid #e5dccf; border-radius: 24px; overflow: hidden; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 28px; background: #fff; border-bottom: 1px solid #e7ded0; }
     .brand { width: 150px; flex: 0 0 auto; }
-    .desk-label { color: #d6ad64; font-size: 11px; line-height: 1.2; font-weight: 900; letter-spacing: .16em; text-align: right; white-space: nowrap; }
-    .hero-grid { display: grid; grid-template-columns: minmax(0, 1fr) 184px; gap: 22px; align-items: center; }
-    .eyebrow { color: #d6ad64; font-size: 12px; line-height: 1.2; font-weight: 900; letter-spacing: .15em; }
+    .toplinks { display: flex; align-items: center; gap: 9px; color: #c6b9a5; font-size: 12px; line-height: 1.2; font-weight: 900; white-space: nowrap; }
+    .toplinks a { color: #8a632d; }
+    .hero { background: #fffaf2; padding: 30px 34px 28px; }
+    .hero-grid { display: grid; grid-template-columns: minmax(0, 1fr) 148px; gap: 22px; align-items: center; }
+    .eyebrow { color: #9a6b28; font-size: 12px; line-height: 1.2; font-weight: 900; letter-spacing: .15em; }
     h1, p { margin: 0; }
-    h1 { margin-top: 14px; color: #fff7ea; font-size: 36px; line-height: 1.08; font-weight: 900; letter-spacing: -.01em; }
-    .hero p { margin-top: 10px; color: #dce1ec; font-size: 15px; line-height: 1.72; }
+    h1 { margin-top: 14px; color: #111827; font-size: 35px; line-height: 1.08; font-weight: 900; letter-spacing: -.01em; }
+    .hero p { margin-top: 10px; color: #475569; font-size: 15px; line-height: 1.7; }
     .actions { margin-top: 24px; display: flex; gap: 10px; flex-wrap: wrap; }
     .btn { display: inline-block; padding: 14px 22px; border-radius: 999px; font-size: 14px; font-weight: 900; }
-    .primary { background: #d7ad64; color: #11131b; }
-    .ghost { border: 1px solid rgba(215,173,100,.72); color: #f6ddb0; }
-    .logo-wall { display: grid; grid-template-columns: repeat(3, 52px); gap: 9px 5px; justify-content: end; }
-    .logo-wall img { width: 52px; height: 52px; border-radius: 14px; border: 1px solid rgba(255,255,255,.16); background: #fff; object-fit: cover; }
-    .points { padding: 26px 34px 8px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
-    .point b { display: block; color: #151a27; font-size: 15px; line-height: 1.35; font-weight: 900; }
-    .point span { display: block; margin-top: 5px; color: #667085; font-size: 12.5px; line-height: 1.55; }
-    .services { padding: 8px 34px 26px; }
+    .primary { background: #111827; color: #fffaf2; }
+    .ghost { border: 1px solid #d7ad64; color: #8a632d; }
+    .logo-wall { display: grid; grid-template-columns: repeat(2, 58px); gap: 8px; justify-content: center; padding: 12px; border-radius: 24px; background: #fff; border: 1px solid #e7ded0; }
+    .logo-wall img { width: 58px; height: 58px; border-radius: 16px; border: 1px solid #e5e7eb; background: #fff; object-fit: cover; }
+    .services { padding: 24px 34px 28px; background: #f8f3ea; }
+    .service-kicker { color: #8a632d; font-size: 12px; line-height: 1.2; font-weight: 900; letter-spacing: .14em; margin-bottom: 12px; }
     .service { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; padding: 12px 0; border-top: 1px solid #e3d8c8; align-items: center; }
     .service img { width: 34px; height: 34px; border-radius: 9px; border: 1px solid #e5e7eb; object-fit: cover; }
     .service b { color: #151a27; font-size: 15px; line-height: 1.35; font-weight: 900; }
     .service span { color: #8a632d; font-size: 14px; line-height: 1.35; font-weight: 900; white-space: nowrap; }
     .service.accent span { color: #b45f20; }
-    .support { background: #101624; padding: 24px 34px; text-align: center; }
-    .support h2 { margin: 0; color: #fff7ea; font-size: 22px; line-height: 1.28; font-weight: 900; }
-    .support p { margin: 8px 0 18px; color: #dce1ec; font-size: 14px; line-height: 1.65; }
-    .footer { background: #080c17; padding: 18px 24px 22px; text-align: center; color: #9fa8ba; font-size: 12px; line-height: 1.75; }
+    .support { background: #fff; padding: 22px 34px; text-align: center; border-top: 1px solid #e7ded0; }
+    .support p { margin: 0 0 14px; color: #475569; font-size: 14px; line-height: 1.65; }
+    .footer { background: #f4eee5; padding: 18px 24px 22px; text-align: center; color: #667085; font-size: 12px; line-height: 1.75; }
     .footer a { color: #d8b56f; font-weight: 850; }
     @media (max-width: 540px) {
       .wrap { padding: 12px; }
       .email { border-radius: 20px; }
+      .topbar { align-items: flex-start; flex-direction: column; padding: 18px 20px; gap: 10px; }
+      .toplinks { white-space: normal; }
       .hero { padding: 24px; }
-      .brand-bar { align-items: flex-start; flex-direction: column; gap: 10px; }
-      .desk-label { text-align: left; white-space: normal; }
       .hero-grid { grid-template-columns: 1fr; }
-      .logo-wall { justify-content: start; grid-template-columns: repeat(6, 42px); }
-      .logo-wall img { width: 42px; height: 42px; border-radius: 11px; }
+      .logo-wall { justify-content: start; grid-template-columns: repeat(4, 50px); padding: 10px; }
+      .logo-wall img { width: 50px; height: 50px; border-radius: 14px; }
       h1 { font-size: 31px; }
-      .points { grid-template-columns: 1fr; padding: 24px 24px 6px; gap: 12px; }
-      .services { padding: 6px 24px 24px; }
+      .hero p { max-width: 300px; }
+      .services { padding: 22px 24px 24px; }
       .support { padding: 24px; }
-      .actions { display: grid; grid-template-columns: 1fr 1fr; }
-      .btn { text-align: center; padding-left: 12px; padding-right: 12px; }
+      .support p { max-width: 300px; margin-left: auto; margin-right: auto; }
+      .actions { display: grid; grid-template-columns: 1fr; }
+      .btn { display: block; width: 100%; max-width: 300px; text-align: center; padding-left: 12px; padding-right: 12px; }
+      .service { grid-template-columns: 34px minmax(0, 1fr); align-items: flex-start; }
+      .service span { grid-column: 2; white-space: normal; text-align: left; margin-top: 2px; }
     }
   </style>
 </head>
 <body>
   <div class="wrap">
     <main class="email">
-      <section class="hero">
-        <div class="brand-bar">
+      <div class="topbar">
+        <a href="https://liumeiti.vip/">
           <img class="brand" src="assets/email-logo.png" alt="冒央会社">
-          <span class="desk-label">OFFICIAL SERVICE DESK</span>
+        </a>
+        <div class="toplinks">
+          <a href="https://liumeiti.vip/">服务目录</a>
+          <span>|</span>
+          <a href="https://liumeiti.vip/service-center">服务中心</a>
         </div>
+      </div>
+      <section class="hero">
         <div class="hero-grid">
           <div>
             <div class="eyebrow">STREAMING · AI · VPN</div>
             <h1>常用会员服务，<br>一处下单和售后。</h1>
-            <p>Spotify、Netflix、Disney+、HBO Max、AI 会员与机场节点，统一选择、查询订单和处理问题。</p>
+            <p>影音、音乐、AI 与机场节点集中处理，购买、查单、售后不用反复换入口。</p>
             <div class="actions">
               <a class="btn primary" href="https://liumeiti.vip/">查看服务</a>
               <a class="btn ghost" href="https://liumeiti.vip/service-center">查询订单</a>
@@ -83,28 +90,21 @@
           </div>
           <div class="logo-wall" aria-label="服务 logo">
             <img src="../../public/products/spotify.jpg" alt="Spotify">
-            <img src="../../public/products/netflix.jpg" alt="Netflix">
-            <img src="../../public/products/disney.jpg" alt="Disney+">
-            <img src="../../public/products/hbomax.jpg" alt="HBO Max">
+            <img src="../../public/products/streaming-4k.jpg" alt="4K 影音会员">
             <img src="../../public/products/ai.jpg" alt="AI">
             <img src="../../public/products/rocket.jpg" alt="机场节点">
           </div>
         </div>
       </section>
-      <section class="points">
-        <div class="point"><b>价格先看清</b><span>规格、周期、库存以下单页为准。</span></div>
-        <div class="point"><b>订单可查询</b><span>进度和售后集中到服务中心。</span></div>
-        <div class="point"><b>问题可接续</b><span>围绕同一订单继续处理。</span></div>
-      </section>
       <section class="services">
+        <div class="service-kicker">POPULAR SERVICES</div>
         <a class="service" href="https://liumeiti.vip/services/spotify"><img src="../../public/products/spotify.jpg" alt=""><b>Spotify 高价区订阅</b><span>¥128/年起 →</span></a>
-        <a class="service" href="https://liumeiti.vip/shop"><img src="../../public/products/netflix.jpg" alt=""><b>4K 影音会员</b><span>进入 Shop 查看 →</span></a>
+        <a class="service" href="https://liumeiti.vip/shop"><img src="../../public/products/streaming-4k.jpg" alt=""><b>4K 影音会员</b><span>¥108/年起 →</span></a>
         <a class="service" href="https://liumeiti.vip/services/ai"><img src="../../public/products/ai.jpg" alt=""><b>AI 会员</b><span>¥198/三个月起 →</span></a>
         <a class="service accent" href="https://liumeiti.vip/services/airport-node"><img src="../../public/products/rocket.jpg" alt=""><b>机场节点</b><span>¥5/次 · ¥128/年起 →</span></a>
       </section>
       <section class="support">
-        <h2>已下单？直接进服务中心。</h2>
-        <p>订单查询、支付状态、售后处理都放在这里。</p>
+        <p>已下单用户可直接查询订单、支付状态和售后进度。</p>
         <a class="btn primary" href="https://liumeiti.vip/service-center">进入服务中心</a>
       </section>
       <footer class="footer">
