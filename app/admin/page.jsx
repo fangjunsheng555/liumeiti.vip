@@ -59,6 +59,16 @@ function splitIntoBatches(items, size) {
   return batches;
 }
 
+function normalizeEmailList(values) {
+  return Array.from(new Set((values || [])
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter((value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))));
+}
+
+function extractEmailsFromText(value) {
+  return String(value || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+}
+
 function referralCommissionTotal(order) {
   return (Array.isArray(order?.referralCommissionEntries) ? order.referralCommissionEntries : [])
     .reduce((sum, entry) => sum + Number(entry?.amount || 0), 0);
@@ -1238,6 +1248,9 @@ export default function AdminPage() {
   const [mailMode, setMailMode] = useState("customer");
   const [mailRecipientBusy, setMailRecipientBusy] = useState(false);
   const [mailBatchProgress, setMailBatchProgress] = useState(null);
+  const [mailMarketingHtml, setMailMarketingHtml] = useState("");
+  const [mailMarketingLoading, setMailMarketingLoading] = useState(false);
+  const [mailRecipientPool, setMailRecipientPool] = useState({ emails: [], registered: 0, orders: 0, label: "" });
   const [mailBatchMode, setMailBatchMode] = useState(false);
   const [selectedMailIds, setSelectedMailIds] = useState(new Set());
   const [mailDeleteBusy, setMailDeleteBusy] = useState(false);
@@ -1894,6 +1907,7 @@ export default function AdminPage() {
   function openMailComposer(nextMode = "customer") {
     applyMailComposerMode(nextMode);
     setMailComposeOpen(true);
+    if (nextMode === "marketing") loadMarketingMailTemplate();
   }
 
   function buildMailPayload(to = mailForm.to) {
@@ -1903,6 +1917,7 @@ export default function AdminPage() {
         subject: mailForm.subject || MARKETING_MAIL_SUBJECT,
         content: MARKETING_MAIL_PREVIEW,
         template: MARKETING_MAIL_TEMPLATE_ID,
+        html: mailMarketingHtml,
       };
     }
     return {
@@ -1912,15 +1927,61 @@ export default function AdminPage() {
     };
   }
 
-  async function readRegisteredMailEmails() {
+  async function loadMarketingMailTemplate(force = false) {
+    if (mailMarketingLoading || (!force && mailMarketingHtml.trim())) return;
+    setMailMarketingLoading(true);
+    try {
+      const res = await fetch(`/api/admin/mail?template=${encodeURIComponent(MARKETING_MAIL_TEMPLATE_ID)}`, {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setMailMarketingHtml(data.html || "");
+        setMailForm((current) => ({
+          ...current,
+          subject: current.subject && current.subject !== "客服服务通知" ? current.subject : (data.subject || MARKETING_MAIL_SUBJECT),
+          content: data.preview || MARKETING_MAIL_PREVIEW,
+        }));
+      } else {
+        setMailResult({ type: "error", message: data.error === "forbidden" ? "当前工作人员没有发信权限" : (data.error || "读取营销邮件模板失败") });
+      }
+    } catch (e) {
+      setMailResult({ type: "error", message: "读取营销邮件模板失败，请稍后重试" });
+    } finally {
+      setMailMarketingLoading(false);
+    }
+  }
+
+  async function fetchRegisteredMailEmails() {
     if (!canViewUsers) {
       setMailResult({ type: "error", message: "读取注册用户邮箱需要用户查看权限" });
       return [];
     }
-    if (mailRecipientBusy) return [];
-    setMailRecipientBusy(true);
-    try {
-      const res = await fetch("/api/admin/users/list", {
+    const res = await fetch("/api/admin/users/list", {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      const msg = {
+        unauthorized: "登录状态已失效，请重新登录后台",
+        forbidden: "当前工作人员没有查看用户权限",
+      }[data.error] || data.error || "读取注册用户邮箱失败";
+      throw new Error(msg);
+    }
+    return normalizeEmailList((data.users || []).map((user) => user?.email));
+  }
+
+  async function fetchOrderMailEmails() {
+    const emails = [];
+    let offset = 0;
+    const limit = 200;
+    while (true) {
+      const params = new URLSearchParams();
+      params.set("offset", String(offset));
+      params.set("limit", String(limit));
+      const res = await fetch("/api/admin/orders?" + params.toString(), {
         credentials: "same-origin",
         cache: "no-store",
       });
@@ -1928,43 +1989,71 @@ export default function AdminPage() {
       if (!data.ok) {
         const msg = {
           unauthorized: "登录状态已失效，请重新登录后台",
-          forbidden: "当前工作人员没有查看用户权限",
-        }[data.error] || data.error || "读取用户邮箱失败";
-        setMailResult({ type: "error", message: msg });
-        return [];
+          forbidden: "当前工作人员没有查看订单权限",
+        }[data.error] || data.error || "读取历史订单邮箱失败";
+        throw new Error(msg);
       }
-      return Array.from(new Set((data.users || [])
-        .map((user) => String(user?.email || "").trim().toLowerCase())
-        .filter(Boolean)));
+      const orders = Array.isArray(data.orders) ? data.orders : [];
+      orders.forEach((order) => {
+        emails.push(order?.email);
+        emails.push(...extractEmailsFromText(order?.contact));
+      });
+      offset += orders.length;
+      if (!data.hasMore || orders.length === 0) break;
+    }
+    return normalizeEmailList(emails);
+  }
+
+  async function loadMarketingRecipientPool(source = "all") {
+    if (mailRecipientBusy) return;
+    setMailRecipientBusy(true);
+    setMailBatchProgress(null);
+    try {
+      let registered = [];
+      let orders = [];
+      if (source === "registered" || source === "all") registered = await fetchRegisteredMailEmails();
+      if (source === "orders" || source === "all") orders = await fetchOrderMailEmails();
+      const emails = normalizeEmailList([...registered, ...orders]);
+      const label = source === "registered" ? "注册用户" : source === "orders" ? "历史订单联系邮箱" : "注册用户 + 历史订单";
+      setMailRecipientPool({ emails, registered: registered.length, orders: orders.length, label });
+      setMailResult({
+        type: emails.length > 0 ? "success" : "error",
+        message: emails.length > 0
+          ? `已读取 ${label}：去重后 ${emails.length} 个邮箱。批量发送会按每批 ${MAIL_BATCH_LIMIT} 个自动发完，不会只发送前 ${MAIL_BATCH_LIMIT} 个。`
+          : "没有读取到可用邮箱。",
+      });
     } catch (e) {
-      setMailResult({ type: "error", message: "读取用户邮箱失败，请稍后重试" });
-      return [];
+      setMailResult({ type: "error", message: e?.message || "读取邮箱失败，请稍后重试" });
     } finally {
       setMailRecipientBusy(false);
     }
   }
 
   async function fillRegisteredMailRecipients() {
-    const emails = await readRegisteredMailEmails();
-    if (emails.length === 0) return;
-    setMailForm((current) => ({
-      ...current,
-      to: emails.slice(0, MAIL_BATCH_LIMIT).join(", "),
-    }));
-    setMailResult({
-      type: "success",
-      message: emails.length > MAIL_BATCH_LIMIT
-        ? `已读取 ${emails.length} 个注册邮箱，手动发送栏先填入前 ${MAIL_BATCH_LIMIT} 个；批量发送会自动分批。`
-        : `已读取 ${emails.length} 个注册邮箱。`,
-    });
+    await loadMarketingRecipientPool("registered");
+  }
+
+  async function fillOrderMailRecipients() {
+    await loadMarketingRecipientPool("orders");
+  }
+
+  async function fillAllMarketingRecipients() {
+    await loadMarketingRecipientPool("all");
   }
 
   async function sendMarketingMailToRegisteredUsers() {
     if (mailBusy || mailRecipientBusy) return;
     if (mailMode !== "marketing") applyMailComposerMode("marketing");
-    const emails = await readRegisteredMailEmails();
-    if (emails.length === 0) return;
-    if (typeof window !== "undefined" && !window.confirm(`确认向 ${emails.length} 个注册用户发送这封营销邮件？系统会按每批 ${MAIL_BATCH_LIMIT} 个邮箱分批发送。`)) {
+    if (!mailMarketingHtml.trim()) {
+      setMailResult({ type: "error", message: "请先等待营销邮件 HTML 模板加载完成，或手动填写 HTML" });
+      return;
+    }
+    const emails = mailRecipientPool.emails || [];
+    if (emails.length === 0) {
+      setMailResult({ type: "error", message: "请先读取注册用户或历史订单邮箱，再执行批量发送" });
+      return;
+    }
+    if (typeof window !== "undefined" && !window.confirm(`确认向已读取的 ${emails.length} 个邮箱发送这封营销邮件？系统会按每批 ${MAIL_BATCH_LIMIT} 个自动发完。`)) {
       return;
     }
     const batches = splitIntoBatches(emails, MAIL_BATCH_LIMIT);
@@ -1984,6 +2073,7 @@ export default function AdminPage() {
             subject: mailForm.subject || MARKETING_MAIL_SUBJECT,
             content: MARKETING_MAIL_PREVIEW,
             template: MARKETING_MAIL_TEMPLATE_ID,
+            html: mailMarketingHtml,
           }),
         });
         const data = await res.json();
@@ -2007,7 +2097,6 @@ export default function AdminPage() {
           ? `营销邮件已发送 ${sentTotal} 封，失败 ${failedTotal} 封，请查看发信记录。`
           : `营销邮件已发送 ${sentTotal} 封，并已写入发信记录。`,
       });
-      setMailForm((current) => ({ ...current, to: "" }));
       await loadMailLogs();
     } catch (e) {
       setMailResult({ type: "error", message: "批量发送失败，请检查网络或 SMTP 配置后重试" });
@@ -2057,6 +2146,10 @@ export default function AdminPage() {
     e.preventDefault();
     if (mailBusy) return;
     const isMarketing = mailMode === "marketing";
+    if (isMarketing && !mailMarketingHtml.trim()) {
+      setMailResult({ type: "error", message: "请先等待营销邮件 HTML 模板加载完成，或手动填写 HTML" });
+      return;
+    }
     setMailBusy(true);
     setMailResult(null);
     try {
@@ -4727,7 +4820,7 @@ export default function AdminPage() {
                 <button
                   type="button"
                   className={mailMode === "marketing" ? "active" : ""}
-                  onClick={() => applyMailComposerMode("marketing")}
+                  onClick={() => { applyMailComposerMode("marketing"); loadMarketingMailTemplate(); }}
                   disabled={mailBusy || mailRecipientBusy}
                 >营销邮件</button>
               </div>
@@ -4772,21 +4865,43 @@ export default function AdminPage() {
                   <div className="admin-mail-bulk-row">
                     <button type="button" onClick={fillRegisteredMailRecipients} disabled={!canViewUsers || mailRecipientBusy || mailBusy}>
                       {mailRecipientBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Users size={12} />}
-                      读取用户邮箱
+                      读取注册用户
                     </button>
-                    <button type="button" className="primary" onClick={sendMarketingMailToRegisteredUsers} disabled={!canViewUsers || mailRecipientBusy || mailBusy}>
+                    <button type="button" onClick={fillOrderMailRecipients} disabled={mailRecipientBusy || mailBusy}>
+                      {mailRecipientBusy ? <LoaderCircle size={12} className="spin-icon" /> : <ClipboardList size={12} />}
+                      读取订单邮箱
+                    </button>
+                    <button type="button" onClick={fillAllMarketingRecipients} disabled={!canViewUsers || mailRecipientBusy || mailBusy}>
+                      {mailRecipientBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Users size={12} />}
+                      读取全部来源
+                    </button>
+                    <button type="button" className="primary" onClick={sendMarketingMailToRegisteredUsers} disabled={mailRecipientBusy || mailBusy || (mailRecipientPool.emails || []).length === 0}>
                       {mailBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Megaphone size={12} />}
-                      批量发送给注册用户
+                      批量发送已读取
                     </button>
-                    <span>{canViewUsers ? `按每批 ${MAIL_BATCH_LIMIT} 个邮箱发送` : "读取注册用户邮箱需要用户查看权限"}</span>
+                    <span>
+                      {mailRecipientPool.emails.length
+                        ? `已读取 ${mailRecipientPool.emails.length} 个去重邮箱（注册 ${mailRecipientPool.registered} / 订单 ${mailRecipientPool.orders}），发送时每批 ${MAIL_BATCH_LIMIT} 个自动发完`
+                        : canViewUsers ? `可读取注册用户与历史订单联系邮箱，每批 ${MAIL_BATCH_LIMIT} 个自动发送` : "读取注册用户邮箱需要用户查看权限；历史订单邮箱可单独读取"}
+                    </span>
                   </div>
                 )}
                 {mailMode === "marketing" ? (
-                  <div className="admin-mail-campaign-note">
-                    <strong>将发送固定营销邮件模板</strong>
-                    <p>内容为「数字会员服务台」专业营销邮件，包含站点 Logo、营销图片、服务说明、访问网站与账号中心入口。手动发送可在上方填写邮箱；批量发送会读取现有注册用户邮箱并分批调用原发信接口。</p>
-                    <small>邮件正文由服务端模板生成，发信记录中会标记为营销邮件预览。</small>
-                  </div>
+                  <label className="admin-mail-body-field admin-mail-html-field">
+                    <span>营销邮件 HTML（默认模板，可手动编辑后发送）</span>
+                    <textarea
+                      value={mailMarketingHtml}
+                      onChange={(e) => setMailMarketingHtml(e.target.value)}
+                      placeholder={mailMarketingLoading ? "正在读取默认营销邮件 HTML..." : "粘贴或编辑完整 HTML 邮件源码"}
+                      rows={13}
+                      maxLength={120000}
+                      required
+                    />
+                    <small>
+                      {mailMarketingLoading ? "默认 HTML 读取中..." : "手动发送使用上方收件邮箱；批量发送使用已读取邮箱池。"}
+                      <button type="button" onClick={() => loadMarketingMailTemplate(true)} disabled={mailMarketingLoading || mailBusy}>恢复默认 HTML</button>
+                    </small>
+                  </label>
                 ) : (
                   <label className="admin-mail-body-field">
                     <span>正文内容</span>
@@ -4804,8 +4919,8 @@ export default function AdminPage() {
                   {mailMode === "marketing" ? (
                     <>
                       <span>手动邮箱用逗号隔开</span>
-                      <span>批量发送自动分批</span>
-                      <span>模板 HTML 由服务端生成</span>
+                      <span>HTML 可手动编辑</span>
+                      <span>批量发送读取完整邮箱池</span>
                     </>
                   ) : (
                     <>

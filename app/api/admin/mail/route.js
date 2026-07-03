@@ -22,6 +22,33 @@ function cleanMailBody(value) {
     .slice(0, 3000);
 }
 
+function cleanMailHtml(value) {
+  return String(value || "")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, " ")
+    .trim()
+    .slice(0, 120000);
+}
+
+function htmlToText(value) {
+  return String(value || "")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>|<\/div>|<\/tr>|<\/table>|<\/h[1-6]>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim()
+    .slice(0, 5000);
+}
+
 const MAX_MAIL_RECIPIENTS = 20;
 
 function parseMailRecipients(value) {
@@ -46,6 +73,23 @@ function currentStaffPayload(session) {
 export async function GET(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const url = new URL(request.url);
+  if (url.searchParams.get("template") === MARKETING_MAIL_TEMPLATE_ID) {
+    if (!adminPermissionProfile(session).canSendMail) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+    const { getSettings } = await import("../../_settings.js");
+    const settings = await getSettings();
+    const brandName = settings.brand.name || process.env.BRAND_NAME || "冒央会社";
+    const siteDomain = process.env.SITE_DOMAIN || "www.liumeiti.vip";
+    const siteUrl = process.env.SITE_URL || "https://www.liumeiti.vip";
+    return Response.json({
+      ok: true,
+      template: MARKETING_MAIL_TEMPLATE_ID,
+      subject: MARKETING_MAIL_SUBJECT,
+      preview: MARKETING_MAIL_PREVIEW,
+      html: buildMarketingMailHtml({ brandName, siteDomain, siteUrl }),
+      text: buildMarketingMailText({ brandName, siteUrl }),
+    });
+  }
   const logs = await getAdminMailLog();
   return Response.json({ ok: true, logs, currentStaff: currentStaffPayload(session) });
 }
@@ -64,6 +108,7 @@ export async function POST(request) {
   const defaultSubject = isMarketingMail ? MARKETING_MAIL_SUBJECT : "客服服务通知";
   const subject = clean(body.subject || defaultSubject, 120) || defaultSubject;
   const content = cleanMailBody(body.content);
+  const customHtml = isMarketingMail ? cleanMailHtml(body.html) : "";
   const invalidRecipients = recipients.filter((email) => !validEmail(email));
   if (recipients.length === 0 || invalidRecipients.length > 0) {
     return Response.json({
@@ -89,7 +134,7 @@ export async function POST(request) {
   const siteUrl = process.env.SITE_URL || "https://www.liumeiti.vip";
   const mailSubject = subject.includes(brandName) ? subject : `${brandName} · ${subject}`;
   const html = isMarketingMail
-    ? buildMarketingMailHtml({ brandName, siteDomain, siteUrl })
+    ? (customHtml || buildMarketingMailHtml({ brandName, siteDomain, siteUrl }))
     : buildCustomerMailHtml({
         subject,
         content,
@@ -99,7 +144,7 @@ export async function POST(request) {
         staffId: actor.staffId,
       });
   const text = isMarketingMail
-    ? buildMarketingMailText({ brandName, siteUrl })
+    ? (customHtml ? (htmlToText(customHtml) || buildMarketingMailText({ brandName, siteUrl })) : buildMarketingMailText({ brandName, siteUrl }))
     : buildCustomerMailText({
         subject,
         content,
@@ -108,7 +153,7 @@ export async function POST(request) {
         siteUrl,
         staffId: actor.staffId,
       });
-  const logContent = isMarketingMail ? MARKETING_MAIL_PREVIEW : content;
+  const logContent = isMarketingMail ? (customHtml ? `${MARKETING_MAIL_PREVIEW}（自定义 HTML）` : MARKETING_MAIL_PREVIEW) : content;
 
   const results = [];
   const logs = [];

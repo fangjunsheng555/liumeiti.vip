@@ -11413,6 +11413,34 @@ summary:focus-visible {
   font-size: 10.5px;
   font-weight: 850;
 }
+.admin-mail-html-field textarea {
+  min-height: 280px;
+  max-height: 48dvh;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px !important;
+  line-height: 1.55;
+  white-space: pre;
+}
+.admin-mail-html-field small {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 800;
+}
+.admin-mail-html-field small button {
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  background: #fff;
+  color: var(--primary);
+  font-size: 10.5px;
+  font-weight: 900;
+  padding: 0 8px;
+  white-space: nowrap;
+}
 .admin-mail-progress {
   padding: 8px 10px;
   border-radius: 10px;
@@ -11983,6 +12011,8 @@ summary:focus-visible {
   .admin-mail-form-grid { grid-template-columns: 1fr; gap: 7px; }
   .admin-mail-bulk-row { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
   .admin-mail-bulk-row span { grid-column: 1 / -1; }
+  .admin-mail-html-field textarea { min-height: 230px; max-height: 42dvh; font-size: 11.5px !important; }
+  .admin-mail-html-field small { align-items: flex-start; flex-direction: column; }
   .admin-mail-form textarea { min-height: 112px; max-height: 210px; }
   .admin-mail-modal .admin-mail-form textarea { min-height: 136px; max-height: 38dvh; }
   .admin-mail-helper span { font-size: 10px; padding: 3px 7px; }
