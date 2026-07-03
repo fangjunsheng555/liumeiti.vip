@@ -5,7 +5,7 @@ import {
   adminSessionFromRequest, adminActorFromSession, pushAdminActionLog,
   generateTotpSecret, verifyTotp, encryptTotpSecret,
   getStaff2fa, setStaff2fa, clearStaff2fa, verifyStaff2faCode,
-  generateBackupCodes, twoFaGloballyDisabled, redisCmd, clean,
+  generateBackupCodes, twoFaGloballyDisabled, redisCmd, clean, formatBeijingTime,
 } from "../../_utils.js";
 
 export const runtime = "nodejs";
@@ -52,7 +52,7 @@ export async function POST(request) {
     await setStaff2fa(id, {
       secretEnc: encryptTotpSecret(secret),
       enabledAt: now.toISOString(),
-      enabledAtBeijing: `${now.toISOString().slice(0, 10)}`,
+      enabledAtBeijing: formatBeijingTime(now),
       backupHashes: hashes,
     });
     await redisCmd(["DEL", pendingKey(id)]);
