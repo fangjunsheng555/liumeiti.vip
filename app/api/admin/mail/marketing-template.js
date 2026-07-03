@@ -62,7 +62,7 @@ export function buildMarketingMailHtml({ brandName, siteDomain, siteUrl }) {
                 <table role="presentation" cellspacing="0" cellpadding="0" style="margin:22px auto 18px;">
                   <tr>
                     ${heroLogo(product("spotify.jpg"), "Spotify")}
-                    ${heroLogo(product("streaming-4k.jpg"), "4K 影音会员")}
+                    ${heroLogo(product("streaming-4k-edm-v2.jpg"), "4K 影音会员")}
                     ${heroLogo(product("ai.jpg"), "AI")}
                     ${heroLogo(product("rocket.jpg"), "机场节点")}
                   </tr>
@@ -81,7 +81,7 @@ export function buildMarketingMailHtml({ brandName, siteDomain, siteUrl }) {
               <td style="padding:22px 28px 24px;background:#f8f3ea;">
                 <div style="color:#8a632d;font-size:12px;line-height:1.2;font-weight:900;letter-spacing:.14em;margin-bottom:10px;">HOT SERVICES</div>
                 ${serviceLine(product("spotify.jpg"), "Spotify 高价区订阅", "¥128/年起", origin + "/services/spotify")}
-                ${serviceLine(product("streaming-4k.jpg"), "4K 影音会员", "¥108/年起", origin + "/shop")}
+                ${serviceLine(product("streaming-4k-edm-v2.jpg"), "4K 影音会员", "¥108/年起", origin + "/shop")}
                 ${serviceLine(product("ai.jpg"), "AI 会员", "¥198/三个月起", origin + "/services/ai")}
                 ${serviceLine(product("rocket.jpg"), "机场节点", "¥5/次 · ¥128/年起", origin + "/services/airport-node", true)}
               </td>
