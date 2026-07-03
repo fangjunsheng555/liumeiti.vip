@@ -5,6 +5,13 @@ import {
   deleteAdminMailLogEntries, pushAdminActionLog,
 } from "../../_utils.js";
 import { buildCustomerMailHtml, buildCustomerMailText } from "./template.js";
+import {
+  MARKETING_MAIL_PREVIEW,
+  MARKETING_MAIL_SUBJECT,
+  MARKETING_MAIL_TEMPLATE_ID,
+  buildMarketingMailHtml,
+  buildMarketingMailText,
+} from "./marketing-template.js";
 
 function cleanMailBody(value) {
   return String(value || "")
@@ -51,8 +58,11 @@ export async function POST(request) {
   let body = {};
   try { body = await request.json(); } catch (e) {}
 
+  const template = body.template === MARKETING_MAIL_TEMPLATE_ID ? MARKETING_MAIL_TEMPLATE_ID : "customer";
+  const isMarketingMail = template === MARKETING_MAIL_TEMPLATE_ID;
   const recipients = parseMailRecipients(body.to);
-  const subject = clean(body.subject || "客服服务通知", 120) || "客服服务通知";
+  const defaultSubject = isMarketingMail ? MARKETING_MAIL_SUBJECT : "客服服务通知";
+  const subject = clean(body.subject || defaultSubject, 120) || defaultSubject;
   const content = cleanMailBody(body.content);
   const invalidRecipients = recipients.filter((email) => !validEmail(email));
   if (recipients.length === 0 || invalidRecipients.length > 0) {
@@ -69,7 +79,7 @@ export async function POST(request) {
       limit: MAX_MAIL_RECIPIENTS,
     }, { status: 400 });
   }
-  if (!content) return Response.json({ ok: false, error: "content_required" }, { status: 400 });
+  if (!isMarketingMail && !content) return Response.json({ ok: false, error: "content_required" }, { status: 400 });
 
   // 品牌以站点设置为准
   const { getSettings } = await import("../../_settings.js");
@@ -78,22 +88,27 @@ export async function POST(request) {
   const siteDomain = process.env.SITE_DOMAIN || "www.liumeiti.vip";
   const siteUrl = process.env.SITE_URL || "https://www.liumeiti.vip";
   const mailSubject = subject.includes(brandName) ? subject : `${brandName} · ${subject}`;
-  const html = buildCustomerMailHtml({
-    subject,
-    content,
-    brandName,
-    siteDomain,
-    siteUrl,
-    staffId: actor.staffId,
-  });
-  const text = buildCustomerMailText({
-    subject,
-    content,
-    brandName,
-    siteDomain,
-    siteUrl,
-    staffId: actor.staffId,
-  });
+  const html = isMarketingMail
+    ? buildMarketingMailHtml({ brandName, siteDomain, siteUrl })
+    : buildCustomerMailHtml({
+        subject,
+        content,
+        brandName,
+        siteDomain,
+        siteUrl,
+        staffId: actor.staffId,
+      });
+  const text = isMarketingMail
+    ? buildMarketingMailText({ brandName, siteUrl })
+    : buildCustomerMailText({
+        subject,
+        content,
+        brandName,
+        siteDomain,
+        siteUrl,
+        staffId: actor.staffId,
+      });
+  const logContent = isMarketingMail ? MARKETING_MAIL_PREVIEW : content;
 
   const results = [];
   const logs = [];
@@ -109,8 +124,8 @@ export async function POST(request) {
     const log = await pushAdminMailLog({
       to,
       subject: mailSubject,
-      content,
-      preview: content,
+      content: logContent,
+      preview: logContent,
       ok: result.ok,
       reason,
       messageId: result.messageId || "",
@@ -136,6 +151,7 @@ export async function POST(request) {
     detail: {
       ok: sentCount > 0,
       subject: mailSubject,
+      template,
       recipients,
       sentCount,
       failedCount,

@@ -39,12 +39,24 @@ const WITHDRAWAL_STATUS = [
   ["success", "提现成功"],
   ["failed", "审核失败"],
 ];
+const MARKETING_MAIL_TEMPLATE_ID = "membership_edm_v4";
+const MARKETING_MAIL_SUBJECT = "数字会员服务台｜常用会员不必重新找";
+const MARKETING_MAIL_PREVIEW = "营销邮件：数字会员服务台";
+const MAIL_BATCH_LIMIT = 20;
 
 function copyText(text) {
   if (typeof window === "undefined") return;
   if (navigator.clipboard && window.isSecureContext) {
     navigator.clipboard.writeText(text).catch(() => {});
   }
+}
+
+function splitIntoBatches(items, size) {
+  const batches = [];
+  for (let index = 0; index < items.length; index += size) {
+    batches.push(items.slice(index, index + size));
+  }
+  return batches;
 }
 
 function referralCommissionTotal(order) {
@@ -1223,6 +1235,9 @@ export default function AdminPage() {
   const [mailLoading, setMailLoading] = useState(false);
   const [mailBusy, setMailBusy] = useState(false);
   const [mailResult, setMailResult] = useState(null);
+  const [mailMode, setMailMode] = useState("customer");
+  const [mailRecipientBusy, setMailRecipientBusy] = useState(false);
+  const [mailBatchProgress, setMailBatchProgress] = useState(null);
   const [mailBatchMode, setMailBatchMode] = useState(false);
   const [selectedMailIds, setSelectedMailIds] = useState(new Set());
   const [mailDeleteBusy, setMailDeleteBusy] = useState(false);
@@ -1856,6 +1871,152 @@ export default function AdminPage() {
     });
   }
 
+  function applyMailComposerMode(nextMode) {
+    setMailMode(nextMode);
+    setMailResult(null);
+    setMailBatchProgress(null);
+    setMailForm((current) => {
+      if (nextMode === "marketing") {
+        return {
+          ...current,
+          subject: MARKETING_MAIL_SUBJECT,
+          content: MARKETING_MAIL_PREVIEW,
+        };
+      }
+      return {
+        ...current,
+        subject: current.subject === MARKETING_MAIL_SUBJECT ? "客服服务通知" : (current.subject || "客服服务通知"),
+        content: current.content === MARKETING_MAIL_PREVIEW ? "" : current.content,
+      };
+    });
+  }
+
+  function openMailComposer(nextMode = "customer") {
+    applyMailComposerMode(nextMode);
+    setMailComposeOpen(true);
+  }
+
+  function buildMailPayload(to = mailForm.to) {
+    if (mailMode === "marketing") {
+      return {
+        to,
+        subject: mailForm.subject || MARKETING_MAIL_SUBJECT,
+        content: MARKETING_MAIL_PREVIEW,
+        template: MARKETING_MAIL_TEMPLATE_ID,
+      };
+    }
+    return {
+      to,
+      subject: mailForm.subject,
+      content: mailForm.content,
+    };
+  }
+
+  async function readRegisteredMailEmails() {
+    if (!canViewUsers) {
+      setMailResult({ type: "error", message: "读取注册用户邮箱需要用户查看权限" });
+      return [];
+    }
+    if (mailRecipientBusy) return [];
+    setMailRecipientBusy(true);
+    try {
+      const res = await fetch("/api/admin/users/list", {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        const msg = {
+          unauthorized: "登录状态已失效，请重新登录后台",
+          forbidden: "当前工作人员没有查看用户权限",
+        }[data.error] || data.error || "读取用户邮箱失败";
+        setMailResult({ type: "error", message: msg });
+        return [];
+      }
+      return Array.from(new Set((data.users || [])
+        .map((user) => String(user?.email || "").trim().toLowerCase())
+        .filter(Boolean)));
+    } catch (e) {
+      setMailResult({ type: "error", message: "读取用户邮箱失败，请稍后重试" });
+      return [];
+    } finally {
+      setMailRecipientBusy(false);
+    }
+  }
+
+  async function fillRegisteredMailRecipients() {
+    const emails = await readRegisteredMailEmails();
+    if (emails.length === 0) return;
+    setMailForm((current) => ({
+      ...current,
+      to: emails.slice(0, MAIL_BATCH_LIMIT).join(", "),
+    }));
+    setMailResult({
+      type: "success",
+      message: emails.length > MAIL_BATCH_LIMIT
+        ? `已读取 ${emails.length} 个注册邮箱，手动发送栏先填入前 ${MAIL_BATCH_LIMIT} 个；批量发送会自动分批。`
+        : `已读取 ${emails.length} 个注册邮箱。`,
+    });
+  }
+
+  async function sendMarketingMailToRegisteredUsers() {
+    if (mailBusy || mailRecipientBusy) return;
+    if (mailMode !== "marketing") applyMailComposerMode("marketing");
+    const emails = await readRegisteredMailEmails();
+    if (emails.length === 0) return;
+    if (typeof window !== "undefined" && !window.confirm(`确认向 ${emails.length} 个注册用户发送这封营销邮件？系统会按每批 ${MAIL_BATCH_LIMIT} 个邮箱分批发送。`)) {
+      return;
+    }
+    const batches = splitIntoBatches(emails, MAIL_BATCH_LIMIT);
+    let sentTotal = 0;
+    let failedTotal = 0;
+    setMailBusy(true);
+    setMailBatchProgress({ sent: 0, failed: 0, total: emails.length, batch: 0, batches: batches.length });
+    try {
+      for (let index = 0; index < batches.length; index += 1) {
+        const batch = batches[index];
+        const res = await fetch("/api/admin/mail", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to: batch.join(", "),
+            subject: mailForm.subject || MARKETING_MAIL_SUBJECT,
+            content: MARKETING_MAIL_PREVIEW,
+            template: MARKETING_MAIL_TEMPLATE_ID,
+          }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          sentTotal += Number(data.sentCount || batch.length);
+          failedTotal += Number(data.failedCount || 0);
+        } else {
+          failedTotal += batch.length;
+        }
+        setMailBatchProgress({
+          sent: sentTotal,
+          failed: failedTotal,
+          total: emails.length,
+          batch: index + 1,
+          batches: batches.length,
+        });
+      }
+      setMailResult({
+        type: failedTotal > 0 ? "error" : "success",
+        message: failedTotal > 0
+          ? `营销邮件已发送 ${sentTotal} 封，失败 ${failedTotal} 封，请查看发信记录。`
+          : `营销邮件已发送 ${sentTotal} 封，并已写入发信记录。`,
+      });
+      setMailForm((current) => ({ ...current, to: "" }));
+      await loadMailLogs();
+    } catch (e) {
+      setMailResult({ type: "error", message: "批量发送失败，请检查网络或 SMTP 配置后重试" });
+      await loadMailLogs();
+    } finally {
+      setMailBusy(false);
+    }
+  }
+
   // ── 客服发信快捷模板 ──
   async function saveMailTemplate() {
     if (mailTplBusy) return;
@@ -1895,6 +2056,7 @@ export default function AdminPage() {
   async function sendCustomerMail(e) {
     e.preventDefault();
     if (mailBusy) return;
+    const isMarketing = mailMode === "marketing";
     setMailBusy(true);
     setMailResult(null);
     try {
@@ -1902,23 +2064,30 @@ export default function AdminPage() {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(mailForm),
+        body: JSON.stringify(buildMailPayload()),
       });
       const data = await res.json();
       if (data.ok) {
         const sentCount = Number(data.sentCount || 1);
         const failedCount = Number(data.failedCount || 0);
-        setMailForm((current) => ({ ...current, to: "", content: "" }));
+        setMailForm((current) => ({
+          ...current,
+          to: "",
+          content: isMarketing ? MARKETING_MAIL_PREVIEW : "",
+        }));
         setMailComposeOpen(false);
+        setMailBatchProgress(null);
         setMailResult({
           type: failedCount > 0 ? "error" : "success",
           message: failedCount > 0
-            ? `已发送 ${sentCount} 封，${failedCount} 封失败，请查看发信记录`
-            : `邮件已发送 ${sentCount} 封，并已记录工作人员编号`,
+            ? `${isMarketing ? "营销邮件" : "邮件"}已发送 ${sentCount} 封，${failedCount} 封失败，请查看发信记录`
+            : `${isMarketing ? "营销邮件" : "邮件"}已发送 ${sentCount} 封，并已记录工作人员编号`,
         });
         await loadMailLogs();
       } else {
         const msg = {
+          unauthorized: "登录状态已失效，请重新登录后台",
+          forbidden: "当前工作人员没有发信权限",
           invalid_email: data.detail ? `邮箱格式错误：${data.detail}` : "请填写正确的收件邮箱",
           too_many_recipients: `单次最多发送 ${data.limit || 20} 个邮箱`,
           content_required: "请填写邮件正文内容",
@@ -3649,11 +3818,19 @@ export default function AdminPage() {
           </div>
         ) : tab === "mail" ? (
           <div className="admin-mail-pane">
-            <div className="admin-mail-compose-card">
-              <div className="admin-card-title"><Mail size={15} />客服发信</div>
-              <button type="button" onClick={() => { setMailResult(null); setMailComposeOpen(true); }}>
-                <Mail size={13} />写邮件
-              </button>
+            <div className="admin-mail-entry-strip">
+              <div className="admin-mail-entry-copy">
+                <strong><Mail size={15} />客服发信</strong>
+                <span>手动通知与会员营销邮件共用原发信记录</span>
+              </div>
+              <div className="admin-mail-entry-actions">
+                <button type="button" onClick={() => openMailComposer("customer")}>
+                  <Mail size={13} />写客服邮件
+                </button>
+                <button type="button" className="secondary" onClick={() => openMailComposer("marketing")}>
+                  <Megaphone size={13} />发送营销邮件
+                </button>
+              </div>
             </div>
 
             {mailResult && <div className={`admin-alert ${mailResult.type}`}>{mailResult.message}</div>}
@@ -4528,27 +4705,45 @@ export default function AdminPage() {
       )}
 
       {mailComposeOpen && (
-        <div className="admin-modal-mask" onClick={() => !mailBusy && setMailComposeOpen(false)}>
+        <div className="admin-modal-mask" onClick={() => !mailBusy && !mailRecipientBusy && setMailComposeOpen(false)}>
           <div className="admin-modal admin-compact-modal admin-mail-modal" onClick={(e) => e.stopPropagation()}>
             <div className="admin-modal-head">
               <div>
-                <div className="admin-modal-id">客服发信</div>
-                <div className="admin-modal-status status-received">冒央会社客服人员</div>
+                <div className="admin-modal-id">{mailMode === "marketing" ? "营销邮件" : "客服发信"}</div>
+                <div className="admin-modal-status status-received">
+                  {mailMode === "marketing" ? "数字会员服务台模板" : "冒央会社客服人员"}
+                </div>
               </div>
-              <button type="button" className="admin-modal-close" onClick={() => setMailComposeOpen(false)} disabled={mailBusy}><X size={16} /></button>
+              <button type="button" className="admin-modal-close" onClick={() => setMailComposeOpen(false)} disabled={mailBusy || mailRecipientBusy}><X size={16} /></button>
             </div>
             <div className="admin-modal-body">
-              <div className="admin-mail-tpl-row">
-                <span className="admin-mail-tpl-label">快捷模板</span>
-                {mailTemplates.length === 0 && <em className="admin-mail-tpl-empty">暂无 · 填好正文后点「存为模板」</em>}
-                {mailTemplates.map((t) => (
-                  <span key={t.id} className="admin-mail-tpl-chip">
-                    <button type="button" title={t.subject} onClick={() => setMailForm((f) => ({ ...f, subject: t.subject || f.subject, content: t.content }))}>{t.name}</button>
-                    <button type="button" className="tpl-del" aria-label="删除模板" onClick={() => deleteMailTemplate(t.id, t.name)}>×</button>
-                  </span>
-                ))}
-                <button type="button" className="admin-mail-tpl-save" onClick={saveMailTemplate} disabled={mailTplBusy}>+ 存为模板</button>
+              <div className="admin-mail-mode-row">
+                <button
+                  type="button"
+                  className={mailMode === "customer" ? "active" : ""}
+                  onClick={() => applyMailComposerMode("customer")}
+                  disabled={mailBusy || mailRecipientBusy}
+                >客服邮件</button>
+                <button
+                  type="button"
+                  className={mailMode === "marketing" ? "active" : ""}
+                  onClick={() => applyMailComposerMode("marketing")}
+                  disabled={mailBusy || mailRecipientBusy}
+                >营销邮件</button>
               </div>
+              {mailMode === "customer" && (
+                <div className="admin-mail-tpl-row">
+                  <span className="admin-mail-tpl-label">快捷模板</span>
+                  {mailTemplates.length === 0 && <em className="admin-mail-tpl-empty">暂无 · 填好正文后点「存为模板」</em>}
+                  {mailTemplates.map((t) => (
+                    <span key={t.id} className="admin-mail-tpl-chip">
+                      <button type="button" title={t.subject} onClick={() => setMailForm((f) => ({ ...f, subject: t.subject || f.subject, content: t.content }))}>{t.name}</button>
+                      <button type="button" className="tpl-del" aria-label="删除模板" onClick={() => deleteMailTemplate(t.id, t.name)}>×</button>
+                    </span>
+                  ))}
+                  <button type="button" className="admin-mail-tpl-save" onClick={saveMailTemplate} disabled={mailTplBusy}>+ 存为模板</button>
+                </div>
+              )}
               <form className="admin-mail-form" onSubmit={sendCustomerMail}>
                 <div className="admin-mail-form-grid">
                   <label>
@@ -4573,25 +4768,61 @@ export default function AdminPage() {
                     />
                   </label>
                 </div>
-                <label className="admin-mail-body-field">
-                  <span>正文内容</span>
-                  <textarea
-                    value={mailForm.content}
-                    onChange={(e) => setMailForm({ ...mailForm, content: e.target.value })}
-                    placeholder="输入需要告知用户的内容；邮件会自动加入客服开头与结尾。"
-                    rows={7}
-                    maxLength={3000}
-                    required
-                  />
-                </label>
+                {mailMode === "marketing" && (
+                  <div className="admin-mail-bulk-row">
+                    <button type="button" onClick={fillRegisteredMailRecipients} disabled={!canViewUsers || mailRecipientBusy || mailBusy}>
+                      {mailRecipientBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Users size={12} />}
+                      读取用户邮箱
+                    </button>
+                    <button type="button" className="primary" onClick={sendMarketingMailToRegisteredUsers} disabled={!canViewUsers || mailRecipientBusy || mailBusy}>
+                      {mailBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Megaphone size={12} />}
+                      批量发送给注册用户
+                    </button>
+                    <span>{canViewUsers ? `按每批 ${MAIL_BATCH_LIMIT} 个邮箱发送` : "读取注册用户邮箱需要用户查看权限"}</span>
+                  </div>
+                )}
+                {mailMode === "marketing" ? (
+                  <div className="admin-mail-campaign-note">
+                    <strong>将发送固定营销邮件模板</strong>
+                    <p>内容为「数字会员服务台」专业营销邮件，包含站点 Logo、营销图片、服务说明、访问网站与账号中心入口。手动发送可在上方填写邮箱；批量发送会读取现有注册用户邮箱并分批调用原发信接口。</p>
+                    <small>邮件正文由服务端模板生成，发信记录中会标记为营销邮件预览。</small>
+                  </div>
+                ) : (
+                  <label className="admin-mail-body-field">
+                    <span>正文内容</span>
+                    <textarea
+                      value={mailForm.content}
+                      onChange={(e) => setMailForm({ ...mailForm, content: e.target.value })}
+                      placeholder="输入需要告知用户的内容；邮件会自动加入客服开头与结尾。"
+                      rows={7}
+                      maxLength={3000}
+                      required
+                    />
+                  </label>
+                )}
                 <div className="admin-mail-helper">
-                  <span>多个邮箱用英文逗号隔开</span>
-                  <span>自动加入客服开头与结尾</span>
-                  <span>正文保留换行</span>
+                  {mailMode === "marketing" ? (
+                    <>
+                      <span>手动邮箱用逗号隔开</span>
+                      <span>批量发送自动分批</span>
+                      <span>模板 HTML 由服务端生成</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>多个邮箱用英文逗号隔开</span>
+                      <span>自动加入客服开头与结尾</span>
+                      <span>正文保留换行</span>
+                    </>
+                  )}
                 </div>
+                {mailBatchProgress && mailMode === "marketing" && (
+                  <div className="admin-mail-progress">
+                    已处理 {mailBatchProgress.batch}/{mailBatchProgress.batches} 批 · 成功 {mailBatchProgress.sent}/{mailBatchProgress.total} · 失败 {mailBatchProgress.failed}
+                  </div>
+                )}
                 <button type="submit" disabled={mailBusy}>
                   {mailBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Mail size={12} />}
-                  {mailBusy ? "发送中" : "发送邮件"}
+                  {mailBusy ? "发送中" : (mailMode === "marketing" ? "发送营销邮件" : "发送邮件")}
                 </button>
               </form>
             </div>
