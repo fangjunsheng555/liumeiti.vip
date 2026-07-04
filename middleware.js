@@ -17,10 +17,49 @@ const ALLOWED_ORIGINS = new Set(
   ].filter(Boolean)
 );
 
+const SERVICE_CANONICAL_SLUGS = new Set(["spotify", "ai", "netflix", "disney", "hbo-max", "airport-node"]);
+const SERVICE_SLUG_REDIRECTS = {
+  max: "hbo-max",
+  hbomax: "hbo-max",
+  rocket: "airport-node",
+};
+
 function applyCors(headers, origin) {
   headers.set("Access-Control-Allow-Origin", origin);
   headers.set("Access-Control-Allow-Credentials", "true");
   headers.set("Vary", "Origin");
+}
+
+function handleServiceSlug(request, pathname) {
+  const match = pathname.match(/^\/services\/([^/]+)\/?$/);
+  if (!match) return null;
+
+  let slug = "";
+  try {
+    slug = decodeURIComponent(match[1]).toLowerCase();
+  } catch (e) {
+    slug = String(match[1] || "").toLowerCase();
+  }
+
+  const canonical = SERVICE_SLUG_REDIRECTS[slug];
+  if (canonical) {
+    const url = request.nextUrl.clone();
+    url.pathname = `/services/${canonical}`;
+    return NextResponse.redirect(url, 308);
+  }
+
+  if (SERVICE_CANONICAL_SLUGS.has(slug)) return null;
+
+  return new NextResponse(
+    '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="robots" content="noindex,follow"><title>404 - Page not found</title></head><body>404 - Page not found</body></html>',
+    {
+      status: 404,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "X-Robots-Tag": "noindex, follow",
+      },
+    }
+  );
 }
 
 // ── 后台会话强制下线检查 ──
@@ -61,6 +100,11 @@ export async function middleware(request) {
   const allow = ALLOWED_ORIGINS.has(origin);
 
   const { pathname } = request.nextUrl;
+  if (pathname.startsWith("/services/")) {
+    const serviceResponse = handleServiceSlug(request, pathname);
+    if (serviceResponse) return serviceResponse;
+  }
+
   if (pathname.startsWith("/api/admin") && !pathname.startsWith("/api/admin/login")) {
     const revoked = await adminKickCheck(request);
     if (revoked) return revoked;
@@ -82,5 +126,5 @@ export async function middleware(request) {
 }
 
 export const config = {
-  matcher: ["/api/auth/:path*", "/api/tool/:path*", "/api/track", "/api/admin/:path*"],
+  matcher: ["/services/:path*", "/api/auth/:path*", "/api/tool/:path*", "/api/track", "/api/admin/:path*"],
 };

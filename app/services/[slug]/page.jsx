@@ -1,9 +1,9 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import { ArrowRight, BadgeCheck, CheckCircle2, ShieldCheck } from "lucide-react";
 import FloatingSupport from "../../components/FloatingSupport";
 import MobileNav from "../../components/MobileNav";
-import { getServiceBySlug, localizeService, SERVICE_PAGES } from "../service-data";
+import { getServiceBySlug, localizeService, SERVICE_ALIASES, SERVICE_PAGES } from "../service-data";
 import ServiceOrderActions from "../ServiceOrderActions";
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../../social-meta";
 import { getServerLocale } from "../../lib/i18n-server";
@@ -35,14 +35,17 @@ function applyCatalogToService(service, catProd, locale, soldOutMap = {}) {
 
 export const dynamic = "force-dynamic"; // 始终读最新商品覆盖(价格/上下架),不静态缓存
 
+export const dynamicParams = false;
+
 export function generateStaticParams() {
-  return SERVICE_PAGES.map((item) => ({ slug: item.slug }));
+  return Array.from(new Set([...SERVICE_PAGES.map((item) => item.slug), ...Object.keys(SERVICE_ALIASES)]))
+    .map((slug) => ({ slug }));
 }
 
 export async function generateMetadata({ params }) {
   const { slug } = await params;
   const raw = getServiceBySlug(slug);
-  if (!raw) return {};
+  if (!raw) notFound();
   const locale = await getServerLocale();
   const en = locale === "en";
   const service = localizeService(raw, locale);
@@ -72,6 +75,7 @@ export default async function ServiceLandingPage({ params }) {
   const { slug } = await params;
   const raw = getServiceBySlug(slug);
   if (!raw) notFound();
+  if (String(slug || "").toLowerCase() !== raw.slug) permanentRedirect(`/services/${raw.slug}`);
   const locale = await getServerLocale();
   const t = getT(locale);
   const catalog = await getMergedCatalog();
