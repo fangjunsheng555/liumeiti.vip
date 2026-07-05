@@ -1853,8 +1853,12 @@ export async function refundVoidedOrder(order, actor = null) {
     if (amount > 0) {
       const user = await getUser(email);
       const txs = await getBalanceTxs(email);
-      const already = txs.some((tx) => tx?.source === "order_refund" && tx?.orderId === order.orderId);
-      if (user && !already) {
+      // 净额去重:退款笔数 > 收回笔数 = 当前已有未收回的退款,跳过;
+      // 收回后(reclaim)再作废可再次退款,与 reclaimRefundOnReactivate 对称幂等。
+      const refundCount = txs.filter((tx) => tx?.source === "order_refund" && tx?.orderId === order.orderId).length;
+      const reclaimCount = txs.filter((tx) => tx?.source === "order_refund_reclaim" && tx?.orderId === order.orderId).length;
+      const outstanding = refundCount > reclaimCount;
+      if (user && !outstanding) {
         const prev = roundMoney(user.balance);
         const next = roundMoney(prev + amount);
         user.balance = next;
@@ -1889,6 +1893,82 @@ export async function refundVoidedOrder(order, actor = null) {
   order.refundedAt = now.toISOString();
   order.refundedAtBeijing = formatBeijingTime(now);
   order.refund = out;
+  return { ok: true, ...out };
+}
+
+// 优惠券重新标记为已用(reactivate 时用,restoreCoupon 的逆操作)。
+async function reconsumeCoupon(email, couponId, orderId) {
+  if (!email || !couponId) return false;
+  const user = await getUser(email);
+  if (!user || !Array.isArray(user.coupons)) return false;
+  const idx = user.coupons.findIndex((c) => c.id === couponId && c.status === "active");
+  if (idx < 0) return false;
+  const now = new Date();
+  user.coupons[idx] = {
+    ...user.coupons[idx],
+    status: "used",
+    usedOrderId: orderId,
+    usedAt: now.toISOString(),
+    usedAtBeijing: formatBeijingTime(now),
+  };
+  return setUser(email, user);
+}
+
+// 作废订单被改回「有效」时,回收此前的退款 —— 否则用户既拿退款、订单又生效(白嫖资金洞)。
+// 余额扣回(净额幂等,允许负余额)、优惠券重新置为已用、清空退款标记以便再次作废可再退。
+// 库存的重新占用由 [orderId] 路由处理。
+export async function reclaimRefundOnReactivate(order, actor = null) {
+  if (!order || !order.refundedAt) return { ok: true, skipped: "not_refunded", balance: 0, coupon: false };
+  const now = new Date();
+  const email = String(order.userEmail || "").trim().toLowerCase();
+  const out = { balance: 0, coupon: false };
+
+  // 1) 余额:把作废时退回的钱重新扣除(净额去重:退款笔数 > 收回笔数 时才收回)
+  if (order.paidByBalance && validEmail(email)) {
+    const amount = roundMoney(order.refund?.balance || order.finalAmount || 0);
+    if (amount > 0) {
+      const txs = await getBalanceTxs(email);
+      const refundCount = txs.filter((tx) => tx?.source === "order_refund" && tx?.orderId === order.orderId).length;
+      const reclaimCount = txs.filter((tx) => tx?.source === "order_refund_reclaim" && tx?.orderId === order.orderId).length;
+      if (refundCount > reclaimCount) {
+        const user = await getUser(email);
+        if (user) {
+          const prev = roundMoney(user.balance);
+          const next = roundMoney(prev - amount); // 允许为负:退款可能已被花掉,负余额如实反映欠款
+          user.balance = next;
+          await setUser(email, user);
+          const tx = {
+            id: makeId("TX"),
+            amount: -amount,
+            reason: `作废撤销·退款收回 ${order.orderId}`,
+            balanceAfter: next,
+            source: "order_refund_reclaim",
+            orderId: order.orderId,
+            createdAt: now.toISOString(),
+            createdAtBeijing: formatBeijingTime(now),
+            staffId: Number(actor?.staffId || 1),
+            staffUsername: clean(actor?.staffUsername || "admin", 60),
+          };
+          await addBalanceTx(email, tx);
+          await pushAdminBalanceLog({ ...tx, email, balanceBefore: prev, action: "order_refund_reclaim", detail: { orderId: order.orderId, amount } });
+          out.balance = amount;
+        }
+      }
+    }
+  }
+
+  // 2) 优惠券:重新置为已用(仅当作废时还回过)
+  if (order.couponId && validEmail(email) && order.refund?.coupon) {
+    out.coupon = Boolean(await reconsumeCoupon(email, order.couponId, order.orderId));
+  }
+
+  // 清空退款标记,使订单若再次作废可再次退款(与净额去重配合幂等)
+  order.refundedAt = "";
+  order.refundedAtBeijing = "";
+  order.refund = null;
+  order.refundReclaimedAt = now.toISOString();
+  order.refundReclaimedAtBeijing = formatBeijingTime(now);
+  order.refundReclaim = out;
   return { ok: true, ...out };
 }
 

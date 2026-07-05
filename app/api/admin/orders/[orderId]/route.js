@@ -3,7 +3,7 @@ import {
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
   pushAdminActionLog, formatBeijingTime, clean, isRootAdminSession,
   settleOrderReferralCommission, reverseOrderReferralCommission, sendSimpleEmail, adminPermissionProfile,
-  restoreStock, refundVoidedOrder,
+  restoreStock, reserveStock, refundVoidedOrder, reclaimRefundOnReactivate,
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
@@ -153,6 +153,7 @@ export async function PATCH(request, { params }) {
   const wasCompleted = order.status === "completed";
   const wasInvalid = order.status === "invalid";
   let refundResult = null;
+  let reclaimResult = null;
   if (newStatus) {
     order.status = newStatus;
     if (newStatus === "completed" && !wasCompleted) {
@@ -181,6 +182,14 @@ export async function PATCH(request, { params }) {
     if (newStatus !== "invalid") {
       order.invalidAt = null;
       order.invalidAtBeijing = null;
+    }
+    // 作废 → 有效(撤销作废):回收退款 + 重新占用库存,防止「既退款又生效」资金洞。
+    if (wasInvalid && newStatus !== "invalid") {
+      reclaimResult = await reclaimRefundOnReactivate(order, actor);
+      for (const it of (order.items || [])) {
+        const res = await reserveStock(it.service, it.plan);
+        if (res.ok && !res.unlimited) it.stockReserved = true;
+      }
     }
   }
 
@@ -238,6 +247,7 @@ export async function PATCH(request, { params }) {
     invalidNotice: newStatus === "invalid" && !wasInvalid ? { email: invalidEmailResult } : null,
     commission: commissionResult,
     refund: refundResult,
+    reclaim: reclaimResult,
     statusChange: newStatus,
   });
 }
