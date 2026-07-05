@@ -909,13 +909,86 @@ export async function deleteResetCode(email) {
   } catch (e) { return false; }
 }
 
-// Send a generic email via configured SMTP. Returns {ok, ...}
-// Retries once on transient failures (iCloud sometimes throttles connections).
-export async function sendSimpleEmail({ to, subject, text, html, fromName, marketing = false }) {
+// Shared email delivery helpers. Resend SMTP/API is the default path.
+function mailFromAddress() {
+  return clean(process.env.MAIL_FROM || process.env.SMTP_FROM || "info@liumeiti.vip", 200);
+}
+
+function mailFromName(value) {
+  return clean(value || process.env.MAIL_FROM_NAME || process.env.BRAND_NAME || "冒央会社", 120)
+    .replace(/[<>\r\n"]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatMailFrom(name, address) {
+  const safeName = mailFromName(name);
+  return safeName ? `${safeName} <${address}>` : address;
+}
+
+async function readEmailApiError(res) {
+  try {
+    const data = await res.json();
+    return data?.message || data?.error || JSON.stringify(data);
+  } catch (e) {
+    try { return await res.text(); } catch (er) { return res.statusText || "request_failed"; }
+  }
+}
+
+async function sendViaResend({ to, subject, text, html, fromName, marketing = false }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = mailFromAddress();
+  if (!apiKey || !from || !to) return { ok: false, reason: "resend_or_to_missing" };
+  if (!validEmail(from)) return { ok: false, reason: "invalid_mail_from" };
+  const recipients = Array.isArray(to) ? to : [to];
+  const headers = marketing ? { "List-Unsubscribe": `<mailto:${from}?subject=unsubscribe>` } : undefined;
+  const payload = {
+    from: formatMailFrom(fromName, from),
+    to: recipients,
+    subject,
+    ...(html ? { html } : {}),
+    ...(text ? { text } : {}),
+    ...(headers ? { headers } : {}),
+  };
+
+  async function attemptSend(attempt) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    try {
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (!res.ok) return { ok: false, error: await readEmailApiError(res), code: res.status, attempt };
+      const data = await res.json();
+      return { ok: true, messageId: data?.id || "", provider: "resend", attempt };
+    } catch (e) {
+      clearTimeout(timer);
+      return { ok: false, error: e.message, code: e.name || "fetch_error", attempt };
+    }
+  }
+
+  const r1 = await attemptSend(1);
+  if (r1.ok) return r1;
+  console.warn(`[email:resend] attempt 1 failed (${r1.code || "?"}): ${r1.error}; retrying...`);
+  await new Promise((res) => setTimeout(res, 1200));
+  const r2 = await attemptSend(2);
+  if (r2.ok) return r2;
+  console.error(`[email:resend] both attempts failed for ${recipients.join(",")}: ${r2.error}`);
+  return { ok: false, provider: "resend", reason: "send_failed_after_retry", error: r2.error, code: r2.code };
+}
+
+async function sendViaSmtp({ to, subject, text, html, fromName, marketing = false }) {
   const host = process.env.SMTP_HOST;
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
-  const from = process.env.SMTP_FROM || user;
+  const from = mailFromAddress() || user;
   const brandName = fromName || process.env.BRAND_NAME || "冒央会社";
   if (!host || !user || !pass || !from || !to) {
     return { ok: false, reason: "smtp_or_to_missing" };
@@ -943,7 +1016,7 @@ export async function sendSimpleEmail({ to, subject, text, html, fromName, marke
     });
     try {
       const info = await transporter.sendMail({
-        from: `"${brandName}" <${from}>`,
+        from: formatMailFrom(mailFromName(brandName), from),
         to, subject, text, html,
         priority,
         ...(extraHeaders ? { headers: extraHeaders } : {}),
@@ -972,6 +1045,15 @@ export async function sendSimpleEmail({ to, subject, text, html, fromName, marke
 }
 
 // ── Account extensions: coupons, transfers, redeem codes, withdrawals ──
+// Send a generic email. Resend is the default provider; SMTP requires explicit
+// EMAIL_PROVIDER=smtp and is kept only as an emergency fallback.
+export async function sendSimpleEmail(args) {
+  const provider = String(process.env.EMAIL_PROVIDER || "resend").toLowerCase();
+  if (provider === "smtp") return sendViaSmtp(args);
+  if (process.env.RESEND_API_KEY) return sendViaResend(args);
+  return { ok: false, provider: "resend", reason: "resend_api_key_missing" };
+}
+
 export const REGISTER_COUPON_AMOUNT = 8.88;
 export const WITHDRAWAL_STATUS_LABEL = {
   pending: "待审核",

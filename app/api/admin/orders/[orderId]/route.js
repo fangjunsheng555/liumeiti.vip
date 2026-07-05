@@ -36,27 +36,8 @@ function subscriptionLinks(username) {
 }
 
 async function sendCompletionEmail(order) {
-  const host = process.env.SMTP_HOST;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  const from = process.env.SMTP_FROM || user;
-  if (!host || !user || !pass || !from || !order.email) {
-    return { ok: false, reason: "smtp_or_email_missing" };
-  }
-  let nodemailer;
-  try { nodemailer = (await import("nodemailer")).default; }
-  catch (e) { return { ok: false, reason: "nodemailer_import_failed" }; }
-
-  const port = Number(process.env.SMTP_PORT) || 587;
-  const secure = port === 465;
-  const transporter = nodemailer.createTransport({
-    host, port, secure, auth: { user, pass },
-    requireTLS: !secure,
-    tls: { minVersion: "TLSv1.2" },
-    connectionTimeout: 15000, greetingTimeout: 10000, socketTimeout: 20000,
-  });
-
-  try {
+  {
+    if (!order.email) return { ok: false, reason: "order_email_missing" };
     const emailLocale = order.locale === "en" ? "en" : "zh";
     const settings = await getSettings();
     const brandName = settings.brand.name || BRAND_NAME;
@@ -70,17 +51,18 @@ async function sendCompletionEmail(order) {
     const subject = emailLocale === "en"
       ? `🎉 Order ${order.orderId} is ready · ${brandName}`
       : `🎉 订单 ${order.orderId} 已开通 · ${brandName}`;
-    const info = await transporter.sendMail({
-      from: `"${brandName}" <${from}>`,
+    const result = await sendSimpleEmail({
       to: order.email,
-      subject, text, html,
+      subject,
+      text,
+      html,
+      fromName: brandName,
     });
-    console.log(`[completion-email] sent to ${order.email} (msg=${info.messageId})`);
-    return { ok: true, messageId: info.messageId };
-  } catch (e) {
-    console.error("[completion-email] failed:", e.message);
-    return { ok: false, reason: "send_failed", error: e.message };
+    if (result.ok) console.log(`[completion-email] sent to ${order.email} via ${result.provider || "smtp"} (msg=${result.messageId})`);
+    else console.error("[completion-email] failed:", result.reason || result.error || result.code || "send_failed");
+    return result;
   }
+
 }
 
 async function sendTelegramNotice(text) {

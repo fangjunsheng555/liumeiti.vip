@@ -64,7 +64,7 @@ export async function POST(request) {
     const text = L(`${brandName} 密码重置\n\n验证码: ${code}\n有效期 10 分钟\n\n如非本人操作,请忽略此邮件`, `${brandName} password reset\n\nCode: ${code}\nValid for 10 minutes\n\nIf this wasn't you, please ignore this email.`);
     // Important: await the send so Vercel serverless doesn't kill the
     // function before the SMTP transaction finishes. Fire-and-forget
-    // was causing emails to never reach iCloud's queue.
+    // was causing emails to never reach the provider queue.
     const result = await sendSimpleEmail({
       to: email,
       subject: L(`${brandName} · 密码重置验证码 ${code}`, `${brandName} · Password reset code ${code}`),

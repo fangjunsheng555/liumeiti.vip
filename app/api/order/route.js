@@ -14,7 +14,7 @@ import {
   inviteCodeFromRequest, normalizeInviteCode, resolveReferralForOrder,
   pushAdminActionLog,
   saveOrderRecord, verifyPaymentQuote, getCookieFromRequest,
-  reserveStock, restoreStock, getUsdtRate, redisCmd,
+  reserveStock, restoreStock, getUsdtRate, redisCmd, sendSimpleEmail,
 } from "../_utils.js";
 
 // 从合并后的目录商品里解析规格(沿用 rocket single→basic 别名 + 默认规格回退)。
@@ -184,27 +184,8 @@ async function refundFailedBalanceOrder(order, userEmail, finalAmount, now) {
 }
 
 async function sendOrderEmail(order) {
-  const host = process.env.SMTP_HOST;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  const from = process.env.SMTP_FROM || user;
-
-  if (!host || !user || !pass || !from) {
-    console.error("[email] SMTP env missing:", { host: !!host, user: !!user, pass: !!pass, from: !!from });
-    return { ok: false, reason: "smtp_env_missing" };
-  }
   if (!order.email) return { ok: false, reason: "order_email_missing" };
 
-  let nodemailer;
-  try {
-    nodemailer = (await import("nodemailer")).default;
-  } catch (error) {
-    console.error("[email] nodemailer import failed:", error.message);
-    return { ok: false, reason: "nodemailer_import_failed", error: error.message };
-  }
-
-  const port = Number(process.env.SMTP_PORT) || 587;
-  const secure = port === 465;
   const emailLocale = order.locale === "en" ? "en" : "zh";
   // 客服联系方式 / 品牌以站点设置为准(与站点显示一致)
   const settings = await getSettings();
@@ -226,45 +207,20 @@ async function sendOrderEmail(order) {
     ? `${confirmWord} ${order.orderId} · ${order.items.length}${emailLocale === "en" ? "" : " 件"} · ${BRAND_NAME}`
     : `${confirmWord} ${order.orderId} · ${subjItem} · ${BRAND_NAME}`;
 
-  // Try twice — iCloud SMTP sometimes drops the first connection.
-  async function attempt(n) {
-    const transporter = nodemailer.createTransport({
-      host, port, secure, auth: { user, pass },
-      requireTLS: !secure,
-      tls: { minVersion: "TLSv1.2" },
-      connectionTimeout: 10000,
-      greetingTimeout: 8000,
-      socketTimeout: 15000,
-    });
-    try {
-      const info = await transporter.sendMail({
-        from: `"${BRAND_NAME}" <${from}>`,
-        to: order.email,
-        subject, text, html,
-        priority: "high",
-      });
-      try { transporter.close(); } catch (e) {}
-      return { ok: true, messageId: info.messageId, attempt: n };
-    } catch (error) {
-      try { transporter.close(); } catch (e) {}
-      return { ok: false, error: error.message, code: error.code, response: error.response, attempt: n };
-    }
+  const result = await sendSimpleEmail({
+    to: order.email,
+    subject,
+    text,
+    html,
+    fromName: brandName,
+  });
+  if (result.ok) {
+    console.log(`[email] sent to ${order.email} via ${result.provider || "smtp"} (msgId=${result.messageId})`);
+  } else {
+    console.error(`[email] failed for ${order.email}: ${result.reason || result.error || result.code || "send_failed"}`);
   }
+  return result;
 
-  const r1 = await attempt(1);
-  if (r1.ok) {
-    console.log(`[email] sent to ${order.email} (msgId=${r1.messageId})`);
-    return { ok: true, messageId: r1.messageId };
-  }
-  console.warn(`[email] order email attempt 1 failed: ${r1.code || "?"} ${r1.error}; retrying...`);
-  await new Promise((res) => setTimeout(res, 1500));
-  const r2 = await attempt(2);
-  if (r2.ok) {
-    console.log(`[email] sent to ${order.email} on retry (msgId=${r2.messageId})`);
-    return { ok: true, messageId: r2.messageId, retried: true };
-  }
-  console.error(`[email] both attempts failed for ${order.email}: ${r2.error}`);
-  return { ok: false, reason: "send_failed_after_retry", error: r2.error, code: r2.code };
 }
 
 export async function POST(request) {
