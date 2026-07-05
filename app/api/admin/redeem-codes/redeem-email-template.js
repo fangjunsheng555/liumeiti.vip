@@ -1,6 +1,3 @@
-import { buildEmailBrandHeader } from "../../email-brand.js";
-import { supportContactHtml, supportContactText } from "../../support-links.js";
-
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -10,49 +7,85 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function normalizeUrl(value, fallback = "https://www.liumeiti.vip") {
+  const text = String(value || "").trim().replace(/\/+$/, "");
+  if (!text) return fallback;
+  return /^https?:\/\//i.test(text) ? text : `https://${text.replace(/^\/+/, "")}`;
+}
+
 function formatMoney(value) {
-  return "¥" + Number(value || 0).toFixed(2);
+  const num = Number(value || 0);
+  return `¥${Number.isFinite(num) ? num.toFixed(2) : "0.00"}`;
+}
+
+function serviceLabels(services, locale) {
+  if (!Array.isArray(services)) return "";
+  return services
+    .map((item) => {
+      if (!item || typeof item !== "object") return "";
+      if (locale === "en") {
+        return item.nameEn || item.labelEn || item.variantEn || item.planEn || item.name || item.label || item.id || "";
+      }
+      return item.name || item.label || item.variant || item.plan || item.nameEn || item.labelEn || item.id || "";
+    })
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+    .join(" + ");
+}
+
+function contentLabel({ type, services, amount, locale }) {
+  if (type === "balance") {
+    return locale === "en" ? `Balance ${formatMoney(amount)}` : `余额 ${formatMoney(amount)}`;
+  }
+  const labels = serviceLabels(services, locale);
+  if (labels) return labels;
+  return locale === "en" ? "Service redeem code" : "服务兑换码";
 }
 
 export function buildRedeemEmailSubject({ code, type, services, amount, brandName, locale }) {
-  const en = locale === "en";
-  if (type === "service") {
-    const labels = (services || []).map((s) => s.label || s).join(" + ");
-    return en
-      ? `You've received a service redeem code · ${labels || "Bundle"} · ${brandName}`
-      : `您收到一份服务兑换码 · ${labels || "组合服务"} · ${brandName}`;
-  }
-  return en
-    ? `You've received a balance redeem code · ${formatMoney(amount)} · ${brandName}`
-    : `您收到一份余额兑换码 · ${formatMoney(amount)} · ${brandName}`;
+  const content = contentLabel({ type, services, amount, locale });
+  if (locale === "en") return `Redeem code ${code} · ${content} · ${brandName || "Maoyang Taiwan Inc"}`;
+  return `兑换码 ${code} · ${content} · ${brandName || "冒央会社"}`;
 }
 
 export function buildRedeemEmailText({ code, type, services, amount, brandName, siteUrl, redeemUrl, locale }) {
-  const en = locale === "en";
-  const L = (zh, e) => (en ? e : zh);
-  const isService = type === "service";
-  const valueText = isService
-    ? (services || []).map((s) => s.label || s).join(" + ") || L("组合服务", "Bundle")
-    : `${L("余额", "Balance")} ${formatMoney(amount)}`;
-  const lines = [
-    `${brandName} - ${L("兑换码", "Redeem code")}`,
-    `===========================`,
-    L(`您收到一份${isService ? "服务" : "余额"}兑换码`, `You've received a ${isService ? "service" : "balance"} redeem code`),
-    ``,
-    `${L("兑换码", "Code")}: ${code}`,
-    `${L("内容", "Includes")}: ${valueText}`,
-    ``,
-    L("点击下面的链接前往兑换（链接已自动填入兑换码）：", "Open the link below to redeem (your code is pre-filled):"),
-    redeemUrl,
-    ``,
-    isService
-      ? L("服务码无需登录，打开链接后页面会识别兑换码并跳转至结算页提交", "The service code needs no login — open the link and it loads checkout with your code applied.")
-      : L("余额码需要先登录账号，金额将充入您的账户余额", "The balance code needs you to sign in first — the amount is added to your account balance."),
-    ``,
-    supportContactText(locale),
-    `${L("站点", "Site")}: ${siteUrl}`,
-  ];
-  return lines.join("\n");
+  const origin = normalizeUrl(siteUrl);
+  const link = normalizeUrl(redeemUrl, origin);
+  const content = contentLabel({ type, services, amount, locale });
+
+  if (locale === "en") {
+    return [
+      `${brandName || "Maoyang Taiwan Inc"} service notification`,
+      "",
+      `Redeem code: ${code}`,
+      `Content: ${content}`,
+      `Redeem page: ${link}`,
+      "",
+      "How to use:",
+      "1. Open the redeem page.",
+      "2. Paste the redeem code exactly as shown above.",
+      "3. If you have already placed an order, contact support with this code.",
+      "",
+      "This is an automated transactional notification for your redeem code.",
+      origin,
+    ].join("\n");
+  }
+
+  return [
+    `${brandName || "冒央会社"} 服务通知`,
+    "",
+    `兑换码：${code}`,
+    `内容：${content}`,
+    `兑换页面：${link}`,
+    "",
+    "使用说明：",
+    "1. 打开兑换页面。",
+    "2. 按上方内容完整输入兑换码。",
+    "3. 如已下单，请把兑换码发给客服核对。",
+    "",
+    "这是一封兑换码系统通知，请妥善保存。",
+    origin,
+  ].join("\n");
 }
 
 export function buildRedeemEmailHtml({
@@ -67,131 +100,71 @@ export function buildRedeemEmailHtml({
   supportContact,
   locale,
 }) {
-  const en = locale === "en";
-  const L = (zh, e) => (en ? e : zh);
-  const isService = type === "service";
+  const origin = normalizeUrl(siteUrl || siteDomain);
+  const link = normalizeUrl(redeemUrl, origin);
+  const safeBrand = escapeHtml(brandName || (locale === "en" ? "Maoyang Taiwan Inc" : "冒央会社"));
   const safeCode = escapeHtml(code);
-  const valueDisplay = isService
-    ? escapeHtml((services || []).map((s) => s.label || s).join("  +  ") || L("组合服务", "Bundle"))
-    : `<span style="font-family:ui-monospace,Menlo,Consolas,monospace;">${escapeHtml(formatMoney(amount))}</span>`;
-  const heroTitle = isService
-    ? L("您收到一份服务兑换码", "You've received a service redeem code")
-    : L("您收到一份余额兑换码", "You've received a balance redeem code");
-  const heroDesc = isService
-    ? L("兑换码可直接兑换以下服务，无需支付，点击下方按钮即可一键跳转兑换", "Redeem the services below — no payment needed. Tap the button to redeem in one tap.")
-    : L("兑换码可为您账户充值以下余额，需登录账号后兑换，金额将直接到账", "Top up your account balance below — sign in to redeem and the amount lands instantly.");
-  const usageHint = isService
-    ? L("点击「立即兑换」按钮后，页面会识别兑换码并引导您完成订单提交（免支付）", "After you tap “Redeem now”, the page applies your code and guides you to submit the order (no payment).")
-    : L("点击「立即兑换」按钮跳转首页后请先登录，金额将立即到账", "After you tap “Redeem now”, sign in on the page and the amount is credited instantly.");
+  const safeContent = escapeHtml(contentLabel({ type, services, amount, locale }));
+  const safeLink = escapeHtml(link);
+  const safeSupport = escapeHtml(supportContact || (locale === "en" ? "Contact online support if you need help." : "如需帮助，请联系在线客服。"));
+  const L = (zh, en) => (locale === "en" ? en : zh);
 
-  return `<!DOCTYPE html>
-<html lang="${en ? "en" : "zh-CN"}">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(heroTitle)} - ${escapeHtml(brandName)}</title>
-</head>
-<body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;color:#0f172a;-webkit-font-smoothing:antialiased;">
-  <div style="display:none;max-height:0;overflow:hidden;">${escapeHtml(brandName)} ${L("兑换码", "redeem code")} ${safeCode}</div>
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f6fb;padding:32px 16px;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:580px;background:#ffffff;border-radius:20px;box-shadow:0 8px 32px rgba(15,23,42,0.06);overflow:hidden;">
-          <!-- Header -->
-          ${buildEmailBrandHeader({ brandName, siteDomain, label: L("服务兑换码", "Redeem Code") })}
-
-          <!-- Hero -->
-          <tr>
-            <td style="padding:32px 32px 12px;text-align:center;">
-              <div style="display:inline-block;width:64px;height:64px;line-height:64px;border-radius:50%;background:linear-gradient(135deg,#fef3c7,#fde68a);margin-bottom:14px;">
-                <span style="font-size:30px;color:#b45309;">🎁</span>
-              </div>
-              <h1 style="margin:0 0 6px;font-size:22px;font-weight:900;letter-spacing:-0.03em;color:#0f172a;">${escapeHtml(heroTitle)}</h1>
-              <p style="margin:0;color:#64748b;font-size:13.5px;line-height:1.7;">${escapeHtml(heroDesc)}</p>
-            </td>
-          </tr>
-
-          <!-- Code box -->
-          <tr>
-            <td style="padding:22px 32px 0;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-radius:14px;background:linear-gradient(135deg,#f0fdfa,#ecfeff);border:1px dashed #5eead4;">
-                <tr>
-                  <td style="padding:20px 18px;text-align:center;">
-                    <div style="font-size:11px;color:#0f766e;font-weight:700;letter-spacing:0.16em;text-transform:uppercase;">${L("兑换码", "Redeem code")}</div>
-                    <div style="margin-top:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:24px;font-weight:900;color:#0f172a;letter-spacing:0.06em;word-break:break-all;">${safeCode}</div>
-                    <div style="margin-top:10px;font-size:13px;color:#475569;">
-                      <span style="color:#94a3b8;">${L("兑换内容：", "Includes: ")}</span>
-                      <strong style="color:#134e4a;">${valueDisplay}</strong>
-                    </div>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <!-- CTA -->
-          <tr>
-            <td style="padding:22px 32px 0;text-align:center;">
-              <a href="${escapeHtml(redeemUrl)}"
-                 style="display:inline-block;padding:14px 36px;background:linear-gradient(135deg,#0f766e 0%,#134e4a 100%);color:#ffffff;text-decoration:none;font-size:15px;font-weight:800;letter-spacing:0.02em;border-radius:999px;box-shadow:0 6px 18px rgba(15,118,110,0.28);">
-                 ${L("立即兑换 →", "Redeem now →")}
-              </a>
-              <div style="margin-top:10px;font-size:11.5px;color:#94a3b8;">${L("点击按钮即可前往兑换，兑换码已为您自动填入", "The link opens the redeem area with your code pre-filled")}</div>
-            </td>
-          </tr>
-
-          <!-- Usage hint -->
-          <tr>
-            <td style="padding:24px 32px 0;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-radius:14px;background:#fffbeb;border:1px solid #fde68a;">
-                <tr>
-                  <td style="padding:14px 16px;">
-                    <div style="font-size:12px;font-weight:800;color:#92400e;letter-spacing:.04em;margin-bottom:6px;">${L("使用说明", "How to use")}</div>
-                    <div style="font-size:13px;color:#78350f;line-height:1.7;">${escapeHtml(usageHint)}</div>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <!-- Manual fallback -->
-          <tr>
-            <td style="padding:18px 32px 0;">
-              <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:6px;">${L("无法点击按钮？", "Button not working?")}</div>
-              <p style="margin:0;font-size:12.5px;color:#475569;line-height:1.65;">
-                ${L("请复制下方链接到浏览器打开，或直接访问", "Copy the link below into your browser, or visit")} <a href="${escapeHtml(siteUrl)}" style="color:#0f766e;font-weight:700;text-decoration:underline;">${escapeHtml(siteDomain)}</a> ${L("在首页兑换区域中粘贴兑换码", "and paste the code in the redeem area")}
-              </p>
-              <div style="margin-top:6px;padding:10px 12px;background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;color:#334155;word-break:break-all;">${escapeHtml(redeemUrl)}</div>
-            </td>
-          </tr>
-
-          <!-- Support -->
-          <tr>
-            <td style="padding:24px 32px 0;">
-              <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:8px;">${L("需要帮助？", "Need help?")}</div>
-              <p style="margin:0;font-size:13px;line-height:1.75;color:#475569;">${supportContactHtml(locale)}</p>
-              <p style="margin:8px 0 0;font-size:12.5px;color:#94a3b8;">${L("客服在线时间：北京时间 09:00 – 23:00 · 真人值守", "Support hours: 9:00 – 23:00 Beijing time · staffed by real people")}</p>
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="padding:28px 32px 32px;">
-              <hr style="border:none;border-top:1px solid #e2e8f0;margin:0 0 20px;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td style="color:#0f172a;font-size:13px;font-weight:800;letter-spacing:-0.01em;">${escapeHtml(brandName)}</td>
-                  <td style="text-align:right;color:#94a3b8;font-size:11.5px;">${escapeHtml(siteDomain)}</td>
-                </tr>
-              </table>
-              <p style="margin:10px 0 0;font-size:11px;color:#cbd5e1;line-height:1.6;">${L("本邮件由系统自动发送，请勿直接回复。请妥善保管兑换码，遗失或泄露恕不补发", "This email was sent automatically — please don't reply. Keep your code safe; lost or leaked codes can't be reissued.")}</p>
-            </td>
-          </tr>
-
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
+  return `<!doctype html>
+<html lang="${locale === "en" ? "en" : "zh-CN"}">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light only" />
+    <meta name="supported-color-schemes" content="light only" />
+    <title>${escapeHtml(buildRedeemEmailSubject({ code, type, services, amount, brandName, locale }))}</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f5f7fb;color:#111827;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',Arial,sans-serif;">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;line-height:0;">
+      ${escapeHtml(L(`兑换码：${code}`, `Redeem code: ${code}`))}
+    </div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;background:#f5f7fb;">
+      <tr>
+        <td align="center" style="padding:24px 12px;">
+          <table role="presentation" width="560" cellspacing="0" cellpadding="0" style="width:100%;max-width:560px;background:#ffffff;border:1px solid #e5e7eb;border-radius:18px;overflow:hidden;">
+            <tr>
+              <td style="padding:22px 24px;border-bottom:1px solid #eef2f7;">
+                <div style="font-size:14px;line-height:1.4;color:#64748b;">${safeBrand}</div>
+                <div style="margin-top:6px;font-size:22px;line-height:1.25;font-weight:800;color:#111827;">${escapeHtml(L("兑换码通知", "Redeem Code Notice"))}</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:24px;">
+                <div style="font-size:13px;line-height:1.6;color:#64748b;">${escapeHtml(L("请保存以下兑换码，兑换时需要完整输入。", "Save this redeem code and enter it exactly when redeeming."))}</div>
+                <div style="margin:16px 0 18px;padding:18px;border:1px solid #dbeafe;border-radius:14px;background:#eff6ff;text-align:center;">
+                  <div style="font-size:12px;line-height:1.2;color:#1d4ed8;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">${escapeHtml(L("兑换码", "Redeem Code"))}</div>
+                  <div style="margin-top:8px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:26px;line-height:1.2;font-weight:900;letter-spacing:.08em;color:#0f172a;word-break:break-all;">${safeCode}</div>
+                </div>
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;border:1px solid #eef2f7;border-radius:14px;overflow:hidden;">
+                  <tr>
+                    <td style="padding:12px 14px;background:#f8fafc;color:#64748b;font-size:13px;">${escapeHtml(L("兑换内容", "Content"))}</td>
+                    <td align="right" style="padding:12px 14px;background:#f8fafc;color:#111827;font-size:14px;font-weight:700;">${safeContent}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:12px 14px;border-top:1px solid #eef2f7;color:#64748b;font-size:13px;">${escapeHtml(L("兑换页面", "Redeem page"))}</td>
+                    <td align="right" style="padding:12px 14px;border-top:1px solid #eef2f7;color:#111827;font-size:14px;font-weight:700;">
+                      <a href="${safeLink}" style="color:#0f766e;text-decoration:none;">${escapeHtml(L("打开兑换页面", "Open redeem page"))}</a>
+                    </td>
+                  </tr>
+                </table>
+                <div style="margin-top:18px;padding:14px 16px;border-radius:14px;background:#f8fafc;color:#475569;font-size:13px;line-height:1.7;">
+                  <strong style="color:#111827;">${escapeHtml(L("使用说明", "Instructions"))}</strong><br />
+                  ${escapeHtml(L("打开兑换页面后，粘贴兑换码并提交。如已下单，请把兑换码发给客服核对。", "Open the redeem page, paste the code, and submit it. If you already placed an order, send this code to support for verification."))}
+                </div>
+                <div style="margin-top:16px;color:#64748b;font-size:13px;line-height:1.7;">${safeSupport}</div>
+                <div style="margin-top:18px;color:#94a3b8;font-size:12px;line-height:1.6;">
+                  ${escapeHtml(L("这是一封兑换码系统通知，不包含促销内容。", "This is an automated redeem code notification and contains no promotional content."))}
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
 </html>`;
 }

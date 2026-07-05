@@ -935,20 +935,23 @@ async function readEmailApiError(res) {
   }
 }
 
-async function sendViaResend({ to, subject, text, html, fromName, marketing = false }) {
+async function sendViaResend({ to, subject, text, html, fromName, marketing = false, headers: customHeaders = {} }) {
   const apiKey = process.env.RESEND_API_KEY;
   const from = mailFromAddress();
   if (!apiKey || !from || !to) return { ok: false, reason: "resend_or_to_missing" };
   if (!validEmail(from)) return { ok: false, reason: "invalid_mail_from" };
   const recipients = Array.isArray(to) ? to : [to];
-  const headers = marketing ? { "List-Unsubscribe": `<mailto:${from}?subject=unsubscribe>` } : undefined;
+  const headers = {
+    ...(customHeaders && typeof customHeaders === "object" ? customHeaders : {}),
+    ...(marketing ? { "List-Unsubscribe": `<mailto:${from}?subject=unsubscribe>` } : {}),
+  };
   const payload = {
     from: formatMailFrom(fromName, from),
     to: recipients,
     subject,
     ...(html ? { html } : {}),
     ...(text ? { text } : {}),
-    ...(headers ? { headers } : {}),
+    ...(Object.keys(headers).length ? { headers } : {}),
   };
 
   async function attemptSend(attempt) {
@@ -984,7 +987,7 @@ async function sendViaResend({ to, subject, text, html, fromName, marketing = fa
   return { ok: false, provider: "resend", reason: "send_failed_after_retry", error: r2.error, code: r2.code };
 }
 
-async function sendViaSmtp({ to, subject, text, html, fromName, marketing = false }) {
+async function sendViaSmtp({ to, subject, text, html, fromName, marketing = false, headers: customHeaders = {} }) {
   const host = process.env.SMTP_HOST;
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
@@ -1001,7 +1004,10 @@ async function sendViaSmtp({ to, subject, text, html, fromName, marketing = fals
   // 群发/营销邮件:普通优先级(高优先级=垃圾信号)+ List-Unsubscribe 头(Gmail/Yahoo 对群发的进箱硬要求)。
   // 事务邮件(验证码/订单)保持 high 以求快达。
   const priority = marketing ? "normal" : "high";
-  const extraHeaders = marketing ? { "List-Unsubscribe": `<mailto:${from}?subject=unsubscribe>` } : undefined;
+  const extraHeaders = {
+    ...(customHeaders && typeof customHeaders === "object" ? customHeaders : {}),
+    ...(marketing ? { "List-Unsubscribe": `<mailto:${from}?subject=unsubscribe>` } : {}),
+  };
 
   async function attemptSend(attempt) {
     const transporter = nodemailer.createTransport({
@@ -1019,7 +1025,7 @@ async function sendViaSmtp({ to, subject, text, html, fromName, marketing = fals
         from: formatMailFrom(mailFromName(brandName), from),
         to, subject, text, html,
         priority,
-        ...(extraHeaders ? { headers: extraHeaders } : {}),
+        ...(Object.keys(extraHeaders).length ? { headers: extraHeaders } : {}),
       });
       try { transporter.close(); } catch (e) {}
       return { ok: true, messageId: info.messageId, attempt };
