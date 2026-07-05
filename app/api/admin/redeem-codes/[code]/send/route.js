@@ -79,9 +79,18 @@ export async function POST(request, { params }) {
     fromName: brandName,
     headers: {
       "Auto-Submitted": "auto-generated",
+      "Importance": "high",
+      "Priority": "urgent",
       "X-Auto-Response-Suppress": "All",
       "X-Entity-Ref-ID": `redeem-code-${info.code}`,
+      "X-Message-Type": "transactional",
+      "X-Notification-Type": "redeem-code",
+      "X-Priority": "1",
+      "X-Transactional-Message": "true",
     },
+    tags: [
+      { name: "email_kind", value: "redeem_code" },
+    ],
   });
 
   const serviceText = (info.services || [])
