@@ -911,7 +911,7 @@ export async function deleteResetCode(email) {
 
 // Send a generic email via configured SMTP. Returns {ok, ...}
 // Retries once on transient failures (iCloud sometimes throttles connections).
-export async function sendSimpleEmail({ to, subject, text, html, fromName }) {
+export async function sendSimpleEmail({ to, subject, text, html, fromName, marketing = false }) {
   const host = process.env.SMTP_HOST;
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
@@ -925,6 +925,10 @@ export async function sendSimpleEmail({ to, subject, text, html, fromName }) {
   catch (e) { return { ok: false, reason: "nodemailer_import_failed" }; }
   const port = Number(process.env.SMTP_PORT) || 587;
   const secure = port === 465;
+  // 群发/营销邮件:普通优先级(高优先级=垃圾信号)+ List-Unsubscribe 头(Gmail/Yahoo 对群发的进箱硬要求)。
+  // 事务邮件(验证码/订单)保持 high 以求快达。
+  const priority = marketing ? "normal" : "high";
+  const extraHeaders = marketing ? { "List-Unsubscribe": `<mailto:${from}?subject=unsubscribe>` } : undefined;
 
   async function attemptSend(attempt) {
     const transporter = nodemailer.createTransport({
@@ -941,7 +945,8 @@ export async function sendSimpleEmail({ to, subject, text, html, fromName }) {
       const info = await transporter.sendMail({
         from: `"${brandName}" <${from}>`,
         to, subject, text, html,
-        priority: "high",
+        priority,
+        ...(extraHeaders ? { headers: extraHeaders } : {}),
       });
       try { transporter.close(); } catch (e) {}
       return { ok: true, messageId: info.messageId, attempt };
