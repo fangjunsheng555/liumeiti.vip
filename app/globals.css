@@ -12664,8 +12664,10 @@ summary:focus-visible {
     gap: 7px !important;
     padding: 7px 8px !important;
     min-width: 0 !important;
+    overflow: hidden !important;
   }
   .cart-bar-count {
+    display: inline-flex !important;
     font-size: 10px !important;
     font-weight: 800 !important;
     color: #64748b !important;
@@ -12687,10 +12689,6 @@ summary:focus-visible {
     font-weight: 950 !important;
     color: #0f766e !important;
     letter-spacing: -.02em !important;
-  }
-  .cart-bar-count,
-  .cart-bar-total {
-    display: none !important;
   }
   .cart-bar-discount-tag {
     display: none !important;
