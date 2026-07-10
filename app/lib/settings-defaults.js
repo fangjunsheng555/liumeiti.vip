@@ -27,6 +27,7 @@ export const SETTINGS_DEFAULTS = {
     address: "TDoUMF4nF244o5GZvBBwX5t9axvnSoP1Cm",
     discount: 0.9,        // USDT 支付折扣(0.9 = 9折)
     rateOverride: "",     // 空 = 用每日自动汇率;填数字 = 固定该汇率(美元兑人民币)
+    autoConfirm: false,   // TRON 链上自动确认;完成真实小额测试后由后台开启
   },
   // 组合优惠档位
   bundle: { tier2Rate: 0.05, tier3Rate: 0.10 },
@@ -74,6 +75,7 @@ export function mergeSettings(overrides) {
       discount: num(o.usdt?.discount, d.usdt.discount, 0.1, 1),
       rateOverride: (o.usdt?.rateOverride === "" || o.usdt?.rateOverride == null)
         ? "" : String(num(o.usdt?.rateOverride, "", 0.1, 1000) || ""),
+      autoConfirm: typeof o.usdt?.autoConfirm === "boolean" ? o.usdt.autoConfirm : d.usdt.autoConfirm,
     },
     bundle: {
       tier2Rate: num(o.bundle?.tier2Rate, d.bundle.tier2Rate, 0, 0.9),

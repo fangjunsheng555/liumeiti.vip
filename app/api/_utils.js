@@ -8,6 +8,11 @@ export const ORDER_INDEX_KEY = ORDERS_KEY + ":index";
 export const ORDER_DELETED_INDEX_KEY = ORDERS_KEY + ":deleted-index"; // SET of soft-deleted order ids(供快速分页精确排除)
 export const ORDER_RECORD_PREFIX = ORDERS_KEY + ":record:";
 export const ORDER_EMAIL_INDEX_PREFIX = ORDERS_KEY + ":email:";
+export const USDT_PENDING_ORDER_INDEX_KEY = ORDERS_KEY + ":usdt-pending";
+export const ORDER_OVERVIEW_HASH_KEY = ORDERS_KEY + ":overview";
+const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready";
+const ORDER_INDEX_MIGRATION_READY_KEY = ORDER_INDEX_KEY + ":legacy-ready";
+const ORDER_INDEX_MIGRATION_LOCK_KEY = ORDER_INDEX_KEY + ":legacy-lock";
 export const USERS_KEY = "liumeiti:users";
 
 export function clean(value, limit = 500) {
@@ -81,6 +86,48 @@ function orderEmailIndexKey(email) {
   return lower ? ORDER_EMAIL_INDEX_PREFIX + lower : "";
 }
 
+function isPendingUsdtOrder(order) {
+  return Boolean(
+    order && !order.deleted
+    && order.paidCurrency === "USDT"
+    && order.status === "received"
+    && !order.usdtConfirmedAt
+    && Number(order.usdtPayAmount || 0) > 0
+    && order.usdtQuoteId
+  );
+}
+
+function orderCreatedScore(order) {
+  const score = new Date(order?.createdAt || 0).getTime();
+  return Number.isFinite(score) && score > 0 ? score : Date.now();
+}
+
+function orderOverviewSnapshot(order) {
+  if (!order || order.deleted || !order.orderId) return null;
+  const items = Array.isArray(order.items)
+    ? order.items.map((item) => ({ amount: Number(item?.amount || 0) }))
+    : [];
+  return {
+    orderId: normalizeOrderIdForStorage(order.orderId),
+    status: order.status || "received",
+    paymentMethod: order.paymentMethod || "alipay",
+    paidCurrency: order.paidCurrency || (order.paymentMethod === "usdt" ? "USDT" : "CNY"),
+    paidAmount: Number(order.paidAmount || 0),
+    finalAmount: Number(order.finalAmount || 0),
+    subtotal: Number(order.subtotal || 0),
+    originalAmount: Number(order.originalAmount || 0),
+    bundleFinalAmount: Number(order.bundleFinalAmount || 0),
+    createdAt: order.createdAt || "",
+    createdAtBeijing: order.createdAtBeijing || "",
+    email: order.email || "",
+    serviceLabel: order.serviceLabel || "",
+    items,
+    usdtPayAmount: Number(order.usdtPayAmount || 0),
+    usdtQuoteId: order.usdtQuoteId || "",
+    usdtConfirmedAt: order.usdtConfirmedAt || "",
+  };
+}
+
 function parseOrderJson(value) {
   if (!value) return null;
   if (typeof value === "object") return value;
@@ -140,6 +187,11 @@ export async function saveOrderRecord(order) {
     ["SET", orderRecordKey(orderId), JSON.stringify(order)],
     ["LPUSH", ORDER_INDEX_KEY, orderId],
   ];
+  commands.push(isPendingUsdtOrder(order)
+    ? ["ZADD", USDT_PENDING_ORDER_INDEX_KEY, String(orderCreatedScore(order)), orderId]
+    : ["ZREM", USDT_PENDING_ORDER_INDEX_KEY, orderId]);
+  const overview = orderOverviewSnapshot(order);
+  if (overview) commands.push(["HSET", ORDER_OVERVIEW_HASH_KEY, orderId, JSON.stringify(overview)]);
   const buyerEmailKey = orderEmailIndexKey(order.email);
   const userEmailKey = orderEmailIndexKey(order.userEmail);
   if (buyerEmailKey) commands.push(["LPUSH", buyerEmailKey, orderId]);
@@ -172,8 +224,9 @@ export async function getOrdersByEmail(email, limit = 50) {
       order && !order.deleted &&
       ((order.email || "").toLowerCase() === lower || (order.userEmail || "").toLowerCase() === lower)
     );
-  const legacy = (await getAllOrders())
-    .filter((order) => (order.email || "").toLowerCase() === lower || (order.userEmail || "").toLowerCase() === lower)
+  const legacy = (await getLegacyOrderEntries())
+    .map((entry) => entry.order)
+    .filter((order) => order && !order.deleted && ((order.email || "").toLowerCase() === lower || (order.userEmail || "").toLowerCase() === lower))
     .slice(0, Number(limit || 50));
   const seen = new Set();
   return [...indexed, ...legacy]
@@ -229,6 +282,67 @@ export async function getAllOrdersWithIndex() {
   });
 }
 
+// Compact shadow index for the 10-second admin overview poll. The first read
+// backfills historical orders once; subsequent order creates/updates maintain it.
+export async function getOrderOverviewRows() {
+  if (!redisConfig()) return [];
+  const ready = await redisCmd(["GET", ORDER_OVERVIEW_READY_KEY]);
+  if (ready === "1") {
+    const values = await redisCmd(["HVALS", ORDER_OVERVIEW_HASH_KEY]);
+    if (Array.isArray(values)) return values.map(parseOrderJson).filter(Boolean);
+  }
+
+  const orders = await getAllOrders();
+  const snapshots = orders.map(orderOverviewSnapshot).filter(Boolean);
+  let backfillOk = true;
+  for (let offset = 0; offset < snapshots.length; offset += 100) {
+    const commands = snapshots.slice(offset, offset + 100)
+      .map((row) => ["HSET", ORDER_OVERVIEW_HASH_KEY, row.orderId, JSON.stringify(row)]);
+    const result = await redisPipeline(commands);
+    const rows = pipelineResults(result);
+    if (rows.length !== commands.length || rows.some((item) => item?.error)) {
+      backfillOk = false;
+      break;
+    }
+  }
+  if (backfillOk) await redisCmd(["SET", ORDER_OVERVIEW_READY_KEY, "1"]);
+  return snapshots;
+}
+
+// Incremental USDT pending index: the chain scanner reads only unsettled USDT
+// orders instead of loading every historical order on each poll.
+export async function getPendingUsdtOrderEntries(limit = 500) {
+  if (!redisConfig()) return [];
+  const cutoff = Date.now() - 4 * 24 * 60 * 60 * 1000;
+  await redisCmd(["ZREMRANGEBYSCORE", USDT_PENDING_ORDER_INDEX_KEY, "-inf", String(cutoff - 1)]);
+  const ids = await redisCmd([
+    "ZRANGEBYSCORE", USDT_PENDING_ORDER_INDEX_KEY, String(cutoff), "+inf",
+    "LIMIT", "0", String(Math.max(1, Math.min(1000, Number(limit || 500)))),
+  ]);
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  const entries = await getOrdersByIds(ids);
+  const live = [];
+  const fetchedIds = new Set(entries.map((entry) => normalizeOrderIdForStorage(entry.orderId)));
+  const staleIds = ids
+    .map(normalizeOrderIdForStorage)
+    .filter((id) => id && !fetchedIds.has(id));
+  for (const entry of entries) {
+    if (isPendingUsdtOrder(entry.order)) {
+      live.push({
+        index: { orderId: entry.orderId, legacyIndex: null },
+        raw: entry.orderId,
+        order: entry.order,
+      });
+    } else {
+      staleIds.push(entry.orderId);
+    }
+  }
+  if (staleIds.length) {
+    await redisCmd(["ZREM", USDT_PENDING_ORDER_INDEX_KEY, ...staleIds]);
+  }
+  return live;
+}
+
 // Update an order at a specific handle. New records update by orderId; legacy
 // records also keep their old list slot in sync while being promoted to a record.
 export async function setOrderAt(index, order) {
@@ -241,6 +355,13 @@ export async function setOrderAt(index, order) {
     if (Number.isInteger(handle.legacyIndex) && handle.legacyIndex >= 0) {
       commands.push(["LSET", ORDERS_KEY, String(handle.legacyIndex), JSON.stringify(order)]);
     }
+    commands.push(isPendingUsdtOrder(order)
+      ? ["ZADD", USDT_PENDING_ORDER_INDEX_KEY, String(orderCreatedScore(order)), orderId]
+      : ["ZREM", USDT_PENDING_ORDER_INDEX_KEY, orderId]);
+    const overview = orderOverviewSnapshot(order);
+    commands.push(overview
+      ? ["HSET", ORDER_OVERVIEW_HASH_KEY, orderId, JSON.stringify(overview)]
+      : ["HDEL", ORDER_OVERVIEW_HASH_KEY, orderId]);
     const result = await redisPipeline(commands);
     const rows = pipelineResults(result);
     return rows.length === commands.length && rows.every((item) => !item?.error);
@@ -271,14 +392,43 @@ export async function softDeleteOrderAt(index, orderId, meta = {}) {
   return ok;
 }
 
+async function ensureLegacyOrderIndex() {
+  if (await redisCmd(["GET", ORDER_INDEX_MIGRATION_READY_KEY]) === "1") return true;
+  const lockToken = randomBytes(12).toString("hex");
+  const locked = await redisCmd(["SET", ORDER_INDEX_MIGRATION_LOCK_KEY, lockToken, "EX", "60", "NX"]);
+  if (locked !== "OK") return false;
+  try {
+    const legacy = await getLegacyOrderEntries();
+    const existing = new Set(await getOrderIdsFromIndex(ORDER_INDEX_KEY, "0", "-1"));
+    const commands = [];
+    for (const entry of legacy) {
+      const order = entry.order;
+      const orderId = normalizeOrderIdForStorage(order?.orderId);
+      if (!orderId || existing.has(orderId)) continue;
+      existing.add(orderId);
+      commands.push(["SET", orderRecordKey(orderId), JSON.stringify(order)]);
+      commands.push(["RPUSH", ORDER_INDEX_KEY, orderId]);
+      if (order?.deleted) commands.push(["SADD", ORDER_DELETED_INDEX_KEY, orderId]);
+    }
+    for (let offset = 0; offset < commands.length; offset += 100) {
+      const batch = commands.slice(offset, offset + 100);
+      const result = await redisPipeline(batch);
+      const rows = pipelineResults(result);
+      if (rows.length !== batch.length || rows.some((item) => item?.error)) return false;
+    }
+    return await redisCmd(["SET", ORDER_INDEX_MIGRATION_READY_KEY, "1"]) === "OK";
+  } finally {
+    const script = "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end";
+    await redisCmd(["EVAL", script, "1", ORDER_INDEX_MIGRATION_LOCK_KEY, lockToken]);
+  }
+}
+
 // 快速分页(无筛选时用):只 GET 当前页的完整订单,不再全量拉取。
-// 仅当无 legacy 订单(全部在 index 里)时启用,否则返回 null 让调用方走全量 getAllOrders。
-// index 里的 id 微小(全量拉 id 便宜),真正贵的是 GET 每个订单 JSON —— 这里从 N 降到一页。
+// 首次调用会把 legacy 列表补进增量索引(只增加影子记录,不删除旧数据),之后只取当前页正文。
 export async function getOrdersPageFast(offset = 0, limit = 100) {
   if (!redisConfig()) return null;
   try {
-    const legacyLen = Number(await redisCmd(["LLEN", ORDERS_KEY]) || 0);
-    if (legacyLen > 0) return null; // 有历史遗留订单 → 不走快速路径,保证不漏单
+    if (!await ensureLegacyOrderIndex()) return null;
     const allIds = await getOrderIdsFromIndex(ORDER_INDEX_KEY, "0", "-1"); // 已去重
     const deleted = new Set((await redisCmd(["SMEMBERS", ORDER_DELETED_INDEX_KEY])) || []);
     const liveIds = allIds.filter((id) => !deleted.has(id));
@@ -739,6 +889,48 @@ export function generatePaymentAdjustment() {
   return roundMoney(sign * cents / 100);
 }
 
+const USDT_QUOTE_NONCE_PREFIX = "lm:usdt:quote-nonce:";
+const USDT_QUOTE_CLAIM_PREFIX = "lm:usdt:quote-claim:";
+
+function safeQuoteId(value) {
+  return clean(value, 80).replace(/[^A-Za-z0-9_-]/g, "");
+}
+
+// Reserve a six-decimal USDT tail below 0.1 USDT. Redis NX prevents two live
+// quotes from receiving the same payable amount during the quote window.
+export async function reserveUsdtNonce(quoteId, ttlSec = 45 * 60) {
+  const id = safeQuoteId(quoteId);
+  if (!id || !redisConfig()) return 0;
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const units = randomInt(1, 100000); // 0.000001 - 0.099999 USDT
+    const result = await redisCmd([
+      "SET", USDT_QUOTE_NONCE_PREFIX + units, id,
+      "EX", String(Math.max(60, Number(ttlSec || 0))), "NX",
+    ]);
+    if (result === "OK") return units / 1000000;
+  }
+  return 0;
+}
+
+export async function claimUsdtQuote(quoteId, orderId, ttlSec = 4 * 24 * 60 * 60) {
+  const id = safeQuoteId(quoteId);
+  const order = normalizeOrderIdForStorage(orderId);
+  if (!id || !order || !redisConfig()) return false;
+  const result = await redisCmd([
+    "SET", USDT_QUOTE_CLAIM_PREFIX + id, order,
+    "EX", String(Math.max(300, Number(ttlSec || 0))), "NX",
+  ]);
+  return result === "OK";
+}
+
+export async function releaseUsdtQuote(quoteId, orderId) {
+  const id = safeQuoteId(quoteId);
+  const order = normalizeOrderIdForStorage(orderId);
+  if (!id || !order || !redisConfig()) return false;
+  const script = "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end";
+  return Number(await redisCmd(["EVAL", script, "1", USDT_QUOTE_CLAIM_PREFIX + id, order]) || 0) === 1;
+}
+
 function paymentQuoteSecret() {
   return process.env.AUTH_SECRET || process.env.ADMIN_PASSWORD || "liumeiti-payment-quote-local";
 }
@@ -749,7 +941,7 @@ export function signPaymentQuote(payload) {
   return `${data}.${sig}`;
 }
 
-export function verifyPaymentQuote(token) {
+export function verifyPaymentQuote(token, expectedPaymentMethod = "") {
   if (!token || typeof token !== "string") return null;
   const [data, sig] = token.split(".");
   if (!data || !sig) return null;
@@ -760,9 +952,19 @@ export function verifyPaymentQuote(token) {
   try {
     const payload = JSON.parse(Buffer.from(data, "base64url").toString("utf-8"));
     if (payload.exp && Date.now() > Number(payload.exp)) return null;
+    const paymentMethod = payload.paymentMethod === "usdt" ? "usdt" : payload.paymentMethod === "alipay" ? "alipay" : "";
+    if (!paymentMethod || (expectedPaymentMethod && paymentMethod !== expectedPaymentMethod)) return null;
     const adjustment = roundMoney(payload.paymentAdjustment);
-    if (Math.abs(adjustment) < 0.01 || Math.abs(adjustment) > 0.49) return null;
-    return { ...payload, paymentAdjustment: adjustment };
+    const usdtNonce = Math.round(Number(payload.usdtNonce || 0) * 1000000) / 1000000;
+    if (paymentMethod === "usdt") {
+      if (adjustment !== 0 || usdtNonce < 0.000001 || usdtNonce > 0.099999 || !safeQuoteId(payload.quoteId)) return null;
+    } else if (usdtNonce !== 0 || Math.abs(adjustment) < 0.01 || Math.abs(adjustment) > 0.49) {
+      return null;
+    }
+    const issuedAt = Number(payload.issuedAt || 0);
+    const exp = Number(payload.exp || 0);
+    if (!Number.isFinite(issuedAt) || !Number.isFinite(exp) || issuedAt <= 0 || exp <= issuedAt) return null;
+    return { ...payload, paymentMethod, paymentAdjustment: adjustment, usdtNonce, quoteId: safeQuoteId(payload.quoteId) };
   } catch (e) { return null; }
 }
 

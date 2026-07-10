@@ -177,6 +177,7 @@ export default function CheckoutPage() {
   const [form, setForm] = useState(blankCheckoutForm);
   const [paymentMethod, setPaymentMethod] = useState("alipay");
   const [paymentAdjustment, setPaymentAdjustment] = useState(0);
+  const [usdtNonce, setUsdtNonce] = useState(0);
   const [paymentQuoteToken, setPaymentQuoteToken] = useState("");
   const [paymentPageEnteredAt, setPaymentPageEnteredAt] = useState(0);
   const [paySubmitNotice, setPaySubmitNotice] = useState("");
@@ -479,6 +480,7 @@ export default function CheckoutPage() {
   const usdtDiscount = Number(siteSettings.usdt.discount) || 0.9;
   const effectiveUsdtRate = siteSettings.usdt.rateOverride ? Number(siteSettings.usdt.rateOverride) : usdtRate;
   const finalUsdt = Math.round((finalCny * usdtDiscount / effectiveUsdtRate) * 100) / 100;
+  const usdtPayable = Math.round((finalUsdt + Number(usdtNonce || 0)) * 1000000) / 1000000;
   const savings = subtotal - bundleFinalCny;
 
   // 余额付款变得不足时（加购/优惠变化抬高总价）自动切回支付宝，避免停留在会被服务端拒绝的余额选项。
@@ -623,18 +625,20 @@ export default function CheckoutPage() {
     setPaySubmitNotice("");
     setPaymentQuoteToken("");
     setPaymentAdjustment(0);
-    if (paymentMethod === "alipay" && finalCny > 0) {
+    setUsdtNonce(0);
+    if ((paymentMethod === "alipay" || paymentMethod === "usdt") && finalCny > 0) {
       setSubmitting(true);
       setStatus({ type: "info", message: L("正在生成付款金额...", "Generating payment amount...") });
       try {
         const response = await fetch("/api/order-quote", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ paymentMethod: "alipay" }),
+          body: JSON.stringify({ paymentMethod }),
         });
         const quote = await response.json();
         if (!quote.ok) throw new Error(quote.message || quote.error || "payment_quote_failed");
         setPaymentAdjustment(Number(quote.paymentAdjustment || 0));
+        setUsdtNonce(Number(quote.usdtNonce || 0));
         setPaymentQuoteToken(String(quote.quoteToken || ""));
       } catch (quoteError) {
         setStatus({ type: "error", message: quoteError.message || L("付款金额生成失败，请稍后再试", "Couldn't generate the payment amount, please try again") });
@@ -688,7 +692,7 @@ export default function CheckoutPage() {
         contact: form.contact.trim(),
         remark: form.remark.trim(),
         paymentMethod,
-        paymentQuoteToken: paymentMethod === "alipay" ? paymentQuoteToken : "",
+        paymentQuoteToken: (paymentMethod === "alipay" || paymentMethod === "usdt") ? paymentQuoteToken : "",
         redeemCode: serviceRedeemActive ? redeemMode.code : "",
         inviteCode: storedInviteCode(),
         items,
@@ -1162,7 +1166,7 @@ export default function CheckoutPage() {
                 <span>{paymentMethod === "balance" ? L("余额扣款", "Charged from balance") : L("应付金额", "Amount due")}</span>
                 {paymentMethod === "usdt" ? (
                   <>
-                    <b>{finalUsdt} <em>USDT</em></b>
+                    <b>{usdtPayable} <em>USDT</em></b>
                     <small>¥{finalCny}{L("(支付宝应付)", " (Alipay due)")} × {usdtDiscount} ÷ {effectiveUsdtRate}</small>
                   </>
                 ) : paymentMethod === "alipay" ? (
@@ -1178,7 +1182,7 @@ export default function CheckoutPage() {
               {/* 重要提示 */}
               <div className="pay-tip">
                 {paymentMethod === "usdt"
-                  ? L(`请使用 TRON (TRC20) 网络转账精确金额 ${finalUsdt} USDT 到下方地址,付款完成后请记得返回本页面点击「付款完成」按钮提交订单`, `Send exactly ${finalUsdt} USDT over the TRON (TRC20) network to the address below. After paying, return here and tap "I've paid" to submit your order.`)
+                  ? L(`请使用 TRON (TRC20) 网络转账精确金额 ${usdtPayable} USDT 到下方地址,付款完成后请记得返回本页面点击「付款完成」按钮提交订单`, `Send exactly ${usdtPayable} USDT over the TRON (TRC20) network to the address below. After paying, return here and tap "I've paid" to submit your order.`)
                   : paymentMethod === "balance"
                   ? L(`点击下方「确认扣款并提交订单」后，将从您的账户余额(¥${authedUser?.balance.toFixed(2) || "0.00"})扣除 ¥${finalCny},随后提交订单`, `Tapping "Confirm & submit order" below will deduct ¥${finalCny} from your balance (¥${authedUser?.balance.toFixed(2) || "0.00"}) and place the order.`)
                   : L("请按上方精确金额完成支付宝付款，尾差用于快速核对订单；付款完成后返回本页面点击「付款完成」提交订单", "Pay the exact amount above via Alipay — the small diff helps us verify your order quickly. After paying, return here and tap \"I've paid\" to submit.")}

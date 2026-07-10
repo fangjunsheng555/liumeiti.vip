@@ -15147,3 +15147,26 @@ body:has(.account-modal-mask) .floating-wrap {
 .guide-faq-item p { font-size: 13.5px; line-height: 1.7; color: #475569; margin: 0; }
 .guide-help { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 28px; padding: 14px 16px; border-radius: 12px; background: #f8fafc; border: 1px solid rgba(0,0,0,.06); font-size: 13.5px; color: var(--muted, #6e6e73); font-weight: 600; }
 .guide-help a { color: var(--accent, #0f766e); font-weight: 800; text-decoration: none; }
+
+.usdt-chain-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border: 1px solid #a7f3d0;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.admin-overview-toast {
+  margin-left: auto;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(13, 148, 136, 0.1);
+  color: var(--accent, #0f766e);
+  font-size: 11.5px;
+  font-style: normal;
+  font-weight: 700;
+}

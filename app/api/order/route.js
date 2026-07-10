@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
+import { after } from "next/server";
 import { buildOrderEmailHtml, buildOrderEmailText } from "./email-template.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { getMergedCatalog } from "../_catalog.js";
 import { getSettings } from "../_settings.js";
+import { confirmPendingUsdtPayments } from "../_usdt-confirm.js";
 import { supportText, discountLabel as fmtDiscount } from "../../lib/settings-defaults.js";
 import {
   consumeBestCoupon, restoreCoupon, verifySession, getUser,
@@ -13,7 +15,7 @@ import {
   clientIpFromRequest, clientUserAgentFromRequest,
   inviteCodeFromRequest, normalizeInviteCode, resolveReferralForOrder,
   pushAdminActionLog,
-  saveOrderRecord, verifyPaymentQuote, getCookieFromRequest,
+  saveOrderRecord, verifyPaymentQuote, claimUsdtQuote, releaseUsdtQuote, getCookieFromRequest,
   reserveStock, restoreStock, getUsdtRate, redisCmd, sendSimpleEmail,
 } from "../_utils.js";
 
@@ -38,6 +40,8 @@ const SUPPORT_CONTACT_EN = process.env.SUPPORT_CONTACT_EN
 const USDT_DISCOUNT = 0.9;
 const USDT_RATE = 6.85;
 const ORDER_LIMIT_MESSAGE = "订单提交次数较多，请 5 分钟后再试，或联系在线客服协助下单";
+
+export const maxDuration = 30;
 
 function clean(value, limit = 500) {
   return String(value || "").replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, limit);
@@ -391,15 +395,33 @@ export async function POST(request) {
   const usdtRate = settings.usdt.rateOverride ? Number(settings.usdt.rateOverride) : await getUsdtRate();
   const usdtDiscount = Number(settings.usdt.discount) || USDT_DISCOUNT;
   const finalUsdt = Math.round((finalAmount * usdtDiscount / usdtRate) * 100) / 100;
-  const quote = paymentMethod === "alipay" && finalAmount > 0 ? verifyPaymentQuote(body.paymentQuoteToken) : null;
-  if (paymentMethod === "alipay" && finalAmount > 0 && !quote) {
+  const quotedPayment = (paymentMethod === "alipay" || paymentMethod === "usdt") && finalAmount > 0;
+  const quote = quotedPayment ? verifyPaymentQuote(body.paymentQuoteToken, paymentMethod) : null;
+  if (quotedPayment && !quote) {
     await restoreCoupon(userEmail, coupon.couponId, orderId);
     return Response.json({ ok: false, error: "payment_quote_required", message: "付款金额已刷新，请返回支付页重新确认金额" }, { status: 400 });
   }
   const paymentAdjustment = quote ? normalizePaymentAdjustment(quote.paymentAdjustment) : 0;
   const payableAmount = paymentMethod === "alipay" ? roundMoney(Math.max(0.01, finalAmount + paymentAdjustment)) : finalAmount;
-  const paidAmount = paymentMethod === "usdt" ? finalUsdt : paymentMethod === "alipay" ? payableAmount : finalAmount;
+  const usdtNonce = paymentMethod === "usdt" && quote
+    ? Math.round(Number(quote.usdtNonce || 0) * 1000000) / 1000000
+    : 0;
+  const usdtPayAmount = Math.round((finalUsdt + usdtNonce) * 1000000) / 1000000;
+  const paidAmount = paymentMethod === "usdt" ? usdtPayAmount : paymentMethod === "alipay" ? payableAmount : finalAmount;
   const paidCurrency = paymentMethod === "usdt" ? "USDT" : paymentMethod === "redeem" ? "CODE" : "CNY";
+
+  let usdtQuoteClaimed = false;
+  if (paymentMethod === "usdt" && finalAmount > 0) {
+    usdtQuoteClaimed = await claimUsdtQuote(quote.quoteId, orderId);
+    if (!usdtQuoteClaimed) {
+      await restoreCoupon(userEmail, coupon.couponId, orderId);
+      return Response.json({
+        ok: false,
+        error: "payment_quote_used",
+        message: "该 USDT 付款金额已提交，请重新生成付款金额",
+      }, { status: 409 });
+    }
+  }
 
   // Balance payment requires logged-in user with sufficient balance
   if (paymentMethod === "balance") {
@@ -472,6 +494,14 @@ export async function POST(request) {
     finalAmount,
     finalUsdt,
     usdtRate,
+    usdtPayAmount: paymentMethod === "usdt" ? usdtPayAmount : 0,
+    usdtQuoteId: paymentMethod === "usdt" ? (quote?.quoteId || "") : "",
+    paymentQuoteIssuedAt: paymentMethod === "usdt" && quote ? new Date(Number(quote.issuedAt)).toISOString() : "",
+    paymentQuoteExpiresAt: paymentMethod === "usdt" && quote ? new Date(Number(quote.exp)).toISOString() : "",
+    usdtConfirmedAt: "",
+    usdtConfirmedAtBeijing: "",
+    usdtTxId: "",
+    usdtConfirmedAmount: 0,
     paymentAdjustment,
     payableAmount,
     paymentMethod,
@@ -551,6 +581,7 @@ export async function POST(request) {
     }
     for (const r of stockReserved) await restoreStock(r.service, r.plan);
     await restoreCoupon(userEmail, coupon.couponId, orderId);
+    if (usdtQuoteClaimed) await releaseUsdtQuote(quote.quoteId, orderId);
     if (paymentMethod === "redeem") await restoreServiceRedeemCode(redeemCode, orderId);
     await refundFailedBalanceOrder(order, userEmail, finalAmount, now);
     return Response.json({
@@ -578,6 +609,7 @@ export async function POST(request) {
   if (!stored) {
     for (const r of stockReserved) await restoreStock(r.service, r.plan);
     await restoreCoupon(userEmail, coupon.couponId, orderId);
+    if (usdtQuoteClaimed) await releaseUsdtQuote(quote.quoteId, orderId);
     if (paymentMethod === "redeem") await restoreServiceRedeemCode(redeemCode, orderId);
     await refundFailedBalanceOrder(order, userEmail, finalAmount, now);
     return Response.json({ ok: false, error: "storage_failed", orderId: order.orderId, deliveries }, { status: 500 });
@@ -605,6 +637,23 @@ export async function POST(request) {
       }),
   ];
   await Promise.all(tasks);
+
+  // Confirm after the response so USDT submission stays fast. A short retry
+  // catches the normal gap between broadcasting and TRON confirmation.
+  if (paymentMethod === "usdt" && settings.usdt.autoConfirm) {
+    after(async () => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const chain = await confirmPendingUsdtPayments({
+            settings,
+            actor: { staffId: 0, staffUsername: "order-submit" },
+          });
+          if (Number(chain.matched || 0) > 0) break;
+        } catch (e) {}
+        if (attempt < 1) await new Promise((resolve) => setTimeout(resolve, 3500));
+      }
+    });
+  }
 
   // Localize item labels in the response so the checkout "done" screen matches the user's language.
   const respItems = order.items.map((it) => ({

@@ -155,6 +155,11 @@ export default function SettingsPanel() {
           <Field label={`USDT 折扣率 实付倍率(${usdtPct(s.usdt.discount)})`}><input type="number" step="0.01" min="0.1" max="1" value={s.usdt.discount} onChange={(e) => set("usdt.discount", Number(e.target.value))} /></Field>
           <Field label="固定汇率(留空=每日自动)">{I("usdt.rateOverride", { placeholder: "自动", inputMode: "decimal" })}</Field>
         </div>
+        <label className="admin-settings-check" style={{ marginTop: 12 }}>
+          <input type="checkbox" checked={!!s.usdt.autoConfirm} onChange={(e) => set("usdt.autoConfirm", e.target.checked)} />
+          开启 TRON 链上自动确认到账
+        </label>
+        <div className="admin-settings-hint">每笔 USDT 订单会生成唯一精确金额，仅确认已上链交易，不自动发货。开启前请先完成一笔真实小额测试。</div>
       </Section>
 
       <Section icon={<Layers size={15} />} title="组合优惠档位" sub="多件下单自动打折,结账实收价即时跟随">

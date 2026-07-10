@@ -1,8 +1,9 @@
 import {
   adminSessionFromRequest, isRootAdminSession, adminPermissionProfile,
-  getAllOrders, listWithdrawals, listRedeemCodes, getAdminMailLog, listAllUserEmails,
+  getOrderOverviewRows, listWithdrawals, listRedeemCodes, getAdminMailLog, listAllUserEmails,
   redisCmd,
 } from "../../_utils.js";
+import { getSettings } from "../../_settings.js";
 
 function beijingDateKey(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
@@ -52,7 +53,7 @@ export async function GET(request) {
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
 
   const [ordersRaw, withdrawals, codes, mailLogs, userEmails] = await Promise.all([
-    getAllOrders(),
+    getOrderOverviewRows(),
     listWithdrawals(),
     listRedeemCodes(),
     getAdminMailLog(),
@@ -64,6 +65,10 @@ export async function GET(request) {
       orderId: order.orderId || "",
       status: order.status || "received",
       paymentMethod: order.paymentMethod || "alipay",
+      paidCurrency: order.paidCurrency || (order.paymentMethod === "usdt" ? "USDT" : "CNY"),
+      usdtPayAmount: Number(order.usdtPayAmount || 0),
+      usdtQuoteId: order.usdtQuoteId || "",
+      usdtConfirmedAt: order.usdtConfirmedAt || "",
       createdAt: order.createdAt || "",
       createdAtBeijing: order.createdAtBeijing || "",
       email: order.email || "",
@@ -89,6 +94,10 @@ export async function GET(request) {
     awaitingQuotes: orders.filter((order) => order.status === "awaiting_quote").length,
     pendingQuotePayments: orders.filter((order) => order.status === "pending_payment").length,
     abnormalOrders: orders.filter(isAbnormalOrder).length,
+    usdtPendingConfirm: orders.filter((order) =>
+      order.paidCurrency === "USDT" && order.status === "received" && !order.usdtConfirmedAt
+      && order.usdtPayAmount > 0 && order.usdtQuoteId
+    ).length,
     completedOrders: orders.filter((order) => order.status === "completed").length,
     invalidOrders: orders.filter((order) => order.status === "invalid").length,
     latestOrderId: latestOrder?.orderId || "",
@@ -169,6 +178,11 @@ export async function GET(request) {
   // 弃单待召回计数（仅超管，给 tab 徽章用；ZCARD 廉价单次调用）
   if (isRootAdminSession(session)) {
     try { overview.abandonedTotal = Number((await redisCmd(["ZCARD", "lm:cart:index"])) || 0); } catch (e) {}
+  }
+  try {
+    overview.usdtAutoConfirm = Boolean((await getSettings()).usdt.autoConfirm);
+  } catch (e) {
+    overview.usdtAutoConfirm = false;
   }
 
   return Response.json({

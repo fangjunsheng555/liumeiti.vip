@@ -1,5 +1,5 @@
 import {
-  getCookieFromRequest, verifySession, getAllOrders,
+  getCookieFromRequest, verifySession, getOrdersByEmail,
   getUser, setUser, validUsername, generateRandomUsername, clean,
   generateRandomUserAvatarId, validUserAvatarId,
   publicCoupons, publicReferral, ensureUserReferralProfile, getReferralDownlineRecords,
@@ -125,15 +125,7 @@ export async function GET(request) {
   }
   const profile = user ? await ensureUserReferralProfile(sessionEmail, user) : null;
 
-  const all = await getAllOrders();
-  // Match by user session email (preferred — captures orders where buyer
-  // typed a different delivery email) OR by the buyer-entered email
-  // (backward compat for orders placed before login feature).
-  const myOrders = all
-    .filter((o) =>
-      (o.userEmail || "").toLowerCase() === sessionEmail ||
-      (o.email || "").toLowerCase() === sessionEmail
-    )
+  const myOrders = (await getOrdersByEmail(sessionEmail, 100))
     .map((o) => publicOrder(o, locale));
 
   return Response.json({

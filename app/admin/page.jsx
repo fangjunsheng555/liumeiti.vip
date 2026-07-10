@@ -1265,6 +1265,9 @@ export default function AdminPage() {
   const [activeMailLog, setActiveMailLog] = useState(null);
   const [overview, setOverview] = useState(null);
   const [overviewLoading, setOverviewLoading] = useState(false);
+  const [usdtChecking, setUsdtChecking] = useState(false);
+  const [usdtCheckMsg, setUsdtCheckMsg] = useState("");
+  const usdtCheckingRef = useRef(false);
   const [newOrderAlert, setNewOrderAlert] = useState(null);
   const [highlightOrderIds, setHighlightOrderIds] = useState(new Set());
   const overviewRef = useRef(null);
@@ -1367,6 +1370,36 @@ export default function AdminPage() {
       if (!silent) setOverviewLoading(false);
     }
   }, [triggerNewOrderNotice, applyCurrentStaff]);
+
+  const runUsdtCheck = useCallback(async (manual = false) => {
+    if (usdtCheckingRef.current) return;
+    usdtCheckingRef.current = true;
+    setUsdtChecking(true);
+    try {
+      const response = await fetch("/api/admin/usdt-check", { method: "POST", credentials: "same-origin" });
+      const data = await response.json();
+      if (manual) {
+        const message = data.disabled
+          ? "链上自动确认尚未开启"
+          : data.busy
+          ? "链上检查正在执行，请稍后查看"
+          : data.ok
+          ? `已扫描 ${data.scanned ?? 0} 笔，确认 ${data.matched ?? 0} 单${data.ambiguous ? `，${data.ambiguous} 笔待人工核对` : ""}`
+          : "链上检查失败，请稍后重试";
+        setUsdtCheckMsg(message);
+        setTimeout(() => setUsdtCheckMsg(""), 5000);
+      }
+      if (data.ok && Number(data.matched || 0) > 0) await loadOverview({ silent: true });
+    } catch (e) {
+      if (manual) {
+        setUsdtCheckMsg("链上检查失败，请稍后重试");
+        setTimeout(() => setUsdtCheckMsg(""), 5000);
+      }
+    } finally {
+      usdtCheckingRef.current = false;
+      setUsdtChecking(false);
+    }
+  }, [loadOverview]);
 
   const loadGlobalLog = useCallback(async (q, filter, source) => {
     setLogLoading(true);
@@ -1541,6 +1574,16 @@ export default function AdminPage() {
     if (!authed) return;
     loadOverview();
   }, [authed, loadOverview]);
+
+  useEffect(() => {
+    if (!authed || !overview?.usdtAutoConfirm) return;
+    runUsdtCheck();
+    const timer = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      runUsdtCheck();
+    }, 60000);
+    return () => clearInterval(timer);
+  }, [authed, overview?.usdtAutoConfirm, runUsdtCheck]);
 
   useEffect(() => {
     if (permissionsReady && !canManageCodes && codeType === "history") {
@@ -3378,6 +3421,7 @@ export default function AdminPage() {
             <div className="admin-overview-card">
               <div className="admin-overview-head">
                 <span><BarChart3 size={13} />状态总览</span>
+                {usdtCheckMsg && <em className="admin-overview-toast">{usdtCheckMsg}</em>}
                 {overviewLoading && <LoaderCircle size={12} className="spin-icon" />}
               </div>
               <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("orders")}>
@@ -3396,6 +3440,12 @@ export default function AdminPage() {
                 <span>异常订单</span>
                 <b>{overview?.abnormalOrders ?? 0}</b>
               </button>
+              {overview?.usdtAutoConfirm && (
+                <button type="button" className="admin-overview-item" onClick={() => runUsdtCheck(true)} title="立即检查 TRON 链上到账">
+                  <span>USDT 待确认 {usdtChecking && <LoaderCircle size={11} className="spin-icon" />}</span>
+                  <b>{overview?.usdtPendingConfirm ?? 0}</b>
+                </button>
+              )}
               {canReviewWithdrawals && (
                 <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("withdrawals")}>
                   <span>待审核提现</span>
@@ -4543,6 +4593,7 @@ export default function AdminPage() {
                         {o.referral?.levelOneEmail && (
                           <span className="staff-mini-badge">{referralCommissionLabel(o)}</span>
                         )}
+                        {o.usdtConfirmedAt && <span className="usdt-chain-badge" title={o.usdtTxId ? `链上已确认 · ${o.usdtTxId}` : "链上已确认"}>链上已确认</span>}
                         <span className={`admin-order-status status-${o.status}`}>
                           {o.status === "completed" ? <CheckCircle2 size={11} /> : o.status === "invalid" ? <AlertTriangle size={11} /> : <Clock size={11} />}
                           {STATUS_LABEL[o.status]}
@@ -4704,6 +4755,16 @@ export default function AdminPage() {
                   <div><span>支付方式</span><b>{activeOrder.paymentMethod === "quote" ? "等待报价付款" : activeOrder.paymentMethod === "redeem" ? "服务兑换码" : activeOrder.paymentMethod === "usdt" ? "USDT-TRC20" : "支付宝"}</b></div>
                   <div><span>{activeOrder.status === "pending_payment" ? "报价金额" : "实付金额"}</span><b>{activeOrder.status === "awaiting_quote" ? "尚未报价" : activeOrder.status === "pending_payment" ? `¥${Number(activeOrder.quoteAmount || 0).toFixed(2)} · 未付款` : activeOrder.paidCurrency === "CODE" ? "兑换码抵扣" : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b></div>
                   <div><span>件数</span><b>{activeOrder.itemCount} 件</b></div>
+                  {activeOrder.paidCurrency === "USDT" && (
+                    <div className="span-2">
+                      <span>链上到账</span>
+                      <b className="admin-summary-remark">
+                        {activeOrder.usdtConfirmedAt
+                          ? `已确认 · ${activeOrder.usdtConfirmedAmount || activeOrder.usdtPayAmount} USDT${activeOrder.usdtConfirmedAtBeijing ? ` · ${activeOrder.usdtConfirmedAtBeijing}` : ""}${activeOrder.usdtTxId ? ` · TX ${activeOrder.usdtTxId}` : ""}`
+                          : `待确认${activeOrder.usdtPayAmount ? ` · 应付 ${activeOrder.usdtPayAmount} USDT` : ""}`}
+                      </b>
+                    </div>
+                  )}
                   <div><span>邮箱</span>
                     <b>
                       {activeOrder.email}

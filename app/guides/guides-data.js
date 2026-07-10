@@ -5,12 +5,12 @@ export const GUIDES = [
   {
     slug: "how-to-buy-spotify-premium",
     service: "spotify",
-    updated: "2026-07",
+    updated: "2026-07-11",
     title: "如何购买 Spotify 高价区会员(个人/家庭/双人)",
     titleEn: "How to Buy Spotify Premium (Individual / Duo / Family)",
     desc: "Spotify 高价区会员怎么买、家庭成员和个人订阅怎么选、开通要多久、能不能用自己账号——一篇讲清楚。",
     descEn: "How to buy Spotify Premium on a premium region, choosing between Family member, Individual and Duo, delivery time and whether you can use your own account.",
-    intro: "Spotify 高价区订阅音质更稳、歌单与 AI DJ 全开,价格也更划算。下面按「选规格 → 下单 → 开通」三步说明,并解答账号归属、时长、售后等常见疑问。",
+    intro: "Spotify 高价区订阅提供完整 Premium 权益，家庭成员、个人、双人与家庭套餐可选。下面按「选规格 → 下单 → 开通」说明，并解答账号归属、时长、售后等常见问题。",
     introEn: "Premium-region Spotify plans give you the full catalog, AI DJ and stable playback at a better price. Below is a simple pick-a-plan → order → activation walkthrough, plus answers on account ownership, duration and after-sales.",
     steps: [
       ["选择规格", "家庭成员(性价比,适合单人长期听)、个人订阅(独立账号边界清晰)、双人/家庭(可邀请他人共享)。不确定就先选家庭成员。"],
@@ -38,7 +38,7 @@ export const GUIDES = [
   {
     slug: "how-to-pay-overseas-websites",
     service: "proxy-payment",
-    updated: "2026-07",
+    updated: "2026-07-11",
     title: "海外网站/平台无法付款?全球代付怎么用",
     titleEn: "Can't Pay an Overseas Website? How Proxy Payment Works",
     desc: "境外网站只收海外卡、支付一直失败怎么办。全球代付支持海外购物、订酒店机票、充值话费、虚拟会员等,人工核价后付款,中国大陆网站除外。",
@@ -71,7 +71,7 @@ export const GUIDES = [
   {
     slug: "netflix-4k-seat-vs-full-account",
     service: "netflix",
-    updated: "2026-07",
+    updated: "2026-07-11",
     title: "Netflix 车位和整号怎么选?4K 会员购买指南",
     titleEn: "Netflix 4K Seat vs Full Account — Which to Buy",
     desc: "Netflix 4K 会员车位是什么、和整号有什么区别、哪个更适合我——按使用场景选。",
@@ -102,7 +102,7 @@ export const GUIDES = [
   {
     slug: "how-to-get-chatgpt-claude-membership",
     service: "ai",
-    updated: "2026-07",
+    updated: "2026-07-11",
     title: "ChatGPT Plus / Claude Pro 怎么开通(官方会员)",
     titleEn: "How to Get ChatGPT Plus & Claude Pro (Official)",
     desc: "国内怎么开通 ChatGPT Plus、Claude Pro,官方渠道充值、独立账号、更高额度套餐怎么选。",
@@ -133,7 +133,7 @@ export const GUIDES = [
   {
     slug: "how-to-use-vpn-node",
     service: "airport-node",
-    updated: "2026-07",
+    updated: "2026-07-11",
     title: "机场节点怎么用?订阅链接导入教程(小火箭/Clash)",
     titleEn: "How to Use a VPN Node — Import Your Subscription (Shadowrocket / Clash)",
     desc: "机场节点订阅链接怎么导入,iPhone 小火箭、安卓 Clash、电脑 Clash Verge 怎么配置,套餐怎么选。",
