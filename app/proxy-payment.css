@@ -151,6 +151,44 @@
   top: 82px;
 }
 
+/* 付款方式切换(支付宝 / USDT) */
+.proxy-pay-method-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.proxy-pay-method-seg button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 11px 10px;
+  border-radius: 12px;
+  border: 1.5px solid var(--border, #e2e8f0);
+  background: #fff;
+  color: var(--muted, #475569);
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.proxy-pay-method-seg button em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 800;
+  color: #b45309;
+  background: #fffbeb;
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+.proxy-pay-method-seg button.active {
+  border-color: var(--accent, #0f766e);
+  background: rgba(15, 118, 110, .06);
+  color: var(--accent, #0f766e);
+}
+.proxy-pay-method-seg button.active em { background: rgba(180, 83, 9, .12); }
+
 .proxy-quote-summary {
   padding: 22px;
 }

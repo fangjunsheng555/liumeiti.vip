@@ -126,6 +126,9 @@ const TESTIMONIALS = [
   { name: "Aiden***", initial: "A", region: "硅谷", service: "AI 会员 · Claude Pro", rating: 5, date: "3小时前", text: "Claude Pro 开通很快，写代码和长文都很顺，价格比自己开划算，售后也跟得上" },
   { name: "邹**", initial: "邹", region: "武汉", service: "AI 会员 · GPT 5x Pro", rating: 5, date: "5小时前", text: "5x 额度日常重度使用完全够，账号稳定没掉过，遇到问题带订单号客服直接处理" },
   { name: "白*", initial: "白", region: "西安", service: "AI 会员 · Claude 5x Max", rating: 5, date: "7小时前", text: "Max 高额度跑大项目很顺手，官方渠道靠谱，开通和说明都很清楚，会回购" },
+  { name: "夏**", initial: "夏", region: "深圳", service: "全球代付 · 海外购物", rating: 5, date: "12 分钟前", text: "海外网站不支持国内卡，发链接给客服人工报价，付完款很快就帮我下单了，全程有沟通很省心。" },
+  { name: "Kai**", initial: "K", region: "东京", service: "全球代付 · 订酒店机票", rating: 5, date: "40 分钟前", text: "临时订海外酒店，自己付不了，报价透明、按报价付款，出票也顺利，比找代购靠谱。" },
+  { name: "汤*", initial: "汤", region: "长沙", service: "全球代付 · 虚拟会员", rating: 5, date: "2 小时前", text: "买个海外平台会员一直卡在支付，交给他们代付，报价合理，开通后没任何问题。" },
 ];
 
 const TESTIMONIALS_EN = [
@@ -153,6 +156,9 @@ const TESTIMONIALS_EN = [
   { name: "Chloe D.", initial: "C", region: "Manila", service: "Netflix + VPN", rating: 5, date: "5 days ago", text: "Works fine from overseas too, everything configured at once. I'll likely keep renewing here." },
   { name: "Mason K.", initial: "M", region: "San Francisco", service: "AI Membership · GPT Plus", rating: 5, date: "2 hours ago", text: "Official top-up and a private account I don't have to share — activated within minutes, and support was sharp." },
   { name: "Ivy L.", initial: "I", region: "Singapore", service: "AI Membership · Claude Pro", rating: 5, date: "6 hours ago", text: "Claude Pro was up fast and stayed stable for long writing and coding. Cheaper than doing it myself, with real after-sales." },
+  { name: "Oliver P.", initial: "O", region: "Vancouver", service: "Proxy Pay · overseas shopping", rating: 5, date: "15 min ago", text: "The site wouldn't take my card, so I sent the link and got a manual quote. Paid and they ordered it for me right away — smooth." },
+  { name: "Mia S.", initial: "M", region: "London", service: "Proxy Pay · hotels & flights", rating: 5, date: "1 hour ago", text: "Needed an overseas hotel I couldn't pay for myself. Transparent quote, pay-after-quote, and the booking went through cleanly." },
+  { name: "Ethan W.", initial: "E", region: "Sydney", service: "Proxy Pay · digital membership", rating: 5, date: "3 hours ago", text: "A platform membership kept failing at checkout. They handled the payment, the quote was fair, and activation had no issues." },
 ];
 
 const TESTIMONIALS_PER_PAGE = 4;
@@ -193,6 +199,7 @@ const LIVE_ORDER_PRODUCTS = [
   "机场节点 · 普通套餐", "机场节点 · 高级套餐", "机场节点 · 豪华套餐", "机场节点 · 无限套餐", "机场节点 · 5元10GB测试",
   "AI 会员 · GPT Plus", "AI 会员 · GPT 5x Pro", "AI 会员 · GPT 20x Pro", "AI 会员 · Claude Pro", "AI 会员 · Claude 5x Max", "AI 会员 · Claude 20x Max",
   "Spotify + Netflix", "Netflix + Disney+", "Spotify + HBO Max", "机场节点 + Netflix", "Spotify + 机场节点", "AI 会员 + Netflix",
+  "全球代付 · 海外购物", "全球代付 · 订酒店机票", "全球代付 · 充值话费", "全球代付 · 虚拟会员", "全球代付 · 海外服装日用",
 ];
 
 const LIVE_ORDER_TIMES = [
@@ -326,6 +333,7 @@ const EN_LIVE_ORDER_PRODUCTS = [
   "VPN · Standard", "VPN · Plus", "VPN · Premium", "VPN · Unlimited",
   "AI Membership · GPT Plus", "AI Membership · GPT 5x Pro", "AI Membership · GPT 20x Pro", "AI Membership · Claude Pro", "AI Membership · Claude 5x Max", "AI Membership · Claude 20x Max",
   "Spotify + Netflix", "Netflix + Disney+", "Spotify + VPN", "AI Membership + Netflix",
+  "Proxy Pay · overseas shopping", "Proxy Pay · hotels & flights", "Proxy Pay · mobile top-up", "Proxy Pay · digital membership", "Proxy Pay · overseas apparel",
 ];
 const EN_LIVE_ORDER_TIMES = [
   "just now", "1 min ago", "2 min ago", "3 min ago", "5 min ago", "8 min ago", "10 min ago", "12 min ago",

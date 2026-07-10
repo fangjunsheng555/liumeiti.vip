@@ -10,6 +10,7 @@ import {
   redisCmd,
   sendSimpleEmail,
   setOrderAt,
+  getUsdtRate,
 } from "../../_utils.js";
 import { getSettings } from "../../_settings.js";
 import { buildProxyOrderEmail } from "../_email.js";
@@ -47,6 +48,9 @@ function publicQuoteOrder(order) {
     platformUrl: order.platformUrl || order.items?.[0]?.platformUrl || "",
     productPrice: order.productPrice || order.items?.[0]?.productPrice || "",
     quoteAmount: Number(order.quoteAmount || order.finalAmount || 0),
+    paymentMethod: order.paymentMethod || "quote",
+    paidCurrency: order.paidCurrency || "CNY",
+    paidAmount: Number(order.paidAmount || 0),
     quotedAtBeijing: order.quotedAtBeijing || "",
     paymentSubmittedAtBeijing: order.paymentSubmittedAtBeijing || "",
     completedAtBeijing: order.completedAtBeijing || "",
@@ -153,10 +157,24 @@ export async function POST(request, { params }) {
   }
 
   const now = new Date();
+  const settings0 = await getSettings();
+  const quoteCny = Number(order.quoteAmount || order.finalAmount || 0);
+  const method = body.paymentMethod === "usdt" ? "usdt" : "alipay";
   order.status = "received";
-  order.paymentMethod = "alipay";
-  order.paidAmount = Number(order.quoteAmount || order.finalAmount || 0);
-  order.paidCurrency = "CNY";
+  order.paymentMethod = method;
+  if (method === "usdt") {
+    // 报价人民币额 × USDT 折扣 ÷ 站点设置汇率(固定汇率优先,否则每日自动),与普通结算一致。
+    const rate = settings0.usdt.rateOverride ? Number(settings0.usdt.rateOverride) : await getUsdtRate();
+    const discount = Number(settings0.usdt.discount) || 0.9;
+    const usdt = Math.round((quoteCny * discount / rate) * 100) / 100;
+    order.paidAmount = usdt;
+    order.paidCurrency = "USDT";
+    order.usdtRate = rate;
+    order.finalUsdt = usdt;
+  } else {
+    order.paidAmount = quoteCny;
+    order.paidCurrency = "CNY";
+  }
   order.paymentSubmittedAt = now.toISOString();
   order.paymentSubmittedAtBeijing = formatBeijingTime(now);
   order.staffAudit = Array.isArray(order.staffAudit) ? order.staffAudit : [];

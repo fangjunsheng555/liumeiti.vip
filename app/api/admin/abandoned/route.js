@@ -61,9 +61,15 @@ export async function POST(request) {
   const h = flatToObj(await redisCmd(["HGETALL", ckey]));
   if (!h.ts) return Response.json({ ok: false, error: "not_found" }, { status: 404 });
 
+  // 处理完从弃单索引移除该记录(召回过或已成交,不再显示在列表)
+  async function removeRecord() {
+    await redisCmd(["ZREM", CART_INDEX, id]);
+    await redisCmd(["DEL", ckey]);
+  }
+
   if (action === "converted") {
-    await redisCmd(["HSET", ckey, "status", "converted"]);
-    return Response.json({ ok: true });
+    await removeRecord();
+    return Response.json({ ok: true, removed: true });
   }
   if (action === "email") {
     const to = (h.email || "").toLowerCase();
@@ -82,8 +88,9 @@ export async function POST(request) {
     try { const r = await sendSimpleEmail({ to, subject, text, html, fromName: brandName }); sent = !!(r && (r.messageId || r.ok !== false)); }
     catch (e) { sent = false; }
     if (!sent) return Response.json({ ok: false, error: "send_failed" }, { status: 502 });
-    await redisCmd(["HSET", ckey, "status", "contacted", "contactedAt", String(Date.now())]);
-    return Response.json({ ok: true });
+    // 召回邮件已发出 → 从列表移除
+    await removeRecord();
+    return Response.json({ ok: true, removed: true });
   }
   return Response.json({ ok: false, error: "bad_action" }, { status: 400 });
 }

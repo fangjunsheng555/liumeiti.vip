@@ -46,12 +46,8 @@ export default function ProxyPaymentCheckout({ initialEmail = "", onSubmitted })
 
   function validate() {
     if (!validEmail(form.email)) return L("请填写有效邮箱", "Enter a valid email");
-    try {
-      const url = new URL(form.platformUrl.trim());
-      if (!['http:', 'https:'].includes(url.protocol)) throw new Error();
-    } catch {
-      return L("请填写完整的网站链接，以 https:// 或 http:// 开头", "Enter the full website link, starting with https:// or http://");
-    }
+    // 网站链接/平台不做格式校验,任意内容(链接或文字描述)均可,仅要求非空。
+    if (!form.platformUrl.trim()) return L("请填写网站链接 / 平台", "Enter the website link / platform");
     if (!form.productPrice.trim() || !/\d/.test(form.productPrice)) return L("请填写商品标价和币种", "Enter the listed price and currency");
     if (!form.contact.trim()) return L("请填写联系方式", "Enter your contact");
     return "";
@@ -163,7 +159,7 @@ export default function ProxyPaymentCheckout({ initialEmail = "", onSubmitted })
                 </label>
                 <label className="order-field">
                   <span>{L("网站链接 / 平台", "Website link / platform")} <em className="field-required">*</em></span>
-                  <div className="proxy-url-field"><ExternalLink size={16} /><input type="url" value={form.platformUrl} onChange={(e) => update("platformUrl", e.target.value)} placeholder="https://example.com/product" inputMode="url" maxLength={800} required /></div>
+                  <div className="proxy-url-field"><ExternalLink size={16} /><input type="text" value={form.platformUrl} onChange={(e) => update("platformUrl", e.target.value)} placeholder="https://example.com/product" maxLength={800} required /></div>
                 </label>
                 <div className="proxy-field-row">
                   <label className="order-field">

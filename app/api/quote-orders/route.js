@@ -30,22 +30,11 @@ function validEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
 
+// 网站链接/平台:不做格式校验,接受任意内容(链接或纯文字描述均可),仅要求非空。
 function normalizePlatformUrl(value) {
   const raw = clean(value, 800);
   if (!raw) return { ok: false, error: "missing_platform_url" };
-  try {
-    const url = new URL(raw);
-    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password) {
-      return { ok: false, error: "invalid_platform_url" };
-    }
-    const host = url.hostname.toLowerCase();
-    if (host === "localhost" || !host.includes(".")) return { ok: false, error: "invalid_platform_url" };
-    if (host.endsWith(".cn")) return { ok: false, error: "mainland_site_not_supported" };
-    url.hash = "";
-    return { ok: true, value: url.toString().slice(0, 800) };
-  } catch {
-    return { ok: false, error: "invalid_platform_url" };
-  }
+  return { ok: true, value: raw };
 }
 
 function requestNotice(order) {

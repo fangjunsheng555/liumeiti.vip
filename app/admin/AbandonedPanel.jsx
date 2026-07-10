@@ -55,7 +55,7 @@ export default function AbandonedPanel() {
     try {
       const r = await fetch("/api/admin/abandoned", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, action }) });
       const d = await r.json();
-      if (d && d.ok) { ok(action === "email" ? "召回邮件已发送" : "已标记成交"); refresh(); }
+      if (d && d.ok) { ok(action === "email" ? "召回邮件已发送 · 已移出列表" : "已标记成交 · 已移出列表"); refresh(); }
       else err(d.error === "no_email" ? "该弃单没有邮箱，无法发信召回" : (d.error === "send_failed" ? "发信失败，请重试" : "操作失败"));
     } catch (e) { err("操作失败"); }
     setBusy("");
