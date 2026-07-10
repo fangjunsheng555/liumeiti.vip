@@ -175,6 +175,7 @@ export default function ProxyQuotePayment({ orderId }) {
                 <button type="button" className={payMethod === "alipay" ? "active" : ""} onClick={() => selectPaymentMethod("alipay")} aria-pressed={payMethod === "alipay"} disabled={submitting}>{L("支付宝", "Alipay")}</button>
                 <button type="button" className={payMethod === "usdt" ? "active" : ""} onClick={() => selectPaymentMethod("usdt")} aria-pressed={payMethod === "usdt"} disabled={submitting}>USDT <em>{L("9 折", "10% off")}</em></button>
               </div>
+              <div className="proxy-payment-qr-head"><span><ShieldCheck size={17} />{isUsdt ? L("USDT 付款", "USDT payment") : L("支付宝付款", "Alipay payment")}</span><em>{isUsdt ? "TRC20" : L("安全结算", "Secure")}</em></div>
               <div className={`proxy-payment-method-amount ${payMethod}`} aria-live="polite">
                 <span>{payMethod === "usdt" ? L("USDT 需付", "Pay with USDT") : L("支付宝需付", "Pay with Alipay")}</span>
                 <b>{payMethod === "usdt"
@@ -184,7 +185,6 @@ export default function ProxyQuotePayment({ orderId }) {
                   ? L("TRC20 · 请按此精确金额转账", "TRC20 · send this exact amount")
                   : L("请按此精确金额付款", "Pay this exact amount")}</small>
               </div>
-              <div className="proxy-payment-qr-head"><span><ShieldCheck size={17} />{isUsdt ? L("USDT 付款", "USDT payment") : L("支付宝付款", "Alipay payment")}</span><em>{isUsdt ? "TRC20" : L("安全结算", "Secure")}</em></div>
               <div className={`proxy-payment-qr-frame${qrReady ? " ready" : " loading"}`}>
                 {!qrReady && <div className="proxy-payment-qr-loading"><LoaderCircle size={20} className="spin-icon" /><span>{L("正在切换收款码", "Loading payment QR")}</span></div>}
                 <img
