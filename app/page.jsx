@@ -636,6 +636,7 @@ export default function Page() {
               <Link href="/services/disney">Disney+</Link>
               <Link href="/services/hbo-max">HBO Max</Link>
               <Link href="/services/airport-node">{t("footer.airportNode")}</Link>
+              <Link href="/services/proxy-payment">{locale === "en" ? "Proxy Pay" : "全球代付"}</Link>
             </div>
           </div>
           <div className="footer-legal">

@@ -9,6 +9,7 @@ const PRODUCT_TITLE_EN = {
   max: "HBO Max",
   rocket: "VPN",
   ai: "AI Membership",
+  "proxy-pay": "Global Proxy Pay",
 };
 
 const PLAN_LABEL_EN = {
@@ -31,9 +32,10 @@ const PLAN_LABEL_EN = {
     "claude-max": "Claude 5x Max",
     "claude-20x-max": "Claude 20x Max",
   },
+  "proxy-pay": { quote: "Custom quote" },
 };
 
-const CYCLE_EN = { "1年": "1 yr", "次": "once", "三个月": "3 months" };
+const CYCLE_EN = { "1年": "1 yr", "次": "once", "三个月": "3 months", "按单": "per request", "人工报价": "custom quote" };
 
 export function localizeOrderItemLabel(service, plan, fallbackLabel, locale) {
   if (locale !== "en") return fallbackLabel;

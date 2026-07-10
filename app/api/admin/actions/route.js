@@ -77,6 +77,8 @@ const TYPE_LABELS = {
 };
 
 const STATUS_LABELS = {
+  awaiting_quote: "待报价",
+  pending_payment: "待付款",
   received: "待处理",
   completed: "已完成",
   invalid: "无效",

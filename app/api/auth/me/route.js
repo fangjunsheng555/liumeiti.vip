@@ -23,6 +23,9 @@ function publicOrder(order, locale = "zh") {
         label: localizeOrderItemLabel(it.service, it.plan || it.rocketPlan, it.label || "", locale),
         cycle: localizeCycle(it.cycle || "", locale),
         amount: Number(it.amount || 0),
+        plan: it.plan || it.rocketPlan || "",
+        platformUrl: it.platformUrl || "",
+        productPrice: it.productPrice || "",
         // Show staff-filled credentials when available, fall back to buyer's
         account: it.staffAccount || it.account || "",
         password: it.staffPassword || it.password || "",
@@ -47,6 +50,7 @@ function publicOrder(order, locale = "zh") {
   }
   return {
     orderId: order.orderId || "",
+    orderType: order.orderType || "standard",
     status: order.status || "received",
     createdAt: order.createdAt || "",
     createdAtBeijing: order.createdAtBeijing || "",
@@ -59,6 +63,11 @@ function publicOrder(order, locale = "zh") {
     finalAmount: Number(order.finalAmount || 0),
     paidAmount: Number(order.paidAmount || (order.paymentMethod === "usdt" ? order.finalUsdt : order.finalAmount) || 0),
     paidCurrency: order.paidCurrency || (order.paymentMethod === "usdt" ? "USDT" : "CNY"),
+    platformUrl: order.platformUrl || items[0]?.platformUrl || "",
+    productPrice: order.productPrice || items[0]?.productPrice || "",
+    quoteAmount: Number(order.quoteAmount || 0),
+    quotedAtBeijing: order.quotedAtBeijing || "",
+    paymentSubmittedAtBeijing: order.paymentSubmittedAtBeijing || "",
     couponDiscount: Number(order.couponDiscount || 0),
     couponTitle: order.couponTitle || "",
     contact: order.contact || "",

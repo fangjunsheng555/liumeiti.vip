@@ -19,6 +19,7 @@ function applyCatalogToService(service, catProd, locale, soldOutMap = {}) {
   const activePlans = (catProd.plans || []).filter((pl) => pl.active !== false);
   const next = { ...service };
   if (locale !== "en" && catProd.priceText) next.price = catProd.priceText;
+  if (catProd.quoteOnly || catProd.key === "proxy-pay") return next;
   const cycleShort = (c) => String(c || "").replace(/^1/, "");
   if (Array.isArray(service.plans) && activePlans.length) {
     // 第4位 = 该规格是否售罄(库存0),供下方规格卡用
@@ -92,22 +93,25 @@ export default async function ServiceLandingPage({ params }) {
   const allSoldOut = Boolean(catProd) && (catProd.plans || []).filter((pl) => pl.active !== false).length > 0
     && (catProd.plans || []).filter((pl) => pl.active !== false).every((pl) => soldOutMap[catProd.key + ":" + pl.id]);
 
-  const jsonLd = [
-    {
-      "@context": "https://schema.org",
-      "@type": "Product",
-      name: service.title,
-      image: `https://www.liumeiti.vip${service.image}`,
-      description: service.description,
-      brand: { "@type": "Brand", name: "冒央会社 Maoyang Taiwan Inc" },
-      offers: {
+  const productJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    name: service.title,
+    image: `https://www.liumeiti.vip${service.image}`,
+    description: service.description,
+    brand: { "@type": "Brand", name: "冒央会社 Maoyang Taiwan Inc" },
+  };
+  if (service.key !== "proxy-pay") {
+    productJsonLd.offers = {
         "@type": "AggregateOffer",
         priceCurrency: "CNY",
         lowPrice: String(service.plans[0]?.[1] || service.price).replace(/[^\d.]/g, "") || "0",
         availability: allSoldOut ? "https://schema.org/OutOfStock" : "https://schema.org/InStock",
         url: `https://www.liumeiti.vip/services/${service.slug}`,
-      },
-    },
+    };
+  }
+  const jsonLd = [
+    productJsonLd,
     {
       "@context": "https://schema.org",
       "@type": "BreadcrumbList",
@@ -127,6 +131,9 @@ export default async function ServiceLandingPage({ params }) {
       })),
     },
   ];
+  const processSteps = service.key === "proxy-pay"
+    ? (locale === "en" ? ["Send request", "Manual quote", "Pay by email link", "Order processing"] : ["提交需求", "人工报价", "邮件付款", "订单处理"])
+    : [t("svc.step1"), t("svc.step2"), t("svc.step3"), t("svc.step4")];
 
   return (
     <div className="page-shell portal-page-shell service-landing-shell">
@@ -204,7 +211,7 @@ export default async function ServiceLandingPage({ params }) {
             </div>
           </div>
           <div className="service-process-steps">
-            {[t("svc.step1"), t("svc.step2"), t("svc.step3"), t("svc.step4")].map((item, index) => (
+            {processSteps.map((item, index) => (
               <div key={item}>
                 <em>{String(index + 1).padStart(2, "0")}</em>
                 <span>{item}</span>

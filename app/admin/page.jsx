@@ -14,7 +14,7 @@ import CatalogPanel from "./CatalogPanel";
 import SettingsPanel from "./SettingsPanel";
 import SecurityPanel from "./SecurityPanel";
 import {
-  ArrowLeft, ChevronDown, Copy, Eye, EyeOff,
+  ArrowLeft, ChevronDown, Copy, Eye, EyeOff, ExternalLink,
   LoaderCircle, LogOut, Search, ShieldCheck,
   CheckCircle2, Clock, Inbox, X, AlertTriangle, Trash2,
   Gift, CreditCard, Plus, UserPlus, Mail, BellRing, BarChart3, Download, FileText,
@@ -23,12 +23,16 @@ import {
 } from "lucide-react";
 
 const STATUS_LABEL = {
+  awaiting_quote: "等待报价",
+  pending_payment: "等待付款",
   received: "订单已收到",
   completed: "订单已完成",
   invalid: "无效·未收到付款",
 };
 
 const STATUS_ICON_KEY = {
+  awaiting_quote: "clock",
+  pending_payment: "clock",
   received: "clock",
   completed: "check",
   invalid: "x",
@@ -1076,7 +1080,7 @@ function exportOrderPdf(order, note = "") {
     eyebrow: "Order Certificate",
     title: "订单详情凭证",
     description: "用于核对订单状态、付款信息、用户资料与商品配置",
-    stamp: order.status === "completed" ? "已完成" : order.status === "invalid" ? "无效" : "已收到",
+    stamp: order.status === "awaiting_quote" ? "待报价" : order.status === "pending_payment" ? "待付款" : order.status === "completed" ? "已完成" : order.status === "invalid" ? "无效" : "已收到",
     mainLabel: "Order ID",
     mainValue: order.orderId || "",
     summaryFields: [
@@ -2835,6 +2839,14 @@ export default function AdminPage() {
   }
 
   function openOverviewTarget(target) {
+    if (target === "awaiting_quote" || target === "pending_payment") {
+      setTab("orders");
+      setSearchInput("");
+      setAppliedSearch("");
+      setFilterStatus(target);
+      loadOrders("", target, { silent: true });
+      return;
+    }
     if (target === "orders") {
       setTab("orders");
       setSearchInput("");
@@ -2923,6 +2935,7 @@ export default function AdminPage() {
     setActiveOrder(order);
     setEditForm({
       status: order.status,
+      quoteAmount: order.quoteAmount ? String(order.quoteAmount) : "",
       staffNotes: order.staffNotes || "",
       items: order.items.map((it) => ({
         index: order.items.indexOf(it),
@@ -3083,10 +3096,52 @@ export default function AdminPage() {
         loadOverview({ silent: true });
         setActiveOrder(data.order);
       } else {
-        setSaveResult({ type: "error", message: data.error || "保存失败" });
+        const message = {
+          quote_required: "请先填写报价并发送付款邮件",
+          payment_not_received: "订单尚未收到付款，不能直接标记完成",
+          invalid_status: "当前状态不可用",
+        }[data.error] || data.error || "保存失败";
+        setSaveResult({ type: "error", message });
       }
     } catch (e) {
       setSaveResult({ type: "error", message: "网络错误" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function sendProxyQuote() {
+    if (!activeOrder || activeOrder.orderType !== "proxy_payment" || saving) return;
+    const amount = Math.round(Number(editForm.quoteAmount) * 100) / 100;
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setSaveResult({ type: "error", message: "请填写有效的报价金额" });
+      return;
+    }
+    setSaving(true);
+    setSaveResult(null);
+    try {
+      const res = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ quoteAmount: amount, staffNotes: editForm.staffNotes }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        const message = {
+          invalid_quote_amount: "报价金额无效",
+          quote_status_locked: "当前订单状态不能重新报价",
+        }[data.error] || data.error || "报价发送失败";
+        throw new Error(message);
+      }
+      const mailText = data.quote?.email?.ok ? "报价邮件已发送" : "报价已保存，但邮件发送失败，请检查邮件配置后重新发送";
+      setSaveResult({ type: data.quote?.email?.ok ? "success" : "error", message: mailText });
+      setActiveOrder(data.order);
+      setEditForm((current) => ({ ...current, status: "pending_payment", quoteAmount: String(data.quote?.amount || amount) }));
+      loadOrders(appliedSearch, filterStatus);
+      loadOverview({ silent: true });
+    } catch (error) {
+      setSaveResult({ type: "error", message: error.message || "网络错误" });
     } finally {
       setSaving(false);
     }
@@ -3327,7 +3382,15 @@ export default function AdminPage() {
               </div>
               <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("orders")}>
                 <span>待处理订单</span>
-                <b>{overview?.pendingOrders ?? 0}</b>
+                <b>{overview?.receivedOrders ?? 0}</b>
+              </button>
+              <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("awaiting_quote")}>
+                <span>代付待报价</span>
+                <b>{overview?.awaitingQuotes ?? 0}</b>
+              </button>
+              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("pending_payment")}>
+                <span>代付待付款</span>
+                <b>{overview?.pendingQuotePayments ?? 0}</b>
               </button>
               <button type="button" className="admin-overview-item warn" onClick={() => openOverviewTarget("abnormal")}>
                 <span>异常订单</span>
@@ -3810,7 +3873,7 @@ export default function AdminPage() {
                 />
               ) : (
                 <div className="admin-code-service-picker">
-                  {PRODUCTS.flatMap((p) => {
+                  {PRODUCTS.filter((p) => !p.quoteOnly).flatMap((p) => {
                     if (hasProductPlans(p.key)) {
                       const selectedService = codeServices.find((s) => {
                         const sk = typeof s === "string" ? s : s.key;
@@ -4346,6 +4409,8 @@ export default function AdminPage() {
             <div className="admin-filter">
               {[
                 { v: "all", label: "全部" },
+                { v: "awaiting_quote", label: "待报价" },
+                { v: "pending_payment", label: "待付款" },
                 { v: "received", label: "未完成" },
                 { v: "completed", label: "已完成" },
                 { v: "invalid", label: "无效" },
@@ -4476,7 +4541,15 @@ export default function AdminPage() {
                     )}
                     <div className="admin-order-bot">
                       <span className="admin-order-paid">
-                        {o.paidCurrency === "CODE" ? "兑换码" : o.paidCurrency === "USDT" ? `${o.paidAmount} USDT` : `¥${o.paidAmount}`}
+                        {o.status === "awaiting_quote"
+                          ? "待报价"
+                          : o.status === "pending_payment"
+                          ? `报价 ¥${Number(o.quoteAmount || 0).toFixed(2)}`
+                          : o.paidCurrency === "CODE"
+                          ? "兑换码"
+                          : o.paidCurrency === "USDT"
+                          ? `${o.paidAmount} USDT`
+                          : `¥${o.paidAmount}`}
                       </span>
                       <span className="admin-order-time">{o.createdAtBeijing?.split(" ")[1] || ""}</span>
                     </div>
@@ -4609,8 +4682,8 @@ export default function AdminPage() {
                 <h3>订单概览</h3>
                 <div className="admin-summary-grid">
                   <div><span>下单时间</span><b>{activeOrder.createdAtBeijing}</b></div>
-                  <div><span>支付方式</span><b>{activeOrder.paymentMethod === "redeem" ? "服务兑换码" : activeOrder.paymentMethod === "usdt" ? "USDT-TRC20" : "支付宝"}</b></div>
-                  <div><span>实付金额</span><b>{activeOrder.paidCurrency === "CODE" ? "兑换码抵扣" : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b></div>
+                  <div><span>支付方式</span><b>{activeOrder.paymentMethod === "quote" ? "等待报价付款" : activeOrder.paymentMethod === "redeem" ? "服务兑换码" : activeOrder.paymentMethod === "usdt" ? "USDT-TRC20" : "支付宝"}</b></div>
+                  <div><span>{activeOrder.status === "pending_payment" ? "报价金额" : "实付金额"}</span><b>{activeOrder.status === "awaiting_quote" ? "尚未报价" : activeOrder.status === "pending_payment" ? `¥${Number(activeOrder.quoteAmount || 0).toFixed(2)} · 未付款` : activeOrder.paidCurrency === "CODE" ? "兑换码抵扣" : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b></div>
                   <div><span>件数</span><b>{activeOrder.itemCount} 件</b></div>
                   <div><span>邮箱</span>
                     <b>
@@ -4658,13 +4731,50 @@ export default function AdminPage() {
                 </div>
               </section>
 
+              {activeOrder.orderType === "proxy_payment" && (
+                <section className="admin-modal-section admin-proxy-order-section">
+                  <div className="admin-proxy-section-head">
+                    <div>
+                      <span>代付需求</span>
+                      <h3>核验平台并发送报价</h3>
+                    </div>
+                    <img src="/products/proxy-pay.jpg" alt="全球代付" />
+                  </div>
+                  <div className="admin-proxy-request-grid">
+                    <div className="span-2">
+                      <span>网站 / 平台</span>
+                      <a href={activeOrder.platformUrl} target="_blank" rel="noopener noreferrer">{activeOrder.platformUrl}<ExternalLink size={11} /></a>
+                    </div>
+                    <div><span>商品标价</span><b>{activeOrder.productPrice || "--"}</b></div>
+                    <div><span>联系用户</span><b>{activeOrder.contact || "--"}</b></div>
+                    {activeOrder.quotedAtBeijing && <div><span>报价时间</span><b>{activeOrder.quotedAtBeijing}</b></div>}
+                    {activeOrder.paymentSubmittedAtBeijing && <div><span>用户提交付款</span><b>{activeOrder.paymentSubmittedAtBeijing}</b></div>}
+                  </div>
+                  {["awaiting_quote", "pending_payment"].includes(activeOrder.status) && (
+                    <div className="admin-proxy-quote-row">
+                      <label className="admin-field">
+                        <span>报价金额(CNY) <em>*</em></span>
+                        <div className="admin-proxy-amount-input"><i>¥</i><input type="number" min="0.01" max="1000000" step="0.01" value={editForm.quoteAmount} onChange={(e) => setEditForm({ ...editForm, quoteAmount: e.target.value })} placeholder="0.00" /></div>
+                      </label>
+                      <button type="button" className="admin-save-btn admin-proxy-quote-btn" onClick={sendProxyQuote} disabled={saving || !editForm.quoteAmount}>
+                        {saving ? <><LoaderCircle size={13} className="spin-icon" />发送中</> : <><Mail size={13} />{activeOrder.status === "pending_payment" ? "更新并重发报价" : "发送报价邮件"}</>}
+                      </button>
+                    </div>
+                  )}
+                  {activeOrder.quoteEmailSentAtBeijing && (
+                    <p className={`admin-proxy-mail-state${activeOrder.quoteEmailOk ? " ok" : " failed"}`}>{activeOrder.quoteEmailOk ? "报价邮件已发送" : "报价邮件发送失败"} · {activeOrder.quoteEmailSentAtBeijing}</p>
+                  )}
+                </section>
+              )}
+
               {/* Items */}
               <section className="admin-modal-section">
                 <h3>商品配置 · {editForm.items.length} 件</h3>
                 {editForm.items.map((it, idx) => {
                   const isRocket = it.service === "rocket";
                   const isSpotify = it.service === "spotify";
-                  const isStaffFill = !isSpotify && !isRocket; // netflix/disney/max
+                  const isProxy = it.service === "proxy-pay";
+                  const isStaffFill = !isSpotify && !isRocket && !isProxy; // netflix/disney/max
                   return (
                     <div key={idx} className="admin-item-card">
                       <div className="admin-item-head">
@@ -4673,7 +4783,9 @@ export default function AdminPage() {
                           <span className="admin-item-tag">{isStaffFill ? "客服填写账号密码" : "可修改买家输入"}</span>
                         )}
                       </div>
-                      {isStaffFill ? (
+                      {isProxy ? (
+                        <p className="admin-proxy-item-note">代付订单无需填写账号密码，按上方需求核验并报价。</p>
+                      ) : isStaffFill ? (
                         <>
                           <label className="admin-field">
                             <span>账号 <em>*</em></span>
@@ -4749,9 +4861,21 @@ export default function AdminPage() {
                   onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
                   disabled={saving || deleting}
                 >
-                  <option value="received">订单已收到</option>
-                  <option value="completed">订单已完成(发开通邮件)</option>
-                  <option value="invalid">无效·未收到付款</option>
+                  {activeOrder.orderType === "proxy_payment" ? (
+                    <>
+                      <option value="awaiting_quote">等待报价</option>
+                      <option value="pending_payment" disabled={!activeOrder.quoteAmount}>等待付款</option>
+                      <option value="received" disabled={activeOrder.status === "awaiting_quote"}>订单已收到</option>
+                      <option value="completed" disabled={!['received', 'completed'].includes(activeOrder.status)}>代付已完成(发送邮件)</option>
+                      <option value="invalid">订单无效</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="received">订单已收到</option>
+                      <option value="completed">订单已完成(发开通邮件)</option>
+                      <option value="invalid">无效·未收到付款</option>
+                    </>
+                  )}
                 </select>
                 <button
                   type="button"

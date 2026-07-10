@@ -142,6 +142,23 @@ export const PRODUCTS = [
       "请在支付完成后点击付款完成提交订单，提交后会生成订阅链接",
     qrImage: "/payment/alipay.jpg",
   },
+  {
+    key: "proxy-pay",
+    image: "/products/proxy-pay.jpg",
+    title: "全球代付",
+    subtitle: "海外网站与平台人工代付",
+    amount: 0,
+    cycle: "人工报价",
+    price: "3折起",
+    quoteOnly: true,
+    shortIntro: "代付海外网站与平台，中国大陆网站除外",
+    highlights: ["海外平台可用", "人工核价", "报价后付款"],
+    detailTitle: "提交代付需求，收到人工报价后再付款",
+    detailBody: "填写邮箱、网站链接、商品标价与联系方式。工作人员核验平台及商品后发送报价邮件，您可通过邮件中的专属链接付款。中国大陆网站暂不支持。",
+    orderTitle: "全球代付 · 人工报价",
+    orderBody: "提交需求后等待报价，无需预先付款",
+    qrImage: "/payment/alipay.jpg",
+  },
 ];
 
 export const ROCKET_PLANS = {
@@ -210,6 +227,7 @@ export function applyCatalogOverride(apiProducts) {
       title: p.title, subtitle: p.subtitle, price: p.priceText, cycle: p.cycle,
       shortIntro: p.shortIntro, highlights: p.highlights,
       detailTitle: p.detailTitle, detailBody: p.detailBody, defaultPlan: p.defaultPlan,
+      quoteOnly: !!p.quoteOnly,
       plans, activePlanIds: new Set((p.plans || []).map((pl) => pl.id)),
     };
   }
@@ -239,6 +257,7 @@ export function getCatalogProducts() {
         highlights: Array.isArray(ov.highlights) && ov.highlights.length ? ov.highlights : base.highlights,
         detailTitle: ov.detailTitle || base.detailTitle,
         detailBody: ov.detailBody || base.detailBody,
+        quoteOnly: ov.quoteOnly || base.quoteOnly || false,
       };
     })
     .filter(Boolean);
@@ -342,6 +361,18 @@ export const PRODUCT_EN = {
       "Memberships topped up directly through official channels — private, non-shared accounts that stay stable after activation, with full ChatGPT and Claude membership features. Choose GPT Plus ¥198, GPT 5x Pro ¥998, GPT 20x Pro ¥1888, Claude Pro ¥198, Claude 5x Max ¥998 or Claude 20x Max ¥1888 (all 3 months). Our team reaches out within 30 minutes after you order, with full after-sales support.",
     orderTitle: "AI Membership · choose a plan",
     orderBody: "Enter your email and contact details and pay via Alipay. Once you submit, our team will reach out within 30 minutes.",
+  },
+  "proxy-pay": {
+    title: "Global Proxy Pay",
+    subtitle: "Manual payment for overseas websites",
+    price: "From 30%",
+    cycle: "Custom quote",
+    shortIntro: "Proxy payment for overseas websites and platforms; mainland China excluded",
+    highlights: ["Overseas platforms", "Manual review", "Pay after quote"],
+    detailTitle: "Send your payment request and pay only after receiving a quote",
+    detailBody: "Enter your email, website link, listed price and contact. Our team verifies the platform and item, then emails a secure payment link with the quote. Mainland China websites are not supported.",
+    orderTitle: "Global Proxy Pay · custom quote",
+    orderBody: "Submit your request and wait for a quote. No upfront payment is required.",
   },
 };
 
@@ -477,6 +508,7 @@ export function isProductSoldOut(productKey) {
 
 export function productItemAmount(product, plan) {
   if (!product) return 0;
+  if (product.quoteOnly || product.key === "proxy-pay") return 0;
   if (hasProductPlans(product.key)) return getProductPlan(product.key, plan)?.amount || product.amount;
   return product.amount;
 }
@@ -675,8 +707,11 @@ export function useCart() {
 
   function addToCart(key, options = {}) {
     setCartState((current) => {
-      const next = current.includes(key) ? current : [...current, key];
-      const nextPlans = { ...loadCartPlans() };
+      const isQuoteOnly = key === "proxy-pay";
+      const base = isQuoteOnly ? [] : current.filter((item) => item !== "proxy-pay");
+      const next = base.includes(key) ? base : [...base, key];
+      const nextPlans = isQuoteOnly ? {} : { ...loadCartPlans() };
+      delete nextPlans["proxy-pay"];
       if (hasProductPlans(key)) {
         const plan = getProductPlan(key, options.plan || nextPlans[key] || getDefaultProductPlan(key));
         if (plan) nextPlans[key] = plan.id;
@@ -701,8 +736,11 @@ export function useCart() {
   function toggleCart(key, options = {}) {
     setCartState((current) => {
       const removing = current.includes(key);
-      const next = removing ? current.filter((k) => k !== key) : [...current, key];
-      const nextPlans = { ...loadCartPlans() };
+      const isQuoteOnly = key === "proxy-pay";
+      const base = isQuoteOnly ? [] : current.filter((item) => item !== "proxy-pay");
+      const next = removing ? current.filter((k) => k !== key) : [...base, key];
+      const nextPlans = isQuoteOnly ? {} : { ...loadCartPlans() };
+      delete nextPlans["proxy-pay"];
       if (hasProductPlans(key)) {
         if (removing) {
           delete nextPlans[key];
@@ -720,8 +758,9 @@ export function useCart() {
   function replaceCart(keys) {
     const valid = new Set(PRODUCTS.map((p) => p.key));
     const seen = new Set();
-    const next = (Array.isArray(keys) ? keys : [])
+    let next = (Array.isArray(keys) ? keys : [])
       .filter((key) => typeof key === "string" && valid.has(key) && !seen.has(key) && seen.add(key));
+    if (next.includes("proxy-pay")) next = ["proxy-pay"];
     const currentPlans = loadCartPlans();
     const nextPlans = {};
     next.forEach((key) => {

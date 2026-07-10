@@ -42,6 +42,10 @@ function normalizeOrder(order) {
       label: it.label || "",
       cycle: it.cycle || "",
       amount: Number(it.amount || 0),
+      plan: it.plan || it.rocketPlan || "",
+      planLabel: it.planLabel || it.rocketPlanLabel || "",
+      platformUrl: it.platformUrl || "",
+      productPrice: it.productPrice || "",
       account: it.account || "",
       password: it.password || "",
       staffAccount: it.staffAccount || "",
@@ -81,6 +85,7 @@ function normalizeOrder(order) {
     : [];
   return {
     orderId: order.orderId || "",
+    orderType: order.orderType || "standard",
     status: order.status || "received",
     createdAt: order.createdAt || "",
     createdAtBeijing: order.createdAtBeijing || "",
@@ -102,6 +107,14 @@ function normalizeOrder(order) {
     finalUsdt: Number(order.finalUsdt || 0),
     paidAmount: Number(order.paidAmount || (order.paymentMethod === "usdt" ? order.finalUsdt : order.finalAmount) || 0),
     paidCurrency: order.paidCurrency || (order.paymentMethod === "usdt" ? "USDT" : "CNY"),
+    platformUrl: order.platformUrl || items[0]?.platformUrl || "",
+    productPrice: order.productPrice || items[0]?.productPrice || "",
+    quoteAmount: Number(order.quoteAmount || 0),
+    quotedAtBeijing: order.quotedAtBeijing || "",
+    quoteExpiresAt: order.quoteExpiresAt || "",
+    quoteEmailSentAtBeijing: order.quoteEmailSentAtBeijing || "",
+    quoteEmailOk: order.quoteEmailOk !== false,
+    paymentSubmittedAtBeijing: order.paymentSubmittedAtBeijing || "",
     referral: order.referral ? {
       source: order.referral.source || "",
       inviteCode: order.referral.inviteCode || "",
@@ -146,7 +159,7 @@ function csvCell(v) {
 }
 function ordersToCsv(orders) {
   const head = ["订单号", "状态", "下单时间", "完成时间", "服务", "件数", "支付方式", "实付金额", "实付币种", "折后CNY", "优惠券抵扣", "下单邮箱", "联系方式", "用户IP", "买家备注", "客服备注"];
-  const statusLabel = { received: "未完成", completed: "已完成", invalid: "无效" };
+  const statusLabel = { awaiting_quote: "待报价", pending_payment: "待付款", received: "已收到", completed: "已完成", invalid: "无效" };
   const rows = orders.map((o) => [
     o.orderId, statusLabel[o.status] || o.status, o.createdAtBeijing, o.completedAtBeijing || "",
     o.serviceLabel, o.itemCount, o.paymentMethod, o.paidAmount, o.paidCurrency,
@@ -172,7 +185,7 @@ export async function GET(request) {
   let filtered = all.map(normalizeOrder);
   if (status === "abnormal") {
     filtered = filtered.filter((o) => o.abnormal);
-  } else if (status === "received" || status === "completed" || status === "invalid") {
+  } else if (["awaiting_quote", "pending_payment", "received", "completed", "invalid"].includes(status)) {
     filtered = filtered.filter((o) => o.status === status);
   }
   if (from || to) {
@@ -186,8 +199,8 @@ export async function GET(request) {
   if (q) {
     filtered = filtered.filter((o) => {
       const hay = [
-        o.orderId, o.email, o.contact, o.serviceLabel, o.staffNotes, o.remark,
-        ...o.items.flatMap((i) => [i.label, i.account, i.password, i.staffAccount, i.staffPassword]),
+        o.orderId, o.email, o.contact, o.serviceLabel, o.staffNotes, o.remark, o.platformUrl, o.productPrice,
+        ...o.items.flatMap((i) => [i.label, i.account, i.password, i.staffAccount, i.staffPassword, i.platformUrl, i.productPrice]),
       ].join(" ").toLowerCase();
       return hay.includes(q);
     });

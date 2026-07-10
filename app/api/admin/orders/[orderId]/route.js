@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import {
   getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
@@ -7,6 +8,7 @@ import {
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
+import { buildProxyOrderEmail } from "../../../quote-orders/_email.js";
 import { getSettings } from "../../../_settings.js";
 import { supportText } from "../../../../lib/settings-defaults.js";
 
@@ -41,6 +43,12 @@ async function sendCompletionEmail(order) {
     const emailLocale = order.locale === "en" ? "en" : "zh";
     const settings = await getSettings();
     const brandName = settings.brand.name || BRAND_NAME;
+    if (order.orderType === "proxy_payment") {
+      const content = buildProxyOrderEmail({
+        kind: "completed", order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale: emailLocale, support: settings.support,
+      });
+      return sendSimpleEmail({ to: order.email, ...content, fromName: brandName });
+    }
     const supportContact = supportText(settings.support, emailLocale);
     const html = buildCompletionEmailHtml({
       order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, supportContact, locale: emailLocale,
@@ -63,6 +71,22 @@ async function sendCompletionEmail(order) {
     return result;
   }
 
+}
+
+async function sendProxyQuoteEmail(order, paymentUrl) {
+  const settings = await getSettings();
+  const brandName = settings.brand.name || BRAND_NAME;
+  const content = buildProxyOrderEmail({
+    kind: "quote",
+    order,
+    paymentUrl,
+    brandName,
+    siteDomain: SITE_DOMAIN,
+    siteUrl: SITE_URL,
+    locale: order.locale === "en" ? "en" : "zh",
+    support: settings.support,
+  });
+  return sendSimpleEmail({ to: order.email, ...content, fromName: brandName });
 }
 
 async function sendTelegramNotice(text) {
@@ -91,8 +115,9 @@ export async function PATCH(request, { params }) {
   let body = {};
   try { body = await request.json(); } catch (e) {}
 
-  const ALLOWED_STATUS = ["received", "completed", "invalid"];
-  const newStatus = ALLOWED_STATUS.includes(body.status) ? body.status : null;
+  const ALLOWED_STATUS = ["awaiting_quote", "pending_payment", "received", "completed", "invalid"];
+  let newStatus = ALLOWED_STATUS.includes(body.status) ? body.status : null;
+  const quoteRequested = Object.prototype.hasOwnProperty.call(body, "quoteAmount");
   const staffNotes = clean(body.staffNotes, 1500);
   const itemUpdates = Array.isArray(body.items) ? body.items : [];
 
@@ -109,6 +134,52 @@ export async function PATCH(request, { params }) {
     }
   }
   if (!order) return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
+  if (order.orderType !== "proxy_payment" && ["awaiting_quote", "pending_payment"].includes(newStatus)) {
+    return Response.json({ ok: false, error: "invalid_status" }, { status: 400 });
+  }
+  if (order.orderType === "proxy_payment" && !quoteRequested) {
+    if (newStatus === "pending_payment" && (!Number(order.quoteAmount || 0) || !order.quotePaymentTokenHash)) {
+      return Response.json({ ok: false, error: "quote_required" }, { status: 409 });
+    }
+    if (newStatus === "received" && order.status === "awaiting_quote") {
+      return Response.json({ ok: false, error: "quote_required" }, { status: 409 });
+    }
+    if (newStatus === "completed" && !["received", "completed"].includes(order.status)) {
+      return Response.json({ ok: false, error: "payment_not_received" }, { status: 409 });
+    }
+  }
+
+  let quotePaymentUrl = "";
+  if (quoteRequested) {
+    if (order.orderType !== "proxy_payment") {
+      return Response.json({ ok: false, error: "not_proxy_order" }, { status: 400 });
+    }
+    if (!["awaiting_quote", "pending_payment"].includes(order.status)) {
+      return Response.json({ ok: false, error: "quote_status_locked" }, { status: 409 });
+    }
+    const quoteAmount = Math.round(Number(body.quoteAmount) * 100) / 100;
+    if (!Number.isFinite(quoteAmount) || quoteAmount <= 0 || quoteAmount > 1000000) {
+      return Response.json({ ok: false, error: "invalid_quote_amount" }, { status: 400 });
+    }
+    const now = new Date();
+    const token = randomBytes(32).toString("base64url");
+    order.quoteAmount = quoteAmount;
+    order.subtotal = quoteAmount;
+    order.bundleFinalAmount = quoteAmount;
+    order.finalAmount = quoteAmount;
+    order.payableAmount = quoteAmount;
+    order.paidAmount = 0;
+    order.paidCurrency = "CNY";
+    order.paymentMethod = "quote";
+    order.quotedAt = now.toISOString();
+    order.quotedAtBeijing = formatBeijingTime(now);
+    order.quoteExpiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    order.quotePaymentTokenHash = createHash("sha256").update(token).digest("hex");
+    order.quoteVersion = Number(order.quoteVersion || 0) + 1;
+    if (order.items?.[0]) order.items[0].amount = quoteAmount;
+    newStatus = "pending_payment";
+    quotePaymentUrl = `${SITE_URL}/checkout/quote/${encodeURIComponent(order.orderId)}#token=${encodeURIComponent(token)}`;
+  }
 
   // Apply item updates
   if (Array.isArray(order.items)) {
@@ -223,13 +294,27 @@ export async function PATCH(request, { params }) {
     await setOrderAt(index, order);
   }
 
+  let quoteEmailResult = null;
+  if (quotePaymentUrl) {
+    quoteEmailResult = await sendProxyQuoteEmail(order, quotePaymentUrl);
+    order.quoteEmailSentAt = new Date().toISOString();
+    order.quoteEmailSentAtBeijing = formatBeijingTime(new Date());
+    order.quoteEmailOk = Boolean(quoteEmailResult?.ok);
+    order.quoteEmailError = quoteEmailResult?.ok ? "" : clean(quoteEmailResult?.reason || quoteEmailResult?.error || "send_failed", 120);
+    await setOrderAt(index, order);
+  }
+
+  const responseOrder = { ...order };
+  delete responseOrder.quotePaymentTokenHash;
+
   return Response.json({
-    ok: true, order,
+    ok: true, order: responseOrder,
     completion: newStatus === "completed" && !wasCompleted ? { email: emailResult } : null,
     invalidNotice: newStatus === "invalid" && !wasInvalid ? { email: invalidEmailResult } : null,
     commission: commissionResult,
     refund: refundResult,
     reclaim: reclaimResult,
+    quote: quotePaymentUrl ? { email: quoteEmailResult, amount: order.quoteAmount, expiresAt: order.quoteExpiresAt } : null,
     statusChange: newStatus,
   });
 }
@@ -238,6 +323,12 @@ async function sendInvalidOrderEmail(order) {
   const emailLocale = order.locale === "en" ? "en" : "zh";
   const settings = await getSettings();
   const brandName = settings.brand.name || BRAND_NAME;
+  if (order.orderType === "proxy_payment") {
+    const content = buildProxyOrderEmail({
+      kind: "invalid", order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale: emailLocale, support: settings.support,
+    });
+    return sendSimpleEmail({ to: order.email, ...content, fromName: brandName });
+  }
   const supportContact = supportText(settings.support, emailLocale);
   const html = buildInvalidOrderEmailHtml({
     order,

@@ -17,8 +17,8 @@ import {
 const INVITE_LINK_ORIGIN = "https://www.liumeiti.vip";
 const GOOGLE_OAUTH_START = "/api/auth/oauth/google/start";
 
-const STATUS_LABEL = { received: "订单已收到", completed: "订单已完成", invalid: "订单无效·未收到付款" };
-const STATUS_LABEL_EN = { received: "Order received", completed: "Completed", invalid: "Invalid · unpaid" };
+const STATUS_LABEL = { awaiting_quote: "等待人工报价", pending_payment: "等待付款", received: "订单已收到", completed: "订单已完成", invalid: "订单无效·未收到付款" };
+const STATUS_LABEL_EN = { awaiting_quote: "Awaiting quote", pending_payment: "Awaiting payment", received: "Order received", completed: "Completed", invalid: "Invalid · unpaid" };
 const TX_STATUS_EN = { "待审核": "Pending review", "提现中": "Processing", "提现成功": "Withdrawn", "审核失败": "Rejected" };
 
 function copy(text) {
@@ -795,7 +795,7 @@ export default function AccountPage() {
                     {o.itemCount > 1 && <em>{L(`${o.itemCount} 件`, `${o.itemCount} items`)}</em>}
                   </div>
                   <div className="account-order-bot">
-                    <span>{o.paidCurrency === "CODE" ? L("兑换码", "Code") : o.paidCurrency === "USDT" ? `${o.paidAmount} USDT` : `¥${o.paidAmount}`}</span>
+                    <span>{o.status === "awaiting_quote" ? L("待报价", "Custom quote") : o.status === "pending_payment" ? `${L("报价", "Quote")} ¥${Number(o.quoteAmount || 0).toFixed(2)}` : o.paidCurrency === "CODE" ? L("兑换码", "Code") : o.paidCurrency === "USDT" ? `${o.paidAmount} USDT` : `¥${o.paidAmount}`}</span>
                     <small>{o.createdAtBeijing?.split(" ")[0] || ""}</small>
                   </div>
                 </button>
@@ -1054,10 +1054,18 @@ export default function AccountPage() {
 
             <div className="account-modal-body">
               <div className="account-modal-amount">
-                <span>{L("实付金额", "Amount paid")}</span>
-                <b>{activeOrder.paidCurrency === "CODE" ? L("服务兑换码", "Service code") : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b>
-                <em>{activeOrder.paymentMethod === "redeem" ? L("兑换码", "Code") : activeOrder.paymentMethod === "usdt" ? "USDT" : L("支付宝", "Alipay")}</em>
+                <span>{activeOrder.status === "awaiting_quote" ? L("当前进度", "Current status") : activeOrder.status === "pending_payment" ? L("报价金额", "Quote") : L("实付金额", "Amount paid")}</span>
+                <b>{activeOrder.status === "awaiting_quote" ? L("等待报价", "Awaiting quote") : activeOrder.status === "pending_payment" ? `¥${Number(activeOrder.quoteAmount || 0).toFixed(2)}` : activeOrder.paidCurrency === "CODE" ? L("服务兑换码", "Service code") : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b>
+                <em>{activeOrder.paymentMethod === "quote" ? L("人工报价", "Custom quote") : activeOrder.paymentMethod === "redeem" ? L("兑换码", "Code") : activeOrder.paymentMethod === "usdt" ? "USDT" : L("支付宝", "Alipay")}</em>
               </div>
+
+              {activeOrder.orderType === "proxy_payment" && (
+                <div className="account-proxy-order-info">
+                  <div className="span-2"><span>{L("网站 / 平台", "Website / platform")}</span><a href={activeOrder.platformUrl} target="_blank" rel="noopener noreferrer">{activeOrder.platformUrl}<ExternalLink size={12} /></a></div>
+                  <div><span>{L("商品标价", "Listed price")}</span><b>{activeOrder.productPrice}</b></div>
+                  <div><span>{L("付款提示", "Payment")}</span><b>{activeOrder.status === "pending_payment" ? L("请查收报价邮件", "Check your quote email") : activeOrder.status === "awaiting_quote" ? L("报价将发送至邮箱", "Quote will be emailed") : L("已提交付款信息", "Payment submitted")}</b></div>
+                </div>
+              )}
 
               <div className="account-modal-items-label">{L(`商品明细 · ${activeOrder.itemCount} 件`, `Items · ${activeOrder.itemCount}`)}</div>
               <div className="account-modal-items">
@@ -1065,7 +1073,7 @@ export default function AccountPage() {
                   <div key={idx} className="account-modal-item">
                     <div className="account-modal-item-head">
                       <strong>{it.label}</strong>
-                      <span>{it.cycle} · ¥{it.amount}</span>
+                      <span>{it.service === "proxy-pay" && !it.amount ? L("人工报价", "Custom quote") : `${it.cycle} · ¥${it.amount}`}</span>
                     </div>
                     {(it.account || it.password) && (
                       <div className="account-modal-creds">

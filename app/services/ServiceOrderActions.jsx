@@ -33,6 +33,7 @@ export default function ServiceOrderActions({ service, soldOut = {} }) {
   // 价格/规格/库存以合并目录为准(catalogVersion 变化即重算);售罄 = 目录 soldOut 或服务端首屏传入。
   const planOptions = useMemo(() => getProductPlanOptions(service?.key), [service?.key, catalogVersion]);
   const productKey = service?.key || "";
+  const quoteOnly = productKey === "proxy-pay";
   const currentPlan = getProductPlan(productKey, selectedPlan) || planOptions[0] || null;
   const isSoldOut = (planId) => Boolean(planOptions.find((p) => p.id === planId)?.soldOut) || Boolean(soldOut?.[planId]);
   const allSoldOut = planOptions.length > 0 && planOptions.every((p) => isSoldOut(p.id));
@@ -61,6 +62,26 @@ export default function ServiceOrderActions({ service, soldOut = {} }) {
   }
 
   if (!service) return null;
+
+  if (quoteOnly) {
+    return (
+      <div className="service-seo-actions">
+        <button
+          type="button"
+          className="primary-btn"
+          onClick={() => {
+            trackEvent("cta_click", productKey, "quote");
+            window.location.href = "/checkout?items=proxy-pay";
+          }}
+        >
+          <ShoppingBag size={16} />{locale === "en" ? "Request a quote" : "提交代付需求"}
+        </button>
+        <Link href="/service-center#contact" className="secondary-btn">
+          <Headphones size={16} />{t("svc.askSupport")}
+        </Link>
+      </div>
+    );
+  }
 
   const pickerModal = (
     <div className="modal-mask product-detail-mask service-order-mask" onClick={() => setPickerOpen(false)}>

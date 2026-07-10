@@ -99,26 +99,32 @@ export default function CatalogPanel() {
             <div className="admin-settings-field full"><label>卖点(用 ｜ 分隔)</label><input value={(p.highlights || []).join("｜")} onChange={(e) => patchProduct(p.key, "highlights", e.target.value.split("｜").map((s) => s.trim()).filter(Boolean))} /></div>
           </div>
 
-          <div style={{ fontSize: 12, fontWeight: 800, color: "var(--muted)", margin: "0 0 8px" }}>规格 / 价格 / 库存 <span style={{ fontWeight: 500, color: "var(--faint)" }}>(¥ = 结账实收价 · 库存留空 = 不限 · 0 = 售罄)</span></div>
-          <div style={{ display: "grid", gap: 8 }}>
-            {p.plans.map((pl) => {
-              const sv = stockVal(p, pl);
-              const sold = sv === "0";
-              return (
-                <div key={pl.id} className="admin-catalog-plan-row" style={sold ? { background: "#fef2f2", borderColor: "#fecaca" } : undefined} data-inactive={pl.active === false ? "1" : undefined}>
-                  <input className="plan-label" value={pl.label || ""} onChange={(e) => patchPlan(p.key, pl.id, "label", e.target.value)} title="规格名" />
-                  <div className="plan-amount"><span>¥</span><input type="number" step="0.01" min="0" value={pl.amount} onChange={(e) => patchPlan(p.key, pl.id, "amount", Number(e.target.value))} title="实收价" /></div>
-                  <input className="plan-stock" inputMode="numeric" placeholder="不限" style={sold ? { color: "#dc2626", borderColor: "#fecaca" } : undefined} value={sv} onChange={(e) => setStockVal(p, pl, e.target.value)} title="库存(留空=不限,0=售罄)" />
-                  <input className="plan-cycle" value={pl.cycle || ""} onChange={(e) => patchPlan(p.key, pl.id, "cycle", e.target.value)} title="周期" />
-                  <input className="plan-desc" value={pl.desc || ""} onChange={(e) => patchPlan(p.key, pl.id, "desc", e.target.value)} title="规格说明" />
-                  <label className="plan-active" title="该规格上/下架">
-                    <input type="checkbox" checked={pl.active !== false} onChange={(e) => patchPlan(p.key, pl.id, "active", e.target.checked)} />上架
-                  </label>
-                </div>
-              );
-            })}
-          </div>
-          <div className="admin-settings-hint">列:规格名 · ¥实收价 · 库存 · 周期 · 说明 · 上架　|　规格 id:{p.plans.map((pl) => pl.id).join(" · ")}</div>
+          {p.quoteOnly ? (
+            <div className="admin-settings-hint">人工报价商品：前端仅展示“3折起”，每笔订单在订单详情中单独核价并发送付款链接，不设置固定价格或库存。</div>
+          ) : (
+            <>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "var(--muted)", margin: "0 0 8px" }}>规格 / 价格 / 库存 <span style={{ fontWeight: 500, color: "var(--faint)" }}>(¥ = 结账实收价 · 库存留空 = 不限 · 0 = 售罄)</span></div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {p.plans.map((pl) => {
+                  const sv = stockVal(p, pl);
+                  const sold = sv === "0";
+                  return (
+                    <div key={pl.id} className="admin-catalog-plan-row" style={sold ? { background: "#fef2f2", borderColor: "#fecaca" } : undefined} data-inactive={pl.active === false ? "1" : undefined}>
+                      <input className="plan-label" value={pl.label || ""} onChange={(e) => patchPlan(p.key, pl.id, "label", e.target.value)} title="规格名" />
+                      <div className="plan-amount"><span>¥</span><input type="number" step="0.01" min="0" value={pl.amount} onChange={(e) => patchPlan(p.key, pl.id, "amount", Number(e.target.value))} title="实收价" /></div>
+                      <input className="plan-stock" inputMode="numeric" placeholder="不限" style={sold ? { color: "#dc2626", borderColor: "#fecaca" } : undefined} value={sv} onChange={(e) => setStockVal(p, pl, e.target.value)} title="库存(留空=不限,0=售罄)" />
+                      <input className="plan-cycle" value={pl.cycle || ""} onChange={(e) => patchPlan(p.key, pl.id, "cycle", e.target.value)} title="周期" />
+                      <input className="plan-desc" value={pl.desc || ""} onChange={(e) => patchPlan(p.key, pl.id, "desc", e.target.value)} title="规格说明" />
+                      <label className="plan-active" title="该规格上/下架">
+                        <input type="checkbox" checked={pl.active !== false} onChange={(e) => patchPlan(p.key, pl.id, "active", e.target.checked)} />上架
+                      </label>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="admin-settings-hint">列:规格名 · ¥实收价 · 库存 · 周期 · 说明 · 上架　|　规格 id:{p.plans.map((pl) => pl.id).join(" · ")}</div>
+            </>
+          )}
         </div>
       ))}
     </div>

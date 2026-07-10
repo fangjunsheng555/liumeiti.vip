@@ -24,6 +24,7 @@ function orderServiceAmount(order) {
 }
 
 function orderRevenueAmount(order) {
+  if (!["received", "completed"].includes(order.status || "received")) return 0;
   if (order.paymentMethod === "redeem" || order.paidCurrency === "CODE") {
     return orderServiceAmount(order);
   }
@@ -72,7 +73,7 @@ export async function GET(request) {
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
   const latestOrder = orders[0] || null;
   const todayKey = beijingDateKey();
-  const revenueOrders = orders.filter((order) => order.status !== "invalid");
+  const revenueOrders = orders.filter((order) => ["received", "completed"].includes(order.status));
   const totalRevenue = revenueOrders.reduce((sum, order) => sum + Number(order.revenueAmount || 0), 0);
   const todayRevenue = revenueOrders
     .filter((order) => orderBeijingDateKey(order) === todayKey)
@@ -83,7 +84,10 @@ export async function GET(request) {
     todayOrders: orders.filter((order) => orderBeijingDateKey(order) === todayKey).length,
     todayRevenue: Math.round(todayRevenue * 100) / 100,
     totalRevenue: Math.round(totalRevenue * 100) / 100,
-    pendingOrders: orders.filter((order) => order.status === "received").length,
+    pendingOrders: orders.filter((order) => ["awaiting_quote", "pending_payment", "received"].includes(order.status)).length,
+    receivedOrders: orders.filter((order) => order.status === "received").length,
+    awaitingQuotes: orders.filter((order) => order.status === "awaiting_quote").length,
+    pendingQuotePayments: orders.filter((order) => order.status === "pending_payment").length,
     abnormalOrders: orders.filter(isAbnormalOrder).length,
     completedOrders: orders.filter((order) => order.status === "completed").length,
     invalidOrders: orders.filter((order) => order.status === "invalid").length,
@@ -113,7 +117,7 @@ export async function GET(request) {
     const i = trendIdx[orderBeijingDateKey(order)];
     if (i == null) continue;
     trend[i].orders += 1;
-    if (order.status !== "invalid") trend[i].revenue = Math.round((trend[i].revenue + Number(order.revenueAmount || 0)) * 100) / 100;
+    if (["received", "completed"].includes(order.status)) trend[i].revenue = Math.round((trend[i].revenue + Number(order.revenueAmount || 0)) * 100) / 100;
   }
   overview.trend = trend;
   const yesterday = trend[trend.length - 2] || { orders: 0, revenue: 0 };
@@ -129,7 +133,7 @@ export async function GET(request) {
       const stockMap = await getCatalogStockMap(catalog);
       const low = [];
       for (const p of catalog) {
-        if (p.active === false) continue;
+        if (p.active === false || p.quoteOnly) continue;
         for (const pl of (p.plans || [])) {
           if (pl.active === false) continue;
           const stock = stockMap[p.key + ":" + pl.id];

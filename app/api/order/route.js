@@ -287,6 +287,9 @@ export async function POST(request) {
     if (!product) {
       return Response.json({ ok: false, error: "invalid_service:" + service }, { status: 400 });
     }
+    if (product.quoteOnly || service === "proxy-pay") {
+      return Response.json({ ok: false, error: "quote_service_requires_application" }, { status: 400 });
+    }
     if (product.active === false) {
       return Response.json({ ok: false, error: "service_unavailable:" + service }, { status: 400 });
     }

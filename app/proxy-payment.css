@@ -1,0 +1,896 @@
+/* Proxy-payment product, application checkout, quote payment and admin workflow. */
+.home-service-card.svc-proxy-payment,
+.product-card.svc-proxy-pay {
+  --svc: #2f6fb2;
+}
+
+.price-now-quote {
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.proxy-checkout-main,
+.proxy-payment-main {
+  width: min(1040px, calc(100% - 32px));
+  margin: 0 auto;
+  padding-bottom: 84px;
+}
+
+.proxy-stepper {
+  max-width: 680px;
+  margin: 18px auto 22px;
+}
+
+.proxy-checkout-layout,
+.proxy-payment-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 18px;
+  align-items: start;
+}
+
+.proxy-checkout-form-column {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.proxy-service-hero {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 18px;
+  overflow: hidden;
+  border-color: #d9e6eb;
+  background: linear-gradient(120deg, #fff 0%, #f8fbff 64%, #f2f8ff 100%);
+}
+
+.proxy-service-hero > img {
+  width: 76px;
+  height: 76px;
+  border-radius: 18px;
+  object-fit: cover;
+  border: 1px solid #dce5ee;
+  box-shadow: 0 9px 24px rgba(15, 76, 92, .12);
+}
+
+.proxy-service-hero h1,
+.proxy-request-fields h2,
+.proxy-quote-summary h2,
+.proxy-payment-product h1 {
+  margin: 3px 0 5px;
+  font-size: 19px;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+.proxy-service-hero p {
+  margin: 0;
+  color: #64748b;
+  font-size: 12.5px;
+}
+
+.proxy-service-hero > b {
+  color: #0f4c5c;
+  font-size: 22px;
+  white-space: nowrap;
+  letter-spacing: 0;
+}
+
+.proxy-request-fields {
+  padding: 20px;
+}
+
+.proxy-request-fields .checkout-card-head {
+  align-items: end;
+  margin-bottom: 18px;
+}
+
+.proxy-request-fields .checkout-card-head em {
+  color: #64748b;
+  font-size: 11px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.proxy-request-fields .order-field {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 14px;
+}
+
+.proxy-request-fields .order-field:last-child {
+  margin-bottom: 0;
+}
+
+.proxy-request-fields .order-field > small {
+  color: #7c8a9e;
+  font-size: 11px;
+}
+
+.proxy-field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.proxy-url-field {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  height: 46px;
+  padding: 0 13px;
+  border: 1px solid #d6dee8;
+  border-radius: 11px;
+  background: #fff;
+  color: #64748b;
+  transition: border-color .2s, box-shadow .2s;
+}
+
+.proxy-url-field:focus-within {
+  border-color: #4b9aad;
+  box-shadow: 0 0 0 3px rgba(35, 121, 143, .11);
+}
+
+.proxy-url-field input {
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.proxy-checkout-aside,
+.proxy-payment-qr-card {
+  position: sticky;
+  top: 82px;
+}
+
+.proxy-quote-summary {
+  padding: 22px;
+}
+
+.proxy-summary-mark {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  margin-bottom: 13px;
+  color: #fff;
+  background: #0f4c5c;
+  box-shadow: 0 9px 22px rgba(15, 76, 92, .2);
+}
+
+.proxy-summary-steps {
+  display: grid;
+  gap: 0;
+  margin: 20px 0;
+}
+
+.proxy-summary-steps > div {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  padding: 0 0 18px;
+}
+
+.proxy-summary-steps > div:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  top: 27px;
+  width: 1px;
+  height: 22px;
+  background: #d8e2e8;
+}
+
+.proxy-summary-steps em {
+  display: grid;
+  place-items: center;
+  width: 29px;
+  height: 29px;
+  border-radius: 9px;
+  color: #0f4c5c;
+  background: #e9f5f7;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.proxy-summary-steps span {
+  display: grid;
+  gap: 3px;
+}
+
+.proxy-summary-steps b {
+  font-size: 13px;
+}
+
+.proxy-summary-steps small {
+  color: #64748b;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.proxy-submit,
+.proxy-payment-submit {
+  width: 100%;
+  justify-content: center;
+}
+
+.proxy-quote-summary > p,
+.proxy-payment-qr-card > small {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  margin: 10px 0 0;
+  color: #7b8798;
+  font-size: 10.5px;
+}
+
+.proxy-request-success,
+.proxy-payment-state {
+  width: min(600px, 100%);
+  margin: 38px auto 0;
+  padding: 42px 28px;
+  border: 1px solid #dbe5ea;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 16px 46px rgba(15, 23, 42, .07);
+  text-align: center;
+}
+
+.proxy-success-icon {
+  display: grid;
+  place-items: center;
+  width: 68px;
+  height: 68px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  color: #fff;
+  background: #0f766e;
+  box-shadow: 0 12px 28px rgba(15, 118, 110, .22);
+}
+
+.proxy-request-success h1,
+.proxy-payment-state h1 {
+  margin: 5px 0 9px;
+  font-size: 25px;
+  letter-spacing: 0;
+}
+
+.proxy-request-success > p,
+.proxy-payment-state > p {
+  margin: 0 auto;
+  max-width: 440px;
+  color: #64748b;
+  font-size: 13.5px;
+  line-height: 1.75;
+}
+
+.proxy-order-reference {
+  display: grid;
+  gap: 7px;
+  margin: 22px 0;
+  padding: 16px;
+  border-top: 1px solid #e6edf1;
+  border-bottom: 1px solid #e6edf1;
+}
+
+.proxy-order-reference span {
+  color: #7b8798;
+  font-size: 11px;
+}
+
+.proxy-order-reference code {
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.proxy-order-reference em {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: #0f766e;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.proxy-success-actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+.proxy-payment-layout {
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+
+.proxy-payment-order-card,
+.proxy-payment-qr-card {
+  padding: 22px;
+}
+
+.proxy-payment-product {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e7edf2;
+}
+
+.proxy-payment-product img {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  object-fit: cover;
+  border: 1px solid #dce5ee;
+}
+
+.proxy-payment-amount {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 28px 0 24px;
+}
+
+.proxy-payment-amount span,
+.proxy-payment-amount small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.proxy-payment-amount b {
+  color: #0f4c5c;
+  font-size: 38px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+.proxy-payment-details {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid #e0e8ed;
+  border-radius: 12px;
+  background: #e0e8ed;
+}
+
+.proxy-payment-details > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 13px;
+  background: #fff;
+}
+
+.proxy-payment-details .span-2 {
+  grid-column: 1 / -1;
+}
+
+.proxy-payment-details span {
+  color: #7b8798;
+  font-size: 10.5px;
+}
+
+.proxy-payment-details b,
+.proxy-payment-details a {
+  min-width: 0;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.proxy-payment-details a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #0f6675;
+}
+
+.proxy-payment-details button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 3px;
+  border: 0;
+  background: transparent;
+  color: #64748b;
+}
+
+.proxy-payment-details button em {
+  position: absolute;
+  left: 100%;
+  top: -2px;
+  color: #0f766e;
+  font-size: 9px;
+  font-style: normal;
+}
+
+.proxy-payment-qr-card {
+  text-align: center;
+}
+
+.proxy-payment-qr-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.proxy-payment-qr-head span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.proxy-payment-qr-head em {
+  padding: 4px 8px;
+  border-radius: 99px;
+  color: #0f766e;
+  background: #e8f7f3;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.proxy-payment-qr {
+  display: block;
+  width: min(236px, 78vw);
+  aspect-ratio: 1;
+  object-fit: contain;
+  margin: 0 auto 12px;
+  border: 1px solid #e1e7ec;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.proxy-payment-qr-card > strong {
+  display: block;
+  font-size: 14px;
+}
+
+.proxy-payment-qr-card > p {
+  margin: 5px 0 16px;
+  color: #64748b;
+  font-size: 11.5px;
+}
+
+.proxy-payment-state {
+  display: grid;
+  justify-items: center;
+  gap: 9px;
+}
+
+.proxy-payment-state.error > svg {
+  color: #c2410c;
+}
+
+.admin-order-status.status-awaiting_quote,
+.admin-modal-status.status-awaiting_quote {
+  color: #9a4c0b;
+  background: #fff4df;
+  border-color: #f3d6a4;
+}
+
+.admin-order-status.status-pending_payment,
+.admin-modal-status.status-pending_payment {
+  color: #245a91;
+  background: #edf5ff;
+  border-color: #cbdff4;
+}
+
+.admin-order-card.status-awaiting_quote {
+  border-left-color: #d97706;
+}
+
+.admin-order-card.status-pending_payment {
+  border-left-color: #3978b8;
+}
+
+.admin-proxy-order-section {
+  border-color: #d7e5eb;
+  background: #f9fbfd;
+}
+
+.admin-proxy-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.admin-proxy-section-head span {
+  color: #0f6675;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+
+.admin-proxy-section-head h3 {
+  margin: 3px 0 0;
+}
+
+.admin-proxy-section-head img {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 1px solid #d7e2e9;
+}
+
+.admin-proxy-request-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid #dce6ec;
+  border-radius: 10px;
+  background: #dce6ec;
+}
+
+.admin-proxy-request-grid > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 11px 12px;
+  background: #fff;
+}
+
+.admin-proxy-request-grid .span-2 {
+  grid-column: 1 / -1;
+}
+
+.admin-proxy-request-grid span {
+  color: #7a8798;
+  font-size: 10px;
+}
+
+.admin-proxy-request-grid b,
+.admin-proxy-request-grid a {
+  color: #172033;
+  font-size: 11.5px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.admin-proxy-request-grid a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #0f6675;
+}
+
+.admin-proxy-quote-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 14px;
+}
+
+.admin-proxy-amount-input {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  overflow: hidden;
+  border: 1px solid #cad7e0;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.admin-proxy-amount-input:focus-within {
+  border-color: #348399;
+  box-shadow: 0 0 0 3px rgba(52, 131, 153, .1);
+}
+
+.admin-proxy-amount-input i {
+  padding-left: 12px;
+  color: #0f4c5c;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.admin-proxy-amount-input input {
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+}
+
+.admin-proxy-quote-btn {
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.admin-proxy-mail-state {
+  margin: 10px 0 0;
+  color: #64748b;
+  font-size: 10.5px;
+}
+
+.admin-proxy-mail-state.ok {
+  color: #0f766e;
+}
+
+.admin-proxy-mail-state.failed {
+  color: #b45309;
+}
+
+.admin-proxy-item-note {
+  margin: 8px 0 0;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.account-order-status.status-awaiting_quote,
+.account-modal-status.status-awaiting_quote {
+  color: #9a4c0b;
+  background: #fff4df;
+  border-color: #f3d6a4;
+}
+
+.account-order-status.status-pending_payment,
+.account-modal-status.status-pending_payment {
+  color: #245a91;
+  background: #edf5ff;
+  border-color: #cbdff4;
+}
+
+.account-proxy-order-info {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  margin: 14px 0;
+  overflow: hidden;
+  border: 1px solid #dce6ec;
+  border-radius: 11px;
+  background: #dce6ec;
+}
+
+.account-proxy-order-info > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  background: #f9fbfd;
+}
+
+.account-proxy-order-info .span-2 {
+  grid-column: 1 / -1;
+}
+
+.account-proxy-order-info span {
+  color: #7b8798;
+  font-size: 10.5px;
+}
+
+.account-proxy-order-info b,
+.account-proxy-order-info a {
+  color: #172033;
+  font-size: 11.5px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.query-modal-status.status-awaiting_quote {
+  color: #9a4c0b;
+  background: #fff4df;
+  border-color: #f3d6a4;
+}
+
+.query-modal-status.status-pending_payment {
+  color: #245a91;
+  background: #edf5ff;
+  border-color: #cbdff4;
+}
+
+.query-proxy-order-info {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  margin: 14px 0;
+  overflow: hidden;
+  border: 1px solid #dce6ec;
+  border-radius: 11px;
+  background: #dce6ec;
+}
+
+.query-proxy-order-info > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  background: #f9fbfd;
+}
+
+.query-proxy-order-info .span-2 {
+  grid-column: 1 / -1;
+}
+
+.query-proxy-order-info span {
+  color: #7b8798;
+  font-size: 10.5px;
+}
+
+.query-proxy-order-info b,
+.query-proxy-order-info a {
+  color: #172033;
+  font-size: 11.5px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.query-proxy-order-info a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #0f6675;
+}
+
+.account-proxy-order-info a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #0f6675;
+}
+
+@media (max-width: 820px) {
+  .proxy-checkout-main,
+  .proxy-payment-main {
+    width: min(100% - 20px, 620px);
+    padding-bottom: calc(104px + env(safe-area-inset-bottom));
+  }
+
+  .proxy-checkout-layout,
+  .proxy-payment-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .proxy-checkout-aside,
+  .proxy-payment-qr-card {
+    position: static;
+  }
+
+  .proxy-checkout-aside {
+    display: none;
+  }
+
+  .proxy-mobile-cta {
+    display: flex;
+  }
+
+  .proxy-service-hero {
+    grid-template-columns: 62px minmax(0, 1fr) auto;
+    gap: 11px;
+    padding: 14px;
+  }
+
+  .proxy-service-hero > img {
+    width: 62px;
+    height: 62px;
+    border-radius: 15px;
+  }
+
+  .proxy-service-hero h1 {
+    font-size: 16px;
+  }
+
+  .proxy-service-hero > b {
+    font-size: 17px;
+  }
+}
+
+@media (max-width: 520px) {
+  .proxy-checkout-main,
+  .proxy-payment-main {
+    width: calc(100% - 16px);
+  }
+
+  .proxy-stepper {
+    margin-top: 12px;
+  }
+
+  .proxy-service-hero {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .proxy-service-hero > img {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+  }
+
+  .proxy-service-hero > b {
+    grid-column: 2;
+    justify-self: start;
+    margin-top: -6px;
+  }
+
+  .proxy-request-fields,
+  .proxy-payment-order-card,
+  .proxy-payment-qr-card {
+    padding: 16px;
+  }
+
+  .proxy-field-row,
+  .proxy-payment-details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .proxy-payment-details .span-2 {
+    grid-column: auto;
+  }
+
+  .proxy-request-success,
+  .proxy-payment-state {
+    margin-top: 18px;
+    padding: 32px 18px;
+    border-radius: 16px;
+  }
+
+  .proxy-success-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .proxy-success-actions a {
+    justify-content: center;
+  }
+
+  .proxy-payment-amount b {
+    font-size: 34px;
+  }
+
+  .admin-proxy-request-grid,
+  .admin-proxy-quote-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-proxy-request-grid .span-2 {
+    grid-column: auto;
+  }
+
+  .admin-proxy-quote-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .account-proxy-order-info {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .account-proxy-order-info .span-2 {
+    grid-column: auto;
+  }
+
+  .query-proxy-order-info {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .query-proxy-order-info .span-2 {
+    grid-column: auto;
+  }
+}

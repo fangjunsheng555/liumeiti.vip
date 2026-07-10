@@ -17,6 +17,7 @@ export async function GET() {
       highlights: Array.isArray(p.highlights) ? p.highlights : [],
       detailTitle: p.detailTitle || "", detailBody: p.detailBody || "",
       defaultPlan: p.defaultPlan,
+      quoteOnly: !!p.quoteOnly,
       needsAccountPassword: !!p.needsAccountPassword, needsContact: !!p.needsContact,
       plans: (p.plans || []).filter((pl) => pl.active !== false).map((pl) => ({
         id: pl.id, label: pl.label, amount: Number(pl.amount), cycle: pl.cycle || p.cycle, desc: pl.desc || "",

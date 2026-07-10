@@ -52,6 +52,7 @@ import {
   productItemAmount,
 } from "../lib/store";
 import FloatingSupport from "../components/FloatingSupport";
+import ProxyPaymentCheckout from "../components/ProxyPaymentCheckout";
 import { useLocale } from "../components/LocaleProvider";
 
 const CHECKOUT_DRAFT_KEY = "liumeiti:checkout-draft:v2";
@@ -195,6 +196,7 @@ export default function CheckoutPage() {
   const [urlPlans, setUrlPlans] = useState({});
   const [draftReady, setDraftReady] = useState(false);
   const [usdtRate, setUsdtRate] = useState(USDT_RATE);
+  const [proxySubmitted, setProxySubmitted] = useState(false);
 
   async function refreshAccountState(isCancelled = () => false) {
     try {
@@ -441,6 +443,7 @@ export default function CheckoutPage() {
 
   const cartItems = cart.map((key) => products.find((p) => p.key === key)).filter(Boolean);
   const cartCount = cartItems.length;
+  const proxyQuoteCart = cartCount === 1 && cartItems[0]?.key === "proxy-pay";
   const cartHasRocket = cartItems.some((p) => p.key === "rocket");
   const serviceRedeemActive = Boolean(redeemMode.info && redeemMode.info.type === "service");
   const serviceRedeemPlans = serviceRedeemActive ? planMapFromServices(redeemMode.info?.services || []) : {};
@@ -752,6 +755,22 @@ export default function CheckoutPage() {
         </div>
         <FloatingSupport />
       </div>
+    );
+  }
+
+  if (checkoutReady && (proxyQuoteCart || proxySubmitted)) {
+    return (
+      <ProxyPaymentCheckout
+        initialEmail={form.email || authedUser?.email || ""}
+        onSubmitted={() => {
+          setProxySubmitted(true);
+          clearCart();
+          try {
+            window.localStorage.removeItem(CHECKOUT_PENDING_KEY);
+            window.localStorage.removeItem(CHECKOUT_DRAFT_KEY);
+          } catch {}
+        }}
+      />
     );
   }
 

@@ -7,6 +7,7 @@ import {
   ArrowRight,
   Check,
   CheckCircle2,
+  CreditCard,
   Flame,
   Gift,
   MessageCircleMore,
@@ -48,6 +49,7 @@ const PRODUCT_PROMOS = {
   max: { badge: "影迷经典最爱", badgeIcon: Tag, originalPrice: 348, monthlyRange: [2600, 4600] },
   rocket: { badge: "必备工具", badgeIcon: Sparkles, originalPrice: 268, monthlyRange: [6200, 9200] },
   ai: { badge: "AI 精选", badgeIcon: Sparkles, originalPrice: 398, monthlyRange: [1600, 3200] },
+  "proxy-pay": { badge: "人工报价", badgeIcon: CreditCard, monthlyRange: [260, 520] },
 };
 
 const OPERATION_SLOT_MINUTES = 10;
@@ -301,7 +303,7 @@ export default function ShopPage() {
             <div>
               <div className="section-kicker">{L("服务产品", "Services")}</div>
               <h1 className="section-title">{L("服务选购", "Shop services")}</h1>
-              <p className="section-note">{L("流媒体会员与节点服务，稳定交付", "Reliable memberships & VPN")}</p>
+              <p className="section-note">{L("数字会员、节点与海外代付", "Memberships, VPN & overseas proxy pay")}</p>
             </div>
           </div>
         </section>
@@ -311,6 +313,7 @@ export default function ShopPage() {
             {products.map((item) => {
               const promo = PRODUCT_PROMOS[item.key] || {};
               const BadgeIcon = promo.badgeIcon || Sparkles;
+              const quoteOnly = item.quoteOnly || item.key === "proxy-pay";
               const defaultPlan = hasProductPlans(item.key) ? localizePlan(item.key, getProductPlan(item.key, getDefaultProductPlan(item.key)), locale) : null;
               const displayAmount = defaultPlan?.amount || item.amount;
               const displayCycle = defaultPlan?.unit || defaultPlan?.cycle || (hasProductPlans(item.key) ? L("年起", "yr") : (locale === "en" ? (PRODUCT_EN[item.key]?.cycle || item.cycle) : item.cycle));
@@ -347,18 +350,27 @@ export default function ShopPage() {
                     </div>
                   </div>
                   <div className="price-box price-box-pro">
-                    <div className="price-main">
-                      <span className="price-now">¥{displayAmount}</span>
-                      <span className="price-cycle">/{displayCycle}</span>
-                      {promo.originalPrice && <span className="price-original">¥{promo.originalPrice}</span>}
-                    </div>
-                    <div className="price-meta">
-                      {saved > 0 && <span className="price-save">{L("立省", "Save")} ¥{saved}</span>}
-                      <span className="price-usdt-hint">{L("USDT支付 " + usdtDiscountLabel("zh"), usdtDiscountLabel("en") + " with USDT")}</span>
-                    </div>
+                    {quoteOnly ? (
+                      <>
+                        <div className="price-main"><span className="price-now price-now-quote">{L("3折起", "From 30%")}</span></div>
+                        <div className="price-meta"><span className="price-usdt-hint">{L("核价后付款", "Pay after review")}</span></div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="price-main">
+                          <span className="price-now">¥{displayAmount}</span>
+                          <span className="price-cycle">/{displayCycle}</span>
+                          {promo.originalPrice && <span className="price-original">¥{promo.originalPrice}</span>}
+                        </div>
+                        <div className="price-meta">
+                          {saved > 0 && <span className="price-save">{L("立省", "Save")} ¥{saved}</span>}
+                          <span className="price-usdt-hint">{L("USDT支付 " + usdtDiscountLabel("zh"), usdtDiscountLabel("en") + " with USDT")}</span>
+                        </div>
+                      </>
+                    )}
                   </div>
                   <div className="product-social-proof">
-                    <Flame size={11} /> {L("本月已售", "Sold this month:")} {soldThisMonth.toLocaleString(locale === "en" ? "en-US" : "zh-CN")} {L("份", "")}
+                    {quoteOnly ? <><CheckCircle2 size={11} />{L("人工审核 · 报价后付款", "Manual review · pay after quote")}</> : <><Flame size={11} /> {L("本月已售", "Sold this month:")} {soldThisMonth.toLocaleString(locale === "en" ? "en-US" : "zh-CN")} {L("份", "")}</>}
                   </div>
                   <div
                     className="product-card-actions"
@@ -416,7 +428,9 @@ export default function ShopPage() {
                       <div className="cart-bar-panel-info">
                         <strong>{itemL.title}</strong>
                         <span>
-                          ¥{productItemAmount(item, planMap[item.key])} / {hasProductPlans(item.key) ? localizePlan(item.key, getProductPlan(item.key, planMap[item.key]), locale)?.label : itemL.cycle}
+                          {item.quoteOnly || item.key === "proxy-pay"
+                            ? L("人工报价 · 3折起", "Custom quote · from 30%")
+                            : `¥${productItemAmount(item, planMap[item.key])} / ${hasProductPlans(item.key) ? localizePlan(item.key, getProductPlan(item.key, planMap[item.key]), locale)?.label : itemL.cycle}`}
                         </span>
                       </div>
                       <button
@@ -448,13 +462,16 @@ export default function ShopPage() {
               <ShoppingCart size={22} />
               <span className="cart-bar-count">{L("已选", "")} {cartCount} {L("件商品", "item(s)")}</span>
               <span className="cart-bar-total">
-                {savings > 0 && <s>¥{subtotal}</s>}
-                <b>{L("合计", "Total")} ¥{finalAmount.toFixed(2)}</b>
+                {cartItems.some((item) => item.quoteOnly || item.key === "proxy-pay") ? (
+                  <b>{L("等待人工报价", "Custom quote")}</b>
+                ) : (
+                  <>{savings > 0 && <s>¥{subtotal}</s>}<b>{L("合计", "Total")} ¥{finalAmount.toFixed(2)}</b></>
+                )}
               </span>
               {cartCount >= 2 && <span className="cart-bar-discount-tag">{bundleDiscountLabel(cartCount, locale)}</span>}
             </button>
             <button type="button" className="cart-bar-checkout" onClick={goCheckout}>
-              {L("去结算", "Checkout")} <ArrowRight size={16} />
+              {cartItems.some((item) => item.quoteOnly || item.key === "proxy-pay") ? L("填写需求", "Request quote") : L("去结算", "Checkout")} <ArrowRight size={16} />
             </button>
           </div>
         </>

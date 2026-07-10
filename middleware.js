@@ -17,11 +17,12 @@ const ALLOWED_ORIGINS = new Set(
   ].filter(Boolean)
 );
 
-const SERVICE_CANONICAL_SLUGS = new Set(["spotify", "ai", "netflix", "disney", "hbo-max", "airport-node"]);
+const SERVICE_CANONICAL_SLUGS = new Set(["spotify", "ai", "netflix", "disney", "hbo-max", "airport-node", "proxy-payment"]);
 const SERVICE_SLUG_REDIRECTS = {
   max: "hbo-max",
   hbomax: "hbo-max",
   rocket: "airport-node",
+  "proxy-pay": "proxy-payment",
 };
 
 function applyCors(headers, origin) {

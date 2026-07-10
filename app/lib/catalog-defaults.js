@@ -87,6 +87,17 @@ export const CATALOG_DEFAULTS = [
       { id: "trial", label: "5元10GB测试", amount: 5, cycle: "次", desc: "5 元 10GB 体验，先测速再决定", requiresLogin: false, onePerUser: false },
     ],
   },
+  {
+    key: "proxy-pay", slug: "proxy-payment", title: "全球代付", subtitle: "海外网站与平台人工代付",
+    image: "/products/proxy-pay.jpg", cycle: "人工报价", priceText: "3折起", active: true, sort: 70,
+    shortIntro: "代付海外网站与平台，中国大陆网站除外",
+    highlights: ["海外平台可用", "人工核价", "报价后付款"],
+    quoteOnly: true,
+    defaultPlan: "quote",
+    plans: [
+      { id: "quote", label: "人工报价", amount: 0, cycle: "按单", desc: "提交需求后核价，确认报价再付款" },
+    ],
+  },
 ];
 
 // 便捷映射（按 key）

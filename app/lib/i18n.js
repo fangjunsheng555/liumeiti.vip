@@ -56,7 +56,7 @@ export const messages = {
     "trust.privacy.d": "放心使用",
 
     "services.kicker": "服务产品",
-    "services.title": "流媒体会员与节点服务",
+    "services.title": "数字会员、节点与全球代付",
 
     "redeem.kicker": "权益兑换",
     "redeem.title": "兑换码兑换",
@@ -143,7 +143,7 @@ export const messages = {
     "trust.privacy.d": "Worry-free",
 
     "services.kicker": "Services",
-    "services.title": "Streaming memberships & VPN",
+    "services.title": "Memberships, VPN & proxy pay",
 
     "redeem.kicker": "Redeem",
     "redeem.title": "Redeem a code",
@@ -197,6 +197,7 @@ export const serviceCardEn = {
   "hbo-max": { subtitle: "Global 4K Dolby Profile / full account", price: "From ¥148/yr" },
   "airport-node": { name: "VPN", subtitle: "Real-traffic plans & multi-node speed", price: "From ¥128/yr" },
   ai: { name: "AI Membership", subtitle: "ChatGPT & Claude official plans", price: "From ¥198/3 mo" },
+  "proxy-payment": { name: "Proxy Pay", subtitle: "Overseas websites · manual quote", price: "From 30%" },
 };
 
 // 实时下单条时间本地化

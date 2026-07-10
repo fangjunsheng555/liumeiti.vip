@@ -1,5 +1,6 @@
 import './globals.css';
 import './portal-theme.css';
+import './proxy-payment.css';
 import ReferralTracker from './components/ReferralTracker';
 import VisitTracker from './components/VisitTracker';
 import AnnounceBar from './components/AnnounceBar';
@@ -10,7 +11,7 @@ import { getServerLocale } from './lib/i18n-server';
 const siteUrl = 'https://www.liumeiti.vip';
 const siteTitleZh = '冒央会社 - 流媒体会员服务';
 const siteTitleEn = 'Maoyang Taiwan Inc — Streaming memberships';
-const siteDescEn = 'Spotify, Netflix, Disney+, HBO Max memberships and VPN service. Fast setup, escrow checkout, after-sales support.';
+const siteDescEn = 'Spotify, Netflix, Disney+, HBO Max, AI memberships, VPN and proxy payment for overseas websites. Fast handling and after-sales support.';
 const socialImage = SOCIAL_IMAGE;
 
 export async function generateMetadata() {

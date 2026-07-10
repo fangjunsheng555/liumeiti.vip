@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Copy,
+  ExternalLink,
   Gift,
   Headphones,
   LoaderCircle,
@@ -41,7 +42,7 @@ const FAQ_EN = [
   { q: "Can you customize enterprise or team plans?", a: "Yes. We have 200+ reseller partners. For long-term cooperation, bulk needs or enterprise scenarios, reach our online support to discuss." },
 ];
 
-const STATUS_LABEL_EN = { received: "Order received", completed: "Completed", invalid: "Invalid · unpaid" };
+const STATUS_LABEL_EN = { awaiting_quote: "Awaiting quote", pending_payment: "Awaiting payment", received: "Order received", completed: "Completed", invalid: "Invalid · unpaid" };
 
 const LAYOUT_CARDS = [
   ["选择/兑换服务", "Spotify / Netflix / Disney+ / Hbomax / 机场节点"],
@@ -135,7 +136,7 @@ const SUPPORT_CHANNELS = [
   { label: "Telegram", value: "@MaoyangSupport", copyValue: "@MaoyangSupport" },
 ];
 
-const STATUS_LABEL = { received: "订单已收到", completed: "订单已完成", invalid: "订单无效·未收到付款" };
+const STATUS_LABEL = { awaiting_quote: "等待人工报价", pending_payment: "等待付款", received: "订单已收到", completed: "订单已完成", invalid: "订单无效·未收到付款" };
 
 function GoogleIcon() {
   return (
@@ -149,6 +150,7 @@ function GoogleIcon() {
 }
 
 function paymentLabel(order, locale = "zh") {
+  if (order.paymentMethod === "quote") return locale === "en" ? "Custom quote" : "人工报价";
   if (order.paymentMethod === "redeem") return locale === "en" ? "Code" : "兑换码";
   return order.paymentMethod === "usdt" ? "USDT" : (locale === "en" ? "Alipay" : "支付宝");
 }
@@ -547,7 +549,7 @@ export default function ServiceCenterPage() {
                         </div>
                         <div className="query-result-row-meta">
                           <span>{statusLabel[order.status] || order.status}</span>
-                          <b>¥{Number(order.finalAmount || order.paidAmount || 0).toFixed(2)}</b>
+                          <b>{order.status === "awaiting_quote" ? L("待报价", "Quote") : order.status === "pending_payment" ? `¥${Number(order.quoteAmount || 0).toFixed(2)}` : `¥${Number(order.finalAmount || order.paidAmount || 0).toFixed(2)}`}</b>
                         </div>
                         <ArrowRight size={14} className="query-result-row-arrow" />
                       </button>
@@ -769,17 +771,24 @@ export default function ServiceCenterPage() {
             </div>
             <div className="query-modal-body">
               <div className="query-modal-amount">
-                <span>{L("实付金额", "Amount paid")}</span>
-                <b>{queryDetailOrder.paidCurrency === "USDT" ? `${queryDetailOrder.paidAmount} USDT` : queryDetailOrder.paidCurrency === "CODE" ? L("服务兑换码", "Service code") : `¥${Number(queryDetailOrder.paidAmount || queryDetailOrder.finalAmount || 0).toFixed(2)}`}</b>
+                <span>{queryDetailOrder.status === "awaiting_quote" ? L("当前进度", "Current status") : queryDetailOrder.status === "pending_payment" ? L("报价金额", "Quote") : L("实付金额", "Amount paid")}</span>
+                <b>{queryDetailOrder.status === "awaiting_quote" ? L("等待报价", "Awaiting quote") : queryDetailOrder.status === "pending_payment" ? `¥${Number(queryDetailOrder.quoteAmount || 0).toFixed(2)}` : queryDetailOrder.paidCurrency === "USDT" ? `${queryDetailOrder.paidAmount} USDT` : queryDetailOrder.paidCurrency === "CODE" ? L("服务兑换码", "Service code") : `¥${Number(queryDetailOrder.paidAmount || queryDetailOrder.finalAmount || 0).toFixed(2)}`}</b>
                 <em>{paymentLabel(queryDetailOrder, locale)}</em>
               </div>
+              {queryDetailOrder.orderType === "proxy_payment" && (
+                <div className="query-proxy-order-info">
+                  <div className="span-2"><span>{L("网站 / 平台", "Website / platform")}</span><a href={queryDetailOrder.platformUrl} target="_blank" rel="noopener noreferrer">{queryDetailOrder.platformUrl}<ExternalLink size={12} /></a></div>
+                  <div><span>{L("商品标价", "Listed price")}</span><b>{queryDetailOrder.productPrice}</b></div>
+                  <div><span>{L("下一步", "Next")}</span><b>{queryDetailOrder.status === "awaiting_quote" ? L("等待报价邮件", "Wait for quote email") : queryDetailOrder.status === "pending_payment" ? L("查收邮件并付款", "Pay from the email link") : L("等待处理", "Processing")}</b></div>
+                </div>
+              )}
               <div className="query-modal-items">
                 <div className="query-modal-items-label">{L("商品明细", "Items")} · {queryItems.length}</div>
                 {queryItems.map((item, idx) => (
                   <div key={idx} className="query-modal-item">
                     <div className="query-modal-item-head">
                       <strong>{item.label || L("订单商品", "Item")}</strong>
-                      <span>¥{Number(item.amount || 0).toFixed(2)}</span>
+                      <span>{item.service === "proxy-pay" && !item.amount ? L("人工报价", "Custom quote") : `¥${Number(item.amount || 0).toFixed(2)}`}</span>
                     </div>
                     {(item.account || item.password) && (
                       <div className="query-modal-item-creds">

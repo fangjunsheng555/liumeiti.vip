@@ -128,6 +128,25 @@ export const SERVICE_PAGES = [
       ["支持哪些客户端", "支持常见订阅工具，订单完成后会提供订阅链接与使用说明"],
     ],
   },
+  {
+    slug: "proxy-payment",
+    key: "proxy-pay",
+    title: "全球代付服务",
+    shortTitle: "全球代付",
+    subtitle: "海外网站与平台人工代付",
+    price: "3折起",
+    image: "/products/proxy-pay.jpg",
+    description: "代付海外网站与平台，中国大陆网站除外。提交网站链接、商品标价与联系方式，人工核价后通过邮件发送专属付款链接。",
+    highlights: ["海外平台可用", "人工核价", "报价后付款"],
+    plans: [
+      ["人工报价", "3折起", "提交需求，确认报价后付款"],
+    ],
+    faq: [
+      ["支持哪些平台", "支持大多数海外网站与平台，中国大陆网站除外"],
+      ["何时需要付款", "工作人员核验需求并报价后，付款链接会发送至您的邮箱"],
+      ["需要填写什么", "邮箱、网站链接、商品标价和联系方式为必填，备注选填"],
+    ],
+  },
 ];
 
 // 英文翻译（按 locale 覆盖，不改中文原数据）
@@ -243,6 +262,22 @@ const SERVICE_EN = {
       ["Is after-sales included", "Every order includes after-sales support — reach us with your order number or via online support if anything comes up"],
     ],
   },
+  "proxy-payment": {
+    title: "Global Proxy Payment",
+    shortTitle: "Proxy Pay",
+    subtitle: "Manual payment for overseas websites",
+    price: "From 30%",
+    description: "Proxy payment for overseas websites and platforms; mainland China excluded. Send the website link, listed price and contact, then receive a secure payment link by email after manual review.",
+    highlights: ["Overseas platforms", "Manual review", "Pay after quote"],
+    plans: [
+      ["Custom quote", "From 30%", "Submit the request and pay after accepting the quote"],
+    ],
+    faq: [
+      ["Which platforms are supported", "Most overseas websites and platforms are supported; mainland China websites are excluded"],
+      ["When do I pay", "After review, the quote and secure payment link are emailed to you"],
+      ["What details are required", "Email, website link, listed price and contact are required; notes are optional"],
+    ],
+  },
 };
 
 export function localizeService(service, locale) {
@@ -261,6 +296,8 @@ export const SERVICE_ALIASES = {
   rocket: "airport-node",
   "airport-node": "airport-node",
   ai: "ai",
+  "proxy-pay": "proxy-payment",
+  "proxy-payment": "proxy-payment",
 };
 
 export const SERVICE_SLUG_BY_KEY = SERVICE_PAGES.reduce((acc, item) => {
