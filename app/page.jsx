@@ -419,10 +419,11 @@ export default function Page() {
   const catByKey = {};
   getCatalogProducts().forEach((p) => { catByKey[p.key] = p; });
   // 首页固定 6 张卡:HBO Max 不上首页(选购页/服务页仍正常售卖)。两个分支都排除,避免加载闪现。
+  // 顺序跟随合并目录(后台「商品价格」的排序字段改了,首页/选购页同步变)。
   const HOME_HIDDEN_KEYS = ["max"];
   const homeBase = SERVICE_PAGES.filter((s) => !HOME_HIDDEN_KEYS.includes(s.key));
   const homeServices = catalogOverrideLoaded()
-    ? homeBase.filter((s) => catByKey[s.key]) // 加载后:仅上架(按 catalog key 匹配,注意 slug≠key)
+    ? getCatalogProducts().map((p) => homeBase.find((s) => s.key === p.key)).filter(Boolean) // 目录序+仅上架
     : homeBase;
 
   useEffect(() => {
