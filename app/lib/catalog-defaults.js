@@ -64,7 +64,7 @@ export const CATALOG_DEFAULTS = [
   },
   {
     key: "max", slug: "max", title: "HBO Max", subtitle: "全球可用4K杜比车位/整号",
-    image: "/products/hbomax.jpg", cycle: "1年", priceText: "¥148/年起", active: true, sort: 50,
+    image: "/products/hbomax.jpg", cycle: "1年", priceText: "¥148/年起", active: true, sort: 70,
     shortIntro: "全球可用最高级别 4K 杜比套餐，单独车位或整号购买",
     highlights: ["4K 杜比", "车位/整号", "售后保障"],
     defaultPlan: "seat",
@@ -89,7 +89,7 @@ export const CATALOG_DEFAULTS = [
   },
   {
     key: "proxy-pay", slug: "proxy-payment", title: "全球代付", subtitle: "海外网站与平台人工代付",
-    image: "/products/proxy-pay.jpg", cycle: "人工报价", priceText: "3折起", active: true, sort: 70,
+    image: "/products/proxy-pay.jpg", cycle: "人工报价", priceText: "3折起", active: true, sort: 50,
     shortIntro: "代付海外网站与平台，中国大陆网站除外",
     highlights: ["海外平台可用", "人工核价", "报价后付款"],
     quoteOnly: true,

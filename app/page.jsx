@@ -418,9 +418,12 @@ export default function Page() {
   const footerCfg = siteSettings.footer;
   const catByKey = {};
   getCatalogProducts().forEach((p) => { catByKey[p.key] = p; });
+  // 首页固定 6 张卡:HBO Max 不上首页(选购页/服务页仍正常售卖)。两个分支都排除,避免加载闪现。
+  const HOME_HIDDEN_KEYS = ["max"];
+  const homeBase = SERVICE_PAGES.filter((s) => !HOME_HIDDEN_KEYS.includes(s.key));
   const homeServices = catalogOverrideLoaded()
-    ? SERVICE_PAGES.filter((s) => catByKey[s.key]) // 加载后:仅上架(按 catalog key 匹配,注意 slug≠key,如 hbo-max/max)
-    : SERVICE_PAGES;
+    ? homeBase.filter((s) => catByKey[s.key]) // 加载后:仅上架(按 catalog key 匹配,注意 slug≠key)
+    : homeBase;
 
   useEffect(() => {
     const update = () => setMetrics(buildOperationMetrics());
