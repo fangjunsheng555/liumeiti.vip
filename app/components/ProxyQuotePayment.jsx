@@ -25,10 +25,13 @@ export default function ProxyQuotePayment({ orderId }) {
   const [order, setOrder] = useState(null);
   const [state, setState] = useState({ loading: true, error: "", notice: "" });
   const [submitting, setSubmitting] = useState(false);
-  const [loadedAt, setLoadedAt] = useState(0);
+  const [paymentReadyAt, setPaymentReadyAt] = useState(0);
   const [payMethod, setPayMethod] = useState("alipay"); // alipay | usdt
   const [usdtRate, setUsdtRate] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [qrReady, setQrReady] = useState(false);
+  const alipayQrSrc = settings.payment.alipayQr || "/payment/alipay.jpg";
+  const usdtQrSrc = settings.payment.usdtQr || "/payment/usdt.png";
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
@@ -55,7 +58,6 @@ export default function ProxyQuotePayment({ orderId }) {
           throw new Error(message);
         }
         setOrder(data.order);
-        setLoadedAt(Date.now());
         setState({ loading: false, error: "", notice: "" });
       })
       .catch((error) => setState({ loading: false, error: error.message, notice: "" }));
@@ -71,14 +73,32 @@ export default function ProxyQuotePayment({ orderId }) {
     return () => { on = false; };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    [alipayQrSrc, usdtQrSrc].forEach((src) => {
+      const image = new Image();
+      image.src = src;
+    });
+  }, [alipayQrSrc, usdtQrSrc]);
+
   const quoteCny = Number(order?.quoteAmount || 0);
   const usdtDiscount = Number(settings.usdt.discount) || 0.9;
   const usdtAmount = usdtRate > 0 ? Math.round((quoteCny * usdtDiscount / usdtRate) * 100) / 100 : 0;
+  const isUsdt = payMethod === "usdt";
+  const paymentQrSrc = isUsdt ? usdtQrSrc : alipayQrSrc;
+
+  function selectPaymentMethod(method) {
+    if (method === payMethod || submitting) return;
+    setPayMethod(method);
+    setQrReady(false);
+    setPaymentReadyAt(0);
+    setState((current) => ({ ...current, error: "", notice: "" }));
+  }
 
   async function confirmPayment() {
     if (submitting || !token || !order) return;
-    if (Date.now() - loadedAt < 5000) {
-      setState((current) => ({ ...current, notice: L("请先完成扫码付款，再提交付款信息", "Complete the QR payment before submitting") }));
+    if (!paymentReadyAt || Date.now() - paymentReadyAt < 5000) {
+      setState((current) => ({ ...current, notice: L("请扫码完成付款，付款完成后再点击「付款完成」提交订单", "Please scan to pay first, then tap \"I've paid\" to submit the order") }));
       return;
     }
     setSubmitting(true);
@@ -141,15 +161,6 @@ export default function ProxyQuotePayment({ orderId }) {
           <div className="proxy-payment-layout">
             <section className="checkout-card proxy-payment-order-card">
               <div className="proxy-payment-product"><img src="/products/proxy-pay.jpg" alt={L("全球代付", "Global Proxy Pay")} /><div><span className="section-kicker">{L("全球代付", "Global Proxy Pay")}</span><h1>{L("人工报价已完成", "Your custom quote")}</h1></div></div>
-              <div className="proxy-payment-amount">
-                <span>{L("应付金额", "Amount due")}</span>
-                {payMethod === "usdt"
-                  ? <b>{usdtAmount > 0 ? `${usdtAmount} USDT` : "…"}</b>
-                  : <b>¥{quoteCny.toFixed(2)}</b>}
-                <small>{payMethod === "usdt"
-                  ? L(`¥${quoteCny.toFixed(2)} × ${usdtDiscount} ÷ ${usdtRate || "…"} · 请支付精确金额`, `¥${quoteCny.toFixed(2)} × ${usdtDiscount} ÷ ${usdtRate || "…"} · pay the exact amount`)
-                  : L("请支付页面显示的精确金额", "Pay the exact amount shown")}</small>
-              </div>
               <div className="proxy-payment-details">
                 <div><span>{L("订单号", "Order ID")}</span><b>{order.orderId}<button type="button" onClick={() => { copyText(order.orderId); setCopied(true); setTimeout(() => setCopied(false), 1500); }} aria-label={L("复制订单号", "Copy order ID")}><Copy size={12} />{copied && <em>{L("已复制", "Copied")}</em>}</button></b></div>
                 <div><span>{L("商品标价", "Listed price")}</span><b>{order.productPrice}</b></div>
@@ -161,8 +172,8 @@ export default function ProxyQuotePayment({ orderId }) {
 
             <section className="checkout-card proxy-payment-qr-card">
               <div className="proxy-pay-method-seg">
-                <button type="button" className={payMethod === "alipay" ? "active" : ""} onClick={() => setPayMethod("alipay")}>{L("支付宝", "Alipay")}</button>
-                <button type="button" className={payMethod === "usdt" ? "active" : ""} onClick={() => setPayMethod("usdt")}>USDT <em>{L("9 折", "10% off")}</em></button>
+                <button type="button" className={payMethod === "alipay" ? "active" : ""} onClick={() => selectPaymentMethod("alipay")} aria-pressed={payMethod === "alipay"} disabled={submitting}>{L("支付宝", "Alipay")}</button>
+                <button type="button" className={payMethod === "usdt" ? "active" : ""} onClick={() => selectPaymentMethod("usdt")} aria-pressed={payMethod === "usdt"} disabled={submitting}>USDT <em>{L("9 折", "10% off")}</em></button>
               </div>
               <div className={`proxy-payment-method-amount ${payMethod}`} aria-live="polite">
                 <span>{payMethod === "usdt" ? L("USDT 需付", "Pay with USDT") : L("支付宝需付", "Pay with Alipay")}</span>
@@ -173,28 +184,29 @@ export default function ProxyQuotePayment({ orderId }) {
                   ? L("TRC20 · 请按此精确金额转账", "TRC20 · send this exact amount")
                   : L("请按此精确金额付款", "Pay this exact amount")}</small>
               </div>
-              {payMethod === "usdt" ? (
-                <>
-                  <div className="proxy-payment-qr-head"><span><ShieldCheck size={17} />{L("USDT 付款", "USDT payment")}</span><em>TRC20</em></div>
-                  <img src={settings.payment.usdtQr || "/payment/usdt.png"} alt={L("USDT 收款码", "USDT QR code")} className="proxy-payment-qr" />
-                  <strong>{L("TRC20 钱包扫码", "Scan with a TRC20 wallet")}</strong>
-                  <div className="usdt-address-box">
-                    <span className="usdt-address-label">{L("TRON / TRC20 收款地址", "TRON / TRC20 address")}</span>
-                    <div className="usdt-address-field">
-                      <code className="usdt-address-value">{settings.usdt.address}</code>
-                      <button type="button" className={`usdt-address-copy${copied ? " copied" : ""}`} onClick={() => { copyText(settings.usdt.address); setCopied(true); setTimeout(() => setCopied(false), 1500); }} aria-label={L("复制地址", "Copy address")}><Copy size={13} /></button>
-                    </div>
+              <div className="proxy-payment-qr-head"><span><ShieldCheck size={17} />{isUsdt ? L("USDT 付款", "USDT payment") : L("支付宝付款", "Alipay payment")}</span><em>{isUsdt ? "TRC20" : L("安全结算", "Secure")}</em></div>
+              <div className={`proxy-payment-qr-frame${qrReady ? " ready" : " loading"}`}>
+                {!qrReady && <div className="proxy-payment-qr-loading"><LoaderCircle size={20} className="spin-icon" /><span>{L("正在切换收款码", "Loading payment QR")}</span></div>}
+                <img
+                  key={`${payMethod}:${paymentQrSrc}`}
+                  src={paymentQrSrc}
+                  alt={isUsdt ? L("USDT 收款码", "USDT QR code") : L("支付宝收款码", "Alipay QR code")}
+                  className="proxy-payment-qr"
+                  loading="eager"
+                  onLoad={() => { setQrReady(true); setPaymentReadyAt(Date.now()); }}
+                />
+              </div>
+              <strong>{isUsdt ? L("TRC20 钱包扫码", "Scan with a TRC20 wallet") : L("支付宝扫一扫", "Scan with Alipay")}</strong>
+              {isUsdt && (
+                <div className="usdt-address-box">
+                  <span className="usdt-address-label">{L("TRON / TRC20 收款地址", "TRON / TRC20 address")}</span>
+                  <div className="usdt-address-field">
+                    <code className="usdt-address-value">{settings.usdt.address}</code>
+                    <button type="button" className={`usdt-address-copy${copied ? " copied" : ""}`} onClick={() => { copyText(settings.usdt.address); setCopied(true); setTimeout(() => setCopied(false), 1500); }} aria-label={L("复制地址", "Copy address")}><Copy size={13} /></button>
                   </div>
-                  <p>{L("转账完成后返回本页提交付款信息", "Return here after paying and submit the payment")}</p>
-                </>
-              ) : (
-                <>
-                  <div className="proxy-payment-qr-head"><span><ShieldCheck size={17} />{L("支付宝付款", "Alipay payment")}</span><em>{L("安全结算", "Secure")}</em></div>
-                  <img src={settings.payment.alipayQr || "/payment/alipay.jpg"} alt={L("支付宝收款码", "Alipay QR code")} className="proxy-payment-qr" />
-                  <strong>{L("支付宝扫一扫", "Scan with Alipay")}</strong>
-                  <p>{L("付款完成后返回本页提交付款信息", "Return here after paying and submit the payment")}</p>
-                </>
+                </div>
               )}
+              <p>{isUsdt ? L("转账完成后返回本页提交付款信息", "Return here after paying and submit the payment") : L("付款完成后返回本页提交付款信息", "Return here after paying and submit the payment")}</p>
               {state.notice && <div className="checkout-alert info">{state.notice}</div>}
               {state.error && <div className="checkout-alert error">{state.error}</div>}
               <button type="button" className="primary-btn primary-btn-lg proxy-payment-submit" onClick={confirmPayment} disabled={submitting || (payMethod === "usdt" && usdtAmount <= 0)}>{submitting ? <><LoaderCircle size={16} className="spin-icon" />{L("提交中", "Submitting")}</> : <><CheckCircle2 size={16} />{L("付款完成，提交订单", "I've paid — submit")}</>}</button>

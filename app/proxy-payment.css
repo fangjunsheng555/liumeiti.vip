@@ -398,26 +398,6 @@
   border: 1px solid #dce5ee;
 }
 
-.proxy-payment-amount {
-  display: grid;
-  justify-items: center;
-  gap: 4px;
-  padding: 28px 0 24px;
-}
-
-.proxy-payment-amount span,
-.proxy-payment-amount small {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.proxy-payment-amount b {
-  color: #0f4c5c;
-  font-size: 38px;
-  line-height: 1.2;
-  letter-spacing: 0;
-}
-
 .proxy-payment-details {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -489,23 +469,18 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 18px;
+  margin-bottom: 10px;
 }
 
 .proxy-payment-method-amount {
-  display: grid;
-  justify-items: center;
-  gap: 3px;
-  margin: 14px 0 18px;
-  padding: 13px 12px;
-  border: 1px solid #d9e8f8;
-  border-radius: 12px;
-  background: #f4f9ff;
-}
-
-.proxy-payment-method-amount.usdt {
-  border-color: #cfe9df;
-  background: #f0faf6;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-height: 28px;
+  margin: 4px 0 10px;
+  padding: 0 2px;
 }
 
 .proxy-payment-method-amount span {
@@ -516,7 +491,7 @@
 
 .proxy-payment-method-amount b {
   color: #0b3560;
-  font-size: 25px;
+  font-size: 20px;
   line-height: 1.15;
 }
 
@@ -526,7 +501,7 @@
 
 .proxy-payment-method-amount small {
   color: #b45309;
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 700;
 }
 
@@ -548,15 +523,45 @@
   font-weight: 700;
 }
 
-.proxy-payment-qr {
-  display: block;
-  width: min(236px, 78vw);
+.proxy-payment-qr-frame {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: min(226px, 74vw);
   aspect-ratio: 1;
-  object-fit: contain;
-  margin: 0 auto 12px;
+  margin: 0 auto 10px;
+  overflow: hidden;
   border: 1px solid #e1e7ec;
   border-radius: 14px;
   background: #fff;
+}
+
+.proxy-payment-qr {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border: 0;
+  background: #fff;
+  transition: opacity .15s ease;
+}
+
+.proxy-payment-qr-frame.loading .proxy-payment-qr {
+  opacity: 0;
+}
+
+.proxy-payment-qr-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 7px;
+  color: #64748b;
+  background: #f8fafc;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .proxy-payment-qr-card > strong {
@@ -956,10 +961,6 @@
 
   .proxy-success-actions a {
     justify-content: center;
-  }
-
-  .proxy-payment-amount b {
-    font-size: 34px;
   }
 
   .admin-proxy-request-grid,
