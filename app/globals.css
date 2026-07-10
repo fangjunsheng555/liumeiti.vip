@@ -15081,3 +15081,12 @@ body:has(.account-modal-mask) .floating-wrap {
   .admin-aistock-grid { grid-template-columns: 1fr; }
 }
 
+/* Final iOS focus-zoom guard: keep all text-entry controls at 16px on touch-sized viewports. */
+@media (max-width: 1024px) {
+  html body input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="hidden"]),
+  html body textarea,
+  html body select {
+    font-size: 16px !important;
+  }
+}
+

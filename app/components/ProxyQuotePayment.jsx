@@ -164,6 +164,15 @@ export default function ProxyQuotePayment({ orderId }) {
                 <button type="button" className={payMethod === "alipay" ? "active" : ""} onClick={() => setPayMethod("alipay")}>{L("支付宝", "Alipay")}</button>
                 <button type="button" className={payMethod === "usdt" ? "active" : ""} onClick={() => setPayMethod("usdt")}>USDT <em>{L("9 折", "10% off")}</em></button>
               </div>
+              <div className={`proxy-payment-method-amount ${payMethod}`} aria-live="polite">
+                <span>{payMethod === "usdt" ? L("USDT 需付", "Pay with USDT") : L("支付宝需付", "Pay with Alipay")}</span>
+                <b>{payMethod === "usdt"
+                  ? (usdtAmount > 0 ? `${usdtAmount} USDT` : L("汇率读取中…", "Loading rate…"))
+                  : `¥${quoteCny.toFixed(2)}`}</b>
+                <small>{payMethod === "usdt"
+                  ? L("TRC20 · 请按此精确金额转账", "TRC20 · send this exact amount")
+                  : L("请按此精确金额付款", "Pay this exact amount")}</small>
+              </div>
               {payMethod === "usdt" ? (
                 <>
                   <div className="proxy-payment-qr-head"><span><ShieldCheck size={17} />{L("USDT 付款", "USDT payment")}</span><em>TRC20</em></div>

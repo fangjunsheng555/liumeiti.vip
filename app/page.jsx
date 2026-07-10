@@ -58,6 +58,7 @@ const LAYOUT_CARDS = [
 
 const TESTIMONIALS = [
   { name: "宁波 孙**", initial: "孙", region: "宁波", service: "Netflix 整号购买", rating: 5, date: "3 分钟前", text: "整号档案分得很清楚，电视端登录一次就好了。客服把注意事项发得很细，家里人用起来没再问我。" },
+  { name: "夏**", initial: "夏", region: "深圳", service: "全球代付 · 海外购物", rating: 5, date: "7 分钟前", text: "买的东西只收海外卡，我把商品页和标价提交后，当天就收到了报价邮件。确认金额再付款，后来查订单也能看到处理进度。" },
   { name: "林*", initial: "林", region: "苏州", service: "机场节点 · 高级套餐", rating: 5, date: "9 分钟前", text: "100GB 每月对我刚好，刷流媒体和临时办公都够用。订阅导入很顺，晚高峰速度也稳。" },
   { name: "Qian**", initial: "Q", region: "上海", service: "AI 会员 · GPT 20x Pro", rating: 5, date: "16 分钟前", text: "额度比普通 Plus 宽很多，做方案和代码问题不用一直卡次数。开通后订单里能看到记录，很放心。" },
   { name: "何*", initial: "何", region: "广州", service: "Spotify 家庭套餐", rating: 5, date: "25 分钟前", text: "家庭名额邀请步骤写得清楚，爸妈和我自己的账号都正常加入，歌单也没丢。" },
@@ -126,13 +127,13 @@ const TESTIMONIALS = [
   { name: "Aiden***", initial: "A", region: "硅谷", service: "AI 会员 · Claude Pro", rating: 5, date: "3小时前", text: "Claude Pro 开通很快，写代码和长文都很顺，价格比自己开划算，售后也跟得上" },
   { name: "邹**", initial: "邹", region: "武汉", service: "AI 会员 · GPT 5x Pro", rating: 5, date: "5小时前", text: "5x 额度日常重度使用完全够，账号稳定没掉过，遇到问题带订单号客服直接处理" },
   { name: "白*", initial: "白", region: "西安", service: "AI 会员 · Claude 5x Max", rating: 5, date: "7小时前", text: "Max 高额度跑大项目很顺手，官方渠道靠谱，开通和说明都很清楚，会回购" },
-  { name: "夏**", initial: "夏", region: "深圳", service: "全球代付 · 海外购物", rating: 5, date: "12 分钟前", text: "海外网站不支持国内卡，发链接给客服人工报价，付完款很快就帮我下单了，全程有沟通很省心。" },
-  { name: "Kai**", initial: "K", region: "东京", service: "全球代付 · 订酒店机票", rating: 5, date: "40 分钟前", text: "临时订海外酒店，自己付不了，报价透明、按报价付款，出票也顺利，比找代购靠谱。" },
-  { name: "汤*", initial: "汤", region: "长沙", service: "全球代付 · 虚拟会员", rating: 5, date: "2 小时前", text: "买个海外平台会员一直卡在支付，交给他们代付，报价合理，开通后没任何问题。" },
+  { name: "Kai**", initial: "K", region: "东京", service: "全球代付 · 酒店预订", rating: 5, date: "40 分钟前", text: "酒店官网的房型只收境外卡，我在备注里写了入住日期。客服核对房型后发来报价，付款完成后订单状态很快更新了。" },
+  { name: "汤*", initial: "汤", region: "长沙", service: "全球代付 · 软件订阅", rating: 5, date: "2 小时前", text: "设计工具的年付页面一直刷不过卡，提交官网链接后收到报价邮件。付完后当天续费成功，服务中心也能查到记录。" },
 ];
 
 const TESTIMONIALS_EN = [
   { name: "Nathan R.", initial: "N", region: "New York", service: "Netflix full account", rating: 5, date: "4 min ago", text: "Profiles were organized clearly and the TV login worked on the first try. Support sent practical notes instead of generic replies." },
+  { name: "Oliver P.", initial: "O", region: "Vancouver", service: "Proxy Pay · overseas shopping", rating: 5, date: "8 min ago", text: "The store only accepted overseas cards. I sent the item page and listed price, received the quote by email that day, then tracked the request after paying." },
   { name: "Claire T.", initial: "C", region: "Sydney", service: "VPN · Plus", rating: 5, date: "11 min ago", text: "100GB per month is enough for streaming and a little remote work. Importing the subscription was simple and peak-hour speed stayed steady." },
   { name: "Ryan H.", initial: "R", region: "Toronto", service: "AI Membership · GPT 20x Pro", rating: 5, date: "22 min ago", text: "The higher quota makes daily heavy use much easier. Activation was fast, and the order page kept the records clear." },
   { name: "Emily S.", initial: "E", region: "Los Angeles", service: "Spotify Premium Family", rating: 5, date: "35 min ago", text: "Family invites were explained clearly. Everyone joined without losing playlists, and support checked in after activation." },
@@ -156,9 +157,8 @@ const TESTIMONIALS_EN = [
   { name: "Chloe D.", initial: "C", region: "Manila", service: "Netflix + VPN", rating: 5, date: "5 days ago", text: "Works fine from overseas too, everything configured at once. I'll likely keep renewing here." },
   { name: "Mason K.", initial: "M", region: "San Francisco", service: "AI Membership · GPT Plus", rating: 5, date: "2 hours ago", text: "Official top-up and a private account I don't have to share — activated within minutes, and support was sharp." },
   { name: "Ivy L.", initial: "I", region: "Singapore", service: "AI Membership · Claude Pro", rating: 5, date: "6 hours ago", text: "Claude Pro was up fast and stayed stable for long writing and coding. Cheaper than doing it myself, with real after-sales." },
-  { name: "Oliver P.", initial: "O", region: "Vancouver", service: "Proxy Pay · overseas shopping", rating: 5, date: "15 min ago", text: "The site wouldn't take my card, so I sent the link and got a manual quote. Paid and they ordered it for me right away — smooth." },
-  { name: "Mia S.", initial: "M", region: "London", service: "Proxy Pay · hotels & flights", rating: 5, date: "1 hour ago", text: "Needed an overseas hotel I couldn't pay for myself. Transparent quote, pay-after-quote, and the booking went through cleanly." },
-  { name: "Ethan W.", initial: "E", region: "Sydney", service: "Proxy Pay · digital membership", rating: 5, date: "3 hours ago", text: "A platform membership kept failing at checkout. They handled the payment, the quote was fair, and activation had no issues." },
+  { name: "Mia S.", initial: "M", region: "London", service: "Proxy Pay · hotel booking", rating: 5, date: "1 hour ago", text: "The hotel rate only accepted a foreign card. I added the dates in my note, received a quote after they checked the room, and saw the order update after payment." },
+  { name: "Ethan W.", initial: "E", region: "Sydney", service: "Proxy Pay · software subscription", rating: 5, date: "3 hours ago", text: "My annual software renewal kept declining at checkout. I submitted the official page, paid through the emailed quote, and the renewal was active later that day." },
 ];
 
 const TESTIMONIALS_PER_PAGE = 4;
