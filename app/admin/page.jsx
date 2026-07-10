@@ -3443,6 +3443,25 @@ export default function AdminPage() {
               </div>
             </div>
 
+            <div className="admin-overview-revenue">
+              <div className="admin-overview-revenue-item">
+                <span>近 7 天营收</span>
+                <b>¥{Number(overview?.revenue7d || 0).toFixed(2)}</b>
+              </div>
+              <div className="admin-overview-revenue-item">
+                <span>近 30 天营收</span>
+                <b>¥{Number(overview?.revenue30d || 0).toFixed(2)}</b>
+              </div>
+              <div className="admin-overview-revenue-item">
+                <span>本月营收</span>
+                <b>¥{Number(overview?.revenueMonth || 0).toFixed(2)}</b>
+              </div>
+              <div className="admin-overview-revenue-item">
+                <span>客单价 · 成交 {overview?.paidOrders ?? 0} 单</span>
+                <b>¥{Number(overview?.avgOrderValue || 0).toFixed(2)}</b>
+              </div>
+            </div>
+
             {Array.isArray(overview?.lowStock) && overview.lowStock.length > 0 && (
               <div className="admin-overview-lowstock">
                 <div className="admin-overview-trend-head">

@@ -124,6 +124,26 @@ export async function GET(request) {
   overview.yesterdayOrders = yesterday.orders;
   overview.yesterdayRevenue = yesterday.revenue;
 
+  // 周期营收 + 客单价(全部从已加载订单算,零额外 IO)。营收口径与总营收一致:仅 received/completed。
+  const dayKeyN = (n) => beijingDateKey(new Date(Date.now() - n * 86400000));
+  const monthPrefix = todayKey.slice(0, 7); // YYYY-MM
+  const key7 = dayKeyN(6), key30 = dayKeyN(29);
+  let revenue7d = 0, revenue30d = 0, revenueMonth = 0, paidOrders = 0;
+  for (const order of revenueOrders) {
+    const dk = orderBeijingDateKey(order);
+    const amt = Number(order.revenueAmount || 0);
+    if (dk >= key7) revenue7d += amt;
+    if (dk >= key30) revenue30d += amt;
+    if (dk.startsWith(monthPrefix)) revenueMonth += amt;
+    paidOrders += 1;
+  }
+  const round2 = (v) => Math.round(v * 100) / 100;
+  overview.revenue7d = round2(revenue7d);
+  overview.revenue30d = round2(revenue30d);
+  overview.revenueMonth = round2(revenueMonth);
+  overview.paidOrders = paidOrders;
+  overview.avgOrderValue = paidOrders > 0 ? round2(totalRevenue / paidOrders) : 0;
+
   // 低库存预警(可管库存的角色):受限库存 ≤3 的规格(0=售罄)。
   if (adminPermissionProfile(session).canManageStock) {
     try {

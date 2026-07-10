@@ -8423,6 +8423,15 @@ summary:focus-visible {
 }
 .admin-delta.up { background: #ecfdf5; color: #047857; }
 .admin-delta.down { background: #fef2f2; color: #dc2626; }
+.admin-overview-revenue {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 12px;
+}
+.admin-overview-revenue-item {
+  padding: 12px 14px; border-radius: 12px; background: #fff;
+  border: 1px solid var(--line); box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+.admin-overview-revenue-item span { display: block; font-size: 11.5px; color: var(--muted); font-weight: 600; margin-bottom: 5px; }
+.admin-overview-revenue-item b { font-size: 18px; font-weight: 900; color: var(--accent); letter-spacing: -0.01em; }
 .admin-overview-trends {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 12px;
 }
