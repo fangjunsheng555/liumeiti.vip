@@ -1,5 +1,5 @@
 import {
-  getAllOrders,
+  getAllOrders, getOrdersPageFast,
   formatBeijingTime,
   adminSessionFromRequest,
   isRootAdminSession,
@@ -180,6 +180,29 @@ export async function GET(request) {
   const format = String(url.searchParams.get("format") || "").trim();
   const offset = Math.max(0, Number(url.searchParams.get("offset") || 0));
   const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 100)));
+
+  // 性能:无任何筛选/搜索/导出时,走快速分页(只 GET 当前页的完整订单),避免订单量大时全量拉取。
+  const noFilter = !q && !status && !from && !to && format !== "csv";
+  if (noFilter) {
+    const fast = await getOrdersPageFast(offset, limit);
+    if (fast) {
+      return Response.json({
+        ok: true,
+        orders: fast.orders.map(normalizeOrder),
+        total: fast.total,
+        filteredCount: fast.total,
+        offset, limit,
+        hasMore: fast.hasMore,
+        currentStaff: {
+          id: Number(session.staffId || 1),
+          username: session.staffUsername || "admin",
+          root: isRootAdminSession(session),
+          role: adminPermissionProfile(session).role,
+          permissions: adminPermissionProfile(session),
+        },
+      });
+    }
+  }
 
   const all = await getAllOrders();
   let filtered = all.map(normalizeOrder);

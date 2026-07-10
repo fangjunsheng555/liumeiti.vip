@@ -5,6 +5,7 @@ import { USER_AVATAR_IDS, isUserAvatarId, normalizeUserAvatarId } from "../lib/a
 
 export const ORDERS_KEY = "liumeiti:orders";
 export const ORDER_INDEX_KEY = ORDERS_KEY + ":index";
+export const ORDER_DELETED_INDEX_KEY = ORDERS_KEY + ":deleted-index"; // SET of soft-deleted order ids(供快速分页精确排除)
 export const ORDER_RECORD_PREFIX = ORDERS_KEY + ":record:";
 export const ORDER_EMAIL_INDEX_PREFIX = ORDERS_KEY + ":email:";
 export const USERS_KEY = "liumeiti:users";
@@ -258,13 +259,36 @@ export async function setOrderAt(index, order) {
 // getAllOrders filters these out so they vanish from queries.
 export async function softDeleteOrderAt(index, orderId, meta = {}) {
   const now = new Date();
-  return setOrderAt(index, {
+  const ok = await setOrderAt(index, {
     deleted: true,
     orderId,
     deletedAt: now.toISOString(),
     deletedAtBeijing: formatBeijingTime(now),
     ...meta,
   });
+  // 记入删除集,供快速分页精确排除(失败不影响删除本身:快速路径仍会二次过滤 order.deleted)
+  if (ok) { try { await redisCmd(["SADD", ORDER_DELETED_INDEX_KEY, normalizeOrderIdForStorage(orderId)]); } catch (e) {} }
+  return ok;
+}
+
+// 快速分页(无筛选时用):只 GET 当前页的完整订单,不再全量拉取。
+// 仅当无 legacy 订单(全部在 index 里)时启用,否则返回 null 让调用方走全量 getAllOrders。
+// index 里的 id 微小(全量拉 id 便宜),真正贵的是 GET 每个订单 JSON —— 这里从 N 降到一页。
+export async function getOrdersPageFast(offset = 0, limit = 100) {
+  if (!redisConfig()) return null;
+  try {
+    const legacyLen = Number(await redisCmd(["LLEN", ORDERS_KEY]) || 0);
+    if (legacyLen > 0) return null; // 有历史遗留订单 → 不走快速路径,保证不漏单
+    const allIds = await getOrderIdsFromIndex(ORDER_INDEX_KEY, "0", "-1"); // 已去重
+    const deleted = new Set((await redisCmd(["SMEMBERS", ORDER_DELETED_INDEX_KEY])) || []);
+    const liveIds = allIds.filter((id) => !deleted.has(id));
+    const pageIds = liveIds.slice(offset, offset + limit);
+    const fetched = await getOrdersByIds(pageIds);
+    const byId = new Map(fetched.map((e) => [normalizeOrderIdForStorage(e.orderId), e.order]));
+    // 保序 + 二次过滤 deleted(兼容历史未入删除集的删单)
+    const orders = pageIds.map((id) => byId.get(id)).filter((o) => o && !o.deleted);
+    return { orders, total: liveIds.length, hasMore: offset + limit < liveIds.length };
+  } catch (e) { return null; }
 }
 
 // ── Password hashing (scrypt) ──
