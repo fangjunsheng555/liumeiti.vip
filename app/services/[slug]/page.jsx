@@ -12,13 +12,31 @@ import { getCatalogSoldOutMap } from "../../api/_utils.js";
 import { getMergedCatalog } from "../../api/_catalog.js";
 import { getSettings } from "../../api/_settings.js";
 
+function syncEnglishCatalogPrice(catalogPrice, fallback) {
+  const source = String(catalogPrice || "");
+  const localized = String(fallback || source);
+  const discount = source.match(/(\d+(?:\.\d+)?)\s*折/);
+  if (discount) {
+    const percent = Number(discount[1]) * 10;
+    return Number.isFinite(percent)
+      ? localized.replace(/\d+(?:\.\d+)?%/, `${percent}%`)
+      : localized;
+  }
+  const amount = source.match(/¥\s*([\d,.]+)/);
+  return amount ? localized.replace(/¥\s*[\d,.]+/, `¥${amount[1]}`) : localized;
+}
+
 // 把后台合并目录的价格/规格覆盖到服务页(与首页/选购/结账完全一致)。
 // 名称/说明保持本地化(中英),价格取目录权威 amount;商品下架则 404。
 function applyCatalogToService(service, catProd, locale, soldOutMap = {}) {
   if (!catProd) return service;
   const activePlans = (catProd.plans || []).filter((pl) => pl.active !== false);
   const next = { ...service };
-  if (locale !== "en" && catProd.priceText) next.price = catProd.priceText;
+  if (catProd.priceText) {
+    next.price = locale === "en"
+      ? syncEnglishCatalogPrice(catProd.priceText, next.price)
+      : catProd.priceText;
+  }
   if (catProd.quoteOnly || catProd.key === "proxy-pay") return next;
   const cycleShort = (c) => String(c || "").replace(/^1/, "");
   if (Array.isArray(service.plans) && activePlans.length) {

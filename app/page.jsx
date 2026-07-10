@@ -42,6 +42,20 @@ const HERO_STATS = [
   { metric: "serviceYears", labelKey: "hero.metric.years", icon: Award },
 ];
 
+function syncEnglishCatalogPrice(catalogPrice, fallback) {
+  const source = String(catalogPrice || "");
+  const localized = String(fallback || source);
+  const discount = source.match(/(\d+(?:\.\d+)?)\s*折/);
+  if (discount) {
+    const percent = Number(discount[1]) * 10;
+    return Number.isFinite(percent)
+      ? localized.replace(/\d+(?:\.\d+)?%/, `${percent}%`)
+      : localized;
+  }
+  const amount = source.match(/¥\s*([\d,.]+)/);
+  return amount ? localized.replace(/¥\s*[\d,.]+/, `¥${amount[1]}`) : localized;
+}
+
 const TRUST_ITEMS = [
   { icon: ShieldCheck, tKey: "trust.stable.t", dKey: "trust.stable.d" },
   { icon: Users, tKey: "trust.team.t", dKey: "trust.team.d" },
@@ -583,7 +597,11 @@ export default function Page() {
                   <div className="home-service-sub">{locale === "en" ? (serviceCardEn[s.slug]?.subtitle || s.subtitle) : s.subtitle}</div>
                 </div>
                 <div className="home-service-foot">
-                  <span className="home-service-price">{locale === "en" ? (serviceCardEn[s.slug]?.price || s.price) : (catByKey[s.key]?.price || s.price)}</span>
+                  <span className="home-service-price">
+                    {locale === "en"
+                      ? syncEnglishCatalogPrice(catByKey[s.key]?.price, serviceCardEn[s.slug]?.price || s.price)
+                      : (catByKey[s.key]?.price || s.price)}
+                  </span>
                   <ArrowRight size={16} className="home-service-arrow" />
                 </div>
               </Link>
