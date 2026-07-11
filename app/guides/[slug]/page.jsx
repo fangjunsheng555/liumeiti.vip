@@ -10,6 +10,30 @@ import { getServiceBySlug, localizeService } from "../../services/service-data";
 
 const SITE_URL = "https://www.liumeiti.vip";
 
+function StepDescription({ content }) {
+  if (typeof content === "string") return <p>{content}</p>;
+
+  return (
+    <p>
+      {(content?.parts || []).map((part, index) => {
+        if (typeof part === "string") return part;
+        return (
+          <a
+            key={`${part.href}-${index}`}
+            className="guide-step-link"
+            href={part.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={part.ariaLabel || part.text}
+          >
+            {part.text}
+          </a>
+        );
+      })}
+    </p>
+  );
+}
+
 export function generateStaticParams() {
   return GUIDES.map((g) => ({ slug: g.slug }));
 }
@@ -99,7 +123,7 @@ export default async function GuidePage({ params }) {
               {g.steps.map(([t, d], i) => (
                 <li key={i}>
                   <span className="guide-step-num">{i + 1}</span>
-                  <div><strong>{t}</strong><p>{d}</p></div>
+                  <div><strong>{t}</strong><StepDescription content={d} /></div>
                 </li>
               ))}
             </ol>

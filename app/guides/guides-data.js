@@ -149,13 +149,33 @@ export const GUIDES = [
       ["按月流量选择规格", "普通为 50GB/月，高级为 100GB/月，豪华为 200GB/月，无限规格不设月流量上限；首次使用可先选 10GB 测试。"],
       ["提交订单", "选择规格并填写接收订单通知的邮箱，核对应付金额后按结算页提示完成付款。"],
       ["复制订阅链接", "订单提交后可在完成页、订单详情或通知邮件中查看订阅链接，请完整复制，不要遗漏字符。"],
-      ["导入客户端", "iPhone/iPad 可用 Shadowrocket，Android 可用 Clash Meta，Windows/macOS 可用 Clash Verge；在客户端新增订阅并粘贴链接。"],
+      ["导入客户端", {
+        parts: [
+          "iPhone/iPad 可用 Shadowrocket（",
+          { text: "点击获取共享 ID", href: "https://tool.liumeiti.vip/apple-id?v=20260703at", ariaLabel: "获取 Shadowrocket 共享 ID" },
+          "），Android 可用 Clash Meta（",
+          { text: "点击下载", href: "https://github.com/MetaCubeX/ClashMetaForAndroid/releases", ariaLabel: "下载 Clash Meta" },
+          "），Windows/macOS 可用 Clash Verge（",
+          { text: "点击下载", href: "https://github.com/clash-verge-rev/clash-verge-rev/releases/", ariaLabel: "下载 Clash Verge" },
+          "）；在客户端新增订阅并粘贴链接。",
+        ],
+      }],
     ],
     stepsEn: [
       ["Choose by monthly traffic", "Standard includes 50 GB/month, Plus 100 GB/month, Premium 200 GB/month, and Unlimited has no monthly traffic cap. New users can start with the 10 GB Trial."],
       ["Place the order", "Select the plan, enter the email for order notices, review the payable amount and follow the checkout instructions."],
       ["Copy the subscription URL", "After submitting the order, find the URL on the completion page, in order details or in the notification email. Copy it in full."],
-      ["Import into a client", "Use Shadowrocket on iPhone/iPad, Clash Meta on Android, or Clash Verge on Windows/macOS. Add a subscription and paste the URL."],
+      ["Import into a client", {
+        parts: [
+          "Use Shadowrocket on iPhone/iPad (",
+          { text: "get a shared Apple ID", href: "https://tool.liumeiti.vip/apple-id?v=20260703at", ariaLabel: "Get a shared Apple ID for Shadowrocket" },
+          "), Clash Meta on Android (",
+          { text: "download", href: "https://github.com/MetaCubeX/ClashMetaForAndroid/releases", ariaLabel: "Download Clash Meta" },
+          "), or Clash Verge on Windows/macOS (",
+          { text: "download", href: "https://github.com/clash-verge-rev/clash-verge-rev/releases/", ariaLabel: "Download Clash Verge" },
+          "). Add a subscription and paste the URL.",
+        ],
+      }],
     ],
     faq: [
       ["首次购买建议哪种规格？", "不确定线路适配时可先选 10GB 测试；确认使用稳定后，再按每月流量选择年付规格。"],
