@@ -50,6 +50,15 @@ function normalizeOrder(order) {
       password: it.password || "",
       staffAccount: it.staffAccount || "",
       staffPassword: it.staffPassword || "",
+      passwordCorrectionRequestedAt: it.passwordCorrectionRequestedAt || "",
+      passwordCorrectionRequestedAtBeijing: it.passwordCorrectionRequestedAtBeijing || "",
+      passwordCorrectionExpiresAt: it.passwordCorrectionExpiresAt || "",
+      passwordCorrectionEmailSentAtBeijing: it.passwordCorrectionEmailSentAtBeijing || "",
+      passwordCorrectionEmailOk: Boolean(it.passwordCorrectionEmailOk),
+      passwordCorrectionStaffNote: it.passwordCorrectionStaffNote || "",
+      customerPasswordUpdatedAt: it.customerPasswordUpdatedAt || "",
+      customerPasswordUpdatedAtBeijing: it.customerPasswordUpdatedAtBeijing || "",
+      customerPasswordUpdateCount: Number(it.customerPasswordUpdateCount || 0),
       subscriptionLinks: it.subscriptionLinks || (it.service === "rocket" && (it.staffAccount || it.account) ? subscriptionLinks(it.staffAccount || it.account) : null),
     }));
   } else {

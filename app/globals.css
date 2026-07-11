@@ -7207,11 +7207,41 @@ summary:focus-visible {
 .admin-item-card + .admin-item-card { margin-top: 8px; }
 .admin-item-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .admin-item-head strong { font-size: 13px; font-weight: 800; color: var(--primary); }
+.admin-item-head-actions { min-width: 0; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 5px; }
 .admin-item-tag {
   padding: 2px 7px; border-radius: 999px;
   background: var(--accent-soft); color: #0f766e;
   font-size: 9.5px; font-weight: 800; letter-spacing: .03em;
 }
+.admin-spotify-password-updated {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: #047857; font-size: 9.5px; font-weight: 800;
+}
+.admin-spotify-password-updated::before {
+  content: ""; width: 5px; height: 5px; border-radius: 50%; background: #10b981;
+}
+.admin-spotify-password-mail-trigger {
+  min-height: 25px; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  padding: 0 8px; border: 1px solid #fed7aa; border-radius: 7px;
+  background: #fff; color: #c2410c; font-size: 9.5px; font-weight: 850; cursor: pointer;
+}
+.admin-spotify-password-mail-trigger:hover { background: #fff7ed; }
+.admin-spotify-password-mail-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px;
+  padding-top: 7px; border-top: 1px solid #e8eef2;
+}
+.admin-spotify-password-mail-row input {
+  min-width: 0; height: 34px; padding: 0 9px; border: 1px solid #cbd5e1; border-radius: 7px;
+  outline: 0; background: #fff; color: #0f172a; font-size: 13px;
+}
+.admin-spotify-password-mail-row input:focus { border-color: #14b8a6; box-shadow: 0 0 0 3px rgba(20, 184, 166, .08); }
+.admin-spotify-password-mail-row button {
+  height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  padding: 0 10px; border: 0; border-radius: 7px; background: #0f766e; color: #fff;
+  font-size: 10px; font-weight: 850; cursor: pointer;
+}
+.admin-spotify-password-mail-row button.cancel { border: 1px solid #cbd5e1; background: #fff; color: #64748b; }
+.admin-spotify-password-mail-row button:disabled { opacity: .55; cursor: not-allowed; }
 .admin-field { display: grid; gap: 4px; }
 .admin-field span { font-size: 11px; font-weight: 700; color: var(--muted); }
 .admin-field span em { font-style: normal; color: #ef4444; margin-left: 2px; }
@@ -8570,6 +8600,63 @@ summary:focus-visible {
   gap: 12px;
   margin-top: 12px;
 }
+
+/* Secure Spotify order-detail correction */
+.spotify-update-page { min-height: 100dvh; padding: 18px 14px 42px; background: #f3f6f8; color: #102a27; }
+.spotify-update-header { width: min(600px, 100%); display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 auto 14px; }
+.spotify-update-header img { display: block; width: 176px; height: auto; }
+.spotify-update-back { display: inline-flex; align-items: center; gap: 5px; color: #56706c; font-size: 12px; font-weight: 750; text-decoration: none; }
+.spotify-update-panel { width: min(600px, 100%); margin: 0 auto; overflow: hidden; border: 1px solid #dbe5e4; border-radius: 14px; background: #fff; box-shadow: 0 12px 34px rgba(15, 23, 42, .06); }
+.spotify-update-title { position: relative; padding: 22px 24px 18px; border-bottom: 1px solid #e5eceb; }
+.spotify-update-title > span { color: #0f766e; font-size: 11px; font-weight: 850; }
+.spotify-update-title h1 { margin: 6px 0 6px; color: #102a27; font-size: 23px; line-height: 1.3; font-weight: 900; letter-spacing: 0; }
+.spotify-update-title p { margin: 0; color: #71827f; font-size: 12px; line-height: 1.65; }
+.spotify-update-title code { display: inline-block; margin-top: 10px; color: #849490; font-size: 10px; }
+.spotify-update-form { display: grid; gap: 13px; padding: 18px 24px 22px; }
+.spotify-update-form > label { display: grid; gap: 6px; }
+.spotify-update-form > label > span { color: #344e4a; font-size: 11px; font-weight: 800; }
+.spotify-update-form input,
+.spotify-update-form textarea { width: 100%; border: 1px solid #cfdad8; border-radius: 9px; outline: 0; background: #fff; color: #102a27; font-family: inherit; font-size: 16px; transition: border-color .16s, box-shadow .16s; }
+.spotify-update-form input { min-height: 44px; padding: 0 12px; }
+.spotify-update-form textarea { min-height: 66px; resize: vertical; padding: 10px 12px; line-height: 1.55; }
+.spotify-update-form input:focus,
+.spotify-update-form textarea:focus { border-color: #14b8a6; box-shadow: 0 0 0 3px rgba(20, 184, 166, .09); }
+.spotify-update-label-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.spotify-update-label-row > span { color: #344e4a; }
+.spotify-update-label-row a { color: #0f766e; font-size: 10.5px; font-weight: 800; text-decoration: none; white-space: nowrap; }
+.spotify-update-label-row a:hover { text-decoration: underline; text-underline-offset: 2px; }
+.spotify-update-password { position: relative; }
+.spotify-update-password input { padding-right: 44px; }
+.spotify-update-password button { position: absolute; top: 6px; right: 6px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 7px; background: transparent; color: #71827f; cursor: pointer; }
+.spotify-update-divider { height: 1px; margin: 1px 0; background: #e7eeee; }
+.spotify-update-error { margin: 0; padding: 8px 10px; border-left: 3px solid #ef4444; background: #fff5f5; color: #b91c1c; font-size: 11px; line-height: 1.5; }
+.spotify-update-submit { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: 9px; background: #0f766e; color: #fff; font-size: 13px; font-weight: 900; cursor: pointer; }
+.spotify-update-submit:hover { background: #115e59; }
+.spotify-update-submit:disabled { opacity: .58; cursor: not-allowed; }
+.spotify-update-state { min-height: 350px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 30px; color: #64748b; text-align: center; }
+.spotify-update-state strong,
+.spotify-update-state h1 { margin: 0; color: #102a27; font-size: 19px; font-weight: 900; }
+.spotify-update-state p { max-width: 400px; margin: 0; color: #71827f; font-size: 12px; line-height: 1.65; }
+.spotify-update-state a { color: #0f766e; font-size: 12px; font-weight: 850; }
+.spotify-update-state.success > svg { color: #0f766e; }
+.spotify-update-state.error > svg { color: #c2410c; }
+
+@media (max-width: 620px) {
+  .admin-item-head { align-items: flex-start; }
+  .admin-item-head-actions { max-width: 72%; }
+  .admin-spotify-password-mail-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .admin-spotify-password-mail-row input { grid-column: 1 / -1; font-size: 16px; }
+  .spotify-update-page { padding: 10px 7px 28px; }
+  .spotify-update-header { padding: 0 6px; margin-bottom: 9px; }
+  .spotify-update-header img { width: 148px; }
+  .spotify-update-panel { border-radius: 12px; }
+  .spotify-update-title { padding: 18px 16px 15px; }
+  .spotify-update-title h1 { font-size: 20px; }
+  .spotify-update-form { gap: 12px; padding: 15px 16px 18px; }
+  .spotify-update-label-row { align-items: baseline; }
+  .spotify-update-label-row a { font-size: 10px; }
+}
+
 .admin-overview-trend-card {
   min-width: 0;
   padding: 15px 16px 12px;

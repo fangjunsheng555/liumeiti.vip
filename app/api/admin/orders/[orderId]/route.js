@@ -4,13 +4,14 @@ import {
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
   pushAdminActionLog, formatBeijingTime, clean, isRootAdminSession,
   settleOrderReferralCommission, reverseOrderReferralCommission, sendSimpleEmail, adminPermissionProfile,
-  restoreStock, reserveStock, refundVoidedOrder, reclaimRefundOnReactivate,
+  restoreStock, reserveStock, refundVoidedOrder, reclaimRefundOnReactivate, validEmail,
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
 import { buildProxyOrderEmail } from "../../../quote-orders/_email.js";
 import { getSettings } from "../../../_settings.js";
 import { supportText } from "../../../../lib/settings-defaults.js";
+import { buildSpotifyPasswordErrorEmail } from "../../../order-password-update/email.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
@@ -18,6 +19,17 @@ const SITE_URL = process.env.SITE_URL || `https://${SITE_DOMAIN}`;
 const SUPPORT_CONTACT = process.env.SUPPORT_CONTACT || "请通过 QQ 2802632995 / WhatsApp +34 671143339 / Telegram @MaoyangSupport 联系在线客服";
 const SUPPORT_CONTACT_EN = process.env.SUPPORT_CONTACT_EN
   || ("Reach our online support via " + SUPPORT_CONTACT.replace(/^请通过\s*/, "").replace(/\s*联系在线客服\s*$/, "").trim());
+
+function orderForAdminResponse(order) {
+  const response = {
+    ...order,
+    items: Array.isArray(order?.items)
+      ? order.items.map(({ passwordCorrectionTokenHash, ...item }) => item)
+      : [],
+  };
+  delete response.quotePaymentTokenHash;
+  return response;
+}
 
 function adminSession(request) {
   const token = getCookieFromRequest(request, "lm_admin");
@@ -134,6 +146,85 @@ export async function PATCH(request, { params }) {
     }
   }
   if (!order) return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
+
+  if (body.action === "spotify_password_error") {
+    if (order.status === "invalid") {
+      return Response.json({ ok: false, error: "order_invalid" }, { status: 409 });
+    }
+    const itemIndex = Number(body.itemIndex);
+    const item = Number.isInteger(itemIndex) ? order.items?.[itemIndex] : null;
+    if (!item || item.service !== "spotify") {
+      return Response.json({ ok: false, error: "spotify_item_not_found" }, { status: 404 });
+    }
+    if (!validEmail(order.email)) {
+      return Response.json({ ok: false, error: "order_email_missing" }, { status: 409 });
+    }
+
+    const now = new Date();
+    const passwordCorrectionStaffNote = clean(body.staffNote, 500);
+    const token = randomBytes(32).toString("base64url");
+    const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    item.passwordCorrectionTokenHash = createHash("sha256").update(token).digest("hex");
+    item.passwordCorrectionRequestedAt = now.toISOString();
+    item.passwordCorrectionRequestedAtBeijing = formatBeijingTime(now);
+    item.passwordCorrectionExpiresAt = expiresAt.toISOString();
+    item.passwordCorrectionRequestVersion = Number(item.passwordCorrectionRequestVersion || 0) + 1;
+    item.passwordCorrectionStaffNote = passwordCorrectionStaffNote;
+
+    const saved = await setOrderAt(index, order);
+    if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
+
+    const settings = await getSettings();
+    const brandName = settings.brand.name || BRAND_NAME;
+    const updateUrl = `${SITE_URL}/order-update/spotify/${encodeURIComponent(order.orderId)}#token=${encodeURIComponent(token)}`;
+    const email = buildSpotifyPasswordErrorEmail({
+      order,
+      item,
+      updateUrl,
+      brandName,
+      siteDomain: SITE_DOMAIN,
+      staffNote: passwordCorrectionStaffNote,
+    });
+    const emailResult = await sendSimpleEmail({ to: order.email, ...email, fromName: brandName });
+    const emailedAt = new Date();
+    item.passwordCorrectionEmailSentAt = emailedAt.toISOString();
+    item.passwordCorrectionEmailSentAtBeijing = formatBeijingTime(emailedAt);
+    item.passwordCorrectionEmailOk = Boolean(emailResult?.ok);
+    item.passwordCorrectionEmailError = emailResult?.ok
+      ? ""
+      : clean(emailResult?.reason || emailResult?.error || "send_failed", 120);
+
+    order.staffAudit = Array.isArray(order.staffAudit) ? order.staffAudit : [];
+    order.staffAudit.unshift({
+      id: "OA" + Date.now().toString(36).toUpperCase(),
+      staffId: actor.staffId,
+      staffUsername: actor.staffUsername,
+      label: adminActorLabel(actor),
+      action: "spotify_password_error",
+      status: order.status,
+      createdAt: emailedAt.toISOString(),
+      createdAtBeijing: formatBeijingTime(emailedAt),
+    });
+    order.staffAudit = order.staffAudit.slice(0, 30);
+    await setOrderAt(index, order);
+    await pushAdminActionLog({
+      action: "spotify_password_error",
+      actor,
+      target: "order:" + orderId,
+      detail: { itemIndex, emailOk: Boolean(emailResult?.ok) },
+    });
+
+    return Response.json({
+      ok: true,
+      order: orderForAdminResponse(order),
+      passwordCorrection: {
+        itemIndex,
+        expiresAt: item.passwordCorrectionExpiresAt,
+        email: emailResult,
+      },
+    });
+  }
+
   if (order.orderType !== "proxy_payment" && ["awaiting_quote", "pending_payment"].includes(newStatus)) {
     return Response.json({ ok: false, error: "invalid_status" }, { status: 400 });
   }
@@ -304,8 +395,7 @@ export async function PATCH(request, { params }) {
     await setOrderAt(index, order);
   }
 
-  const responseOrder = { ...order };
-  delete responseOrder.quotePaymentTokenHash;
+  const responseOrder = orderForAdminResponse(order);
 
   return Response.json({
     ok: true, order: responseOrder,

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 
 process.env.AUTH_SECRET = "after-sales-test-secret-at-least-32-characters";
 process.env.KV_REST_API_URL = "http://redis.test";
@@ -75,6 +76,21 @@ function execute(command) {
     lists.set(args[0], list.slice(Number(args[1]), Number(args[2]) + 1));
     return "OK";
   }
+  if (name === "LRANGE") {
+    const list = lists.get(args[0]) || [];
+    const start = Number(args[1]);
+    const stop = Number(args[2]);
+    return list.slice(start, stop < 0 ? undefined : stop + 1);
+  }
+  if (name === "LSET") {
+    const list = lists.get(args[0]) || [];
+    const index = Number(args[1]);
+    if (index < 0 || index >= list.length) return null;
+    list[index] = args[2];
+    lists.set(args[0], list);
+    return "OK";
+  }
+  if (name === "HSET" || name === "HDEL") return 1;
   return null;
 }
 
@@ -94,6 +110,9 @@ const customerRoute = await import("../app/api/after-sales/route.js");
 const adminListRoute = await import("../app/api/admin/after-sales/route.js");
 const adminDetailRoute = await import("../app/api/admin/after-sales/[ticketId]/route.js");
 const store = await import("../app/api/after-sales/_store.js");
+const adminOrderRoute = await import("../app/api/admin/orders/[orderId]/route.js");
+const passwordUpdateRoute = await import("../app/api/order-password-update/[orderId]/route.js");
+const passwordUpdateEmail = await import("../app/api/order-password-update/email.js");
 
 function orderRecord(orderId, email = "buyer@example.com") {
   return {
@@ -250,6 +269,91 @@ test("concurrent customer submissions create only one pending ticket", async () 
   const active = await store.getActiveAfterSalesTicket(order.orderId);
   assert.equal(active.status, "pending");
   assert.equal(active.orderId, order.orderId);
+});
+
+test("Spotify password correction updates the original order without exposing the old password", async () => {
+  const order = {
+    orderId: "LMSPOTIFYPASSWORD1",
+    status: "received",
+    locale: "zh",
+    email: "buyer@example.com",
+    contact: "original-contact",
+    remark: "original-note",
+    items: [{
+      service: "spotify",
+      label: "Spotify · 家庭成员",
+      account: "old-account@example.com",
+      password: "old-password",
+      amount: 128,
+    }],
+  };
+  lists.set("liumeiti:orders", [JSON.stringify(order)]);
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const adminResponse = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "spotify_password_error", itemIndex: 0, staffNote: "请确认密码可正常登录" }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(adminResponse.status, 200);
+  const adminResult = await adminResponse.json();
+  assert.equal(adminResult.ok, true);
+  assert.equal(adminResult.order.items[0].passwordCorrectionStaffNote, "请确认密码可正常登录");
+  assert.equal(Object.hasOwn(adminResult.order.items[0], "passwordCorrectionTokenHash"), false);
+  const emailPreview = passwordUpdateEmail.buildSpotifyPasswordErrorEmail({
+    order,
+    item: order.items[0],
+    updateUrl: "https://www.liumeiti.vip/order-update/spotify/test#token=token",
+    brandName: "冒央会社",
+    siteDomain: "www.liumeiti.vip",
+    staffNote: "请确认密码可正常登录",
+  });
+  assert.match(emailPreview.text, /您填写的密码错误，请重新填写准确的密码/);
+  assert.match(emailPreview.html, /请确认密码可正常登录/);
+  assert.match(emailPreview.html, /重新填写并提交/);
+
+  const token = "known-password-correction-token";
+  const storedAfterMail = JSON.parse(lists.get("liumeiti:orders")[0]);
+  storedAfterMail.items[0].passwordCorrectionTokenHash = createHash("sha256").update(token).digest("hex");
+  storedAfterMail.items[0].passwordCorrectionExpiresAt = new Date(Date.now() + 60_000).toISOString();
+  lists.set("liumeiti:orders", [JSON.stringify(storedAfterMail)]);
+
+  const getResponse = await passwordUpdateRoute.GET(
+    new Request(`https://www.liumeiti.vip/api/order-password-update/${order.orderId}`, { headers: { Authorization: `Bearer ${token}` } }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  const inspected = await getResponse.json();
+  assert.equal(inspected.ok, true);
+  assert.equal(inspected.details.account, "old-account@example.com");
+  assert.equal(inspected.details.email, "buyer@example.com");
+  assert.equal(Object.hasOwn(inspected.details, "password"), false);
+
+  const patchResponse = await passwordUpdateRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/order-password-update/${order.orderId}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account: "correct-account@example.com",
+        password: "correct-password",
+        email: "updated@example.com",
+        contact: "updated-contact",
+        remark: "updated-note",
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(patchResponse.status, 200);
+  const patched = await patchResponse.json();
+  assert.equal(patched.ok, true);
+  const finalOrder = JSON.parse(lists.get("liumeiti:orders")[0]);
+  assert.equal(finalOrder.items[0].account, "correct-account@example.com");
+  assert.equal(finalOrder.items[0].password, "correct-password");
+  assert.equal(finalOrder.email, "updated@example.com");
+  assert.equal(finalOrder.contact, "updated-contact");
+  assert.equal(finalOrder.remark, "updated-note");
+  assert.equal(finalOrder.items[0].customerPasswordUpdateCount, 1);
 });
 
 test("legacy staff-provided service tickets hydrate and sync latest credentials", async () => {

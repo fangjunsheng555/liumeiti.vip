@@ -56,6 +56,12 @@ function compactAdminTime(value) {
   return match ? `${match[1].slice(5)} ${match[2]}` : "时间未记录";
 }
 
+function hasCustomerPasswordUpdate(item) {
+  const updatedAt = new Date(item?.customerPasswordUpdatedAt || 0).getTime();
+  const requestedAt = new Date(item?.passwordCorrectionRequestedAt || 0).getTime();
+  return Number.isFinite(updatedAt) && updatedAt > 0 && (!Number.isFinite(requestedAt) || updatedAt >= requestedAt);
+}
+
 function copyText(text) {
   if (typeof window === "undefined") return;
   if (navigator.clipboard && window.isSecureContext) {
@@ -1148,6 +1154,8 @@ export default function AdminPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [saveResult, setSaveResult] = useState(null);
   const [showPwds, setShowPwds] = useState({});
+  const [spotifyPasswordMail, setSpotifyPasswordMail] = useState(null);
+  const [spotifyPasswordMailBusy, setSpotifyPasswordMailBusy] = useState(false);
 
   // Batch selection state
   const [batchMode, setBatchMode] = useState(false);
@@ -2990,10 +2998,19 @@ export default function AdminPage() {
         password: it.password || "",
         staffAccount: it.staffAccount || "",
         staffPassword: it.staffPassword || "",
+        passwordCorrectionRequestedAt: it.passwordCorrectionRequestedAt || "",
+        passwordCorrectionRequestedAtBeijing: it.passwordCorrectionRequestedAtBeijing || "",
+        passwordCorrectionEmailSentAtBeijing: it.passwordCorrectionEmailSentAtBeijing || "",
+        passwordCorrectionEmailOk: Boolean(it.passwordCorrectionEmailOk),
+        passwordCorrectionStaffNote: it.passwordCorrectionStaffNote || "",
+        customerPasswordUpdatedAt: it.customerPasswordUpdatedAt || "",
+        customerPasswordUpdatedAtBeijing: it.customerPasswordUpdatedAtBeijing || "",
+        customerPasswordUpdateCount: Number(it.customerPasswordUpdateCount || 0),
       })),
     });
     setSaveResult(null);
     setConfirmDelete(false);
+    setSpotifyPasswordMail(null);
   }
 
   function toggleBatchMode() {
@@ -3101,6 +3118,52 @@ export default function AdminPage() {
       ...cur,
       items: cur.items.map((it, i) => i === idx ? { ...it, [field]: value } : it),
     }));
+  }
+
+  async function sendSpotifyPasswordError(itemPosition) {
+    if (!activeOrder || !editForm || spotifyPasswordMailBusy) return;
+    const item = editForm.items[itemPosition];
+    if (!item || item.service !== "spotify") return;
+    setSpotifyPasswordMailBusy(true);
+    setSaveResult(null);
+    try {
+      const response = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "spotify_password_error",
+          itemIndex: item.index,
+          staffNote: spotifyPasswordMail?.index === itemPosition ? spotifyPasswordMail.note : "",
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        const message = {
+          spotify_item_not_found: "未找到对应的 Spotify 商品",
+          order_email_missing: "订单邮箱无效，无法发送邮件",
+          order_invalid: "无效订单不能发送密码更正邮件",
+        }[data.error] || data.error || "发送失败";
+        throw new Error(message);
+      }
+      const returnedItem = data.order?.items?.[item.index] || {};
+      setActiveOrder(data.order);
+      setEditForm((current) => ({
+        ...current,
+        items: current.items.map((currentItem, index) => index === itemPosition ? { ...currentItem, ...returnedItem, index: currentItem.index } : currentItem),
+      }));
+      if (data.passwordCorrection?.email?.ok) {
+        setSaveResult({ type: "success", message: "密码更正邮件已发送" });
+        setSpotifyPasswordMail(null);
+      } else {
+        setSaveResult({ type: "error", message: "更正链接已生成，但邮件发送失败，请检查发信服务后重试" });
+      }
+      loadOrders(appliedSearch, filterStatus);
+    } catch (sendError) {
+      setSaveResult({ type: "error", message: sendError.message || "网络错误" });
+    } finally {
+      setSpotifyPasswordMailBusy(false);
+    }
   }
 
   async function saveOrder() {
@@ -4888,10 +4951,41 @@ export default function AdminPage() {
                     <div key={idx} className="admin-item-card">
                       <div className="admin-item-head">
                         <strong>{idx + 1}. {it.label}</strong>
-                        {!isRocket && (
-                          <span className="admin-item-tag">{isStaffFill ? "客服填写账号密码" : "可修改买家输入"}</span>
-                        )}
+                        <div className="admin-item-head-actions">
+                          {isSpotify && hasCustomerPasswordUpdate(it) && (
+                            <span className="admin-spotify-password-updated">用户已更新 · {compactAdminTime(it.customerPasswordUpdatedAtBeijing)}</span>
+                          )}
+                          {!isRocket && (
+                            <span className="admin-item-tag">{isStaffFill ? "客服填写账号密码" : "可修改买家输入"}</span>
+                          )}
+                          {isSpotify && (
+                            <button
+                              type="button"
+                              className="admin-spotify-password-mail-trigger"
+                              onClick={() => setSpotifyPasswordMail((current) => current?.index === idx ? null : { index: idx, note: it.passwordCorrectionStaffNote || "" })}
+                              disabled={spotifyPasswordMailBusy}
+                            >
+                              <Mail size={12} />密码错误
+                            </button>
+                          )}
+                        </div>
                       </div>
+                      {isSpotify && spotifyPasswordMail?.index === idx && (
+                        <div className="admin-spotify-password-mail-row">
+                          <input
+                            value={spotifyPasswordMail.note}
+                            onChange={(event) => setSpotifyPasswordMail({ index: idx, note: event.target.value })}
+                            placeholder="备注（选填，会随邮件发送）"
+                            maxLength={500}
+                            autoFocus
+                          />
+                          <button type="button" onClick={() => sendSpotifyPasswordError(idx)} disabled={spotifyPasswordMailBusy}>
+                            {spotifyPasswordMailBusy ? <LoaderCircle size={13} className="spin-icon" /> : <Mail size={13} />}
+                            {spotifyPasswordMailBusy ? "发送中" : "发送邮件"}
+                          </button>
+                          <button type="button" className="cancel" onClick={() => setSpotifyPasswordMail(null)} disabled={spotifyPasswordMailBusy}>取消</button>
+                        </div>
+                      )}
                       {isProxy ? (
                         <p className="admin-proxy-item-note">代付订单无需填写账号密码，按上方需求核验并报价。</p>
                       ) : isStaffFill ? (
