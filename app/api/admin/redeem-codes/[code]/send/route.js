@@ -56,6 +56,7 @@ export async function POST(request, { params }) {
     siteUrl,
     redeemUrl,
     supportContact,
+    support: settings.support,
     locale,
   });
   const text = buildRedeemEmailText({
@@ -70,7 +71,7 @@ export async function POST(request, { params }) {
   });
 
   const result = await sendSimpleEmail({
-    to, subject, text, html, fromName: brandName,
+    to, subject, text, html, fromName: brandName, support: settings.support, locale,
   });
 
   const previewLine = info.type === "service"

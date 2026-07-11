@@ -59,11 +59,11 @@ async function sendCompletionEmail(order) {
       const content = buildProxyOrderEmail({
         kind: "completed", order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale: emailLocale, support: settings.support,
       });
-      return sendSimpleEmail({ to: order.email, ...content, fromName: brandName });
+      return sendSimpleEmail({ to: order.email, ...content, fromName: brandName, support: settings.support, locale: emailLocale });
     }
     const supportContact = supportText(settings.support, emailLocale);
     const html = buildCompletionEmailHtml({
-      order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, supportContact, locale: emailLocale,
+      order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, supportContact, support: settings.support, locale: emailLocale,
     });
     const text = buildCompletionEmailText({
       order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale: emailLocale,
@@ -77,6 +77,8 @@ async function sendCompletionEmail(order) {
       text,
       html,
       fromName: brandName,
+      support: settings.support,
+      locale: emailLocale,
     });
     if (result.ok) console.log(`[completion-email] sent to ${order.email} via ${result.provider || "smtp"} (msg=${result.messageId})`);
     else console.error("[completion-email] failed:", result.reason || result.error || result.code || "send_failed");
@@ -98,7 +100,13 @@ async function sendProxyQuoteEmail(order, paymentUrl) {
     locale: order.locale === "en" ? "en" : "zh",
     support: settings.support,
   });
-  return sendSimpleEmail({ to: order.email, ...content, fromName: brandName });
+  return sendSimpleEmail({
+    to: order.email,
+    ...content,
+    fromName: brandName,
+    support: settings.support,
+    locale: order.locale === "en" ? "en" : "zh",
+  });
 }
 
 async function sendTelegramNotice(text) {
@@ -185,7 +193,7 @@ export async function PATCH(request, { params }) {
       siteDomain: SITE_DOMAIN,
       staffNote: passwordCorrectionStaffNote,
     });
-    const emailResult = await sendSimpleEmail({ to: order.email, ...email, fromName: brandName });
+    const emailResult = await sendSimpleEmail({ to: order.email, ...email, fromName: brandName, support: settings.support, locale: order.locale === "en" ? "en" : "zh" });
     const emailedAt = new Date();
     item.passwordCorrectionEmailSentAt = emailedAt.toISOString();
     item.passwordCorrectionEmailSentAtBeijing = formatBeijingTime(emailedAt);
@@ -417,7 +425,7 @@ async function sendInvalidOrderEmail(order) {
     const content = buildProxyOrderEmail({
       kind: "invalid", order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale: emailLocale, support: settings.support,
     });
-    return sendSimpleEmail({ to: order.email, ...content, fromName: brandName });
+    return sendSimpleEmail({ to: order.email, ...content, fromName: brandName, support: settings.support, locale: emailLocale });
   }
   const supportContact = supportText(settings.support, emailLocale);
   const html = buildInvalidOrderEmailHtml({
@@ -426,6 +434,7 @@ async function sendInvalidOrderEmail(order) {
     siteDomain: SITE_DOMAIN,
     siteUrl: SITE_URL,
     supportContact,
+    support: settings.support,
     locale: emailLocale,
   });
   const text = buildInvalidOrderEmailText({
@@ -444,6 +453,8 @@ async function sendInvalidOrderEmail(order) {
     text,
     html,
     fromName: brandName,
+    support: settings.support,
+    locale: emailLocale,
   });
 }
 

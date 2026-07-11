@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { PRODUCTS, getProductPlan, getProductPlanOptions, hasProductPlans, useSiteSettings, getSiteSettings } from "../lib/store";
+import { getSpotifyPasswordAttention } from "../lib/order-attention";
 import VisitorsPanel from "./VisitorsPanel";
 import AbandonedPanel from "./AbandonedPanel";
 import InsightsPanel from "./InsightsPanel";
@@ -54,12 +55,6 @@ const MAIL_BATCH_LIMIT = 20;
 function compactAdminTime(value) {
   const match = String(value || "").match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/);
   return match ? `${match[1].slice(5)} ${match[2]}` : "时间未记录";
-}
-
-function hasCustomerPasswordUpdate(item) {
-  const updatedAt = new Date(item?.customerPasswordUpdatedAt || 0).getTime();
-  const requestedAt = new Date(item?.passwordCorrectionRequestedAt || 0).getTime();
-  return Number.isFinite(updatedAt) && updatedAt > 0 && (!Number.isFinite(requestedAt) || updatedAt >= requestedAt);
 }
 
 function copyText(text) {
@@ -3013,6 +3008,21 @@ export default function AdminPage() {
     setSpotifyPasswordMail(null);
   }
 
+  async function openRelatedOrder(orderId) {
+    const normalizedId = String(orderId || "").trim().toUpperCase();
+    if (!normalizedId) throw new Error("order_not_found");
+    const params = new URLSearchParams({ q: normalizedId, offset: "0", limit: "20" });
+    const response = await fetch(`/api/admin/orders?${params.toString()}`, {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || "order_load_failed");
+    const order = (data.orders || []).find((item) => String(item.orderId || "").toUpperCase() === normalizedId);
+    if (!order) throw new Error("order_not_found");
+    openOrder(order);
+  }
+
   function toggleBatchMode() {
     setBatchMode((v) => {
       const next = !v;
@@ -3153,10 +3163,10 @@ export default function AdminPage() {
         items: current.items.map((currentItem, index) => index === itemPosition ? { ...currentItem, ...returnedItem, index: currentItem.index } : currentItem),
       }));
       if (data.passwordCorrection?.email?.ok) {
-        setSaveResult({ type: "success", message: "密码更正邮件已发送" });
+        setSaveResult({ type: "success", message: "密码更新邮件已发送" });
         setSpotifyPasswordMail(null);
       } else {
-        setSaveResult({ type: "error", message: "更正链接已生成，但邮件发送失败，请检查发信服务后重试" });
+        setSaveResult({ type: "error", message: "更新链接已生成，但邮件发送失败，请检查发信服务后重试" });
       }
       loadOrders(appliedSearch, filterStatus);
     } catch (sendError) {
@@ -3640,7 +3650,11 @@ export default function AdminPage() {
             )}
           </div>
         ) : tab === "after-sales" ? (
-          <AfterSalesPanel canEdit={canEditOrders} onChanged={() => loadOverview({ silent: true })} />
+          <AfterSalesPanel
+            canEdit={canEditOrders}
+            onChanged={() => loadOverview({ silent: true })}
+            onOpenOrder={openRelatedOrder}
+          />
         ) : tab === "users" ? (
           <div className="admin-users-pane">
             {/* All registered users */}
@@ -4664,6 +4678,7 @@ export default function AdminPage() {
             {orders.map((o) => {
               const isSelected = selectedIds.has(o.orderId);
               const isNew = highlightOrderIds.has(o.orderId);
+              const passwordAttention = getSpotifyPasswordAttention(o);
               return (
                 <div
                   key={o.orderId}
@@ -4686,9 +4701,16 @@ export default function AdminPage() {
                           <span className="staff-mini-badge">{referralCommissionLabel(o)}</span>
                         )}
                         {o.usdtConfirmedAt && <span className="usdt-chain-badge" title={o.usdtTxId ? `链上已确认 · ${o.usdtTxId}` : "链上已确认"}>链上已确认</span>}
-                        <span className={`admin-order-status status-${o.status}`}>
-                          {o.status === "completed" ? <CheckCircle2 size={11} /> : o.status === "invalid" ? <AlertTriangle size={11} /> : <Clock size={11} />}
-                          {STATUS_LABEL[o.status]}
+                        <span className="admin-order-status-stack">
+                          <span className={`admin-order-status status-${o.status}`}>
+                            {o.status === "completed" ? <CheckCircle2 size={11} /> : o.status === "invalid" ? <AlertTriangle size={11} /> : <Clock size={11} />}
+                            {STATUS_LABEL[o.status]}
+                          </span>
+                          {passwordAttention.updated && (
+                            <span className="admin-order-customer-update" title={passwordAttention.updatedAtBeijing || "用户已提交最新资料"}>
+                              用户已更新
+                            </span>
+                          )}
                         </span>
                       </span>
                     </div>
@@ -4952,9 +4974,6 @@ export default function AdminPage() {
                       <div className="admin-item-head">
                         <strong>{idx + 1}. {it.label}</strong>
                         <div className="admin-item-head-actions">
-                          {isSpotify && hasCustomerPasswordUpdate(it) && (
-                            <span className="admin-spotify-password-updated">用户已更新 · {compactAdminTime(it.customerPasswordUpdatedAtBeijing)}</span>
-                          )}
                           {!isRocket && (
                             <span className="admin-item-tag">{isStaffFill ? "客服填写账号密码" : "可修改买家输入"}</span>
                           )}
@@ -4975,7 +4994,7 @@ export default function AdminPage() {
                           <input
                             value={spotifyPasswordMail.note}
                             onChange={(event) => setSpotifyPasswordMail({ index: idx, note: event.target.value })}
-                            placeholder="备注（选填，会随邮件发送）"
+                            placeholder="补充说明（选填，将随邮件发送）"
                             maxLength={500}
                             autoFocus
                           />

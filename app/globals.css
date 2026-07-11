@@ -7121,6 +7121,12 @@ summary:focus-visible {
 .admin-order-status.status-completed { background: #dcfce7; color: #166534; }
 .admin-order-status.status-received { background: #fef3c7; color: #92400e; }
 .admin-order-status.status-invalid { background: #e2e8f0; color: #475569; }
+.admin-order-status-stack { display: grid; justify-items: end; gap: 2px; flex: none; }
+.admin-order-customer-update {
+  display: inline-flex; align-items: center; gap: 3px;
+  color: #047857; font-size: 8.5px; line-height: 1.1; font-weight: 750;
+}
+.admin-order-customer-update::before { content: ""; width: 4px; height: 4px; border-radius: 50%; background: #10b981; }
 .admin-order-mid { display: flex; justify-content: space-between; align-items: center; }
 .admin-order-service { font-size: 13px; font-weight: 800; color: var(--primary); }
 .admin-order-count {
@@ -7212,13 +7218,6 @@ summary:focus-visible {
   padding: 2px 7px; border-radius: 999px;
   background: var(--accent-soft); color: #0f766e;
   font-size: 9.5px; font-weight: 800; letter-spacing: .03em;
-}
-.admin-spotify-password-updated {
-  display: inline-flex; align-items: center; gap: 4px;
-  color: #047857; font-size: 9.5px; font-weight: 800;
-}
-.admin-spotify-password-updated::before {
-  content: ""; width: 5px; height: 5px; border-radius: 50%; background: #10b981;
 }
 .admin-spotify-password-mail-trigger {
   min-height: 25px; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
@@ -13011,6 +13010,13 @@ summary:focus-visible {
 .admin-after-sales-modal-identifiers { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .admin-after-sales-modal-identifiers code { padding: 2px 7px; border-radius: 6px; background: #f1f5f9; color: #475569; font-size: 9.5px; }
 .admin-after-sales-modal-identifiers span { color: #94a3b8; font-size: 9px; }
+.admin-after-sales-modal-identifiers button {
+  min-width: 0; display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px;
+  border: 0; border-radius: 6px; background: #ecfdf5; color: #0f766e;
+  font-family: ui-monospace, Menlo, monospace; font-size: 9.5px; font-weight: 800; cursor: pointer;
+}
+.admin-after-sales-modal-identifiers button:hover { background: #d1fae5; }
+.admin-after-sales-modal-identifiers button:disabled { opacity: .55; cursor: wait; }
 .admin-after-sales-modal-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; gap: 0; padding: 0 16px; }
 .admin-after-sales-status-banner { display: flex; align-items: center; gap: 8px; margin: 0 -16px; padding: 9px 16px; border: 0; border-bottom: 1px solid #fed7aa; border-radius: 0; background: #fff7ed; color: #c2410c; }
 .admin-after-sales-status-banner.completed { border-color: #a7f3d0; background: #ecfdf5; color: #047857; }

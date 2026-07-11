@@ -5,6 +5,7 @@ import {
 } from "../../_utils.js";
 import { getSettings } from "../../_settings.js";
 import { getAfterSalesCounts } from "../../after-sales/_store.js";
+import { hasPendingSpotifyPasswordCorrection } from "../../../lib/order-attention.js";
 
 function beijingDateKey(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
@@ -42,6 +43,7 @@ function minutesSince(value) {
 function isAbnormalOrder(order) {
   const status = order.status || "received";
   if (status === "invalid") return true;
+  if (hasPendingSpotifyPasswordCorrection(order)) return true;
   if (status !== "received") return false;
   const age = minutesSince(order.createdAt);
   const paymentMethod = order.paymentMethod || "alipay";

@@ -80,12 +80,12 @@ export async function POST(request) {
     // 品牌以站点设置为准
     const settings = await getSettings();
     const brandName = (en ? settings.brand.nameEn : settings.brand.name) || BRAND_NAME;
-    const params = { services, amount: h.amount, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale };
+    const params = { services, amount: h.amount, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, support: settings.support, locale };
     const subject = en ? `Your ${brandName} order is one step away 🛒` : `您的订单还差一步就完成啦 🛒 · ${brandName}`;
     const html = buildRecoveryEmailHtml(params);
     const text = buildRecoveryEmailText(params);
     let sent = false;
-    try { const r = await sendSimpleEmail({ to, subject, text, html, fromName: brandName }); sent = !!(r && (r.messageId || r.ok !== false)); }
+    try { const r = await sendSimpleEmail({ to, subject, text, html, fromName: brandName, support: settings.support, locale }); sent = !!(r && (r.messageId || r.ok !== false)); }
     catch (e) { sent = false; }
     if (!sent) return Response.json({ ok: false, error: "send_failed" }, { status: 502 });
     // 召回邮件已发出 → 从列表移除

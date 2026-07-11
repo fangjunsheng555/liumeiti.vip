@@ -69,6 +69,8 @@ export async function POST(request) {
       to: email,
       subject: L(`${brandName} · 密码重置验证码 ${code}`, `${brandName} · Password reset code ${code}`),
       text, html,
+      support: settings.support,
+      locale: en ? "en" : "zh",
     });
     if (!result.ok) {
       console.error("[forgot] email failed:", result);

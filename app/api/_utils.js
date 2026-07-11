@@ -2,6 +2,8 @@
 
 import { createHmac, createHash, createCipheriv, createDecipheriv, randomBytes, randomInt, scryptSync, timingSafeEqual } from "node:crypto";
 import { USER_AVATAR_IDS, isUserAvatarId, normalizeUserAvatarId } from "../lib/avatars.js";
+import { hasPendingSpotifyPasswordCorrection } from "../lib/order-attention.js";
+import { mergeSettings } from "../lib/settings-defaults.js";
 
 export const ORDERS_KEY = "liumeiti:orders";
 export const ORDER_INDEX_KEY = ORDERS_KEY + ":index";
@@ -10,7 +12,7 @@ export const ORDER_RECORD_PREFIX = ORDERS_KEY + ":record:";
 export const ORDER_EMAIL_INDEX_PREFIX = ORDERS_KEY + ":email:";
 export const USDT_PENDING_ORDER_INDEX_KEY = ORDERS_KEY + ":usdt-pending";
 export const ORDER_OVERVIEW_HASH_KEY = ORDERS_KEY + ":overview";
-const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready";
+const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v2";
 const ORDER_INDEX_MIGRATION_READY_KEY = ORDER_INDEX_KEY + ":legacy-ready";
 const ORDER_INDEX_MIGRATION_LOCK_KEY = ORDER_INDEX_KEY + ":legacy-lock";
 export const USERS_KEY = "liumeiti:users";
@@ -125,6 +127,7 @@ function orderOverviewSnapshot(order) {
     usdtPayAmount: Number(order.usdtPayAmount || 0),
     usdtQuoteId: order.usdtQuoteId || "",
     usdtConfirmedAt: order.usdtConfirmedAt || "",
+    passwordCorrectionPending: hasPendingSpotifyPasswordCorrection(order),
   };
 }
 
@@ -1142,6 +1145,85 @@ export async function deleteResetCode(email) {
 }
 
 // Shared email delivery helpers. Resend SMTP/API is the default path.
+const EMAIL_SUPPORT_MARKER = "data-lm-support-contacts";
+const EMAIL_SETTINGS_KEY = "lm:settings";
+let emailSupportCache = null;
+let emailSupportCacheUntil = 0;
+
+function escapeEmailValue(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function emailLocale(args) {
+  if (args?.locale === "en" || args?.locale === "zh") return args.locale;
+  const sample = `${args?.subject || ""}\n${args?.text || ""}`;
+  return /[\u3400-\u9fff]/.test(sample) ? "zh" : "en";
+}
+
+function emailSupportContacts(support) {
+  return [
+    { label: "QQ", ...(support?.qq || {}) },
+    { label: "WhatsApp", ...(support?.whatsapp || {}) },
+    { label: "Telegram", ...(support?.telegram || {}) },
+  ].filter((item) => item.value && item.href);
+}
+
+function emailSupportFooter(support, locale) {
+  const links = emailSupportContacts(support).map((item) => (
+    `<a href="${escapeEmailValue(item.href)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;margin:3px 8px 3px 0;color:#0f766e;font-size:12px;font-weight:800;text-decoration:underline;white-space:nowrap;">${escapeEmailValue(item.label)} ${escapeEmailValue(item.value)}</a>`
+  )).join("");
+  const label = locale === "en" ? "Customer support" : "在线客服";
+  return `<!-- ${EMAIL_SUPPORT_MARKER} --><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;"><tr><td align="center" style="padding:0 12px 22px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:580px;border-collapse:collapse;"><tr><td style="padding:15px 4px 0;border-top:1px solid #dbe4e8;color:#64748b;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',Arial,sans-serif;"><div style="margin-bottom:4px;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;">${label}</div><div>${links}</div></td></tr></table></td></tr></table>`;
+}
+
+function emailSupportText(support, locale) {
+  const heading = locale === "en" ? "Customer support" : "在线客服";
+  return [heading, ...emailSupportContacts(support).map((item) => `${item.label} ${item.value}: ${item.href}`)].join("\n");
+}
+
+function appendHtmlFooter(html, footer) {
+  const closingIndex = html.toLowerCase().lastIndexOf("</body>");
+  return closingIndex >= 0
+    ? `${html.slice(0, closingIndex)}${footer}${html.slice(closingIndex)}`
+    : `${html}${footer}`;
+}
+
+export function applyEmailSupportContacts(args, support) {
+  const locale = emailLocale(args);
+  const contacts = emailSupportContacts(support);
+  if (contacts.length !== 3) return { ...args };
+
+  let html = String(args?.html || "");
+  if (!html && args?.text) {
+    html = `<!doctype html><html><body style="margin:0;padding:24px;background:#f4f6f8;color:#1f2937;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',Arial,sans-serif;"><div style="max-width:580px;margin:0 auto;white-space:pre-wrap;font-size:14px;line-height:1.7;">${escapeEmailValue(args.text)}</div></body></html>`;
+  }
+  const hasHtmlContacts = html.includes(EMAIL_SUPPORT_MARKER)
+    || contacts.every((item) => html.includes(escapeEmailValue(item.href)));
+  if (html && !hasHtmlContacts) html = appendHtmlFooter(html, emailSupportFooter(support, locale));
+
+  let text = String(args?.text || "");
+  const hasTextContacts = contacts.every((item) => text.includes(item.href));
+  if (!hasTextContacts) text = `${text}${text ? "\n\n" : ""}${emailSupportText(support, locale)}`;
+  return { ...args, html, text };
+}
+
+async function currentEmailSupport() {
+  if (emailSupportCache && Date.now() < emailSupportCacheUntil) return emailSupportCache;
+  let overrides = {};
+  try {
+    const raw = await redisCmd(["GET", EMAIL_SETTINGS_KEY]);
+    overrides = typeof raw === "string" ? JSON.parse(raw) : raw || {};
+  } catch (e) { overrides = {}; }
+  emailSupportCache = mergeSettings(overrides).support;
+  emailSupportCacheUntil = Date.now() + 15000;
+  return emailSupportCache;
+}
+
 function mailFromAddress() {
   return clean(process.env.MAIL_FROM || process.env.SMTP_FROM || "info@liumeiti.vip", 200);
 }
@@ -1280,9 +1362,10 @@ async function sendViaSmtp({ to, subject, text, html, fromName, marketing = fals
 // Send a generic email. Resend is the default provider; SMTP requires explicit
 // EMAIL_PROVIDER=smtp and is kept only as an emergency fallback.
 export async function sendSimpleEmail(args) {
+  const prepared = applyEmailSupportContacts(args, args?.support || await currentEmailSupport());
   const provider = String(process.env.EMAIL_PROVIDER || "resend").toLowerCase();
-  if (provider === "smtp") return sendViaSmtp(args);
-  if (process.env.RESEND_API_KEY) return sendViaResend(args);
+  if (provider === "smtp") return sendViaSmtp(prepared);
+  if (process.env.RESEND_API_KEY) return sendViaResend(prepared);
   return { ok: false, provider: "resend", reason: "resend_api_key_missing" };
 }
 

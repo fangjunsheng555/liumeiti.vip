@@ -109,7 +109,11 @@ export function supportText(support, locale) {
   return locale === "en" ? `Reach our online support via ${body}` : `请通过 ${body} 联系在线客服`;
 }
 export function supportHtml(support, locale) {
-  const link = (c) => `<a href="${c.href}" target="_blank" rel="noopener noreferrer" style="color:#0f766e;font-weight:700;text-decoration:underline;white-space:nowrap;">${c.value}</a>`;
-  const body = `QQ ${link(support.qq)} &nbsp;/&nbsp; WhatsApp ${link(support.whatsapp)} &nbsp;/&nbsp; Telegram ${link(support.telegram)}`;
-  return locale === "en" ? `Reach our online support via ${body}` : `请通过 ${body} 联系在线客服`;
+  const escape = (value) => String(value || "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  const link = (label, c) => `<a href="${escape(c.href)}" target="_blank" rel="noopener noreferrer" style="color:#0f766e;font-weight:700;text-decoration:underline;white-space:nowrap;">${label} ${escape(c.value)}</a>`;
+  const body = `${link("QQ", support.qq)} &nbsp;/&nbsp; ${link("WhatsApp", support.whatsapp)} &nbsp;/&nbsp; ${link("Telegram", support.telegram)}`;
+  const copy = locale === "en" ? `Reach our online support via ${body}` : `请通过 ${body} 联系在线客服`;
+  return `<span data-lm-support-contacts="1">${copy}</span>`;
 }

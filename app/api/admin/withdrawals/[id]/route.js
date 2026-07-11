@@ -4,7 +4,7 @@ import {
 } from "../../../_utils.js";
 import { buildEmailBrandHeader } from "../../../email-brand.js";
 import { getSettings } from "../../../_settings.js";
-import { supportText } from "../../../../lib/settings-defaults.js";
+import { supportHtml, supportText } from "../../../../lib/settings-defaults.js";
 
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
 
@@ -16,6 +16,7 @@ async function sendWithdrawalResultEmail(withdrawal) {
     const settings = await getSettings();
     const brandName = settings.brand.name || "冒央会社";
     const support = supportText(settings.support, "zh");
+    const supportLinks = supportHtml(settings.support, "zh");
     const okStatus = withdrawal.status === "success";
     const amount = Number(withdrawal.amount || 0).toFixed(2);
     const title = okStatus ? "提现已完成" : "提现审核未通过";
@@ -37,7 +38,7 @@ async function sendWithdrawalResultEmail(withdrawal) {
         </div>
       </td></tr>
       <tr><td style="padding:14px 32px 28px;">
-        <p style="margin:0;font-size:11.5px;color:#94a3b8;line-height:1.7;">${support}。本邮件由系统自动发送,请勿直接回复。</p>
+        <p style="margin:0;font-size:11.5px;color:#94a3b8;line-height:1.7;">${supportLinks}<br>本邮件由系统自动发送，请勿直接回复。</p>
       </td></tr>
     </table>
   </td></tr>
@@ -47,7 +48,7 @@ async function sendWithdrawalResultEmail(withdrawal) {
     return await sendSimpleEmail({
       to,
       subject: `${okStatus ? "✅" : "⚠️"} ${title} · ¥${amount} · ${brandName}`,
-      text, html, fromName: brandName,
+      text, html, fromName: brandName, support: settings.support, locale: "zh",
     });
   } catch (e) { return null; }
 }

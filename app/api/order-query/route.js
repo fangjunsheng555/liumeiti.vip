@@ -228,6 +228,8 @@ async function sendQueryCode(email, code, query, locale) {
     subject: L(`${brandName} · 订单查询验证码 ${code}`, `${brandName} · Order lookup code ${code}`),
     text,
     html,
+    support: settings.support,
+    locale,
   });
 }
 

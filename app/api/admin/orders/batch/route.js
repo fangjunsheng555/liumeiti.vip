@@ -32,6 +32,7 @@ async function sendInvalidOrderEmail(order) {
     siteDomain: SITE_DOMAIN,
     siteUrl: SITE_URL,
     supportContact,
+    support: settings.support,
     locale: emailLocale,
   });
   const text = buildInvalidOrderEmailText({
@@ -49,7 +50,9 @@ async function sendInvalidOrderEmail(order) {
       : `订单 ${order.orderId} 未收到付款，已标记无效 · ${brandName}`,
     text,
     html,
-    fromName: BRAND_NAME,
+    fromName: brandName,
+    support: settings.support,
+    locale: emailLocale,
   });
 }
 

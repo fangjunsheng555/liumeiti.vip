@@ -23,7 +23,7 @@ function compactTime(value) {
   return match ? `${match[1]} ${match[2]}` : value || "未记录";
 }
 
-export default function AfterSalesPanel({ canEdit = false, onChanged }) {
+export default function AfterSalesPanel({ canEdit = false, onChanged, onOpenOrder }) {
   const [status, setStatus] = useState("pending");
   const [search, setSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
@@ -37,6 +37,7 @@ export default function AfterSalesPanel({ canEdit = false, onChanged }) {
   const [detailLoading, setDetailLoading] = useState("");
   const [staffNote, setStaffNote] = useState("");
   const [completing, setCompleting] = useState(false);
+  const [relatedOrderLoading, setRelatedOrderLoading] = useState(false);
   const [result, setResult] = useState(null);
 
   const loadTickets = useCallback(async ({ silent = false } = {}) => {
@@ -94,6 +95,20 @@ export default function AfterSalesPanel({ canEdit = false, onChanged }) {
 
   function updateCredential(index, field, value) {
     setCredentialItems((items) => items.map((item) => item.index === index ? { ...item, [field]: value } : item));
+  }
+
+  async function openRelatedOrder() {
+    if (!active?.orderId || !onOpenOrder || relatedOrderLoading || completing) return;
+    setRelatedOrderLoading(true);
+    setResult(null);
+    try {
+      await onOpenOrder(active.orderId);
+      setActive(null);
+    } catch {
+      setResult({ type: "error", message: "关联订单加载失败，请稍后重试" });
+    } finally {
+      setRelatedOrderLoading(false);
+    }
   }
 
   async function completeTicket() {
@@ -205,7 +220,14 @@ export default function AfterSalesPanel({ canEdit = false, onChanged }) {
               <div>
                 <span className="admin-after-sales-kicker"><Headphones size={14} />售后工单详情</span>
                 <h2 id="admin-after-sales-title">{active.serviceLabel || "订单售后"}</h2>
-                <div className="admin-after-sales-modal-identifiers"><code>{active.ticketId}</code><span>关联</span><code>{active.orderId}</code></div>
+                <div className="admin-after-sales-modal-identifiers">
+                  <code>{active.ticketId}</code>
+                  <span>关联订单</span>
+                  <button type="button" onClick={openRelatedOrder} disabled={relatedOrderLoading || completing} title="查看订单详情">
+                    {relatedOrderLoading ? <LoaderCircle size={11} className="spin-icon" /> : <ExternalLink size={11} />}
+                    {active.orderId}
+                  </button>
+                </div>
               </div>
               <button type="button" onClick={() => setActive(null)} disabled={completing} aria-label="关闭"><X size={19} /></button>
             </header>

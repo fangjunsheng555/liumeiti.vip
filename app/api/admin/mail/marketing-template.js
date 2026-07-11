@@ -1,3 +1,5 @@
+import { supportHtml } from "../../../lib/settings-defaults.js";
+
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -181,12 +183,7 @@ function productCard(icon, name, subtitle, price, href) {
 
 function buildSupportLine(support) {
   if (!support) return "";
-  const parts = [];
-  if (support.qq && support.qq.value) parts.push(`QQ ${escapeHtml(support.qq.value)}`);
-  if (support.whatsapp && support.whatsapp.value) parts.push(`WhatsApp ${escapeHtml(support.whatsapp.value)}`);
-  if (support.telegram && support.telegram.value) parts.push(`Telegram ${escapeHtml(support.telegram.value)}`);
-  if (!parts.length) return "";
-  return `<div style="margin-top:8px;color:#94a3b8;font-size:12px;line-height:1.7;">在线客服：${parts.join(" &nbsp;·&nbsp; ")}</div>`;
+  return `<div style="margin-top:8px;color:#94a3b8;font-size:12px;line-height:1.7;">${supportHtml(support, "zh")}</div>`;
 }
 
 export function buildMarketingMailText({ brandName, siteUrl, products } = {}) {

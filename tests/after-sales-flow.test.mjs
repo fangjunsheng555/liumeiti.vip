@@ -111,8 +111,11 @@ const adminListRoute = await import("../app/api/admin/after-sales/route.js");
 const adminDetailRoute = await import("../app/api/admin/after-sales/[ticketId]/route.js");
 const store = await import("../app/api/after-sales/_store.js");
 const adminOrderRoute = await import("../app/api/admin/orders/[orderId]/route.js");
+const adminOrdersRoute = await import("../app/api/admin/orders/route.js");
 const passwordUpdateRoute = await import("../app/api/order-password-update/[orderId]/route.js");
 const passwordUpdateEmail = await import("../app/api/order-password-update/email.js");
+const orderAttention = await import("../app/lib/order-attention.js");
+const settingsDefaults = await import("../app/lib/settings-defaults.js");
 
 function orderRecord(orderId, email = "buyer@example.com") {
   return {
@@ -275,6 +278,7 @@ test("Spotify password correction updates the original order without exposing th
   const order = {
     orderId: "LMSPOTIFYPASSWORD1",
     status: "received",
+    createdAt: new Date().toISOString(),
     locale: "zh",
     email: "buyer@example.com",
     contact: "original-contact",
@@ -302,6 +306,14 @@ test("Spotify password correction updates the original order without exposing th
   assert.equal(adminResult.ok, true);
   assert.equal(adminResult.order.items[0].passwordCorrectionStaffNote, "请确认密码可正常登录");
   assert.equal(Object.hasOwn(adminResult.order.items[0], "passwordCorrectionTokenHash"), false);
+  const abnormalResponse = await adminOrdersRoute.GET(new Request(
+    "https://www.liumeiti.vip/api/admin/orders?status=abnormal",
+    { headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}` } },
+  ));
+  const abnormalResult = await abnormalResponse.json();
+  const abnormalOrder = abnormalResult.orders.find((item) => item.orderId === order.orderId);
+  assert.ok(abnormalOrder);
+  assert.match(abnormalOrder.abnormalReason, /Spotify/);
   const emailPreview = passwordUpdateEmail.buildSpotifyPasswordErrorEmail({
     order,
     item: order.items[0],
@@ -310,9 +322,9 @@ test("Spotify password correction updates the original order without exposing th
     siteDomain: "www.liumeiti.vip",
     staffNote: "请确认密码可正常登录",
   });
-  assert.match(emailPreview.text, /您填写的密码错误，请重新填写准确的密码/);
+  assert.match(emailPreview.text, /Spotify 密码无法通过验证/);
   assert.match(emailPreview.html, /请确认密码可正常登录/);
-  assert.match(emailPreview.html, /重新填写并提交/);
+  assert.match(emailPreview.html, /更新订单资料/);
 
   const token = "known-password-correction-token";
   const storedAfterMail = JSON.parse(lists.get("liumeiti:orders")[0]);
@@ -354,6 +366,45 @@ test("Spotify password correction updates the original order without exposing th
   assert.equal(finalOrder.contact, "updated-contact");
   assert.equal(finalOrder.remark, "updated-note");
   assert.equal(finalOrder.items[0].customerPasswordUpdateCount, 1);
+
+  const resolvedResponse = await adminOrdersRoute.GET(new Request(
+    "https://www.liumeiti.vip/api/admin/orders?status=abnormal",
+    { headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}` } },
+  ));
+  const resolvedResult = await resolvedResponse.json();
+  assert.equal(resolvedResult.orders.some((item) => item.orderId === order.orderId), false);
+});
+
+test("shared email delivery adds the three configured clickable support contacts once", () => {
+  const support = {
+    qq: { value: "QQ-TEST", href: "https://support.example.com/qq" },
+    whatsapp: { value: "WA-TEST", href: "https://support.example.com/wa" },
+    telegram: { value: "TG-TEST", href: "https://support.example.com/tg" },
+  };
+  const prepared = utils.applyEmailSupportContacts({
+    subject: "订单通知",
+    text: "订单内容",
+    html: "<!doctype html><html><body><p>订单内容</p></body></html>",
+  }, support);
+  for (const contact of Object.values(support)) {
+    assert.match(prepared.html, new RegExp(contact.href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(prepared.text, new RegExp(contact.href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.equal((prepared.html.match(/data-lm-support-contacts/g) || []).length, 1);
+  const preparedTwice = utils.applyEmailSupportContacts(prepared, support);
+  assert.equal((preparedTwice.html.match(/data-lm-support-contacts/g) || []).length, 1);
+
+  const embedded = settingsDefaults.supportHtml(support, "zh");
+  for (const contact of Object.values(support)) assert.match(embedded, new RegExp(contact.href.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  const preparedEmbedded = utils.applyEmailSupportContacts({ subject: "订单通知", text: "订单内容", html: `<html><body>${embedded}</body></html>` }, support);
+  assert.equal((preparedEmbedded.html.match(/data-lm-support-contacts/g) || []).length, 1);
+});
+
+test("compact overview rows preserve pending Spotify password attention", () => {
+  assert.equal(orderAttention.hasPendingSpotifyPasswordCorrection({
+    items: [{ amount: 128 }],
+    passwordCorrectionPending: true,
+  }), true);
 });
 
 test("legacy staff-provided service tickets hydrate and sync latest credentials", async () => {

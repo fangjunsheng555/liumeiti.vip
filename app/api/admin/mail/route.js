@@ -195,6 +195,7 @@ export async function POST(request) {
       html,
       fromName: `${brandName}客服`,
       marketing: isMarketingMail,
+      support: settings.support,
     });
     const reason = result.ok ? "" : (result.reason || result.error || result.code || "send_failed");
     const log = await pushAdminMailLog({

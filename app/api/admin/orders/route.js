@@ -5,6 +5,7 @@ import {
   isRootAdminSession,
   adminPermissionProfile,
 } from "../../_utils.js";
+import { hasPendingSpotifyPasswordCorrection } from "../../../lib/order-attention.js";
 
 function subscriptionLinks(username) {
   const encoded = encodeURIComponent(String(username || "").trim());
@@ -23,6 +24,9 @@ function minutesSince(value) {
 function abnormalInfo(order) {
   const status = order.status || "received";
   if (status === "invalid") return { abnormal: true, reason: "已标记无效", level: "danger" };
+  if (hasPendingSpotifyPasswordCorrection(order)) {
+    return { abnormal: true, reason: "Spotify 登录资料待用户更新", level: "warn" };
+  }
   if (status !== "received") return { abnormal: false, reason: "", level: "" };
   const age = minutesSince(order.createdAt);
   const paymentMethod = order.paymentMethod || "alipay";

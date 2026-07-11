@@ -1,7 +1,7 @@
 import { sendSimpleEmail } from "../_utils.js";
 import { getSettings } from "../_settings.js";
 import { buildEmailBrandHeader } from "../email-brand.js";
-import { supportText } from "../../lib/settings-defaults.js";
+import { supportHtml, supportText } from "../../lib/settings-defaults.js";
 
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
 const SITE_URL = process.env.SITE_URL || `https://${SITE_DOMAIN}`;
@@ -26,6 +26,7 @@ export async function sendAfterSalesEmail(ticket, kind = "received") {
   const L = (zh, english) => (en ? english : zh);
   const brandName = (en ? settings.brand.nameEn : settings.brand.name) || "冒央会社";
   const support = supportText(settings.support, locale);
+  const supportLinks = supportHtml(settings.support, locale);
   const completed = kind === "completed";
   const title = completed ? L("售后工单已处理完成", "Your after-sales ticket is complete") : L("您的售后工单已收到", "We received your after-sales ticket");
   const description = completed
@@ -65,7 +66,7 @@ export async function sendAfterSalesEmail(ticket, kind = "received") {
         ${credentialBlock}
         <tr><td style="padding:0 32px 28px;">
           <a href="${escapeHtml(detailUrl)}" style="display:inline-block;padding:12px 20px;border-radius:10px;background:#0f766e;color:#fff;text-decoration:none;font-size:13px;font-weight:800;">${L("查看订单与售后", "View order & after-sales")}</a>
-          <p style="margin:18px 0 0;font-size:11.5px;color:#94a3b8;line-height:1.7;">${escapeHtml(support)}。${L("本邮件由系统自动发送，请勿直接回复。", "This email was sent automatically. Please do not reply directly.")}</p>
+          <p style="margin:18px 0 0;font-size:11.5px;color:#94a3b8;line-height:1.7;">${supportLinks}<br>${L("本邮件由系统自动发送，请勿直接回复。", "This email was sent automatically. Please do not reply directly.")}</p>
         </td></tr>
       </table>
     </td></tr>
@@ -82,5 +83,7 @@ export async function sendAfterSalesEmail(ticket, kind = "received") {
     text,
     html,
     fromName: brandName,
+    support: settings.support,
+    locale,
   });
 }

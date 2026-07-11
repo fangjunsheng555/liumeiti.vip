@@ -197,7 +197,7 @@ async function sendOrderEmail(order) {
   const supportContact = supportText(settings.support, emailLocale);
   const html = buildOrderEmailHtml({
     order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL,
-    supportContact, usdtRate: order.usdtRate || USDT_RATE, locale: emailLocale,
+    supportContact, support: settings.support, usdtRate: order.usdtRate || USDT_RATE, locale: emailLocale,
     usdtDiscountLabel: fmtDiscount(1 - settings.usdt.discount, emailLocale),
   });
   const text = buildOrderEmailText({
@@ -217,6 +217,8 @@ async function sendOrderEmail(order) {
     text,
     html,
     fromName: brandName,
+    support: settings.support,
+    locale: emailLocale,
   });
   if (result.ok) {
     console.log(`[email] sent to ${order.email} via ${result.provider || "smtp"} (msgId=${result.messageId})`);

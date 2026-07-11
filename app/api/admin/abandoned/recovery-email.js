@@ -1,6 +1,7 @@
 // 弃单召回邮件 — 专业品牌模板（与订单确认邮件同级：table 邮件安全布局 + 品牌头 + 卡片 + 信任标识 + 双语）。
 import { buildEmailBrandHeader } from "../../email-brand.js";
 import { supportContactHtml, supportContactText } from "../../support-links.js";
+import { supportHtml } from "../../../lib/settings-defaults.js";
 
 function escapeHtml(value) {
   return String(value || "")
@@ -38,7 +39,7 @@ function resolveServices(services, base, en) {
   return { displayHtml: escapeHtml(fallback), displayText: fallback, ctaUrl: base + "/shop", resume: false };
 }
 
-export function buildRecoveryEmailHtml({ services, amount, brandName, siteDomain, siteUrl, locale }) {
+export function buildRecoveryEmailHtml({ services, amount, brandName, siteDomain, siteUrl, support, locale }) {
   const en = locale === "en";
   const L = (zh, e) => (en ? e : zh);
   const base = siteUrl || "https://" + (siteDomain || "www.liumeiti.vip");
@@ -126,7 +127,7 @@ export function buildRecoveryEmailHtml({ services, amount, brandName, siteDomain
           <tr>
             <td style="padding:24px 32px 0;">
               <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:8px;">${L("有疑问?", "Questions?")}</div>
-              <p style="margin:0;font-size:13px;line-height:1.75;color:#475569;">${supportContactHtml(locale)}</p>
+              <p style="margin:0;font-size:13px;line-height:1.75;color:#475569;">${support ? supportHtml(support, locale) : supportContactHtml(locale)}</p>
               <p style="margin:8px 0 0;font-size:12.5px;color:#94a3b8;">${L("客服在线时间:北京时间 09:00 – 23:00 · 真人值守", "Support hours: 9:00 – 23:00 Beijing time · staffed by real people")}</p>
             </td>
           </tr>
