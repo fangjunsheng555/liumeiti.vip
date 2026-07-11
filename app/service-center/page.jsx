@@ -595,7 +595,12 @@ export default function ServiceCenterPage() {
               <div className="order-query-panel">
                 <form className={`order-query-form ${queryVerification ? "is-verifying" : ""}`} onSubmit={submitQuery}>
                   <label className="order-query-field">
-                    <span>{L("完整订单号 / 下单邮箱", "Full order number / order email")}</span>
+                    <span className="order-query-field-head">
+                      <span>{L("完整订单号 / 下单邮箱", "Full order number / order email")}</span>
+                      <Link href="/guides/how-to-request-after-sales-support" className="order-query-guide-link">
+                        {L("如何申请售后？", "How to request after-sales?")}
+                      </Link>
+                    </span>
                     <input
                       value={queryInput}
                       onChange={(e) => {

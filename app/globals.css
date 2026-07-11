@@ -1142,6 +1142,24 @@ button { cursor: pointer; border: none; background: transparent; }
   font-size: 13px;
   font-weight: 900;
 }
+.order-query-field .order-query-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.order-query-field .order-query-guide-link {
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.order-query-field .order-query-guide-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 .order-query-field input {
   width: 100%;
   border: 1px solid rgba(148, 163, 184, .28);
