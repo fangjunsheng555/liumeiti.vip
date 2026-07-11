@@ -2,28 +2,30 @@ export const SERVICE_PAGES = [
   {
     slug: "spotify",
     key: "spotify",
+    guideSlug: "how-to-buy-spotify-premium",
     title: "Spotify 会员服务",
     shortTitle: "Spotify",
     subtitle: "欧美日高价区多规格订阅",
     price: "¥128/年起",
     image: "/products/spotify.jpg",
-    description: "提供 Spotify 家庭成员、个人订阅、双人订阅与家庭套餐，均为欧美日高价区订阅，支持无损音质、播客、AIDJ、离线下载与完整曲库",
-    highlights: ["欧美日高价区", "个人/双人/家庭多规格", "订单完成后邮件同步"],
+    description: "提供 Spotify 高价区家庭成员、个人订阅、双人订阅与家庭套餐。各规格均可使用客户自己的账号；如需由我们提供账号，可在下单前联系确认。",
+    highlights: ["高价区 Premium", "自有账号可开通", "四种规格可选"],
     plans: [
-      ["家庭成员", "¥128/年", "加入高价区家庭计划，适合单人长期听歌"],
-      ["个人订阅", "¥388/年", "独立订阅，账号使用边界更清晰"],
+      ["家庭成员", "¥128/年", "性价比高，使用体验与个人订阅无异"],
+      ["个人订阅", "¥388/年", "独立订阅，价格较高"],
       ["双人订阅", "¥488/年", "可邀请 1 个账号免费享用订阅"],
       ["家庭套餐", "¥588/年", "可邀请 5 个账号免费享用订阅"],
     ],
     faq: [
-      ["支持哪些功能", "支持无损音质、播客、AIDJ、离线下载、合辑歌单与完整曲库"],
-      ["如何使用服务", "下载 Spotify app 或使用网页登录您的账号，即可开始使用"],
-      ["适合什么用户", "适合长期听歌、家庭共享或需要高价区订阅权益的用户"],
+      ["推荐哪个规格", "单人用户建议优先选择家庭成员；双人或家庭套餐适合邀请其他账号共享"],
+      ["可以使用自己的账号吗", "可以，四种规格均支持自有账号；如需我们提供账号，请在下单前联系确认"],
+      ["如何完成开通", "下单填写需要开通的账号信息，工作人员核对订单后按所选规格处理"],
     ],
   },
   {
     slug: "ai",
     key: "ai",
+    guideSlug: "how-to-get-chatgpt-claude-membership",
     title: "AI 会员服务",
     shortTitle: "AI 会员",
     subtitle: "ChatGPT / Claude 官方会员",
@@ -48,6 +50,7 @@ export const SERVICE_PAGES = [
   {
     slug: "netflix",
     key: "netflix",
+    guideSlug: "netflix-4k-seat-vs-full-account",
     title: "Netflix 4K 杜比会员",
     shortTitle: "Netflix",
     subtitle: "全球可用 4K 杜比车位/整号",
@@ -68,6 +71,7 @@ export const SERVICE_PAGES = [
   {
     slug: "disney",
     key: "disney",
+    guideSlug: "disney-plus-seat-vs-full-account",
     title: "Disney+ 4K 杜比会员",
     shortTitle: "Disney+",
     subtitle: "全球可用 4K 杜比车位/整号",
@@ -88,6 +92,7 @@ export const SERVICE_PAGES = [
   {
     slug: "proxy-payment",
     key: "proxy-pay",
+    guideSlug: "how-to-pay-overseas-websites",
     title: "全球代付服务",
     shortTitle: "全球代付",
     subtitle: "海外网站与平台人工代付",
@@ -107,6 +112,7 @@ export const SERVICE_PAGES = [
   {
     slug: "airport-node",
     key: "rocket",
+    guideSlug: "how-to-use-vpn-node",
     title: "机场节点服务",
     shortTitle: "机场节点",
     subtitle: "真实流量套餐与多节点加速",
@@ -130,6 +136,7 @@ export const SERVICE_PAGES = [
   {
     slug: "hbo-max",
     key: "max",
+    guideSlug: "hbo-max-seat-vs-full-account",
     title: "HBO Max 4K 杜比会员",
     shortTitle: "HBO Max",
     subtitle: "全球可用 4K 杜比车位/整号",
@@ -156,18 +163,18 @@ const SERVICE_EN = {
     shortTitle: "Spotify",
     subtitle: "Premium Individual / Duo / Family",
     price: "From ¥128/yr",
-    description: "Spotify Premium plans — Family member, Individual, Duo and Family — on premium-region accounts, with lossless audio, podcasts, AI DJ, offline downloads and the full catalog.",
-    highlights: ["Premium-region accounts", "Individual / Duo / Family", "Emailed once the order completes"],
+    description: "Premium-region Spotify plans: Family Member, Individual, Duo and Family. Every plan can use your existing account; contact us before ordering if you need an account supplied.",
+    highlights: ["Premium-region Premium", "Use your own account", "Four plan options"],
     plans: [
-      ["Family member", "¥128/yr", "A seat on a premium-region family plan — ideal for one long-term listener"],
-      ["Individual", "¥388/yr", "Your own standalone subscription, used privately"],
+      ["Family Member", "¥128/yr", "Best value, with the same everyday experience as Individual"],
+      ["Individual", "¥388/yr", "Standalone subscription at a higher price"],
       ["Duo", "¥488/yr", "Invite 1 account to use the subscription free"],
       ["Family", "¥588/yr", "Invite up to 5 accounts to use the subscription free"],
     ],
     faq: [
-      ["What features are included", "Lossless audio, podcasts, AI DJ, offline downloads, playlists and the full catalog"],
-      ["How to use the service", "Download the Spotify app or sign in on the web with your account to start"],
-      ["Who is it for", "Great for long-term listeners, family sharing, or anyone needing premium-region benefits"],
+      ["Which plan is recommended", "Family Member is our recommendation for one listener; Duo and Family are for inviting other users"],
+      ["Can I use my own account", "Yes. All four plans support an existing account; contact us before ordering if you need an account supplied"],
+      ["How is it activated", "Enter the account to be activated at checkout; our team fulfils the selected plan after checking the order"],
     ],
   },
   netflix: {
@@ -302,6 +309,11 @@ export const SERVICE_ALIASES = {
 
 export const SERVICE_SLUG_BY_KEY = SERVICE_PAGES.reduce((acc, item) => {
   acc[item.key] = item.slug;
+  return acc;
+}, {});
+
+export const GUIDE_SLUG_BY_KEY = SERVICE_PAGES.reduce((acc, item) => {
+  if (item.guideSlug) acc[item.key] = item.guideSlug;
   return acc;
 }, {});
 

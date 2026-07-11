@@ -178,6 +178,7 @@ export default function CheckoutPage() {
   const [paymentMethod, setPaymentMethod] = useState("alipay");
   const [paymentAdjustment, setPaymentAdjustment] = useState(0);
   const [usdtNonce, setUsdtNonce] = useState(0);
+  const [usdtPrecision, setUsdtPrecision] = useState(4);
   const [paymentQuoteToken, setPaymentQuoteToken] = useState("");
   const [paymentPageEnteredAt, setPaymentPageEnteredAt] = useState(0);
   const [paySubmitNotice, setPaySubmitNotice] = useState("");
@@ -480,7 +481,8 @@ export default function CheckoutPage() {
   const usdtDiscount = Number(siteSettings.usdt.discount) || 0.9;
   const effectiveUsdtRate = siteSettings.usdt.rateOverride ? Number(siteSettings.usdt.rateOverride) : usdtRate;
   const finalUsdt = Math.round((finalCny * usdtDiscount / effectiveUsdtRate) * 100) / 100;
-  const usdtPayable = Math.round((finalUsdt + Number(usdtNonce || 0)) * 1000000) / 1000000;
+  const usdtScale = 10 ** usdtPrecision;
+  const usdtPayable = (Math.round((finalUsdt + Number(usdtNonce || 0)) * usdtScale) / usdtScale).toFixed(usdtPrecision);
   const savings = subtotal - bundleFinalCny;
 
   // 余额付款变得不足时（加购/优惠变化抬高总价）自动切回支付宝，避免停留在会被服务端拒绝的余额选项。
@@ -626,6 +628,7 @@ export default function CheckoutPage() {
     setPaymentQuoteToken("");
     setPaymentAdjustment(0);
     setUsdtNonce(0);
+    setUsdtPrecision(4);
     if ((paymentMethod === "alipay" || paymentMethod === "usdt") && finalCny > 0) {
       setSubmitting(true);
       setStatus({ type: "info", message: L("正在生成付款金额...", "Generating payment amount...") });
@@ -639,6 +642,7 @@ export default function CheckoutPage() {
         if (!quote.ok) throw new Error(quote.message || quote.error || "payment_quote_failed");
         setPaymentAdjustment(Number(quote.paymentAdjustment || 0));
         setUsdtNonce(Number(quote.usdtNonce || 0));
+        setUsdtPrecision(Number(quote.usdtPrecision) === 6 ? 6 : 4);
         setPaymentQuoteToken(String(quote.quoteToken || ""));
       } catch (quoteError) {
         setStatus({ type: "error", message: quoteError.message || L("付款金额生成失败，请稍后再试", "Couldn't generate the payment amount, please try again") });

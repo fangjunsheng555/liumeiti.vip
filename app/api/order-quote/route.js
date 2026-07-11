@@ -26,6 +26,7 @@ export async function POST(request) {
   const usdtNonce = paymentMethod === "usdt"
     ? await reserveUsdtNonce(quoteId, Math.ceil(QUOTE_TTL_MS / 1000) + 15 * 60)
     : 0;
+  const usdtPrecision = paymentMethod === "usdt" ? 4 : 0;
   if (paymentMethod === "usdt" && !usdtNonce) {
     return Response.json({
       ok: false,
@@ -38,7 +39,8 @@ export async function POST(request) {
     ok: true,
     paymentAdjustment,
     usdtNonce,
-    quoteToken: signPaymentQuote({ quoteId, paymentMethod, paymentAdjustment, usdtNonce, issuedAt, exp }),
+    usdtPrecision,
+    quoteToken: signPaymentQuote({ quoteId, paymentMethod, paymentAdjustment, usdtNonce, usdtPrecision, issuedAt, exp }),
     expiresAt: new Date(exp).toISOString(),
   }, { headers: { "Cache-Control": "no-store" } });
 }

@@ -73,7 +73,7 @@ export default async function GuidePage({ params }) {
           </Link>
           <nav className="desktop-nav">
             <Link href="/shop">{L("服务产品", "Services")}</Link>
-            <Link href="/guides">{L("使用教程", "Guides")}</Link>
+            <Link href="/guides">{L("服务指南", "Guides")}</Link>
             <Link href="/service-center">{L("服务中心", "Service Center")}</Link>
             <Link href="/service-center#contact">{L("联系我们", "Contact")}</Link>
           </nav>
@@ -83,7 +83,7 @@ export default async function GuidePage({ params }) {
       <main className="main-content portal-main guide-article-main">
         <nav className="container guide-breadcrumb" aria-label="breadcrumb">
           <Link href="/">{L("首页", "Home")}</Link><ChevronRight size={13} />
-          <Link href="/guides">{L("使用教程", "Guides")}</Link><ChevronRight size={13} />
+          <Link href="/guides">{L("服务指南", "Guides")}</Link><ChevronRight size={13} />
           <span>{g.title}</span>
         </nav>
 

@@ -5,12 +5,12 @@ import Link from "next/link";
 import {
   ArrowLeft,
   ArrowRight,
+  BookOpen,
   Check,
   CheckCircle2,
   CreditCard,
   Flame,
   Gift,
-  MessageCircleMore,
   ShoppingCart,
   Sparkles,
   Star,
@@ -39,7 +39,7 @@ import {
 } from "../lib/store";
 import MobileNav from "../components/MobileNav";
 import FloatingSupport from "../components/FloatingSupport";
-import { SERVICE_SLUG_BY_KEY } from "../services/service-data";
+import { GUIDE_SLUG_BY_KEY, SERVICE_SLUG_BY_KEY } from "../services/service-data";
 import { useLocale } from "../components/LocaleProvider";
 
 const PRODUCT_PROMOS = {
@@ -525,14 +525,16 @@ export default function ShopPage() {
                       ? (isInCart(selectedProduct.key) ? L("更换规格", "Change plan") : L("选择规格", "Select plan"))
                       : (isInCart(selectedProduct.key) ? L("已加入购物车", "In cart") : L("加入购物车", "Add to cart"))}
                   </button>
-                  <Link href="/service-center#contact" className="secondary-btn">
-                    <MessageCircleMore size={16} />
-                    {L("联系客服", "Support")}
-                  </Link>
+                  {GUIDE_SLUG_BY_KEY[selectedProduct.key] && (
+                    <Link href={`/guides/${GUIDE_SLUG_BY_KEY[selectedProduct.key]}`} className="secondary-btn">
+                      <BookOpen size={16} />
+                      {L("购买指南", "Buying guide")}
+                    </Link>
+                  )}
                   {SERVICE_SLUG_BY_KEY[selectedProduct.key] && (
                     <Link href={`/services/${SERVICE_SLUG_BY_KEY[selectedProduct.key]}`} className="secondary-btn">
                       <ArrowRight size={16} />
-                      {L("服务指南", "Guide")}
+                      {L("服务详情", "Service details")}
                     </Link>
                   )}
                 </div>
@@ -587,10 +589,12 @@ export default function ShopPage() {
                 <ShoppingCart size={16} />
                 {isPlanSoldOut(planPickerProduct.key, planChoices[planPickerProduct.key] || getDefaultProductPlan(planPickerProduct.key)) ? L("已售罄", "Sold out") : L("选择规格并加入", "Add to cart")}
               </button>
-              <Link href="/service-center#contact" className="secondary-btn">
-                <MessageCircleMore size={16} />
-                {L("联系客服", "Support")}
-              </Link>
+              {GUIDE_SLUG_BY_KEY[planPickerProduct.key] && (
+                <Link href={`/guides/${GUIDE_SLUG_BY_KEY[planPickerProduct.key]}`} className="secondary-btn">
+                  <BookOpen size={16} />
+                  {L("购买指南", "Buying guide")}
+                </Link>
+              )}
             </div>
           </div>
         </div>

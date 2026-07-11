@@ -889,25 +889,25 @@ export function generatePaymentAdjustment() {
   return roundMoney(sign * cents / 100);
 }
 
-const USDT_QUOTE_NONCE_PREFIX = "lm:usdt:quote-nonce:";
+const USDT_QUOTE_NONCE_PREFIX = "lm:usdt:quote-nonce:v4:";
 const USDT_QUOTE_CLAIM_PREFIX = "lm:usdt:quote-claim:";
 
 function safeQuoteId(value) {
   return clean(value, 80).replace(/[^A-Za-z0-9_-]/g, "");
 }
 
-// Reserve a six-decimal USDT tail below 0.1 USDT. Redis NX prevents two live
+// Reserve a four-decimal USDT tail below 0.1 USDT. Redis NX prevents two live
 // quotes from receiving the same payable amount during the quote window.
 export async function reserveUsdtNonce(quoteId, ttlSec = 45 * 60) {
   const id = safeQuoteId(quoteId);
   if (!id || !redisConfig()) return 0;
   for (let attempt = 0; attempt < 24; attempt += 1) {
-    const units = randomInt(1, 100000); // 0.000001 - 0.099999 USDT
+    const units = randomInt(1, 1000); // 0.0001 - 0.0999 USDT
     const result = await redisCmd([
       "SET", USDT_QUOTE_NONCE_PREFIX + units, id,
       "EX", String(Math.max(60, Number(ttlSec || 0))), "NX",
     ]);
-    if (result === "OK") return units / 1000000;
+    if (result === "OK") return units / 10000;
   }
   return 0;
 }
@@ -955,16 +955,22 @@ export function verifyPaymentQuote(token, expectedPaymentMethod = "") {
     const paymentMethod = payload.paymentMethod === "usdt" ? "usdt" : payload.paymentMethod === "alipay" ? "alipay" : "";
     if (!paymentMethod || (expectedPaymentMethod && paymentMethod !== expectedPaymentMethod)) return null;
     const adjustment = roundMoney(payload.paymentAdjustment);
-    const usdtNonce = Math.round(Number(payload.usdtNonce || 0) * 1000000) / 1000000;
+    const rawUsdtPrecision = payload.usdtPrecision == null ? 6 : Number(payload.usdtPrecision);
+    if (paymentMethod === "usdt" && rawUsdtPrecision !== 4 && rawUsdtPrecision !== 6) return null;
+    const usdtPrecision = paymentMethod === "usdt" ? rawUsdtPrecision : 0;
+    const usdtScale = 10 ** (usdtPrecision || 6);
+    const usdtNonce = Math.round(Number(payload.usdtNonce || 0) * usdtScale) / usdtScale;
     if (paymentMethod === "usdt") {
-      if (adjustment !== 0 || usdtNonce < 0.000001 || usdtNonce > 0.099999 || !safeQuoteId(payload.quoteId)) return null;
+      const minNonce = usdtPrecision === 4 ? 0.0001 : 0.000001;
+      const maxNonce = usdtPrecision === 4 ? 0.0999 : 0.099999;
+      if (adjustment !== 0 || usdtNonce < minNonce || usdtNonce > maxNonce || !safeQuoteId(payload.quoteId)) return null;
     } else if (usdtNonce !== 0 || Math.abs(adjustment) < 0.01 || Math.abs(adjustment) > 0.49) {
       return null;
     }
     const issuedAt = Number(payload.issuedAt || 0);
     const exp = Number(payload.exp || 0);
     if (!Number.isFinite(issuedAt) || !Number.isFinite(exp) || issuedAt <= 0 || exp <= issuedAt) return null;
-    return { ...payload, paymentMethod, paymentAdjustment: adjustment, usdtNonce, quoteId: safeQuoteId(payload.quoteId) };
+    return { ...payload, paymentMethod, paymentAdjustment: adjustment, usdtNonce, usdtPrecision, quoteId: safeQuoteId(payload.quoteId) };
   } catch (e) { return null; }
 }
 

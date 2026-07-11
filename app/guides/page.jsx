@@ -11,10 +11,10 @@ const SITE_URL = "https://www.liumeiti.vip";
 export async function generateMetadata() {
   const locale = await getServerLocale();
   const en = locale === "en";
-  const title = en ? "Guides & How-tos" : "使用教程与购买指南";
+  const title = en ? "Service Buying & Setup Guides" : "服务购买与使用指南";
   const description = en
-    ? "Step-by-step guides: buying Spotify/Netflix/AI memberships, VPN nodes, and proxy payment for overseas websites."
-    : "手把手教程:Spotify/Netflix/AI 会员购买、机场节点配置、海外网站全球代付,一看就会。";
+    ? "Accurate buying, delivery and setup guides for Spotify, Netflix, Disney+, HBO Max, AI memberships, VPN nodes and global proxy payment."
+    : "覆盖 Spotify、Netflix、Disney+、HBO Max、AI 会员、机场节点与全球代付的选购、交付及使用说明。";
   return {
     title,
     description,
@@ -50,9 +50,9 @@ export default async function GuidesIndexPage() {
 
       <main className="main-content portal-main guides-main">
         <section className="container guides-hero">
-          <div className="section-kicker"><BookOpen size={13} /> {L("使用教程", "Guides")}</div>
-          <h1>{L("使用教程与购买指南", "Guides & How-tos")}</h1>
-          <p>{L("从选规格到开通、从代付申请到节点配置,常见问题一篇讲清。", "From choosing a plan to activation, proxy-pay requests to node setup — the common questions, answered.")}</p>
+          <div className="section-kicker"><BookOpen size={13} /> {L("服务指南", "Service guides")}</div>
+          <h1>{L("服务购买与使用指南", "Service Buying & Setup Guides")}</h1>
+          <p>{L("按实际在售规格整理选购、下单、交付与使用要点，帮助你在付款前确认合适方案。", "Built around the plans we actually sell, so you can confirm the right option, order requirements, delivery and setup before paying.")}</p>
         </section>
 
         <section className="container guides-grid">
@@ -60,7 +60,7 @@ export default async function GuidesIndexPage() {
             <Link key={g.slug} href={`/guides/${g.slug}`} className="guide-card">
               <h2>{g.title}</h2>
               <p>{g.desc}</p>
-              <span className="guide-card-cta">{L("阅读教程", "Read guide")} <ArrowRight size={14} /></span>
+              <span className="guide-card-cta">{L("查看指南", "View guide")} <ArrowRight size={14} /></span>
             </Link>
           ))}
         </section>

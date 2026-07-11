@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
-import { Headphones, ShoppingBag, X } from "lucide-react";
+import { BookOpen, ShoppingBag, X } from "lucide-react";
 import { getDefaultProductPlan, getProductPlan, getProductPlanOptions, localizePlan, useCatalogSync } from "../lib/store";
 import { useLocale } from "../components/LocaleProvider";
 
@@ -34,6 +34,7 @@ export default function ServiceOrderActions({ service, soldOut = {} }) {
   const planOptions = useMemo(() => getProductPlanOptions(service?.key), [service?.key, catalogVersion]);
   const productKey = service?.key || "";
   const quoteOnly = productKey === "proxy-pay";
+  const guideHref = service?.guideSlug ? `/guides/${service.guideSlug}` : "/guides";
   const currentPlan = getProductPlan(productKey, selectedPlan) || planOptions[0] || null;
   const isSoldOut = (planId) => Boolean(planOptions.find((p) => p.id === planId)?.soldOut) || Boolean(soldOut?.[planId]);
   const allSoldOut = planOptions.length > 0 && planOptions.every((p) => isSoldOut(p.id));
@@ -76,8 +77,8 @@ export default function ServiceOrderActions({ service, soldOut = {} }) {
         >
           <ShoppingBag size={16} />{locale === "en" ? "Request a quote" : "提交代付需求"}
         </button>
-        <Link href="/service-center#contact" className="secondary-btn">
-          <Headphones size={16} />{t("svc.askSupport")}
+        <Link href={guideHref} className="secondary-btn">
+          <BookOpen size={16} />{locale === "en" ? "Buying guide" : "购买指南"}
         </Link>
       </div>
     );
@@ -126,9 +127,9 @@ export default function ServiceOrderActions({ service, soldOut = {} }) {
             <ShoppingBag size={16} />
             {currentPlan && isSoldOut(currentPlan.id) ? (locale === "en" ? "Sold out" : "已售罄") : t("svc.pickAndOrder")}
           </button>
-          <Link href="/service-center#contact" className="secondary-btn">
-            <Headphones size={16} />
-            {t("svc.askSupport")}
+          <Link href={guideHref} className="secondary-btn">
+            <BookOpen size={16} />
+            {locale === "en" ? "Buying guide" : "购买指南"}
           </Link>
         </div>
       </div>
@@ -141,8 +142,8 @@ export default function ServiceOrderActions({ service, soldOut = {} }) {
         <button type="button" className="primary-btn" onClick={() => setPickerOpen(true)} disabled={allSoldOut}>
           <ShoppingBag size={16} />{allSoldOut ? (locale === "en" ? "Sold out" : "已售罄") : t("svc.orderNow")}
         </button>
-        <Link href="/service-center#contact" className="secondary-btn">
-          <Headphones size={16} />{t("svc.askSupport")}
+        <Link href={guideHref} className="secondary-btn">
+          <BookOpen size={16} />{locale === "en" ? "Buying guide" : "购买指南"}
         </Link>
       </div>
 

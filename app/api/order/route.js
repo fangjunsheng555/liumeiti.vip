@@ -403,10 +403,12 @@ export async function POST(request) {
   }
   const paymentAdjustment = quote ? normalizePaymentAdjustment(quote.paymentAdjustment) : 0;
   const payableAmount = paymentMethod === "alipay" ? roundMoney(Math.max(0.01, finalAmount + paymentAdjustment)) : finalAmount;
+  const usdtPrecision = paymentMethod === "usdt" && quote?.usdtPrecision === 4 ? 4 : 6;
+  const usdtScale = 10 ** usdtPrecision;
   const usdtNonce = paymentMethod === "usdt" && quote
-    ? Math.round(Number(quote.usdtNonce || 0) * 1000000) / 1000000
+    ? Math.round(Number(quote.usdtNonce || 0) * usdtScale) / usdtScale
     : 0;
-  const usdtPayAmount = Math.round((finalUsdt + usdtNonce) * 1000000) / 1000000;
+  const usdtPayAmount = Math.round((finalUsdt + usdtNonce) * usdtScale) / usdtScale;
   const paidAmount = paymentMethod === "usdt" ? usdtPayAmount : paymentMethod === "alipay" ? payableAmount : finalAmount;
   const paidCurrency = paymentMethod === "usdt" ? "USDT" : paymentMethod === "redeem" ? "CODE" : "CNY";
 
