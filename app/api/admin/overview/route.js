@@ -4,6 +4,7 @@ import {
   redisCmd,
 } from "../../_utils.js";
 import { getSettings } from "../../_settings.js";
+import { getAfterSalesCounts } from "../../after-sales/_store.js";
 
 function beijingDateKey(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
@@ -52,12 +53,13 @@ export async function GET(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
 
-  const [ordersRaw, withdrawals, codes, mailLogs, userEmails] = await Promise.all([
+  const [ordersRaw, withdrawals, codes, mailLogs, userEmails, afterSalesCounts] = await Promise.all([
     getOrderOverviewRows(),
     listWithdrawals(),
     listRedeemCodes(),
     getAdminMailLog(),
     listAllUserEmails(),
+    getAfterSalesCounts(),
   ]);
 
   const orders = ordersRaw
@@ -118,6 +120,9 @@ export async function GET(request) {
     voidCodes: codes.filter((item) => item.status === "void").length,
     failedMails: mailLogs.filter((item) => item.ok === false).length,
     usersTotal: userEmails.length,
+    afterSalesTotal: Number(afterSalesCounts.all || 0),
+    pendingAfterSales: Number(afterSalesCounts.pending || 0),
+    completedAfterSales: Number(afterSalesCounts.completed || 0),
   };
 
   // 近 14 天订单/营收趋势(总览迷你趋势图 + 今日环比昨日)——直接用已加载的订单算,零额外 IO。

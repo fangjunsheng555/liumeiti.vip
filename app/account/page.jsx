@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import MobileNav from "../components/MobileNav";
 import FloatingSupport from "../components/FloatingSupport";
+import AfterSalesTicketSheet from "../components/AfterSalesTicketSheet";
 import { useLocale } from "../components/LocaleProvider";
 import { DEFAULT_USER_AVATAR_ID, USER_AVATARS, normalizeUserAvatarId, userAvatarPath } from "../lib/avatars";
 import {
@@ -12,6 +13,7 @@ import {
   AlertTriangle, Wallet, TrendingDown, TrendingUp,
   User, Users, Edit3, Check,
   Gift, Send, CreditCard, RefreshCw, Share2, BadgePercent, ShieldCheck,
+  LifeBuoy,
 } from "lucide-react";
 
 const INVITE_LINK_ORIGIN = "https://www.liumeiti.vip";
@@ -102,6 +104,10 @@ export default function AccountPage() {
   const L = (zh, en) => (locale === "en" ? en : zh);
   const [state, setState] = useState({ loading: true, email: null, username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
   const [activeOrder, setActiveOrder] = useState(null);
+  const [afterSalesOrder, setAfterSalesOrder] = useState(null);
+  const [afterSalesForm, setAfterSalesForm] = useState(null);
+  const [afterSalesBusy, setAfterSalesBusy] = useState(false);
+  const [afterSalesStatus, setAfterSalesStatus] = useState(null);
   const [txModal, setTxModal] = useState(false);
   const [avatarModal, setAvatarModal] = useState(false);
   const [avatarSaving, setAvatarSaving] = useState("");
@@ -164,6 +170,102 @@ export default function AccountPage() {
   }
 
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    if (!afterSalesOrder) return;
+    document.body.style.overflow = "hidden";
+    const onKey = (event) => { if (event.key === "Escape" && !afterSalesBusy) setAfterSalesOrder(null); };
+    document.addEventListener("keydown", onKey);
+    return () => { document.body.style.overflow = ""; document.removeEventListener("keydown", onKey); };
+  }, [afterSalesOrder, afterSalesBusy]);
+
+  function openAfterSales(order) {
+    if (!order?.afterSalesEligible || !order?.afterSalesToken || order?.afterSalesTicket?.status === "pending") return;
+    const sourceItems = Array.isArray(order.items) && order.items.length ? order.items : [];
+    setAfterSalesOrder(order);
+    setAfterSalesForm({
+      email: order.email || state.email || "",
+      contact: order.contact || "",
+      remark: order.remark || "",
+      issue: "",
+      items: sourceItems.map((item, index) => ({
+        index,
+        service: item.service || "",
+        label: item.label || order.serviceLabel || L("订单服务", "Order service"),
+        account: item.account || "",
+        password: item.password || "",
+        platformUrl: item.platformUrl || order.platformUrl || "",
+        productPrice: item.productPrice || order.productPrice || "",
+      })),
+    });
+    setAfterSalesStatus(null);
+  }
+
+  function updateAfterSalesField(field, value) {
+    setAfterSalesForm((current) => current ? { ...current, [field]: value } : current);
+  }
+
+  function updateAfterSalesItem(index, field, value) {
+    setAfterSalesForm((current) => current ? {
+      ...current,
+      items: current.items.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: value } : item),
+    } : current);
+  }
+
+  function attachAfterSalesTicket(orderId, ticket) {
+    if (!ticket) return;
+    setState((current) => ({
+      ...current,
+      orders: current.orders.map((order) => order.orderId === orderId ? { ...order, afterSalesTicket: ticket } : order),
+    }));
+    setActiveOrder((order) => order?.orderId === orderId ? { ...order, afterSalesTicket: ticket } : order);
+    setAfterSalesOrder((order) => order?.orderId === orderId ? { ...order, afterSalesTicket: ticket } : order);
+  }
+
+  async function submitAfterSales(event) {
+    event.preventDefault();
+    if (!afterSalesOrder || !afterSalesForm || afterSalesBusy) return;
+    setAfterSalesBusy(true);
+    setAfterSalesStatus(null);
+    try {
+      const response = await fetch("/api/after-sales", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId: afterSalesOrder.orderId,
+          token: afterSalesOrder.afterSalesToken,
+          issue: afterSalesForm.issue,
+          contact: afterSalesForm.contact,
+          remark: afterSalesForm.remark,
+          items: afterSalesForm.items,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        if (data.error === "pending_ticket_exists" && data.ticket) {
+          attachAfterSalesTicket(afterSalesOrder.orderId, data.ticket);
+          setAfterSalesStatus({ type: "success", ticketId: data.ticket.ticketId, emailWarning: false });
+          return;
+        }
+        const message = {
+          verification_required: L("登录凭证已过期，请重新登录后再试", "Your session expired. Sign in again and retry."),
+          order_not_eligible: L("无效订单暂不支持提交售后工单", "After-sales tickets are unavailable for invalid orders."),
+          issue_required: L("请至少用 5 个字说明需要处理的问题", "Please describe the issue in at least five characters."),
+          missing_credentials: L("请完整填写该服务的账号与密码", "Enter the full account and password for this service."),
+          missing_proxy_details: L("请完整填写网站链接与商品标价", "Enter the website link and listed price."),
+          contact_required: L("请填写有效联系方式", "Enter a valid contact."),
+        }[data.error] || L("售后工单提交失败，请稍后再试", "Ticket submission failed. Please try again.");
+        throw new Error(message);
+      }
+      attachAfterSalesTicket(afterSalesOrder.orderId, data.ticket);
+      setAfterSalesStatus({ type: "success", ticketId: data.ticket.ticketId, emailWarning: !data.notice?.email });
+    } catch (error) {
+      setAfterSalesStatus({ type: "error", message: error?.message || L("售后工单提交失败，请稍后再试", "Ticket submission failed. Please try again.") });
+    } finally {
+      setAfterSalesBusy(false);
+    }
+  }
 
   async function refreshAuthCaptcha(clearAnswer = true) {
     setAuthCaptcha((cur) => ({ ...cur, loading: true, error: "" }));
@@ -1053,6 +1155,20 @@ export default function AccountPage() {
             </div>
 
             <div className="account-modal-body">
+              <div className="query-after-sales-entry">
+                {activeOrder.afterSalesTicket?.status === "pending" ? (
+                  <div className="query-after-sales-pending">
+                    <span><Clock size={17} /></span>
+                    <div><strong>{L("售后工单待处理", "After-sales ticket pending")}</strong><small>{activeOrder.afterSalesTicket.ticketId} · {L("工作人员会尽快处理", "Our team will handle it shortly")}</small></div>
+                  </div>
+                ) : activeOrder.afterSalesEligible ? (
+                  <button type="button" className="query-after-sales-btn" onClick={() => openAfterSales(activeOrder)}>
+                    <span><LifeBuoy size={19} /></span>
+                    <div><strong>{L("申请售后", "Request after-sales")}</strong><small>{L("资料自动填充，提交后邮件确认", "Details are pre-filled and confirmed by email")}</small></div>
+                    <ArrowRight size={17} />
+                  </button>
+                ) : null}
+              </div>
               <div className="account-modal-amount">
                 <span>{activeOrder.status === "awaiting_quote" ? L("当前进度", "Current status") : activeOrder.status === "pending_payment" ? L("报价金额", "Quote") : L("实付金额", "Amount paid")}</span>
                 <b>{activeOrder.status === "awaiting_quote" ? L("等待报价", "Awaiting quote") : activeOrder.status === "pending_payment" ? `¥${Number(activeOrder.quoteAmount || 0).toFixed(2)}` : activeOrder.paidCurrency === "CODE" ? L("服务兑换码", "Service code") : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b>
@@ -1140,6 +1256,17 @@ export default function AccountPage() {
           </div>
         </div>
       )}
+      <AfterSalesTicketSheet
+        order={afterSalesOrder}
+        form={afterSalesForm}
+        busy={afterSalesBusy}
+        status={afterSalesStatus}
+        onClose={() => !afterSalesBusy && setAfterSalesOrder(null)}
+        onSubmit={submitAfterSales}
+        onFieldChange={updateAfterSalesField}
+        onItemChange={updateAfterSalesItem}
+        L={L}
+      />
       <FloatingSupport />
       <MobileNav />
     </div>

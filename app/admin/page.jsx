@@ -14,6 +14,7 @@ import AIQuotaPanel from "./AIQuotaPanel";
 import CatalogPanel from "./CatalogPanel";
 import SettingsPanel from "./SettingsPanel";
 import SecurityPanel from "./SecurityPanel";
+import AfterSalesPanel from "./AfterSalesPanel";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff, ExternalLink,
   LoaderCircle, LogOut, Search, ShieldCheck,
@@ -21,6 +22,7 @@ import {
   Gift, CreditCard, Plus, UserPlus, Mail, BellRing, BarChart3, Download, FileText,
   LayoutDashboard, ClipboardList, ShoppingCart, Users, Wallet, Coins,
   Megaphone, Footprints, Menu, Newspaper, Gauge, Package, SlidersHorizontal,
+  LifeBuoy,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -1281,6 +1283,7 @@ export default function AdminPage() {
   const canDeleteUsers = permissionsReady ? Boolean(staffPermissions?.canDeleteUsers ?? isRootStaff) : false;
   const canDeleteRecords = permissionsReady ? Boolean(staffPermissions?.canDeleteRecords ?? isRootStaff) : false;
   const canManageStock = permissionsReady ? Boolean(staffPermissions?.canManageStock ?? isRootStaff) : false;
+  const canEditOrders = permissionsReady ? Boolean(staffPermissions?.canEditOrders ?? isRootStaff) : false;
 
   const applyCurrentStaff = useCallback((staff) => {
     if (!staff) return;
@@ -3305,6 +3308,7 @@ export default function AdminPage() {
       title: "交易",
       items: [
         { key: "orders", label: "订单管理", icon: ClipboardList, show: true, badge: Number(overview?.pendingOrders || 0) },
+        { key: "after-sales", label: "售后工单", icon: LifeBuoy, show: true, badge: Number(overview?.pendingAfterSales || 0), warn: true },
         { key: "abnormal", label: "异常订单", icon: AlertTriangle, show: true, badge: Number(overview?.abnormalOrders || 0), warn: true },
         { key: "abandoned", label: "弃单召回", icon: ShoppingCart, show: isRootStaff, badge: Number(overview?.abandonedTotal || 0) },
       ],
@@ -3572,6 +3576,8 @@ export default function AdminPage() {
               </div>
             )}
           </div>
+        ) : tab === "after-sales" ? (
+          <AfterSalesPanel canEdit={canEditOrders} onChanged={() => loadOverview({ silent: true })} />
         ) : tab === "users" ? (
           <div className="admin-users-pane">
             {/* All registered users */}

@@ -11,9 +11,11 @@ import {
   getOrdersByEmail,
   redisConfig,
   getCookieFromRequest,
+  signSession,
 } from "../_utils.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { buildEmailBrandHeader } from "../email-brand.js";
+import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../after-sales/_store.js";
 
 const QUERY_CODE_TTL_SECONDS = 10 * 60;
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
@@ -312,11 +314,28 @@ async function handle(request) {
     return Response.json({ ok: false, error: "code_invalid_or_expired" }, { status: 400, headers });
   }
 
+  const activeTickets = await getActiveAfterSalesTickets(matched.map((order) => order.orderId));
+  const verifiedOrders = matched.map((order) => {
+    const eligible = order.status !== "invalid";
+    const activeTicket = eligible ? activeTickets[normalizeOrderId(order.orderId)] : null;
+    return {
+      ...publicOrder(order, matchType(type), locale),
+      afterSalesEligible: eligible,
+      afterSalesToken: eligible ? signSession({
+        type: "after-sales-order",
+        orderId: normalizeOrderId(order.orderId),
+        email: normalizeEmail(order.email),
+        exp: Date.now() + 24 * 60 * 60 * 1000,
+      }) : "",
+      afterSalesTicket: publicAfterSalesSummary(activeTicket),
+    };
+  });
+
   return Response.json({
     ok: true,
     configured: true,
     verified: true,
-    orders: matched.map((order) => publicOrder(order, matchType(type), locale)),
+    orders: verifiedOrders,
   }, { headers });
 }
 

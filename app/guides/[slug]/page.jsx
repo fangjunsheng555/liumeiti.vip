@@ -17,13 +17,14 @@ function StepDescription({ content }) {
     <p>
       {(content?.parts || []).map((part, index) => {
         if (typeof part === "string") return part;
+        const external = /^https?:\/\//i.test(part.href || "");
         return (
           <a
             key={`${part.href}-${index}`}
             className="guide-step-link"
             href={part.href}
-            target="_blank"
-            rel="noopener noreferrer"
+            target={external ? "_blank" : undefined}
+            rel={external ? "noopener noreferrer" : undefined}
             aria-label={part.ariaLabel || part.text}
           >
             {part.text}

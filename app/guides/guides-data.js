@@ -254,6 +254,53 @@ export const GUIDES = [
       ["Do I provide my own HBO Max account?", "No. We supply the access details for the selected plan."],
     ],
   },
+  {
+    slug: "how-to-request-after-sales-support",
+    service: "",
+    updated: "2026-07-11",
+    title: "售后申请指南：查询订单、提交工单与处理通知",
+    titleEn: "After-sales Guide: Find an Order, Submit a Ticket and Receive Updates",
+    desc: "说明如何完成订单邮箱核验、从订单详情提交售后工单、核对自动填充资料并接收处理结果邮件。",
+    descEn: "How to verify your order email, submit an after-sales ticket from order details, review pre-filled information and receive the result by email.",
+    intro: "售后申请统一从服务中心或登录后的账户中心进入。工单会关联原订单并保留完整处理记录，提交与完成结果均发送至已验证的下单邮箱。",
+    introEn: "After-sales requests start in the Service Center or from My Orders after sign-in. Each ticket is linked to its original order, and submission and completion updates are sent to the verified order email.",
+    steps: [
+      ["进入订单查询/申请售后", {
+        parts: [
+          "打开服务中心的",
+          { text: "订单查询/申请售后", href: "/service-center#order-query", ariaLabel: "前往订单查询与申请售后" },
+          "，输入完整订单号或下单邮箱。登录用户也可在账户中心直接打开订单详情。",
+        ],
+      }],
+      ["完成订单邮箱核验", "未登录查询时，系统会向下单邮箱发送 6 位验证码。核验成功后即可查看订单详情；提交工单时无需再次输入验证码。"],
+      ["从订单详情申请售后", "打开需要处理的订单，在详情顶部点击“申请售后”。若该订单已有待处理工单，页面会显示工单编号和待处理状态。"],
+      ["核对资料并说明问题", "系统会按服务类型自动填充原订单中的账号、联系方式、网站链接、商品标价和备注；除已验证邮箱外均可按当前情况修改。请准确描述异常现象和希望协助的事项。"],
+      ["查收工单通知", "提交后会收到“售后工单已收到”邮件。工作人员完成处理后，系统会再次发送完成邮件；如客服填写处理备注，邮件会一并显示。"],
+    ],
+    stepsEn: [
+      ["Open Orders / after-sales", {
+        parts: [
+          "Open ",
+          { text: "Orders / after-sales", href: "/service-center#order-query", ariaLabel: "Open order lookup and after-sales" },
+          " in the Service Center and enter the full order number or order email. Signed-in users can also open an order from My Orders.",
+        ],
+      }],
+      ["Verify the order email", "For a signed-out lookup, we send a six-digit code to the order email. Once verified, you can view the order and submit a ticket without entering another code."],
+      ["Request after-sales from order details", "Open the relevant order and select Request after-sales at the top. If a pending ticket already exists, its number and status are shown instead."],
+      ["Review details and describe the issue", "The form pre-fills the account, contact, website link, listed price and notes required for that service. Everything except the verified email can be updated. Describe the issue and the assistance required clearly."],
+      ["Receive ticket updates", "A confirmation email is sent after submission. When processing is complete, we send a completion email that includes any support note added by the team."],
+    ],
+    faq: [
+      ["提交售后工单需要再次验证邮箱吗？", "不需要。订单查询已通过邮箱验证码后，可直接提交；登录用户从账户中心提交也无需额外验证码。"],
+      ["同一个订单可以重复提交吗？", "同一订单同一时间只允许存在一个待处理工单。现有工单完成后，如仍有新问题，可以再次申请。"],
+      ["为什么下单邮箱不能修改？", "下单邮箱已完成订单身份核验，并用于接收工单与处理结果。其他服务资料可在提交前修改。"],
+    ],
+    faqEn: [
+      ["Do I verify the email again when submitting?", "No. Once the order lookup is verified, the ticket submits directly. Signed-in users also need no extra code from My Orders."],
+      ["Can I submit more than one ticket for the same order?", "Only one pending ticket is allowed per order. After it is completed, you can submit another request if a new issue remains."],
+      ["Why is the order email locked?", "It is the verified identity and notification address for the order. Other service details remain editable before submission."],
+    ],
+  },
 ];
 
 export function getGuide(slug) {

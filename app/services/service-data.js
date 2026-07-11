@@ -44,7 +44,7 @@ export const SERVICE_PAGES = [
     faq: [
       ["是否官方会员", "均为官方渠道直充的正规会员/订阅，独立账号、非共享，开通后稳定可用"],
       ["如何使用服务", "下单并完成支付后，充值人员会在30分钟内联系你完成开通，按指引登录使用即可"],
-      ["是否包售后", "订单包含售后保障，使用期间遇到问题可凭订单号或通过在线客服处理"],
+      ["是否包售后", "订单包含售后保障，使用期间遇到问题可在服务中心查询订单并自助提交售后工单；如仍有疑问，可联系在线客服"],
     ],
   },
   {
@@ -225,7 +225,7 @@ const SERVICE_EN = {
     faq: [
       ["Multiple devices supported", "Works on common phones, tablets, TVs and browsers"],
       ["How to use the service", "Download the HBO Max app or sign in on the web with the account we provide"],
-      ["How is after-sales handled", "Check the Service Center after your order, or reach our online support"],
+      ["How is after-sales handled", "Find the order in the Service Center and submit an after-sales ticket first; contact online support if you still need help"],
     ],
   },
   "airport-node": {
@@ -266,7 +266,7 @@ const SERVICE_EN = {
     faq: [
       ["Are these official memberships", "Yes — genuine memberships/subscriptions topped up through official channels, private and non-shared"],
       ["How to use the service", "After you order and pay, our team contacts you within 30 minutes to activate it; just sign in and follow the guide"],
-      ["Is after-sales included", "Every order includes after-sales support — reach us with your order number or via online support if anything comes up"],
+      ["Is after-sales included", "Yes. Find the order in the Service Center and submit an after-sales ticket first; contact online support if you still need help"],
     ],
   },
   "proxy-payment": {

@@ -3,8 +3,10 @@ import {
   getUser, setUser, validUsername, generateRandomUsername, clean,
   generateRandomUserAvatarId, validUserAvatarId,
   publicCoupons, publicReferral, ensureUserReferralProfile, getReferralDownlineRecords,
+  signSession,
 } from "../../_utils.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../../lib/order-i18n.js";
+import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../../after-sales/_store.js";
 
 function subscriptionLinks(username) {
   const encoded = encodeURIComponent(String(username || "").trim());
@@ -73,6 +75,7 @@ function publicOrder(order, locale = "zh") {
     contact: order.contact || "",
     remark: order.remark || "",
     staffNotes: order.staffNotes || "",
+    email: order.email || "",
   };
 }
 
@@ -125,8 +128,23 @@ export async function GET(request) {
   }
   const profile = user ? await ensureUserReferralProfile(sessionEmail, user) : null;
 
-  const myOrders = (await getOrdersByEmail(sessionEmail, 100))
-    .map((o) => publicOrder(o, locale));
+  const myOrderRecords = await getOrdersByEmail(sessionEmail, 100);
+  const activeTickets = await getActiveAfterSalesTickets(myOrderRecords.map((order) => order.orderId));
+  const myOrders = myOrderRecords.map((order) => {
+    const eligible = order.status !== "invalid";
+    const activeTicket = eligible ? activeTickets[String(order.orderId || "").replace(/\s+/g, "").toUpperCase()] : null;
+    return {
+      ...publicOrder(order, locale),
+      afterSalesEligible: eligible,
+      afterSalesToken: eligible ? signSession({
+        type: "after-sales-order",
+        orderId: String(order.orderId || "").replace(/\s+/g, "").toUpperCase(),
+        email: String(order.email || "").toLowerCase().trim(),
+        exp: Date.now() + 24 * 60 * 60 * 1000,
+      }) : "",
+      afterSalesTicket: publicAfterSalesSummary(activeTicket),
+    };
+  });
 
   return Response.json({
     ok: true,

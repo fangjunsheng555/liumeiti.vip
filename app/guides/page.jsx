@@ -13,8 +13,8 @@ export async function generateMetadata() {
   const en = locale === "en";
   const title = en ? "Service Buying & Setup Guides" : "服务购买与使用指南";
   const description = en
-    ? "Accurate buying, delivery and setup guides for Spotify, Netflix, Disney+, HBO Max, AI memberships, VPN nodes and global proxy payment."
-    : "覆盖 Spotify、Netflix、Disney+、HBO Max、AI 会员、机场节点与全球代付的选购、交付及使用说明。";
+    ? "Accurate buying, delivery, setup and after-sales guides for Spotify, Netflix, Disney+, HBO Max, AI memberships, VPN nodes and global proxy payment."
+    : "覆盖 Spotify、Netflix、Disney+、HBO Max、AI 会员、机场节点、全球代付及售后申请的选购、交付与使用说明。";
   return {
     title,
     description,
@@ -52,7 +52,7 @@ export default async function GuidesIndexPage() {
         <section className="container guides-hero">
           <div className="section-kicker"><BookOpen size={13} /> {L("服务指南", "Service guides")}</div>
           <h1>{L("服务购买与使用指南", "Service Buying & Setup Guides")}</h1>
-          <p>{L("按实际在售规格整理选购、下单、交付与使用要点，帮助你在付款前确认合适方案。", "Built around the plans we actually sell, so you can confirm the right option, order requirements, delivery and setup before paying.")}</p>
+          <p>{L("按实际服务流程整理选购、下单、交付、使用与售后要点，帮助你准确完成每一步。", "Built around our actual service flow, covering selection, ordering, delivery, setup and after-sales support.")}</p>
         </section>
 
         <section className="container guides-grid">

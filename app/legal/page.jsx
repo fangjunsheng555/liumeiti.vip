@@ -95,9 +95,9 @@ const POLICY_SECTIONS = [
     icon: Headphones,
     title: "售后保障",
     kicker: "After-Sales",
-    lead: "服务使用中如遇账号、车位、节点或订阅异常，可联系在线客服，我们会结合订单情况协助处理",
+    lead: "服务使用中如遇账号、车位、节点或订阅异常，请优先在服务中心查询订单并自助提交售后工单；如仍有疑问，可联系在线客服",
     items: [
-      ["联系渠道", "可通过 QQ、WhatsApp、Telegram 或服务中心提交订单信息与问题说明"],
+      ["申请入口", "在服务中心完成订单查询后，可从订单详情直接提交售后工单，无需重复验证邮箱"],
       ["协助方式", "优先确认服务类型与问题场景，以恢复使用或给出明确结果为目标"],
       ["售后进度", "售后进展会与订单关联，用户可继续通过服务中心查看后续结果"],
     ],
@@ -188,9 +188,9 @@ const POLICY_SECTIONS_EN = {
   },
   "after-sale": {
     title: "After-sales", kicker: "After-Sales",
-    lead: "If an account, seat, node or subscription has issues, reach our online support and we'll help based on your order.",
+    lead: "If an account, Profile, node or subscription has issues, find the order in the Service Center and submit an after-sales ticket first; contact online support if you still need help.",
     items: [
-      ["Contact channels", "Submit order info and your issue via QQ, WhatsApp, Telegram or the Service Center"],
+      ["Request entry", "After verifying the order in the Service Center, submit a ticket directly from order details without another email code"],
       ["How we help", "We first confirm the service type and scenario, aiming to restore use or give a clear outcome"],
       ["Progress", "After-sales progress is linked to your order; keep checking results in the Service Center"],
     ],

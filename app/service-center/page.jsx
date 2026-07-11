@@ -7,11 +7,13 @@ import {
   ArrowRight,
   BadgeCheck,
   CheckCircle2,
+  Clock,
   ChevronDown,
   Copy,
   ExternalLink,
   Gift,
   Headphones,
+  LifeBuoy,
   LoaderCircle,
   Lock,
   RefreshCw,
@@ -24,19 +26,20 @@ import MobileNav from "../components/MobileNav";
 import FloatingSupport from "../components/FloatingSupport";
 import { QQBrandIcon, TelegramBrandIcon, WhatsAppBrandIcon } from "../components/BrandIcons";
 import { useLocale } from "../components/LocaleProvider";
+import AfterSalesTicketSheet from "../components/AfterSalesTicketSheet";
 
 const ASSURANCE_CARDS_EN = [
   { title: "Reliable setup", desc: "Six years of streaming-service experience; orders are processed fast by our team", meta: "Pro & worry-free" },
-  { title: "After-sales help", desc: "If an account, Profile or node has issues, reach our support — online every day, 9am–11pm", meta: "We've got your back" },
+  { title: "After-sales help", desc: "For account, Profile or node issues, submit a ticket in the Service Center first; contact online support if you still need help", meta: "We've got your back" },
   { title: "Refund policy", desc: "If an account can't be used due to our side, a 7-day refund is supported; support helps troubleshoot first", meta: "Clear rules" },
   { title: "Order records", desc: "Order lookup info is kept, and orders are also emailed to your order email", meta: "Easy to track" },
 ];
 
 const FAQ_EN = [
   { q: "How soon can I use it after ordering?", a: "Usually 5–10 minutes after payment, and within 1 hour at peak. Every order is checked for service and details to stay accurate and stable." },
-  { q: "Is the account safe? Could it get banned?", a: "We use first-hand source channels, so accounts stay stable long-term. Spotify uses legitimate family invites; Netflix / Disney+ / HBO are lockable dedicated Profiles; VPN nodes use clean streaming-unlocked IPs. If anything goes wrong, just reach our online support." },
+  { q: "Is the account safe? Could it get banned?", a: "We use first-hand source channels, so accounts stay stable long-term. Spotify uses legitimate family invites; Netflix / Disney+ / HBO are lockable dedicated Profiles; VPN nodes use clean streaming-unlocked IPs. If an issue occurs, submit an after-sales ticket from your order details first." },
   { q: "What payment methods are there? Is it safe?", a: "Alipay escrow (recommended) and USDT ({{usdtOff}}) are supported. An order confirmation email is sent so lookup and after-sales stay clear." },
-  { q: "Is after-sales supported?", a: "Yes. We support a 7-day refund for account-side issues, plus order consultation, online support and troubleshooting. Reach our online support team anytime." },
+  { q: "Is after-sales supported?", a: "Yes. Open Orders / after-sales in the Service Center, find the order and submit a ticket. The request stays linked to the order and completion is emailed; contact online support if you still have questions." },
   { q: "How do I contact support?", a: "Reach us on QQ, WhatsApp or Telegram. Online hours are 9am–11pm Beijing time. Contact our online support team anytime." },
   { q: "About us?", a: "Maoyang Taiwan Inc is based in Taiwan, China and has focused on streaming memberships, usage guidance and after-sales since 2020. We value response speed, service experience and long-term reputation." },
   { q: "Can you customize enterprise or team plans?", a: "Yes. We have 200+ reseller partners. For long-term cooperation, bulk needs or enterprise scenarios, reach our online support to discuss." },
@@ -48,7 +51,7 @@ const LAYOUT_CARDS = [
   ["选择/兑换服务", "Spotify / Netflix / Disney+ / Hbomax / 机场节点"],
   ["填写信息", "按照网站引导，准确填写你的订单所需的信息"],
   ["提交订单", "核查填写信息无误后提交订单，你的邮箱将收到订单确认信息"],
-  ["售后服务", "完成后邮件通知，订单页可继续查询售后信息"],
+  ["售后服务", "订单详情可自助提交工单，处理完成后邮件通知"],
 ];
 
 const ASSURANCE_CARDS = [
@@ -60,7 +63,7 @@ const ASSURANCE_CARDS = [
   },
   {
     title: "售后协助",
-    desc: "账号、车位或节点遇到异常，请联系我们全年无休7x14在线客服处理",
+    desc: "账号、车位或节点遇到异常，优先在服务中心自助提交售后工单；如仍有疑问，可联系在线客服",
     meta: "全程保驾护航",
     icon: Headphones,
   },
@@ -85,7 +88,7 @@ const FAQ = [
   },
   {
     q: "账号安全有保障吗？会被封禁吗？",
-    a: "我们自有源头渠道，账号长期稳定可用。Spotify 为正规家庭组邀请；Netflix / Disney+ / HBO 均为独立车位可上锁，长期稳定可用；机场节点均为已解锁流媒体纯净 IP，如出现问题联系在线客服解决即可",
+    a: "我们自有源头渠道，账号长期稳定可用。Spotify 为正规家庭组邀请；Netflix / Disney+ / HBO 均为独立车位可上锁；机场节点均为已解锁流媒体纯净 IP。如遇异常，优先从订单详情自助提交售后工单",
   },
   {
     q: "支付方式有哪些？支付安全吗？",
@@ -93,7 +96,7 @@ const FAQ = [
   },
   {
     q: "是否支持售后服务？",
-    a: "支持。我们支持 7 天内账号原因退款，我们提供订单服务咨询、在线客服协助与问题排查，如您有任何问题，随时联系我们的在线客服团队",
+    a: "支持。进入服务中心的“订单查询/申请售后”，查询订单后即可自助提交工单；处理进度与结果会关联订单并通过邮件通知。如仍有疑问，可联系在线客服",
   },
   {
     q: "如何联系在线客服？",
@@ -173,6 +176,10 @@ export default function ServiceCenterPage() {
   const [queryLoading, setQueryLoading] = useState(false);
   const [queryResults, setQueryResults] = useState([]);
   const [queryDetailOrder, setQueryDetailOrder] = useState(null);
+  const [afterSalesOrder, setAfterSalesOrder] = useState(null);
+  const [afterSalesForm, setAfterSalesForm] = useState(null);
+  const [afterSalesBusy, setAfterSalesBusy] = useState(false);
+  const [afterSalesStatus, setAfterSalesStatus] = useState(null);
   const [faqOpen, setFaqOpen] = useState(0);
   const [copiedKey, setCopiedKey] = useState("");
   const { locale } = useLocale();
@@ -197,12 +204,18 @@ export default function ServiceCenterPage() {
 
   useEffect(() => {
     if (typeof document === "undefined") return;
-    document.body.style.overflow = authModal ? "hidden" : "";
-    if (!authModal) return () => { document.body.style.overflow = ""; };
-    const onKey = (e) => { if (e.key === "Escape" && !authBusy) setAuthModal(null); };
+    const overlayOpen = Boolean(authModal || queryDetailOrder || afterSalesOrder);
+    document.body.style.overflow = overlayOpen ? "hidden" : "";
+    if (!overlayOpen) return () => { document.body.style.overflow = ""; };
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (afterSalesOrder && !afterSalesBusy) setAfterSalesOrder(null);
+      else if (queryDetailOrder) setQueryDetailOrder(null);
+      else if (!authBusy) setAuthModal(null);
+    };
     document.addEventListener("keydown", onKey);
     return () => { document.body.style.overflow = ""; document.removeEventListener("keydown", onKey); };
-  }, [authModal, authBusy]);
+  }, [authModal, authBusy, queryDetailOrder, afterSalesOrder, afterSalesBusy]);
 
   async function refreshAuthCaptcha(clearAnswer = true) {
     setAuthCaptcha((cur) => ({ ...cur, loading: true, error: "" }));
@@ -444,6 +457,97 @@ export default function ServiceCenterPage() {
     setTimeout(() => setCopiedKey(""), 1600);
   }
 
+  function openAfterSales(order) {
+    if (!order?.afterSalesEligible || !order?.afterSalesToken || order?.afterSalesTicket?.status === "pending") return;
+    const sourceItems = Array.isArray(order.items) && order.items.length ? order.items : [{
+      service: order.service,
+      label: order.serviceLabel,
+      account: order.account || "",
+      password: order.password || "",
+      platformUrl: order.platformUrl || "",
+      productPrice: order.productPrice || "",
+    }];
+    setAfterSalesOrder(order);
+    setAfterSalesForm({
+      email: order.email || "",
+      contact: order.contact || "",
+      remark: order.remark || "",
+      issue: "",
+      items: sourceItems.map((item, index) => ({
+        index,
+        service: item.service || "",
+        label: item.label || order.serviceLabel || L("订单服务", "Order service"),
+        account: item.account || "",
+        password: item.password || "",
+        platformUrl: item.platformUrl || order.platformUrl || "",
+        productPrice: item.productPrice || order.productPrice || "",
+      })),
+    });
+    setAfterSalesStatus(null);
+  }
+
+  function updateAfterSalesField(field, value) {
+    setAfterSalesForm((current) => current ? { ...current, [field]: value } : current);
+  }
+
+  function updateAfterSalesItem(index, field, value) {
+    setAfterSalesForm((current) => current ? {
+      ...current,
+      items: current.items.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: value } : item),
+    } : current);
+  }
+
+  function attachAfterSalesTicket(orderId, ticket) {
+    if (!ticket) return;
+    setQueryResults((orders) => orders.map((order) => order.orderId === orderId ? { ...order, afterSalesTicket: ticket } : order));
+    setQueryDetailOrder((order) => order?.orderId === orderId ? { ...order, afterSalesTicket: ticket } : order);
+    setAfterSalesOrder((order) => order?.orderId === orderId ? { ...order, afterSalesTicket: ticket } : order);
+  }
+
+  async function submitAfterSales(event) {
+    event.preventDefault();
+    if (!afterSalesOrder || !afterSalesForm || afterSalesBusy) return;
+    setAfterSalesBusy(true);
+    setAfterSalesStatus(null);
+    try {
+      const response = await fetch("/api/after-sales", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId: afterSalesOrder.orderId,
+          token: afterSalesOrder.afterSalesToken,
+          issue: afterSalesForm.issue,
+          contact: afterSalesForm.contact,
+          remark: afterSalesForm.remark,
+          items: afterSalesForm.items,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        if (data.error === "pending_ticket_exists" && data.ticket) {
+          attachAfterSalesTicket(afterSalesOrder.orderId, data.ticket);
+          setAfterSalesStatus({ type: "success", ticketId: data.ticket.ticketId, emailWarning: false });
+          return;
+        }
+        const message = {
+          verification_required: L("订单核验已过期，请关闭窗口并重新查询订单", "Order verification expired. Close this window and look up the order again."),
+          order_not_eligible: L("无效订单暂不支持提交售后工单", "After-sales tickets are unavailable for invalid orders."),
+          issue_required: L("请至少用 5 个字说明需要处理的问题", "Please describe the issue in at least five characters."),
+          missing_credentials: L("请完整填写该服务的账号与密码", "Enter the full account and password for this service."),
+          missing_proxy_details: L("请完整填写网站链接与商品标价", "Enter the website link and listed price."),
+          contact_required: L("请填写有效联系方式", "Enter a valid contact."),
+        }[data.error] || L("售后工单提交失败，请稍后再试", "Ticket submission failed. Please try again.");
+        throw new Error(message);
+      }
+      attachAfterSalesTicket(afterSalesOrder.orderId, data.ticket);
+      setAfterSalesStatus({ type: "success", ticketId: data.ticket.ticketId, emailWarning: !data.notice?.email });
+    } catch (error) {
+      setAfterSalesStatus({ type: "error", message: error?.message || L("售后工单提交失败，请稍后再试", "Ticket submission failed. Please try again.") });
+    } finally {
+      setAfterSalesBusy(false);
+    }
+  }
+
   const queryItems = useMemo(() => {
     if (!queryDetailOrder) return [];
     return Array.isArray(queryDetailOrder.items) && queryDetailOrder.items.length
@@ -468,7 +572,7 @@ export default function ServiceCenterPage() {
           <nav className="desktop-nav">
             <Link href="/shop">{L("服务产品", "Services")}</Link>
             <Link href="/#layout">{L("下单流程", "How it works")}</Link>
-            <Link href="#order-query">{L("订单查询", "Track order")}</Link>
+            <Link href="#order-query">{L("订单查询/申请售后", "Order lookup / after-sales")}</Link>
             <Link href="/legal">{L("企业保障", "Guarantees")}</Link>
             <Link href="#faq">FAQ</Link>
           </nav>
@@ -484,8 +588,8 @@ export default function ServiceCenterPage() {
             <div id="order-query" className="query-pair-block order-query-section">
               <div className="section-head simple-head">
                 <div>
-                  <div className="section-kicker">{L("订单查询", "Track order")}</div>
-                  <h2 className="section-title">{L("订单查询", "Track order")}</h2>
+                  <div className="section-kicker">{L("订单查询/申请售后", "Order lookup / after-sales")}</div>
+                  <h2 className="section-title">{L("订单查询/申请售后", "Order lookup / after-sales")}</h2>
                 </div>
               </div>
               <div className="order-query-panel">
@@ -770,6 +874,20 @@ export default function ServiceCenterPage() {
               <button className="close-btn" onClick={() => setQueryDetailOrder(null)} aria-label={L("关闭", "Close")}><X size={20} /></button>
             </div>
             <div className="query-modal-body">
+              <div className="query-after-sales-entry">
+                {queryDetailOrder.afterSalesTicket?.status === "pending" ? (
+                  <div className="query-after-sales-pending">
+                    <span><Clock size={17} /></span>
+                    <div><strong>{L("售后工单待处理", "After-sales ticket pending")}</strong><small>{queryDetailOrder.afterSalesTicket.ticketId} · {L("工作人员会尽快处理", "Our team will handle it shortly")}</small></div>
+                  </div>
+                ) : queryDetailOrder.afterSalesEligible ? (
+                  <button type="button" className="query-after-sales-btn" onClick={() => openAfterSales(queryDetailOrder)}>
+                    <span><LifeBuoy size={19} /></span>
+                    <div><strong>{L("申请售后", "Request after-sales")}</strong><small>{L("资料自动填充，提交后邮件确认", "Details are pre-filled and confirmed by email")}</small></div>
+                    <ArrowRight size={17} />
+                  </button>
+                ) : null}
+              </div>
               <div className="query-modal-amount">
                 <span>{queryDetailOrder.status === "awaiting_quote" ? L("当前进度", "Current status") : queryDetailOrder.status === "pending_payment" ? L("报价金额", "Quote") : L("实付金额", "Amount paid")}</span>
                 <b>{queryDetailOrder.status === "awaiting_quote" ? L("等待报价", "Awaiting quote") : queryDetailOrder.status === "pending_payment" ? `¥${Number(queryDetailOrder.quoteAmount || 0).toFixed(2)}` : queryDetailOrder.paidCurrency === "USDT" ? `${queryDetailOrder.paidAmount} USDT` : queryDetailOrder.paidCurrency === "CODE" ? L("服务兑换码", "Service code") : `¥${Number(queryDetailOrder.paidAmount || queryDetailOrder.finalAmount || 0).toFixed(2)}`}</b>
@@ -826,6 +944,18 @@ export default function ServiceCenterPage() {
           </div>
         </div>
       )}
+
+      <AfterSalesTicketSheet
+        order={afterSalesOrder}
+        form={afterSalesForm}
+        busy={afterSalesBusy}
+        status={afterSalesStatus}
+        onClose={() => !afterSalesBusy && setAfterSalesOrder(null)}
+        onSubmit={submitAfterSales}
+        onFieldChange={updateAfterSalesField}
+        onItemChange={updateAfterSalesItem}
+        L={L}
+      />
 
       <MobileNav />
     </div>
