@@ -1142,21 +1142,23 @@ button { cursor: pointer; border: none; background: transparent; }
   font-size: 13px;
   font-weight: 900;
 }
-.order-query-field .order-query-field-head {
-  display: flex;
+/* 订单查询表头右上角「? 帮助」链接:纯文字 + 问号图标,顶部对齐右上角,无边框/无底色/不悬空 */
+.after-sales-guide-link {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.order-query-field .order-query-guide-link {
-  color: var(--primary);
-  font-size: 12px;
-  font-weight: 800;
-  line-height: 1.4;
+  gap: 4px;
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 2px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
   white-space: nowrap;
   text-decoration: none;
 }
-.order-query-field .order-query-guide-link:hover {
+.after-sales-guide-link svg { opacity: .9; }
+.after-sales-guide-link:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
 }

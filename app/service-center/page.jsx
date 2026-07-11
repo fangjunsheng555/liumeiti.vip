@@ -13,6 +13,7 @@ import {
   ExternalLink,
   Gift,
   Headphones,
+  HelpCircle,
   LifeBuoy,
   LoaderCircle,
   Lock,
@@ -591,16 +592,19 @@ export default function ServiceCenterPage() {
                   <div className="section-kicker">{L("订单查询/申请售后", "Order lookup / after-sales")}</div>
                   <h2 className="section-title">{L("订单查询/申请售后", "Order lookup / after-sales")}</h2>
                 </div>
+                <Link
+                  href="/guides/how-to-request-after-sales-support"
+                  className="after-sales-guide-link"
+                  aria-label={L("如何申请售后帮助", "After-sales help")}
+                >
+                  <HelpCircle size={15} aria-hidden="true" />
+                  {L("帮助", "Help")}
+                </Link>
               </div>
               <div className="order-query-panel">
                 <form className={`order-query-form ${queryVerification ? "is-verifying" : ""}`} onSubmit={submitQuery}>
                   <label className="order-query-field">
-                    <span className="order-query-field-head">
-                      <span>{L("完整订单号 / 下单邮箱", "Full order number / order email")}</span>
-                      <Link href="/guides/how-to-request-after-sales-support" className="order-query-guide-link">
-                        {L("如何申请售后？", "How to request after-sales?")}
-                      </Link>
-                    </span>
+                    <span>{L("完整订单号 / 下单邮箱", "Full order number / order email")}</span>
                     <input
                       value={queryInput}
                       onChange={(e) => {
