@@ -34,12 +34,19 @@ function pipelineRows(value) {
   return [];
 }
 
+function pipelineValue(entry) {
+  if (entry && typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, "result")) {
+    return entry.result;
+  }
+  return entry;
+}
+
 async function getTicketsByIds(ids) {
   const cleanIds = (Array.isArray(ids) ? ids : []).map((id) => normalizeId(id)).filter(Boolean);
   if (!cleanIds.length) return [];
   const response = await redisPipeline(cleanIds.map((id) => ["GET", ticketKey(id)]));
   const rows = pipelineRows(response);
-  return rows.map((entry) => parseRecord(entry?.result ?? entry)).filter(Boolean);
+  return rows.map((entry) => parseRecord(pipelineValue(entry))).filter(Boolean);
 }
 
 async function compareDelete(key, expected) {
@@ -86,13 +93,13 @@ export async function getActiveAfterSalesTickets(orderIds) {
   const ids = [...new Set((Array.isArray(orderIds) ? orderIds : []).map((id) => normalizeId(id, 80)).filter(Boolean))];
   if (!ids.length || !redisConfig()) return {};
   const activeRows = pipelineRows(await redisPipeline(ids.map((orderId) => ["GET", activeOrderKey(orderId)])));
-  const activeIds = activeRows.map((entry) => normalizeId(entry?.result ?? entry)).filter(Boolean);
+  const activeIds = activeRows.map((entry) => normalizeId(pipelineValue(entry))).filter(Boolean);
   const records = await getTicketsByIds([...new Set(activeIds)]);
   const byTicketId = new Map(records.map((ticket) => [normalizeId(ticket.ticketId), ticket]));
   const result = {};
   for (let index = 0; index < ids.length; index += 1) {
     const orderId = ids[index];
-    const ticketId = normalizeId(activeRows[index]?.result ?? activeRows[index]);
+    const ticketId = normalizeId(pipelineValue(activeRows[index]));
     if (!ticketId) continue;
     const ticket = byTicketId.get(ticketId);
     if (ticket?.status === "pending") result[orderId] = ticket;
@@ -200,9 +207,9 @@ export async function getAfterSalesCounts() {
     ["ZCARD", COMPLETED_INDEX],
   ]));
   return {
-    all: Number(rows[0]?.result ?? rows[0] ?? 0),
-    pending: Number(rows[1]?.result ?? rows[1] ?? 0),
-    completed: Number(rows[2]?.result ?? rows[2] ?? 0),
+    all: Number(pipelineValue(rows[0]) ?? 0),
+    pending: Number(pipelineValue(rows[1]) ?? 0),
+    completed: Number(pipelineValue(rows[2]) ?? 0),
   };
 }
 

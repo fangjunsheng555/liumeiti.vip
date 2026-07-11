@@ -130,6 +130,11 @@ function customerRequest(order, token, issue = "账号当前无法正常登录")
   });
 }
 
+test("orders without a ticket return an empty active-ticket map", async () => {
+  const active = await store.getActiveAfterSalesTickets(["LMWITHOUTTICKET"]);
+  assert.deepEqual(active, {});
+});
+
 test("after-sales ticket lifecycle enforces one pending ticket per order", async () => {
   const order = orderRecord("LMTESTAFTERSALE1");
   values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
