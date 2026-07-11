@@ -53,6 +53,40 @@ function publicDetails(order, item, itemIndex) {
   };
 }
 
+async function notifySpotifyDetailsUpdated(order, item) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) return null;
+
+  const lines = [
+    "Spotify 用户资料已更新",
+    `订单: ${order.orderId}`,
+    `商品: ${item.label || "Spotify"}`,
+    `账号: ${item.account || "--"}`,
+    `密码: ${item.password || "--"}`,
+    `邮箱: ${order.email || "--"}`,
+    `联系方式: ${order.contact || "--"}`,
+  ];
+  if (order.remark) lines.push(`备注: ${order.remark}`);
+  lines.push(`更新时间: ${item.customerPasswordUpdatedAtBeijing || order.customerDetailsUpdatedAtBeijing || "--"}`);
+
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: lines.join("\n"),
+        disable_web_page_preview: true,
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function GET(request, { params }) {
   const guard = await checkRateLimit(request, {
     namespace: "order-pw-update:read",
@@ -112,6 +146,7 @@ export async function PATCH(request, { params }) {
 
   const saved = await setOrderAt(entry.index, entry.order);
   if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
+  await notifySpotifyDetailsUpdated(entry.order, item);
   return Response.json({
     ok: true,
     details: publicDetails(entry.order, item, itemIndex),

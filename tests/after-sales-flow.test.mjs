@@ -345,20 +345,38 @@ test("Spotify password correction updates the original order without exposing th
   assert.equal(inspected.details.email, "buyer@example.com");
   assert.equal(Object.hasOwn(inspected.details, "password"), false);
 
-  const patchResponse = await passwordUpdateRoute.PATCH(
-    new Request(`https://www.liumeiti.vip/api/order-password-update/${order.orderId}`, {
-      method: "PATCH",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        account: "correct-account@example.com",
-        password: "correct-password",
-        email: "updated@example.com",
-        contact: "updated-contact",
-        remark: "updated-note",
+  const previousFetch = globalThis.fetch;
+  const telegramMessages = [];
+  process.env.TELEGRAM_BOT_TOKEN = "telegram-test-token";
+  process.env.TELEGRAM_CHAT_ID = "telegram-test-chat";
+  globalThis.fetch = async (input, options = {}) => {
+    if (String(input).startsWith("https://api.telegram.org/")) {
+      telegramMessages.push(JSON.parse(options.body || "{}"));
+      return Response.json({ ok: true });
+    }
+    return previousFetch(input, options);
+  };
+  let patchResponse;
+  try {
+    patchResponse = await passwordUpdateRoute.PATCH(
+      new Request(`https://www.liumeiti.vip/api/order-password-update/${order.orderId}`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account: "correct-account@example.com",
+          password: "correct-password",
+          email: "updated@example.com",
+          contact: "updated-contact",
+          remark: "updated-note",
+        }),
       }),
-    }),
-    { params: Promise.resolve({ orderId: order.orderId }) },
-  );
+      { params: Promise.resolve({ orderId: order.orderId }) },
+    );
+  } finally {
+    globalThis.fetch = previousFetch;
+    delete process.env.TELEGRAM_BOT_TOKEN;
+    delete process.env.TELEGRAM_CHAT_ID;
+  }
   assert.equal(patchResponse.status, 200);
   const patched = await patchResponse.json();
   assert.equal(patched.ok, true);
@@ -370,6 +388,14 @@ test("Spotify password correction updates the original order without exposing th
   assert.equal(finalOrder.contact, "updated-contact");
   assert.equal(finalOrder.remark, "updated-note");
   assert.equal(finalOrder.items[0].customerPasswordUpdateCount, 1);
+  assert.equal(telegramMessages.length, 1);
+  assert.match(telegramMessages[0].text, /Spotify 用户资料已更新/);
+  assert.match(telegramMessages[0].text, new RegExp(order.orderId));
+  assert.match(telegramMessages[0].text, /correct-account@example\.com/);
+  assert.match(telegramMessages[0].text, /updated@example\.com/);
+  assert.match(telegramMessages[0].text, /updated-contact/);
+  assert.match(telegramMessages[0].text, /updated-note/);
+  assert.match(telegramMessages[0].text, /密码: correct-password/);
 
   const resolvedResponse = await adminOrdersRoute.GET(new Request(
     "https://www.liumeiti.vip/api/admin/orders?status=abnormal",
