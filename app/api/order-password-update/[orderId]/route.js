@@ -1,8 +1,10 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
+  checkRateLimit,
   clean,
   formatBeijingTime,
-  getAllOrdersWithIndex,
+  getOrderEntryById,
+  rateLimitResponse,
   setOrderAt,
   validEmail,
 } from "../../_utils.js";
@@ -23,11 +25,8 @@ function tokenMatches(token, expectedHash) {
 async function findTarget(orderId, token) {
   const normalizedId = clean(orderId, 80).replace(/\s+/g, "").toUpperCase();
   if (!normalizedId || !token) return { error: "invalid_update_link" };
-  const entries = await getAllOrdersWithIndex();
-  const entry = entries.find((candidate) => (
-    !candidate.order?.deleted
-    && String(candidate.order?.orderId || "").toUpperCase() === normalizedId
-  ));
+  // 按订单号直读单条记录 + 更新句柄,避免每次请求全量扫描订单库(legacy 订单自动带 legacyIndex)。
+  const entry = await getOrderEntryById(normalizedId);
   if (!entry) return { error: "order_not_found" };
   if (entry.order.status === "invalid") return { error: "order_invalid" };
   const itemIndex = (entry.order.items || []).findIndex((item) => (
@@ -55,6 +54,12 @@ function publicDetails(order, item, itemIndex) {
 }
 
 export async function GET(request, { params }) {
+  const guard = await checkRateLimit(request, {
+    namespace: "order-pw-update:read",
+    limit: 30,
+    windowSec: 10 * 60,
+  });
+  if (!guard.ok) return rateLimitResponse(guard, "请求过于频繁，请稍后再试");
   const { orderId } = await params;
   const target = await findTarget(orderId, bearerToken(request));
   if (target.error) {
@@ -65,6 +70,12 @@ export async function GET(request, { params }) {
 }
 
 export async function PATCH(request, { params }) {
+  const guard = await checkRateLimit(request, {
+    namespace: "order-pw-update:write",
+    limit: 15,
+    windowSec: 10 * 60,
+  });
+  if (!guard.ok) return rateLimitResponse(guard, "提交过于频繁，请稍后再试");
   const { orderId } = await params;
   const target = await findTarget(orderId, bearerToken(request));
   if (target.error) {

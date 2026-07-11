@@ -2931,6 +2931,17 @@ export default function AdminPage() {
     loadOrders(orderId, "all", { silent: true });
   }
 
+  // 总览「即将到期」芯片 → 跳到订单列表并定位该单
+  function openExpiringOrder(orderId) {
+    const id = String(orderId || "").trim();
+    if (!id) return;
+    setTab("orders");
+    setSearchInput(id);
+    setAppliedSearch(id);
+    setFilterStatus("all");
+    loadOrders(id, "all", { silent: true });
+  }
+
   async function doLogin(e) {
     e.preventDefault();
     if (loggingIn) return;
@@ -3622,6 +3633,30 @@ export default function AdminPage() {
                     >
                       {it.title} · {it.planLabel}
                       <b>{it.stock <= 0 ? "售罄" : `剩 ${it.stock}`}</b>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {Array.isArray(overview?.expiringSoon) && overview.expiringSoon.length > 0 && (
+              <div className="admin-overview-lowstock admin-overview-expiring">
+                <div className="admin-overview-trend-head">
+                  <Clock size={13} />即将到期
+                  <small>已完成订单 7 天内到期({overview.expiringSoonTotal ?? overview.expiringSoon.length} 单),点击跟进续费</small>
+                </div>
+                <div className="admin-overview-lowstock-chips">
+                  {overview.expiringSoon.map((it) => (
+                    <button
+                      key={it.orderId}
+                      type="button"
+                      className={`admin-lowstock-chip${it.daysLeft < 0 ? " out" : ""}`}
+                      onClick={() => openExpiringOrder(it.orderId)}
+                      title={`${it.orderId} · ${it.email}`}
+                    >
+                      {it.serviceLabel || it.orderId}
+                      {it.reminded ? <em className="admin-expiring-reminded">已提醒</em> : null}
+                      <b>{it.daysLeft < 0 ? "已到期" : it.daysLeft === 0 ? "今天" : `剩 ${it.daysLeft} 天`}</b>
                     </button>
                   ))}
                 </div>

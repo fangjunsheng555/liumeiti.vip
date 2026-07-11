@@ -3,7 +3,7 @@
 // 站点设置 — 仅超级管理员。读写 /api/admin/settings。
 // 改任何项,保存后前端站点(客服/服务中心/页脚/收款码/结账)与订单邮件即时同步。
 import { useEffect, useState, useCallback } from "react";
-import { LoaderCircle, Save, RotateCcw, Settings as SettingsIcon, AlertTriangle, CheckCircle2, Headphones, Coins, Layers, QrCode, Tag, FileText, Bell, Upload } from "lucide-react";
+import { LoaderCircle, Save, RotateCcw, Settings as SettingsIcon, AlertTriangle, CheckCircle2, Headphones, Coins, Layers, QrCode, Tag, FileText, Bell, Upload, DatabaseBackup } from "lucide-react";
 
 // 图片压缩:最长边 640px,白底(利于扫码),优先 PNG,超 400KB 降级 JPEG。
 async function compressImage(file) {
@@ -207,6 +207,12 @@ export default function SettingsPanel() {
             提现申请 Telegram 通知
           </label>
         </div>
+      </Section>
+
+      <Section icon={<DatabaseBackup size={15} />} title="数据备份" sub="导出全部业务数据(订单/用户/兑换码/提现/售后工单/设置与目录覆盖/日志)为 JSON 文件,建议定期下载留存;不含访客埋点">
+        <a href="/api/admin/backup" className="admin-settings-btn" style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <DatabaseBackup size={13} />下载全量备份
+        </a>
       </Section>
     </div>
   );

@@ -330,7 +330,10 @@ test("Spotify password correction updates the original order without exposing th
   const storedAfterMail = JSON.parse(lists.get("liumeiti:orders")[0]);
   storedAfterMail.items[0].passwordCorrectionTokenHash = createHash("sha256").update(token).digest("hex");
   storedAfterMail.items[0].passwordCorrectionExpiresAt = new Date(Date.now() + 60_000).toISOString();
+  // 生产中 setOrderAt 会同时维护 record + legacy 两个副本,且迁移保证订单在主索引里;测试镜像这一一致性。
   lists.set("liumeiti:orders", [JSON.stringify(storedAfterMail)]);
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(storedAfterMail));
+  lists.set("liumeiti:orders:index", [order.orderId]);
 
   const getResponse = await passwordUpdateRoute.GET(
     new Request(`https://www.liumeiti.vip/api/order-password-update/${order.orderId}`, { headers: { Authorization: `Bearer ${token}` } }),
@@ -359,7 +362,8 @@ test("Spotify password correction updates the original order without exposing th
   assert.equal(patchResponse.status, 200);
   const patched = await patchResponse.json();
   assert.equal(patched.ok, true);
-  const finalOrder = JSON.parse(lists.get("liumeiti:orders")[0]);
+  // 用规范读路径断言(record 优先),与全站读取行为一致。
+  const finalOrder = await utils.getOrderById(order.orderId);
   assert.equal(finalOrder.items[0].account, "correct-account@example.com");
   assert.equal(finalOrder.items[0].password, "correct-password");
   assert.equal(finalOrder.email, "updated@example.com");

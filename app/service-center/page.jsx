@@ -17,6 +17,7 @@ import {
   LifeBuoy,
   LoaderCircle,
   Lock,
+  LockKeyhole,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -153,6 +154,17 @@ function GoogleIcon() {
   );
 }
 
+// 到期日文案(北京时间日期)
+function expiryDateText(iso, locale = "zh") {
+  const ts = new Date(iso || 0).getTime();
+  if (!Number.isFinite(ts) || ts <= 0) return "";
+  const d = new Date(ts + 8 * 60 * 60 * 1000);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return locale === "en" ? `${y}-${m}-${day}` : `${y}年${m}月${day}日`;
+}
+
 function paymentLabel(order, locale = "zh") {
   if (order.paymentMethod === "quote") return locale === "en" ? "Custom quote" : "人工报价";
   if (order.paymentMethod === "redeem") return locale === "en" ? "Code" : "兑换码";
@@ -181,6 +193,12 @@ export default function ServiceCenterPage() {
   const [afterSalesForm, setAfterSalesForm] = useState(null);
   const [afterSalesBusy, setAfterSalesBusy] = useState(false);
   const [afterSalesStatus, setAfterSalesStatus] = useState(null);
+  const [resendCorrection, setResendCorrection] = useState({ busy: false, done: false, error: "" });
+
+  // 切换查看的订单时重置重发状态
+  useEffect(() => {
+    setResendCorrection({ busy: false, done: false, error: "" });
+  }, [queryDetailOrder?.orderId]);
   const [faqOpen, setFaqOpen] = useState(0);
   const [copiedKey, setCopiedKey] = useState("");
   const { locale } = useLocale();
@@ -456,6 +474,28 @@ export default function ServiceCenterPage() {
     copyText(value);
     setCopiedKey(key);
     setTimeout(() => setCopiedKey(""), 1600);
+  }
+
+  // 重发「密码修正」邮件(修正邮件可能进垃圾箱;核验 token 复用售后签名)
+  async function resendCorrectionEmail(order) {
+    if (!order?.afterSalesToken || resendCorrection.busy || resendCorrection.done) return;
+    setResendCorrection({ busy: true, done: false, error: "" });
+    try {
+      const response = await fetch("/api/order-password-update/resend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: order.orderId, token: order.afterSalesToken }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.message || data.error || "resend_failed");
+      setResendCorrection({ busy: false, done: true, error: "" });
+    } catch (error) {
+      setResendCorrection({
+        busy: false,
+        done: false,
+        error: L("重发失败，请稍后再试或联系客服", "Couldn't resend — try again later or contact support"),
+      });
+    }
   }
 
   function openAfterSales(order) {
@@ -897,6 +937,48 @@ export default function ServiceCenterPage() {
                   </button>
                 ) : null}
               </div>
+              {queryDetailOrder.passwordCorrectionPending && (
+                <div className="query-attention-banner">
+                  <span className="query-attention-icon"><LockKeyhole size={16} /></span>
+                  <div className="query-attention-copy">
+                    <strong>{L("需更新 Spotify 登录资料", "Spotify login details needed")}</strong>
+                    <small>{L("更新链接已发送至下单邮箱，请查收（含垃圾箱）后按邮件操作", "We emailed an update link — check your inbox (and spam), then follow the steps")}</small>
+                    {resendCorrection.error && <em>{resendCorrection.error}</em>}
+                  </div>
+                  <button
+                    type="button"
+                    className="query-attention-resend"
+                    disabled={resendCorrection.busy || resendCorrection.done}
+                    onClick={() => resendCorrectionEmail(queryDetailOrder)}
+                  >
+                    {resendCorrection.busy
+                      ? L("发送中…", "Sending…")
+                      : resendCorrection.done
+                        ? L("已重发 ✓", "Sent ✓")
+                        : L("重发邮件", "Resend email")}
+                  </button>
+                </div>
+              )}
+              {queryDetailOrder.expiry && queryDetailOrder.expiry.daysLeft <= 14 && (
+                <div className={`query-expiry-banner ${queryDetailOrder.expiry.expired ? "is-expired" : ""}`}>
+                  <span className="query-attention-icon"><Clock size={16} /></span>
+                  <div className="query-attention-copy">
+                    <strong>
+                      {queryDetailOrder.expiry.expired
+                        ? L("服务已到期", "Service expired")
+                        : queryDetailOrder.expiry.daysLeft <= 0
+                          ? L("服务今天到期", "Service expires today")
+                          : L(`服务剩余 ${queryDetailOrder.expiry.daysLeft} 天`, `${queryDetailOrder.expiry.daysLeft} day${queryDetailOrder.expiry.daysLeft > 1 ? "s" : ""} left`)}
+                    </strong>
+                    <small>{L("续费后无缝衔接，不中断使用", "Renew for a seamless hand-over — no interruption")}</small>
+                  </div>
+                  {queryDetailOrder.renewPath && (
+                    <Link href={queryDetailOrder.renewPath} className="query-renew-btn">
+                      {L("一键续费", "Renew now")}
+                    </Link>
+                  )}
+                </div>
+              )}
               <div className="query-modal-amount">
                 <span>{queryDetailOrder.status === "awaiting_quote" ? L("当前进度", "Current status") : queryDetailOrder.status === "pending_payment" ? L("报价金额", "Quote") : L("实付金额", "Amount paid")}</span>
                 <b>{queryDetailOrder.status === "awaiting_quote" ? L("等待报价", "Awaiting quote") : queryDetailOrder.status === "pending_payment" ? `¥${Number(queryDetailOrder.quoteAmount || 0).toFixed(2)}` : queryDetailOrder.paidCurrency === "USDT" ? `${queryDetailOrder.paidAmount} USDT` : queryDetailOrder.paidCurrency === "CODE" ? L("服务兑换码", "Service code") : `¥${Number(queryDetailOrder.paidAmount || queryDetailOrder.finalAmount || 0).toFixed(2)}`}</b>
@@ -945,6 +1027,17 @@ export default function ServiceCenterPage() {
               <div className="query-modal-rows">
                 <div><span>{L("下单时间", "Ordered at")}</span><b>{queryDetailOrder.createdAtBeijing || "--"}</b></div>
                 <div><span>{L("完成时间", "Completed at")}</span><b>{queryDetailOrder.completedAtBeijing || "--"}</b></div>
+                {queryDetailOrder.expiry && (
+                  <div>
+                    <span>{L("服务到期", "Service expires")}</span>
+                    <b>
+                      {expiryDateText(queryDetailOrder.expiry.expiresAt, locale)}
+                      {!queryDetailOrder.expiry.expired && queryDetailOrder.expiry.daysLeft > 0
+                        ? ` · ${L(`剩 ${queryDetailOrder.expiry.daysLeft} 天`, `${queryDetailOrder.expiry.daysLeft}d left`)}`
+                        : queryDetailOrder.expiry.expired ? ` · ${L("已到期", "expired")}` : ""}
+                    </b>
+                  </div>
+                )}
                 <div><span>{L("邮箱", "Email")}</span><b>{queryDetailOrder.email || "--"}</b></div>
                 <div><span>{L("联系方式", "Contact")}</span><b>{queryDetailOrder.contact || "--"}</b></div>
                 {queryDetailOrder.remark && <div className="query-modal-row-wide"><span>{L("备注", "Note")}</span><b className="query-modal-remark">{queryDetailOrder.remark}</b></div>}

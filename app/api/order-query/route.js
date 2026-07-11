@@ -16,6 +16,8 @@ import {
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { buildEmailBrandHeader } from "../email-brand.js";
 import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../after-sales/_store.js";
+import { orderExpirySummary, renewalCheckoutPath } from "../../lib/order-expiry.js";
+import { getSpotifyPasswordAttention } from "../../lib/order-attention.js";
 
 const QUERY_CODE_TTL_SECONDS = 10 * 60;
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
@@ -131,6 +133,14 @@ function publicOrder(order, type, locale = "zh") {
   if (output.service === "rocket" && output.account) {
     output.subscriptionLinks = subscriptionLinks(output.account);
   }
+  // 服务到期摘要(仅已完成且有周期的订单)+ 一键续费预填路径
+  const expiry = orderExpirySummary(order);
+  if (expiry) {
+    output.expiry = { expiresAt: expiry.expiresAt, daysLeft: expiry.daysLeft, expired: expiry.expired };
+    output.renewPath = renewalCheckoutPath(order);
+  }
+  // Spotify 密码修正待办:修正邮件可能进垃圾箱,查询结果里也要可见
+  if (getSpotifyPasswordAttention(order).pending) output.passwordCorrectionPending = true;
   // 无效/未付订单不释放开通凭据（账号/密码/订阅链接）——仅 received/completed 可见。
   if (order.status === "invalid") {
     output.account = "";

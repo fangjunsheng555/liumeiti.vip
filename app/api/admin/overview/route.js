@@ -6,6 +6,7 @@ import {
 import { getSettings } from "../../_settings.js";
 import { getAfterSalesCounts } from "../../after-sales/_store.js";
 import { hasPendingSpotifyPasswordCorrection } from "../../../lib/order-attention.js";
+import { orderExpirySummary } from "../../../lib/order-expiry.js";
 
 function beijingDateKey(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
@@ -164,6 +165,26 @@ export async function GET(request) {
   overview.revenueMonth = round2(revenueMonth);
   overview.paidOrders = paidOrders;
   overview.avgOrderValue = paidOrders > 0 ? round2(totalRevenue / paidOrders) : 0;
+
+  // 即将到期(已完成订单,7 天内到期或刚过期 2 天):主动跟进续费。
+  // 直接用 snapshot 行(带 completedAt/items.cycle)零额外 IO;reminded=系统续费提醒已发。
+  const expiring = [];
+  for (const row of ordersRaw) {
+    if ((row.status || "") !== "completed") continue;
+    const summary = orderExpirySummary(row);
+    if (!summary || summary.daysLeft > 7 || summary.daysLeft < -2) continue;
+    expiring.push({
+      orderId: row.orderId || "",
+      email: row.email || "",
+      serviceLabel: row.serviceLabel || "",
+      daysLeft: summary.daysLeft,
+      expiresAt: summary.expiresAt,
+      reminded: row.renewalReminderForExpiresAt === summary.expiresAt,
+    });
+  }
+  expiring.sort((a, b) => a.daysLeft - b.daysLeft);
+  overview.expiringSoonTotal = expiring.length;
+  overview.expiringSoon = expiring.slice(0, 12);
 
   // 低库存预警(可管库存的角色):受限库存 ≤3 的规格(0=售罄)。
   if (adminPermissionProfile(session).canManageStock) {

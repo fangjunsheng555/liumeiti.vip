@@ -12,7 +12,7 @@ export const ORDER_RECORD_PREFIX = ORDERS_KEY + ":record:";
 export const ORDER_EMAIL_INDEX_PREFIX = ORDERS_KEY + ":email:";
 export const USDT_PENDING_ORDER_INDEX_KEY = ORDERS_KEY + ":usdt-pending";
 export const ORDER_OVERVIEW_HASH_KEY = ORDERS_KEY + ":overview";
-const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v2";
+const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v3"; // v3: snapshot 增补 completedAt/items.cycle 等到期字段,换 key 触发一次性重建
 const ORDER_INDEX_MIGRATION_READY_KEY = ORDER_INDEX_KEY + ":legacy-ready";
 const ORDER_INDEX_MIGRATION_LOCK_KEY = ORDER_INDEX_KEY + ":legacy-lock";
 export const USERS_KEY = "liumeiti:users";
@@ -106,9 +106,22 @@ function orderCreatedScore(order) {
 
 function orderOverviewSnapshot(order) {
   if (!order || order.deleted || !order.orderId) return null;
-  const items = Array.isArray(order.items)
-    ? order.items.map((item) => ({ amount: Number(item?.amount || 0) }))
-    : [];
+  // items 带 cycle/service/plan,供总览「即将到期」直接算服务到期,无需读全量订单正文。
+  const items = Array.isArray(order.items) && order.items.length
+    ? order.items.map((item) => ({
+        amount: Number(item?.amount || 0),
+        service: item?.service || "",
+        label: item?.label || "",
+        plan: item?.plan || item?.rocketPlan || "",
+        cycle: item?.cycle || "",
+      }))
+    : (order.service ? [{
+        amount: Number(order.finalAmount || 0),
+        service: order.service || "",
+        label: order.serviceLabel || "",
+        plan: order.plan || order.rocketPlan || "",
+        cycle: order.cycle || "",
+      }] : []);
   return {
     orderId: normalizeOrderIdForStorage(order.orderId),
     status: order.status || "received",
@@ -121,6 +134,7 @@ function orderOverviewSnapshot(order) {
     bundleFinalAmount: Number(order.bundleFinalAmount || 0),
     createdAt: order.createdAt || "",
     createdAtBeijing: order.createdAtBeijing || "",
+    completedAt: order.completedAt || "",
     email: order.email || "",
     serviceLabel: order.serviceLabel || "",
     items,
@@ -128,6 +142,7 @@ function orderOverviewSnapshot(order) {
     usdtQuoteId: order.usdtQuoteId || "",
     usdtConfirmedAt: order.usdtConfirmedAt || "",
     passwordCorrectionPending: hasPendingSpotifyPasswordCorrection(order),
+    renewalReminderForExpiresAt: order.renewalReminderForExpiresAt || "",
   };
 }
 
@@ -215,6 +230,23 @@ export async function getOrderById(orderId) {
   const legacy = await getLegacyOrderEntries();
   const found = legacy.find((entry) => normalizeOrderIdForStorage(entry.order?.orderId) === id);
   return found?.order && !found.order.deleted ? found.order : null;
+}
+
+// 单条订单 + 更新句柄:新记录 O(1) 直读(legacyIndex=null);仅旧列表订单才回退
+// 扫有界 legacy 列表并带回 legacyIndex,保证 setOrderAt 时旧槽位同步(LSET)。
+// 用于需要「按订单号找一单然后回写」的路由,避免 getAllOrdersWithIndex 全量扫描。
+export async function getOrderEntryById(orderId) {
+  const id = normalizeOrderIdForStorage(orderId);
+  if (!id) return null;
+  const raw = await redisCmd(["GET", orderRecordKey(id)]);
+  const stored = parseOrderJson(raw);
+  if (stored) {
+    return stored.deleted ? null : { index: { orderId: id, legacyIndex: null }, order: stored };
+  }
+  const legacy = await getLegacyOrderEntries();
+  const found = legacy.find((entry) => normalizeOrderIdForStorage(entry.order?.orderId) === id);
+  if (!found?.order || found.order.deleted) return null;
+  return { index: { orderId: id, legacyIndex: found.index }, order: found.order };
 }
 
 export async function getOrdersByEmail(email, limit = 50) {
@@ -1361,12 +1393,40 @@ async function sendViaSmtp({ to, subject, text, html, fromName, marketing = fals
 // ── Account extensions: coupons, transfers, redeem codes, withdrawals ──
 // Send a generic email. Resend is the default provider; SMTP requires explicit
 // EMAIL_PROVIDER=smtp and is kept only as an emergency fallback.
+// 关键邮件发送失败 → Telegram 运维告警(10 分钟节流防告警风暴)。
+// 订单确认/报价/密码修正/验证码等全部经 sendSimpleEmail,此处是唯一出口:
+// 客户收不到关键邮件(如修正链接)= 订单死锁,必须即时知道而不是等着翻邮件日志。
+async function alertMailFailure(prepared, result) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) return;
+  try {
+    const throttled = (await redisCmd(["SET", "lm:mail-alert:throttle", "1", "NX", "EX", "600"])) !== "OK";
+    if (throttled) return;
+    const text = [
+      "⚠️ 邮件发送失败",
+      `收件人: ${clean(prepared?.to, 120)}`,
+      `主题: ${clean(prepared?.subject, 120)}`,
+      `原因: ${clean(result?.reason || result?.error || "unknown", 160)}`,
+      "(10 分钟内的后续失败不再重复提醒;请检查邮件服务,并在后台「邮件」日志确认/补发)",
+    ].join("\n");
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+    });
+  } catch (e) {}
+}
+
 export async function sendSimpleEmail(args) {
   const prepared = applyEmailSupportContacts(args, args?.support || await currentEmailSupport());
   const provider = String(process.env.EMAIL_PROVIDER || "resend").toLowerCase();
-  if (provider === "smtp") return sendViaSmtp(prepared);
-  if (process.env.RESEND_API_KEY) return sendViaResend(prepared);
-  return { ok: false, provider: "resend", reason: "resend_api_key_missing" };
+  let result;
+  if (provider === "smtp") result = await sendViaSmtp(prepared);
+  else if (process.env.RESEND_API_KEY) result = await sendViaResend(prepared);
+  else result = { ok: false, provider: "resend", reason: "resend_api_key_missing" };
+  if (!result?.ok) await alertMailFailure(prepared, result);
+  return result;
 }
 
 export const REGISTER_COUPON_AMOUNT = 8.88;

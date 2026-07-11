@@ -7,6 +7,8 @@
 // 不设 TTL（后台手动按时间批量删）。前端静默，无隐私提示（见 [[liumeiti-no-privacy-notice]]）。
 
 import { createHash } from "node:crypto";
+import { after } from "next/server";
+import { runMaintenanceTick } from "../_keeper.js";
 import {
   clientIpFromRequest, clientUserAgentFromRequest,
   getCookieFromRequest, verifySession, validEmail, redisCmd, redisPipeline,
@@ -75,6 +77,8 @@ export async function POST(request) {
   try {
     const ua = clientUserAgentFromRequest(request);
     if (!ua || BOT_RE.test(ua)) return noContent();
+    // 流量搭车维护 tick(响应后异步执行,节流锁保证窗口内至多跑一次,绝不拖慢信标)。
+    try { after(() => runMaintenanceTick()); } catch (e) {}
     const ip = clientIpFromRequest(request);
     let body = {};
     try { body = await request.json(); } catch (e) {}

@@ -7,6 +7,7 @@ import {
 } from "../../_utils.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../../lib/order-i18n.js";
 import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../../after-sales/_store.js";
+import { orderExpirySummary, renewalCheckoutPath } from "../../../lib/order-expiry.js";
 
 function subscriptionLinks(username) {
   const encoded = encodeURIComponent(String(username || "").trim());
@@ -76,6 +77,17 @@ function publicOrder(order, locale = "zh") {
     remark: order.remark || "",
     staffNotes: order.staffNotes || "",
     email: order.email || "",
+    ...expiryFields(order),
+  };
+}
+
+// 服务到期摘要 + 一键续费预填路径(仅已完成且有周期的订单)
+function expiryFields(order) {
+  const expiry = orderExpirySummary(order);
+  if (!expiry) return {};
+  return {
+    expiry: { expiresAt: expiry.expiresAt, daysLeft: expiry.daysLeft, expired: expiry.expired },
+    renewPath: renewalCheckoutPath(order),
   };
 }
 
