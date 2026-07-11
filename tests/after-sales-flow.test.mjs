@@ -388,6 +388,22 @@ test("Spotify password correction updates the original order without exposing th
   assert.equal(finalOrder.contact, "updated-contact");
   assert.equal(finalOrder.remark, "updated-note");
   assert.equal(finalOrder.items[0].customerPasswordUpdateCount, 1);
+  const unauthenticatedDetail = await adminOrderRoute.GET(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(unauthenticatedDetail.status, 401);
+  const adminDetailResponse = await adminOrderRoute.GET(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}` },
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(adminDetailResponse.status, 200);
+  const adminDetail = await adminDetailResponse.json();
+  assert.equal(adminDetail.order.items[0].account, "correct-account@example.com");
+  assert.equal(adminDetail.order.items[0].password, "correct-password");
+  assert.equal(Object.hasOwn(adminDetail.order.items[0], "passwordCorrectionTokenHash"), false);
   assert.equal(telegramMessages.length, 1);
   assert.match(telegramMessages[0].text, /Spotify 用户资料已更新/);
   assert.match(telegramMessages[0].text, new RegExp(order.orderId));

@@ -1122,6 +1122,21 @@ function DeltaBadge({ cur, prev }) {
   return <em className={`admin-delta ${up ? "up" : "down"}`}>{up ? "↑" : "↓"}{Math.abs(pct)}%</em>;
 }
 
+function customerDetailsRevision(order) {
+  return JSON.stringify([
+    order?.customerDetailsUpdatedAt || "",
+    order?.email || "",
+    order?.contact || "",
+    order?.remark || "",
+    ...(order?.items || []).flatMap((item) => [
+      item?.account || "",
+      item?.password || "",
+      item?.customerPasswordUpdatedAt || "",
+      Number(item?.customerPasswordUpdateCount || 0),
+    ]),
+  ]);
+}
+
 export default function AdminPage() {
   const [authed, setAuthed] = useState(null); // null=loading, false=login, true=ok
   const [loginName, setLoginName] = useState("");
@@ -2788,6 +2803,67 @@ export default function AdminPage() {
     }, 10000);
     return () => clearInterval(timer);
   }, [authed, tab, activeOrder, loadOrders, appliedSearch, filterStatus, dateFrom, dateTo, orders.length]);
+
+  useEffect(() => {
+    const orderId = String(activeOrder?.orderId || "").trim();
+    if (!authed || !orderId) return;
+    let disposed = false;
+    let busy = false;
+    let knownRevision = customerDetailsRevision(activeOrder);
+
+    const refreshCustomerDetails = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const response = await fetch(`/api/admin/orders/${encodeURIComponent(orderId)}`, {
+          credentials: "same-origin",
+          cache: "no-store",
+        });
+        const data = await response.json();
+        if (disposed || !response.ok || !data.ok || !data.order) return;
+        const latest = data.order;
+        const revision = customerDetailsRevision(latest);
+        if (revision === knownRevision) return;
+        knownRevision = revision;
+        setActiveOrder((current) => current?.orderId === orderId ? latest : current);
+        setOrders((current) => current.map((order) => order.orderId === orderId ? latest : order));
+        setEditForm((current) => {
+          if (!current) return current;
+          return {
+            ...current,
+            items: current.items.map((draft, index) => {
+              const item = latest.items?.[index];
+              if (!item) return draft;
+              return {
+                ...draft,
+                account: item.account || "",
+                password: item.password || "",
+                passwordCorrectionRequestedAt: item.passwordCorrectionRequestedAt || "",
+                passwordCorrectionRequestedAtBeijing: item.passwordCorrectionRequestedAtBeijing || "",
+                passwordCorrectionEmailSentAtBeijing: item.passwordCorrectionEmailSentAtBeijing || "",
+                passwordCorrectionEmailOk: Boolean(item.passwordCorrectionEmailOk),
+                passwordCorrectionStaffNote: item.passwordCorrectionStaffNote || "",
+                customerPasswordUpdatedAt: item.customerPasswordUpdatedAt || "",
+                customerPasswordUpdatedAtBeijing: item.customerPasswordUpdatedAtBeijing || "",
+                customerPasswordUpdateCount: Number(item.customerPasswordUpdateCount || 0),
+              };
+            }),
+          };
+        });
+      } catch (error) {
+        // Keep the current editor usable if a background refresh fails.
+      } finally {
+        busy = false;
+      }
+    };
+
+    refreshCustomerDetails();
+    const timer = setInterval(refreshCustomerDetails, 5000);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, [authed, activeOrder?.orderId]);
 
   function downloadOrdersCsv() {
     const params = new URLSearchParams();

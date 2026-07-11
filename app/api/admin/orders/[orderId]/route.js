@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
-  getAllOrdersWithIndex, setOrderAt, softDeleteOrderAt,
+  getAllOrdersWithIndex, getOrderById, setOrderAt, softDeleteOrderAt,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
   pushAdminActionLog, formatBeijingTime, clean, isRootAdminSession,
   settleOrderReferralCommission, reverseOrderReferralCommission, sendSimpleEmail, adminPermissionProfile,
@@ -121,6 +121,21 @@ async function sendTelegramNotice(text) {
     });
     return res.ok;
   } catch (e) { return false; }
+}
+
+export async function GET(request, { params }) {
+  const session = adminSession(request);
+  if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!adminPermissionProfile(session).canViewOrders) {
+    return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  }
+  const { orderId } = await params;
+  const order = await getOrderById(orderId);
+  if (!order) return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
+  return Response.json(
+    { ok: true, order: orderForAdminResponse(order) },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }
 
 // PATCH /api/admin/orders/:orderId
