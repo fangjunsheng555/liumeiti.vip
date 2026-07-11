@@ -4,6 +4,7 @@
 // 数据 = /api/admin/insights?days=N：范围漏斗+转化率 + 每日趋势 + 环比 + 来源/服务 + 累计对照。
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, LoaderCircle } from "lucide-react";
+import { DailyTrendChart } from "./AnalyticsCharts";
 
 const C = {
   text: "var(--text, #1d1d1f)", muted: "var(--muted, #6e6e73)", faint: "var(--faint, #8a8a8e)",
@@ -13,7 +14,6 @@ const C = {
 };
 const fmt = (n) => (n == null ? "—" : Number(n).toLocaleString("zh-CN"));
 const money = (n) => "¥" + (n == null ? "0" : Number(n).toLocaleString("zh-CN", { maximumFractionDigits: 2 }));
-const dlabel = (k) => (k && k.length === 8 ? k.slice(4, 6) + "-" + k.slice(6, 8) : k);
 
 function Delta({ d }) {
   if (d == null) return <span style={{ fontSize: 11.5, fontWeight: 700, color: C.accent }}>新增</span>;
@@ -24,8 +24,11 @@ function Delta({ d }) {
 
 const RANGES = [{ d: 7, label: "近 7 天" }, { d: 30, label: "近 30 天" }, { d: 90, label: "近 90 天" }];
 const TREND_METRICS = [
-  { key: "revenue", label: "营收", money: true }, { key: "paid", label: "成交" },
-  { key: "orders", label: "下单" }, { key: "checkoutStarted", label: "结算发起" }, { key: "serviceViews", label: "服务浏览" },
+  { key: "revenue", label: "营收", money: true, color: "#0f766e", fill: "rgba(15, 118, 110, 0.12)" },
+  { key: "paid", label: "成交", color: "#2563eb", fill: "rgba(37, 99, 235, 0.11)" },
+  { key: "orders", label: "下单", color: "#7c3aed", fill: "rgba(124, 58, 237, 0.1)" },
+  { key: "checkoutStarted", label: "结算发起", color: "#b45309", fill: "rgba(180, 83, 9, 0.1)" },
+  { key: "serviceViews", label: "服务浏览", color: "#0e7490", fill: "rgba(14, 116, 144, 0.1)" },
 ];
 
 export default function InsightsPanel() {
@@ -51,7 +54,6 @@ export default function InsightsPanel() {
   const cmp = data && data.compare;
   const daily = (data && data.daily) || [];
   const tm = TREND_METRICS.find((m) => m.key === metric) || TREND_METRICS[0];
-  const maxV = Math.max(1, ...daily.map((x) => Number(x[metric]) || 0));
 
   const card = { flex: "1 1 150px", minWidth: 140, padding: "13px 15px", border: `1px solid ${C.border}`, borderRadius: 14, background: C.surface };
   const big = { fontSize: 23, fontWeight: 800, fontVariantNumeric: "tabular-nums", color: C.text, lineHeight: 1.1, letterSpacing: "-0.01em" };
@@ -60,7 +62,6 @@ export default function InsightsPanel() {
   const td = { padding: "8px 10px", fontSize: 13, color: C.text, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" };
   const numTd = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" };
   const rangeBtn = (active) => ({ padding: "6px 13px", borderRadius: 9, border: `1px solid ${active ? C.accent : C.border}`, background: active ? C.accent : C.surface, color: active ? "#fff" : C.text, fontSize: 13, fontWeight: 600, cursor: "pointer" });
-  const pill = (active) => ({ padding: "5px 11px", borderRadius: 8, border: `1px solid ${active ? C.accent : C.border}`, background: active ? C.accentSoft : C.surface, color: active ? C.accent : C.muted, fontSize: 12.5, fontWeight: 600, cursor: "pointer" });
 
   return (
     <div style={{ color: C.text }}>
@@ -101,29 +102,38 @@ export default function InsightsPanel() {
             ))}
           </div>
 
-          {/* 每日趋势条形图 */}
-          <div style={{ marginTop: 22, border: `1px solid ${C.border}`, borderRadius: 14, background: C.surface, padding: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
-              <h3 style={{ fontSize: 15, margin: 0 }}>每日趋势</h3>
-              <span style={{ flex: 1 }} />
-              {TREND_METRICS.map((m) => <button key={m.key} type="button" onClick={() => setMetric(m.key)} style={pill(metric === m.key)}>{m.label}</button>)}
-            </div>
-            <div style={{ display: "flex", alignItems: "flex-end", gap: daily.length > 45 ? 1 : 3, height: 140, overflowX: "auto" }}>
-              {daily.map((d, i) => {
-                const v = Number(d[metric]) || 0;
-                const h = Math.round((v / maxV) * 120);
-                return (
-                  <div key={i} title={dlabel(d.date) + "：" + (tm.money ? money(v) : fmt(v))} style={{ flex: "1 0 auto", minWidth: daily.length > 45 ? 4 : 7, display: "flex", flexDirection: "column", justifyContent: "flex-end", alignItems: "center", height: "100%" }}>
-                    <div style={{ width: "100%", maxWidth: 18, height: Math.max(v > 0 ? 3 : 0, h), borderRadius: "4px 4px 0 0", background: v > 0 ? `linear-gradient(180deg, ${C.accent}, #2dd4bf)` : "transparent" }} />
-                  </div>
-                );
-              })}
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 7, fontSize: 10.5, color: C.faint }}>
-              <span>{daily[0] ? dlabel(daily[0].date) : ""}</span>
-              <span>{daily.length ? dlabel(daily[daily.length - 1].date) : ""}（今天）</span>
-            </div>
-          </div>
+          {/* 带坐标、汇总和悬停读数的每日趋势图 */}
+          <section className="admin-insights-chart-card">
+            <header className="admin-insights-chart-head">
+              <div>
+                <h3>每日趋势</h3>
+                <p>按日对比当前周期，移动指针可查看具体日期与数值</p>
+              </div>
+              <div className="admin-insights-metric-tabs" role="tablist" aria-label="趋势指标">
+                {TREND_METRICS.map((m) => (
+                  <button
+                    key={m.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={metric === m.key}
+                    className={metric === m.key ? "active" : ""}
+                    style={{ "--metric-color": m.color }}
+                    onClick={() => setMetric(m.key)}
+                  >
+                    <i />{m.label}
+                  </button>
+                ))}
+              </div>
+            </header>
+            <DailyTrendChart
+              rows={daily}
+              valueKey={metric}
+              label={tm.label}
+              color={tm.color}
+              fill={tm.fill}
+              money={tm.money}
+            />
+          </section>
 
           {/* 按来源 */}
           <h3 style={{ fontSize: 15, margin: "22px 0 8px" }}>按来源（范围内有效订单）</h3>

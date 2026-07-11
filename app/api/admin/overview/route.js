@@ -73,6 +73,9 @@ export async function GET(request) {
       createdAtBeijing: order.createdAtBeijing || "",
       email: order.email || "",
       serviceLabel: order.serviceLabel || "",
+      displayAmount: order.paymentMethod === "redeem"
+        ? orderServiceAmount(order)
+        : Number(order.finalAmount || order.paidAmount || orderServiceAmount(order) || 0),
       revenueAmount: orderRevenueAmount(order),
     }))
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
@@ -105,6 +108,8 @@ export async function GET(request) {
     latestOrderTime: latestOrder?.createdAtBeijing || "",
     latestOrderEmail: latestOrder?.email || "",
     latestOrderService: latestOrder?.serviceLabel || "",
+    latestOrderStatus: latestOrder?.status || "",
+    latestOrderAmount: Math.round(Number(latestOrder?.displayAmount || 0) * 100) / 100,
     withdrawalsTotal: withdrawals.length,
     pendingWithdrawals: withdrawals.filter((item) => item.status === "pending").length,
     processingWithdrawals: withdrawals.filter((item) => item.status === "processing").length,

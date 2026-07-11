@@ -6,6 +6,7 @@ import { PRODUCTS, getProductPlan, getProductPlanOptions, hasProductPlans, useSi
 import VisitorsPanel from "./VisitorsPanel";
 import AbandonedPanel from "./AbandonedPanel";
 import InsightsPanel from "./InsightsPanel";
+import { OverviewTrendCard } from "./AnalyticsCharts";
 import UserActivity from "./UserActivity";
 import AnnouncePanel from "./AnnouncePanel";
 import AnnouncePostsPanel from "./AnnouncePostsPanel";
@@ -47,6 +48,11 @@ const MARKETING_MAIL_TEMPLATE_ID = "membership_edm_v4";
 const MARKETING_MAIL_SUBJECT = "常用会员服务，立即下单开通";
 const MARKETING_MAIL_PREVIEW = "Spotify、4K 影音、AI 会员与机场节点，明码标价，付款后开通。";
 const MAIL_BATCH_LIMIT = 20;
+
+function compactAdminTime(value) {
+  const match = String(value || "").match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/);
+  return match ? `${match[1].slice(5)} ${match[2]}` : "时间未记录";
+}
 
 function copyText(text) {
   if (typeof window === "undefined") return;
@@ -1102,23 +1108,6 @@ function exportOrderPdf(order, note = "") {
     tableRows: orderPdfRows(order),
     note,
   });
-}
-
-// 迷你趋势图(总览用):纯内联 SVG,无依赖
-function Sparkline({ data, height = 46, stroke = "#0f766e", fill = "rgba(13,148,136,0.12)" }) {
-  const width = 220;
-  const vals = (data || []).map((v) => Number(v) || 0);
-  if (!vals.length) return null;
-  const max = Math.max(1, ...vals);
-  const stepX = vals.length > 1 ? width / (vals.length - 1) : width;
-  const pts = vals.map((v, i) => `${(i * stepX).toFixed(1)},${(height - 4 - (v / max) * (height - 8)).toFixed(1)}`);
-  const line = pts.join(" ");
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} preserveAspectRatio="none" aria-hidden="true">
-      <polygon points={`0,${height} ${line} ${width},${height}`} fill={fill} />
-      <polyline points={line} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
 }
 
 // 环比徽章(今日 vs 昨日)
@@ -2926,6 +2915,16 @@ export default function AdminPage() {
     }
   }
 
+  function openLatestOrder() {
+    const orderId = String(overview?.latestOrderId || "").trim();
+    if (!orderId) return;
+    setTab("orders");
+    setSearchInput(orderId);
+    setAppliedSearch(orderId);
+    setFilterStatus("all");
+    loadOrders(orderId, "all", { silent: true });
+  }
+
   async function doLogin(e) {
     e.preventDefault();
     if (loggingIn) return;
@@ -3486,11 +3485,29 @@ export default function AdminPage() {
                 <span>累计营收</span>
                 <b>¥{Number(overview?.totalRevenue || 0).toFixed(2)}</b>
               </div>
-              <div className="admin-overview-latest">
-                <span>最新订单</span>
-                <b>{overview?.latestOrderEmail || "暂无"}</b>
-                {overview?.latestOrderService && <small>{overview.latestOrderService}</small>}
-              </div>
+              <button
+                type="button"
+                className="admin-overview-latest"
+                onClick={openLatestOrder}
+                disabled={!overview?.latestOrderId}
+              >
+                <span className="admin-overview-latest-icon"><ClipboardList size={17} /></span>
+                <span className="admin-overview-latest-copy">
+                  <span className="admin-overview-latest-eyebrow">
+                    最新订单
+                    {overview?.latestOrderStatus && (
+                      <em className={`status-${overview.latestOrderStatus}`}>{STATUS_LABEL[overview.latestOrderStatus] || overview.latestOrderStatus}</em>
+                    )}
+                  </span>
+                  <strong>{overview?.latestOrderService || "暂无订单"}</strong>
+                  <small>{overview?.latestOrderEmail || "尚无订单记录"}</small>
+                </span>
+                <span className="admin-overview-latest-meta">
+                  <strong>{Number(overview?.latestOrderAmount || 0) > 0 ? `¥${Number(overview.latestOrderAmount).toFixed(2)}` : (STATUS_LABEL[overview?.latestOrderStatus] || "待处理")}</strong>
+                  <small>{overview?.latestOrderId || "—"} · {compactAdminTime(overview?.latestOrderTime)}</small>
+                </span>
+                <span className="admin-overview-latest-open"><Eye size={14} />查看</span>
+              </button>
             </div>
 
             <div className="admin-overview-revenue">
@@ -3536,16 +3553,22 @@ export default function AdminPage() {
 
             {Array.isArray(overview?.trend) && overview.trend.length > 1 && (
               <div className="admin-overview-trends">
-                <div className="admin-overview-trend-card">
-                  <div className="admin-overview-trend-head">近 14 天订单<b>{overview.trend.reduce((s, d) => s + d.orders, 0)} 单</b></div>
-                  <Sparkline data={overview.trend.map((d) => d.orders)} />
-                  <div className="admin-overview-trend-foot"><span>{overview.trend[0].date.slice(5)}</span><span>今天</span></div>
-                </div>
-                <div className="admin-overview-trend-card">
-                  <div className="admin-overview-trend-head">近 14 天营收<b>¥{overview.trend.reduce((s, d) => s + d.revenue, 0).toFixed(0)}</b></div>
-                  <Sparkline data={overview.trend.map((d) => d.revenue)} stroke="#b45309" fill="rgba(217,119,6,0.12)" />
-                  <div className="admin-overview-trend-foot"><span>{overview.trend[0].date.slice(5)}</span><span>今天</span></div>
-                </div>
+                <OverviewTrendCard
+                  title="近 14 天订单"
+                  rows={overview.trend}
+                  valueKey="orders"
+                  color="#0f766e"
+                  fill="rgba(15, 118, 110, 0.12)"
+                  suffix="单"
+                />
+                <OverviewTrendCard
+                  title="近 14 天营收"
+                  rows={overview.trend}
+                  valueKey="revenue"
+                  color="#b45309"
+                  fill="rgba(180, 83, 9, 0.11)"
+                  money
+                />
               </div>
             )}
           </div>
