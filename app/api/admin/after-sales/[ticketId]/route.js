@@ -5,7 +5,11 @@ import {
   clean,
   pushAdminActionLog,
 } from "../../../_utils.js";
-import { completeAfterSalesTicket, getAfterSalesTicket } from "../../../after-sales/_store.js";
+import {
+  completeAfterSalesTicket,
+  getAfterSalesTicket,
+  hydrateAfterSalesTicketCredentials,
+} from "../../../after-sales/_store.js";
 import { sendAfterSalesEmail } from "../../../after-sales/_email.js";
 
 export async function GET(request, { params }) {
@@ -15,7 +19,7 @@ export async function GET(request, { params }) {
   const { ticketId } = await params;
   const ticket = await getAfterSalesTicket(ticketId);
   if (!ticket) return Response.json({ ok: false, error: "ticket_not_found" }, { status: 404 });
-  return Response.json({ ok: true, ticket });
+  return Response.json({ ok: true, ticket: await hydrateAfterSalesTicketCredentials(ticket) });
 }
 
 export async function PATCH(request, { params }) {
@@ -29,9 +33,19 @@ export async function PATCH(request, { params }) {
   }
   const { ticketId } = await params;
   const actor = adminActorFromSession(session);
-  const result = await completeAfterSalesTicket(ticketId, clean(body.staffNote, 2000), actor);
+  const result = await completeAfterSalesTicket(ticketId, {
+    staffNote: clean(body.staffNote, 2000),
+    items: Array.isArray(body.items) ? body.items : [],
+  }, actor);
   if (!result.ok) {
-    return Response.json({ ok: false, error: result.error }, { status: result.error === "ticket_not_found" ? 404 : 400 });
+    const status = ["ticket_not_found", "order_not_found", "order_item_not_found"].includes(result.error)
+      ? 404
+      : result.error === "ticket_busy"
+        ? 409
+        : result.error === "order_sync_failed" || result.error === "storage_failed"
+          ? 500
+          : 400;
+    return Response.json({ ok: false, error: result.error }, { status });
   }
   let notice = null;
   if (result.changed) {

@@ -25,6 +25,10 @@ function submittedItemAt(items, index) {
   return (Array.isArray(items) ? items : []).find((item) => Number(item?.index) === index) || {};
 }
 
+function isCredentialService(service) {
+  return ["spotify", "ai", "netflix", "disney", "max"].includes(clean(service, 40).toLowerCase());
+}
+
 export async function POST(request) {
   let body = {};
   try { body = await request.json(); } catch {}
@@ -78,14 +82,15 @@ export async function POST(request) {
     const source = sourceItems[index] || {};
     const submitted = submittedItemAt(body.items, index);
     const product = catalogByKey[source.service] || {};
-    const needsCredentials = Boolean(product.needsAccountPassword || source.service === "spotify");
+    const credentialManaged = isCredentialService(source.service);
+    const customerCredentialsRequired = Boolean(product.needsAccountPassword || source.service === "spotify");
     const isProxy = source.service === "proxy-pay";
     contactRequired = contactRequired || Boolean(product.needsContact || isProxy);
-    const account = needsCredentials ? clean(submitted.account ?? source.account, 80) : "";
-    const password = needsCredentials ? clean(submitted.password ?? source.password, 120) : "";
+    const account = credentialManaged ? clean(submitted.account ?? source.staffAccount ?? source.account, 80) : "";
+    const password = credentialManaged ? clean(submitted.password ?? source.staffPassword ?? source.password, 120) : "";
     const platformUrl = isProxy ? clean(submitted.platformUrl ?? source.platformUrl ?? order.platformUrl, 1000) : "";
     const productPrice = isProxy ? clean(submitted.productPrice ?? source.productPrice ?? order.productPrice, 120) : "";
-    if (needsCredentials && (!account || !password)) {
+    if (customerCredentialsRequired && (!account || !password)) {
       return Response.json({ ok: false, error: "missing_credentials", itemIndex: index }, { status: 400 });
     }
     if (isProxy && (!/^https?:\/\//i.test(platformUrl) || !productPrice)) {
@@ -96,6 +101,7 @@ export async function POST(request) {
       service: clean(source.service, 40),
       label: clean(source.label || order.serviceLabel || source.service, 180),
       plan: clean(source.plan || source.rocketPlan, 40),
+      credentialManaged,
       account,
       password,
       platformUrl,

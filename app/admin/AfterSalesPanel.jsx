@@ -5,6 +5,8 @@ import {
   AlertCircle,
   CheckCircle2,
   Clock3,
+  Eye,
+  EyeOff,
   ExternalLink,
   Headphones,
   Inbox,
@@ -30,6 +32,8 @@ export default function AfterSalesPanel({ canEdit = false, onChanged }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [active, setActive] = useState(null);
+  const [credentialItems, setCredentialItems] = useState([]);
+  const [shownPasswords, setShownPasswords] = useState({});
   const [detailLoading, setDetailLoading] = useState("");
   const [staffNote, setStaffNote] = useState("");
   const [completing, setCompleting] = useState(false);
@@ -72,6 +76,13 @@ export default function AfterSalesPanel({ canEdit = false, onChanged }) {
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "detail_failed");
       setActive(data.ticket);
+      setCredentialItems((data.ticket.items || []).map((item, index) => ({
+        index: Number.isFinite(Number(item.index)) ? Number(item.index) : index,
+        account: item.account || "",
+        password: item.password || "",
+        editable: Boolean(item.credentialManaged || item.account || item.password),
+      })));
+      setShownPasswords({});
       setStaffNote(data.ticket.staffNote || "");
       setResult(null);
     } catch {
@@ -81,8 +92,16 @@ export default function AfterSalesPanel({ canEdit = false, onChanged }) {
     }
   }
 
+  function updateCredential(index, field, value) {
+    setCredentialItems((items) => items.map((item) => item.index === index ? { ...item, [field]: value } : item));
+  }
+
   async function completeTicket() {
     if (!active || active.status !== "pending" || completing || !canEdit) return;
+    if (credentialItems.some((item) => item.editable && (!item.account.trim() || !item.password.trim()))) {
+      setResult({ type: "error", message: "请完整填写该服务的账号和密码后再完成工单" });
+      return;
+    }
     setCompleting(true);
     setResult(null);
     try {
@@ -90,11 +109,21 @@ export default function AfterSalesPanel({ canEdit = false, onChanged }) {
         method: "PATCH",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "completed", staffNote }),
+        body: JSON.stringify({
+          status: "completed",
+          staffNote,
+          items: credentialItems.filter((item) => item.editable).map(({ index, account, password }) => ({ index, account, password })),
+        }),
       });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "complete_failed");
       setActive(data.ticket);
+      setCredentialItems((data.ticket.items || []).map((item, index) => ({
+        index: Number.isFinite(Number(item.index)) ? Number(item.index) : index,
+        account: item.account || "",
+        password: item.password || "",
+        editable: Boolean(item.credentialManaged || item.account || item.password),
+      })));
       setStaffNote(data.ticket.staffNote || "");
       setResult(data.changed === false
         ? { type: "success", message: "工单已由其他工作人员完成，未重复发送邮件" }
@@ -160,8 +189,7 @@ export default function AfterSalesPanel({ canEdit = false, onChanged }) {
                   <code>{ticket.ticketId}</code>
                   <em>{ticket.status === "completed" ? "已完成" : "待处理"}</em>
                 </div>
-                <strong>{ticket.serviceLabel || "订单售后"}</strong>
-                <p>{ticket.issue}</p>
+                <div className="admin-after-sales-card-summary"><strong>{ticket.serviceLabel || "订单售后"}</strong><span>{ticket.issue}</span></div>
                 <div className="admin-after-sales-card-meta"><span>{ticket.email}</span><span>{compactTime(ticket.createdAtBeijing)}</span></div>
               </div>
               <div className="admin-after-sales-card-order"><span>关联订单</span><code>{ticket.orderId}</code></div>
@@ -204,20 +232,43 @@ export default function AfterSalesPanel({ canEdit = false, onChanged }) {
               <section className="admin-after-sales-detail-section">
                 <h3>用户提交的服务资料</h3>
                 <div className="admin-after-sales-item-list">
-                  {(active.items || []).map((item, index) => (
-                    <div className="admin-after-sales-item" key={`${item.service}-${index}`}>
-                      <div className="admin-after-sales-item-head"><span>{index + 1}</span><strong>{item.label}</strong></div>
-                      {(item.account || item.password) && <div className="admin-after-sales-item-fields">
-                        {item.account && <div><span>账号</span><code>{item.account}</code></div>}
-                        {item.password && <div><span>密码</span><code>{item.password}</code></div>}
-                      </div>}
-                      {(item.platformUrl || item.productPrice) && <div className="admin-after-sales-item-fields">
-                        {item.platformUrl && <div className="wide"><span>网站 / 平台</span><a href={item.platformUrl} target="_blank" rel="noopener noreferrer">{item.platformUrl}<ExternalLink size={12} /></a></div>}
-                        {item.productPrice && <div><span>商品标价</span><b>{item.productPrice}</b></div>}
-                      </div>}
-                      {!item.account && !item.password && !item.platformUrl && !item.productPrice && <p>该服务下单时无额外必填配置。</p>}
-                    </div>
-                  ))}
+                  {(active.items || []).map((item, index) => {
+                    const itemIndex = Number.isFinite(Number(item.index)) ? Number(item.index) : index;
+                    const draft = credentialItems.find((entry) => entry.index === itemIndex) || { account: item.account || "", password: item.password || "" };
+                    const hasCredentials = Boolean(item.credentialManaged || item.account || item.password);
+                    return (
+                      <div className="admin-after-sales-item" key={`${item.service}-${itemIndex}`}>
+                        <div className="admin-after-sales-item-head"><span>{index + 1}</span><strong>{item.label}</strong></div>
+                        {hasCredentials && active.status === "pending" ? (
+                          <div className="admin-after-sales-credential-edit">
+                            <label>
+                              <span>账号</span>
+                              <input value={draft.account} onChange={(event) => updateCredential(itemIndex, "account", event.target.value)} maxLength={80} autoComplete="off" required disabled={!canEdit || completing} />
+                            </label>
+                            <label>
+                              <span>密码</span>
+                              <div>
+                                <input type={shownPasswords[itemIndex] ? "text" : "password"} value={draft.password} onChange={(event) => updateCredential(itemIndex, "password", event.target.value)} maxLength={120} autoComplete="new-password" required disabled={!canEdit || completing} />
+                                <button type="button" onClick={() => setShownPasswords((current) => ({ ...current, [itemIndex]: !current[itemIndex] }))} aria-label={shownPasswords[itemIndex] ? "隐藏密码" : "显示密码"}>
+                                  {shownPasswords[itemIndex] ? <EyeOff size={14} /> : <Eye size={14} />}
+                                </button>
+                              </div>
+                            </label>
+                          </div>
+                        ) : hasCredentials ? (
+                          <div className="admin-after-sales-item-fields">
+                            <div><span>账号</span><code>{item.account}</code></div>
+                            <div><span>密码</span><code>{item.password}</code></div>
+                          </div>
+                        ) : null}
+                        {(item.platformUrl || item.productPrice) && <div className="admin-after-sales-item-fields">
+                          {item.platformUrl && <div className="wide"><span>网站 / 平台</span><a href={item.platformUrl} target="_blank" rel="noopener noreferrer">{item.platformUrl}<ExternalLink size={12} /></a></div>}
+                          {item.productPrice && <div><span>商品标价</span><b>{item.productPrice}</b></div>}
+                        </div>}
+                        {!hasCredentials && !item.platformUrl && !item.productPrice && <p>该服务下单时无额外账号或密码。</p>}
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
 

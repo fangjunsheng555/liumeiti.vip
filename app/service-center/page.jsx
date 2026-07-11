@@ -888,7 +888,7 @@ export default function ServiceCenterPage() {
                 ) : queryDetailOrder.afterSalesEligible ? (
                   <button type="button" className="query-after-sales-btn" onClick={() => openAfterSales(queryDetailOrder)}>
                     <span><LifeBuoy size={19} /></span>
-                    <div><strong>{L("申请售后", "Request after-sales")}</strong><small>{L("资料自动填充，提交后邮件确认", "Details are pre-filled and confirmed by email")}</small></div>
+                    <strong>{L("申请售后", "Request after-sales")}</strong>
                     <ArrowRight size={17} />
                   </button>
                 ) : null}

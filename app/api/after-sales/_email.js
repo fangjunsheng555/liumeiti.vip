@@ -36,6 +36,12 @@ export async function sendAfterSalesEmail(ticket, kind = "received") {
   const noteBlock = completed && ticket.staffNote
     ? `<tr><td style="padding:0 32px 18px;"><div style="padding:15px 17px;border-radius:12px;background:#f0fdfa;border:1px solid #99f6e4;"><div style="font-size:11px;font-weight:800;color:#0f766e;margin-bottom:7px;">${L("客服处理备注", "Support note")}</div><div style="font-size:13px;line-height:1.75;color:#334155;">${multiline(ticket.staffNote)}</div></div></td></tr>`
     : "";
+  const credentialItems = completed
+    ? (Array.isArray(ticket.items) ? ticket.items : []).filter((item) => item.account && item.password)
+    : [];
+  const credentialBlock = credentialItems.length
+    ? `<tr><td style="padding:0 32px 18px;"><div style="padding-top:16px;border-top:1px solid #e2e8f0;"><div style="font-size:11px;font-weight:800;color:#0f766e;margin-bottom:10px;">${L("最新服务账号", "Latest service credentials")}</div>${credentialItems.map((item) => `<div style="margin-bottom:12px;"><div style="margin-bottom:6px;font-size:12px;font-weight:800;color:#334155;">${escapeHtml(item.label || ticket.serviceLabel)}</div><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f8fafc;border-radius:9px;"><tr><td style="padding:9px 11px;color:#64748b;font-size:11px;border-bottom:1px solid #e2e8f0;">${L("账号", "Account")}</td><td align="right" style="padding:9px 11px;font-size:12px;font-weight:800;border-bottom:1px solid #e2e8f0;word-break:break-all;">${escapeHtml(item.account)}</td></tr><tr><td style="padding:9px 11px;color:#64748b;font-size:11px;">${L("密码", "Password")}</td><td align="right" style="padding:9px 11px;font-size:12px;font-weight:800;word-break:break-all;">${escapeHtml(item.password)}</td></tr></table></div>`).join("")}<div style="font-size:10.5px;line-height:1.6;color:#94a3b8;">${L("以上信息已同步至订单详情，请妥善保管。", "These details are now synced to your order. Please keep them secure.")}</div></div></td></tr>`
+    : "";
   const html = `<!doctype html>
 <html lang="${en ? "en" : "zh-CN"}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',Arial,sans-serif;color:#0f172a;">
@@ -56,6 +62,7 @@ export async function sendAfterSalesEmail(ticket, kind = "received") {
           </table>
         </td></tr>
         ${noteBlock}
+        ${credentialBlock}
         <tr><td style="padding:0 32px 28px;">
           <a href="${escapeHtml(detailUrl)}" style="display:inline-block;padding:12px 20px;border-radius:10px;background:#0f766e;color:#fff;text-decoration:none;font-size:13px;font-weight:800;">${L("查看订单与售后", "View order & after-sales")}</a>
           <p style="margin:18px 0 0;font-size:11.5px;color:#94a3b8;line-height:1.7;">${escapeHtml(support)}。${L("本邮件由系统自动发送，请勿直接回复。", "This email was sent automatically. Please do not reply directly.")}</p>
@@ -65,7 +72,10 @@ export async function sendAfterSalesEmail(ticket, kind = "received") {
   </table>
 </body></html>`;
   const noteText = completed && ticket.staffNote ? `\n${L("客服处理备注", "Support note")}: ${ticket.staffNote}\n` : "";
-  const text = `${brandName}\n\n${title}\n${description}\n\n${L("工单编号", "Ticket")}: ${ticket.ticketId}\n${L("关联订单", "Order")}: ${ticket.orderId}\n${L("服务内容", "Service")}: ${ticket.serviceLabel}${noteText}\n${detailUrl}\n\n${support}`;
+  const credentialText = credentialItems.length
+    ? `\n${L("最新服务账号", "Latest service credentials")}\n${credentialItems.map((item) => `${item.label || ticket.serviceLabel}\n${L("账号", "Account")}: ${item.account}\n${L("密码", "Password")}: ${item.password}`).join("\n\n")}\n`
+    : "";
+  const text = `${brandName}\n\n${title}\n${description}\n\n${L("工单编号", "Ticket")}: ${ticket.ticketId}\n${L("关联订单", "Order")}: ${ticket.orderId}\n${L("服务内容", "Service")}: ${ticket.serviceLabel}${noteText}${credentialText}\n${detailUrl}\n\n${support}`;
   return sendSimpleEmail({
     to: ticket.email,
     subject: `${title} · ${ticket.ticketId} · ${brandName}`,

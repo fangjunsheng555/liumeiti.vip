@@ -178,11 +178,27 @@ test("after-sales ticket lifecycle enforces one pending ticket per order", async
   const detail = await detailResponse.json();
   assert.equal(detail.ticket.items[0].account, "edited-account@example.com");
 
+  const incompleteCredentialsResponse = await adminDetailRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/after-sales/${created.ticket.ticketId}`, {
+      method: "PATCH",
+      headers: adminHeaders,
+      body: JSON.stringify({ status: "completed", items: [{ index: 0, account: "", password: "resolved-password" }] }),
+    }),
+    { params: Promise.resolve({ ticketId: created.ticket.ticketId }) },
+  );
+  assert.equal(incompleteCredentialsResponse.status, 400);
+  assert.equal((await incompleteCredentialsResponse.json()).error, "missing_credentials");
+  assert.equal((await store.getAfterSalesTicket(created.ticket.ticketId)).status, "pending");
+
   const completedResponse = await adminDetailRoute.PATCH(
     new Request(`https://www.liumeiti.vip/api/admin/after-sales/${created.ticket.ticketId}`, {
       method: "PATCH",
       headers: adminHeaders,
-      body: JSON.stringify({ status: "completed", staffNote: "已重新配置，请重新登录。" }),
+      body: JSON.stringify({
+        status: "completed",
+        staffNote: "已重新配置，请重新登录。",
+        items: [{ index: 0, account: "resolved-account@example.com", password: "resolved-password" }],
+      }),
     }),
     { params: Promise.resolve({ ticketId: created.ticket.ticketId }) },
   );
@@ -190,6 +206,12 @@ test("after-sales ticket lifecycle enforces one pending ticket per order", async
   const completed = await completedResponse.json();
   assert.equal(completed.ticket.status, "completed");
   assert.equal(completed.ticket.staffNote, "已重新配置，请重新登录。");
+  assert.equal(completed.ticket.items[0].account, "resolved-account@example.com");
+  assert.equal(completed.ticket.items[0].password, "resolved-password");
+  const syncedOrder = await utils.getOrderById(order.orderId);
+  assert.equal(syncedOrder.items[0].staffAccount, "resolved-account@example.com");
+  assert.equal(syncedOrder.items[0].staffPassword, "resolved-password");
+  assert.equal(syncedOrder.status, "completed");
   assert.equal((await store.getAfterSalesCounts()).pending, 0);
 
   const repeatedCompletionResponse = await adminDetailRoute.PATCH(
@@ -228,4 +250,69 @@ test("concurrent customer submissions create only one pending ticket", async () 
   const active = await store.getActiveAfterSalesTicket(order.orderId);
   assert.equal(active.status, "pending");
   assert.equal(active.orderId, order.orderId);
+});
+
+test("legacy staff-provided service tickets hydrate and sync latest credentials", async () => {
+  const order = {
+    orderId: "LMTESTAFTERSALE3",
+    status: "completed",
+    locale: "zh",
+    email: "ai-buyer@example.com",
+    serviceLabel: "AI 会员 · GPT Plus",
+    items: [{
+      service: "ai",
+      label: "AI 会员 · GPT Plus",
+      plan: "gpt-plus",
+      amount: 229,
+      account: "",
+      password: "",
+      staffAccount: "current-ai-account@example.com",
+      staffPassword: "current-ai-password",
+    }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const createdAt = new Date().toISOString();
+  const created = await store.createAfterSalesTicket({
+    ticketId: "ASLEGACYAI1",
+    orderId: order.orderId,
+    status: "pending",
+    locale: "zh",
+    email: order.email,
+    contact: "",
+    remark: "",
+    issue: "AI 会员账号需要售后协助",
+    serviceLabel: order.serviceLabel,
+    items: [{ index: 0, service: "ai", label: order.serviceLabel, plan: "gpt-plus", account: "", password: "" }],
+    createdAt,
+    createdAtBeijing: createdAt,
+  });
+  assert.equal(created.ok, true);
+
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const adminHeaders = { cookie: `lm_admin=${encodeURIComponent(adminToken)}`, "Content-Type": "application/json" };
+  const detailResponse = await adminDetailRoute.GET(
+    new Request("https://www.liumeiti.vip/api/admin/after-sales/ASLEGACYAI1", { headers: adminHeaders }),
+    { params: Promise.resolve({ ticketId: "ASLEGACYAI1" }) },
+  );
+  const detail = await detailResponse.json();
+  assert.equal(detail.ticket.items[0].credentialManaged, true);
+  assert.equal(detail.ticket.items[0].account, "current-ai-account@example.com");
+  assert.equal(detail.ticket.items[0].password, "current-ai-password");
+
+  const completedResponse = await adminDetailRoute.PATCH(
+    new Request("https://www.liumeiti.vip/api/admin/after-sales/ASLEGACYAI1", {
+      method: "PATCH",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        status: "completed",
+        staffNote: "账号已更新",
+        items: [{ index: 0, account: "new-ai-account@example.com", password: "new-ai-password" }],
+      }),
+    }),
+    { params: Promise.resolve({ ticketId: "ASLEGACYAI1" }) },
+  );
+  assert.equal(completedResponse.status, 200);
+  const syncedOrder = await utils.getOrderById(order.orderId);
+  assert.equal(syncedOrder.items[0].staffAccount, "new-ai-account@example.com");
+  assert.equal(syncedOrder.items[0].staffPassword, "new-ai-password");
 });

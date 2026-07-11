@@ -1,4 +1,12 @@
-import { clean, formatBeijingTime, redisCmd, redisPipeline, redisConfig } from "../_utils.js";
+import {
+  clean,
+  formatBeijingTime,
+  getOrderById,
+  redisCmd,
+  redisPipeline,
+  redisConfig,
+  setOrderAt,
+} from "../_utils.js";
 import { randomBytes } from "node:crypto";
 
 const TICKET_PREFIX = "liumeiti:after-sales:record:";
@@ -7,6 +15,7 @@ const ALL_INDEX = "liumeiti:after-sales:index";
 const PENDING_INDEX = "liumeiti:after-sales:status:pending";
 const COMPLETED_INDEX = "liumeiti:after-sales:status:completed";
 const COMPLETE_LOCK_PREFIX = "liumeiti:after-sales:complete-lock:";
+const CREDENTIAL_SERVICES = new Set(["spotify", "ai", "netflix", "disney", "max"]);
 
 function normalizeId(value, limit = 100) {
   return clean(value, limit).replace(/\s+/g, "").toUpperCase();
@@ -109,6 +118,40 @@ export async function getActiveAfterSalesTickets(orderIds) {
   return result;
 }
 
+function isCredentialService(service) {
+  return CREDENTIAL_SERVICES.has(clean(service, 40).toLowerCase());
+}
+
+export async function hydrateAfterSalesTicketCredentials(ticket) {
+  if (!ticket) return null;
+  const order = await getOrderById(ticket.orderId);
+  const orderItems = Array.isArray(order?.items) && order.items.length
+    ? order.items
+    : order
+      ? [{
+          service: order.service || "",
+          account: order.staffAccount || order.account || "",
+          password: order.staffPassword || order.password || "",
+        }]
+      : [];
+  return {
+    ...ticket,
+    items: (Array.isArray(ticket.items) ? ticket.items : []).map((item, arrayIndex) => {
+      const index = Number.isFinite(Number(item?.index)) ? Number(item.index) : arrayIndex;
+      const source = orderItems[index] || {};
+      const credentialManaged = Boolean(item.credentialManaged || isCredentialService(item.service || source.service));
+      if (!credentialManaged) return { ...item, index };
+      return {
+        ...item,
+        index,
+        credentialManaged: true,
+        account: clean(item.account || source.staffAccount || source.account, 80),
+        password: clean(item.password || source.staffPassword || source.password, 120),
+      };
+    }),
+  };
+}
+
 export async function createAfterSalesTicket(ticket) {
   if (!redisConfig() || !ticket?.ticketId || !ticket?.orderId) {
     return { ok: false, error: "storage_unavailable" };
@@ -159,23 +202,100 @@ export async function createAfterSalesTicket(ticket) {
   return { ok: true, ticket: { ...ticket, ticketId, orderId } };
 }
 
-export async function completeAfterSalesTicket(ticketId, staffNote, actor) {
+function mergeCompletionItems(ticket, updates) {
+  const submitted = new Map((Array.isArray(updates) ? updates : []).map((item) => [Number(item?.index), item]));
+  const items = (Array.isArray(ticket?.items) ? ticket.items : []).map((item, arrayIndex) => {
+    const index = Number.isFinite(Number(item?.index)) ? Number(item.index) : arrayIndex;
+    const hasCredentials = Boolean(item?.credentialManaged || isCredentialService(item?.service) || item?.account || item?.password);
+    if (!hasCredentials) return { ...item, index };
+    const update = submitted.get(index) || {};
+    return {
+      ...item,
+      index,
+      credentialManaged: true,
+      account: clean(update.account ?? item.account, 80),
+      password: clean(update.password ?? item.password, 120),
+    };
+  });
+  if (items.some((item) => (item.account || item.password) && (!item.account || !item.password))) {
+    return { ok: false, error: "missing_credentials" };
+  }
+  return { ok: true, items };
+}
+
+async function syncOrderCredentials(ticket, items, actor) {
+  const credentialItems = items.filter((item) => item.credentialManaged && item.account && item.password);
+  if (!credentialItems.length) return { ok: true };
+
+  const order = await getOrderById(ticket.orderId);
+  if (!order) return { ok: false, error: "order_not_found" };
+  if (!Array.isArray(order.items) || !order.items.length) {
+    const source = credentialItems[0] || items[0] || {};
+    order.items = [{
+      service: order.service || source.service || "",
+      label: order.serviceLabel || source.label || "",
+      cycle: order.cycle || "",
+      amount: Number(order.finalAmount || 0),
+      plan: order.plan || order.rocketPlan || source.plan || "",
+      account: order.account || source.account || "",
+      password: order.password || source.password || "",
+    }];
+  }
+
+  for (const item of credentialItems) {
+    const index = Number(item.index);
+    const target = Number.isFinite(index) ? order.items[index] : null;
+    if (!target) return { ok: false, error: "order_item_not_found" };
+    target.staffAccount = item.account;
+    target.staffPassword = item.password;
+  }
+
+  if (order.items.length === 1 && credentialItems.length === 1) {
+    order.staffAccount = credentialItems[0].account;
+    order.staffPassword = credentialItems[0].password;
+  }
+  const now = new Date();
+  order.staffAudit = Array.isArray(order.staffAudit) ? order.staffAudit : [];
+  order.staffAudit.unshift({
+    id: "OA" + Date.now().toString(36).toUpperCase(),
+    staffId: Number(actor?.staffId || 1),
+    staffUsername: clean(actor?.staffUsername || "admin", 60),
+    label: clean(actor?.staffUsername || "admin", 60),
+    action: "after_sales_credentials_sync",
+    status: order.status || "completed",
+    createdAt: now.toISOString(),
+    createdAtBeijing: formatBeijingTime(now),
+  });
+  order.staffAudit = order.staffAudit.slice(0, 30);
+  const saved = await setOrderAt({ orderId: order.orderId, legacyIndex: null }, order);
+  return saved ? { ok: true } : { ok: false, error: "order_sync_failed" };
+}
+
+export async function completeAfterSalesTicket(ticketId, completion, actor) {
   const id = normalizeId(ticketId);
   const lockKey = COMPLETE_LOCK_PREFIX + id;
   const lockToken = randomBytes(12).toString("hex");
   const locked = await redisCmd(["SET", lockKey, lockToken, "NX", "EX", "30"]);
   if (locked !== "OK") return { ok: false, error: "ticket_busy" };
   try {
-    const ticket = await getAfterSalesTicket(id);
-    if (!ticket) return { ok: false, error: "ticket_not_found" };
+    const storedTicket = await getAfterSalesTicket(id);
+    if (!storedTicket) return { ok: false, error: "ticket_not_found" };
+    const ticket = await hydrateAfterSalesTicketCredentials(storedTicket);
     if (ticket.status === "completed") return { ok: true, ticket, changed: false };
     if (ticket.status !== "pending") return { ok: false, error: "invalid_ticket_status" };
+
+    const payload = completion && typeof completion === "object" ? completion : { staffNote: completion };
+    const merged = mergeCompletionItems(ticket, payload.items);
+    if (!merged.ok) return merged;
+    const synced = await syncOrderCredentials(ticket, merged.items, actor);
+    if (!synced.ok) return synced;
 
     const now = new Date();
     const completed = {
       ...ticket,
       status: "completed",
-      staffNote: clean(staffNote, 2000),
+      items: merged.items,
+      staffNote: clean(payload.staffNote, 2000),
       completedAt: now.toISOString(),
       completedAtBeijing: formatBeijingTime(now),
       completedBy: {
