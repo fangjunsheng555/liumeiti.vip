@@ -15,6 +15,8 @@ import {
 } from "../_utils.js";
 
 export const runtime = "nodejs";
+// keeper(链上确认/续费提醒)经 after() 在本路由生命周期内执行,预留足够时长防中途被杀
+export const maxDuration = 60;
 
 const PREFIX = "lm:visit:";
 const INDEX = PREFIX + "index";
