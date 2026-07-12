@@ -387,6 +387,9 @@ export async function setOrderAt(index, order) {
   const orderId = normalizeOrderIdForStorage(handle.orderId || order?.orderId);
   if (orderId) {
     const commands = [["SET", orderRecordKey(orderId), JSON.stringify(order)]];
+    // Promoted legacy records must enter the primary index before their old list copy can go stale.
+    const indexPosition = await redisCmd(["LPOS", ORDER_INDEX_KEY, orderId]);
+    if (indexPosition === null) commands.push(["RPUSH", ORDER_INDEX_KEY, orderId]);
     if (Number.isInteger(handle.legacyIndex) && handle.legacyIndex >= 0) {
       commands.push(["LSET", ORDERS_KEY, String(handle.legacyIndex), JSON.stringify(order)]);
     }

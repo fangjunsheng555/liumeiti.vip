@@ -3,6 +3,7 @@ import {
   checkRateLimit,
   clean,
   formatBeijingTime,
+  getOrderById,
   getOrderEntryById,
   rateLimitResponse,
   setOrderAt,
@@ -146,10 +147,31 @@ export async function PATCH(request, { params }) {
 
   const saved = await setOrderAt(entry.index, entry.order);
   if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
-  await notifySpotifyDetailsUpdated(entry.order, item);
+  let persistedOrder = await getOrderById(entry.order.orderId);
+  let persistedItem = persistedOrder?.items?.[itemIndex];
+  const detailsPersisted = () => Boolean(
+    persistedOrder
+    && persistedItem
+    && persistedItem.account === account
+    && persistedItem.password === password
+    && persistedOrder.email === email
+    && persistedOrder.contact === contact
+    && persistedOrder.remark === remark
+  );
+  if (!detailsPersisted()) {
+    const retried = await setOrderAt(entry.index, entry.order);
+    if (retried) {
+      persistedOrder = await getOrderById(entry.order.orderId);
+      persistedItem = persistedOrder?.items?.[itemIndex];
+    }
+  }
+  if (!detailsPersisted()) {
+    return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
+  }
+  await notifySpotifyDetailsUpdated(persistedOrder, persistedItem);
   return Response.json({
     ok: true,
-    details: publicDetails(entry.order, item, itemIndex),
-    updatedAtBeijing: item.customerPasswordUpdatedAtBeijing,
+    details: publicDetails(persistedOrder, persistedItem, itemIndex),
+    updatedAtBeijing: persistedItem.customerPasswordUpdatedAtBeijing,
   });
 }

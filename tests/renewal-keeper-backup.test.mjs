@@ -75,6 +75,10 @@ function execute(command) {
     lists.set(args[0], list);
     return list.length;
   }
+  if (name === "LPOS") {
+    const index = (lists.get(args[0]) || []).indexOf(args[1]);
+    return index >= 0 ? index : null;
+  }
   if (name === "LTRIM") {
     const list = lists.get(args[0]) || [];
     lists.set(args[0], list.slice(Number(args[1]), Number(args[2]) + 1));

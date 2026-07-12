@@ -71,6 +71,16 @@ function execute(command) {
     lists.set(args[0], list);
     return list.length;
   }
+  if (name === "RPUSH") {
+    const list = lists.get(args[0]) || [];
+    list.push(...args.slice(1));
+    lists.set(args[0], list);
+    return list.length;
+  }
+  if (name === "LPOS") {
+    const index = (lists.get(args[0]) || []).indexOf(args[1]);
+    return index >= 0 ? index : null;
+  }
   if (name === "LTRIM") {
     const list = lists.get(args[0]) || [];
     lists.set(args[0], list.slice(Number(args[1]), Number(args[2]) + 1));
@@ -304,6 +314,8 @@ test("Spotify password correction updates the original order without exposing th
   assert.equal(adminResponse.status, 200);
   const adminResult = await adminResponse.json();
   assert.equal(adminResult.ok, true);
+  const indexedOrderIds = lists.get("liumeiti:orders:index") || [];
+  assert.equal(indexedOrderIds.filter((orderId) => orderId === order.orderId).length, 1);
   assert.equal(adminResult.order.items[0].passwordCorrectionStaffNote, "请确认密码可正常登录");
   assert.equal(Object.hasOwn(adminResult.order.items[0], "passwordCorrectionTokenHash"), false);
   const abnormalResponse = await adminOrdersRoute.GET(new Request(
@@ -330,10 +342,9 @@ test("Spotify password correction updates the original order without exposing th
   const storedAfterMail = JSON.parse(lists.get("liumeiti:orders")[0]);
   storedAfterMail.items[0].passwordCorrectionTokenHash = createHash("sha256").update(token).digest("hex");
   storedAfterMail.items[0].passwordCorrectionExpiresAt = new Date(Date.now() + 60_000).toISOString();
-  // 生产中 setOrderAt 会同时维护 record + legacy 两个副本,且迁移保证订单在主索引里;测试镜像这一一致性。
+  // Keep a stale legacy copy to verify the indexed record remains authoritative.
   lists.set("liumeiti:orders", [JSON.stringify(storedAfterMail)]);
   values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(storedAfterMail));
-  lists.set("liumeiti:orders:index", [order.orderId]);
 
   const getResponse = await passwordUpdateRoute.GET(
     new Request(`https://www.liumeiti.vip/api/order-password-update/${order.orderId}`, { headers: { Authorization: `Bearer ${token}` } }),
@@ -388,6 +399,10 @@ test("Spotify password correction updates the original order without exposing th
   assert.equal(finalOrder.contact, "updated-contact");
   assert.equal(finalOrder.remark, "updated-note");
   assert.equal(finalOrder.items[0].customerPasswordUpdateCount, 1);
+  const mergedOrders = await utils.getAllOrders();
+  assert.equal(mergedOrders.find((item) => item.orderId === order.orderId)?.items?.[0]?.password, "correct-password");
+  assert.equal(JSON.parse(lists.get("liumeiti:orders")[0]).items[0].password, "old-password");
+  assert.equal((lists.get("liumeiti:orders:index") || []).filter((orderId) => orderId === order.orderId).length, 1);
   const unauthenticatedDetail = await adminOrderRoute.GET(
     new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`),
     { params: Promise.resolve({ orderId: order.orderId }) },
