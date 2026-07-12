@@ -334,9 +334,26 @@ test("Spotify password correction updates the original order without exposing th
     siteDomain: "www.liumeiti.vip",
     staffNote: "请确认密码可正常登录",
   });
-  assert.match(emailPreview.text, /Spotify 密码无法通过验证/);
+  assert.match(emailPreview.text, /Spotify 密码错误/);
+  assert.doesNotMatch(emailPreview.text, /无法通过验证/);
+  assert.match(emailPreview.text, /点击下方按钮前往安全表单/);
   assert.match(emailPreview.html, /请确认密码可正常登录/);
-  assert.match(emailPreview.html, /更新订单资料/);
+  assert.match(emailPreview.html, /提交新的 Spotify 密码/);
+  assert.match(emailPreview.html, /忘记 Spotify 密码？点击去找回/);
+  assert.match(emailPreview.html, /https:\/\/accounts\.spotify\.com\/en\/password-reset/);
+
+  const englishEmailPreview = passwordUpdateEmail.buildSpotifyPasswordErrorEmail({
+    order: { ...order, locale: "en" },
+    item: order.items[0],
+    updateUrl: "https://www.liumeiti.vip/order-update/spotify/test#token=token",
+    brandName: "Maoyang Taiwan Inc.",
+    siteDomain: "www.liumeiti.vip",
+  });
+  assert.match(englishEmailPreview.text, /password submitted with this order is incorrect/i);
+  assert.doesNotMatch(englishEmailPreview.text, /couldn't verify/i);
+  assert.match(englishEmailPreview.html, /Submit new Spotify password/);
+  assert.match(englishEmailPreview.html, /Forgot your Spotify password\? Reset it on Spotify/);
+  assert.match(englishEmailPreview.html, /https:\/\/accounts\.spotify\.com\/en\/password-reset/);
 
   const token = "known-password-correction-token";
   const storedAfterMail = JSON.parse(lists.get("liumeiti:orders")[0]);

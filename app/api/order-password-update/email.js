@@ -15,14 +15,22 @@ export function buildSpotifyPasswordErrorEmail({ order, item, updateUrl, brandNa
   const safeAccount = escapeHtml(item?.account || "");
   const safeUrl = escapeHtml(updateUrl);
   const safeStaffNote = escapeHtml(staffNote);
+  const resetUrl = "https://accounts.spotify.com/en/password-reset";
+  const safeResetUrl = escapeHtml(resetUrl);
   const subject = en
-    ? `Update the Spotify password for order ${order.orderId} · ${brandName}`
-    : `请更新 Spotify 登录密码 · 订单 ${order.orderId} · ${brandName}`;
-  const title = en ? "Update your Spotify password" : "请更新 Spotify 登录密码";
+    ? `Incorrect Spotify password · Order ${order.orderId} · ${brandName}`
+    : `Spotify 密码错误，请重新提交 · 订单 ${order.orderId} · ${brandName}`;
+  const title = en ? "Incorrect Spotify password" : "Spotify 密码错误，请重新提交";
   const message = en
-    ? "We couldn't verify the Spotify password you provided. Submit the correct password so we can continue processing your order."
-    : "您填写的 Spotify 密码无法通过验证，请重新提交正确密码，以便我们继续处理订单。";
-  const button = en ? "Update order details" : "更新订单资料";
+    ? "The Spotify password submitted with this order is incorrect. Please submit a new, correct password so we can continue processing your order."
+    : "您为此订单填写的 Spotify 密码错误。请重新提交新的准确密码，以便我们继续处理订单。";
+  const actionHint = en
+    ? "Click the button below to open the secure form and submit the new password."
+    : "点击下方按钮前往安全表单，填写并提交新密码。";
+  const button = en ? "Submit new Spotify password" : "提交新的 Spotify 密码";
+  const resetPrompt = en
+    ? "Forgot your Spotify password? Reset it on Spotify"
+    : "忘记 Spotify 密码？点击去找回";
   const accountLabel = en ? "Spotify account" : "Spotify 账号";
   const orderLabel = en ? "Order" : "订单号";
   const note = en
@@ -35,7 +43,9 @@ export function buildSpotifyPasswordErrorEmail({ order, item, updateUrl, brandNa
     `${orderLabel}: ${order.orderId}`,
     safeAccount ? `${accountLabel}: ${item.account}` : "",
     staffNote ? `${en ? "Support note" : "客服说明"}: ${staffNote}` : "",
+    actionHint,
     `${button}: ${updateUrl}`,
+    `${resetPrompt}: ${resetUrl}`,
     note,
   ].filter(Boolean).join("\n");
 
@@ -58,7 +68,9 @@ export function buildSpotifyPasswordErrorEmail({ order, item, updateUrl, brandNa
         </td></tr>
         ${safeStaffNote ? `<tr><td style="padding:14px 28px 0;color:#435b58;font-size:13px;line-height:1.7;"><strong style="color:#193c38;">${en ? "Support note" : "客服说明"}</strong><br>${safeStaffNote}</td></tr>` : ""}
         <tr><td style="padding:20px 28px 10px;">
+          <p style="margin:0 0 10px;color:#667b77;font-size:12px;line-height:1.6;text-align:center;">${actionHint}</p>
           <a href="${safeUrl}" style="display:block;padding:13px 18px;border-radius:9px;background:#0f766e;color:#ffffff;text-align:center;text-decoration:none;font-size:14px;font-weight:800;">${button}</a>
+          <p style="margin:12px 0 0;text-align:center;font-size:12px;line-height:1.6;"><a href="${safeResetUrl}" target="_blank" rel="noopener noreferrer" style="color:#0f766e;text-decoration:underline;font-weight:700;">${resetPrompt}</a></p>
         </td></tr>
         <tr><td style="padding:4px 28px 26px;color:#81918e;font-size:11px;line-height:1.65;">${note}</td></tr>
       </table>
