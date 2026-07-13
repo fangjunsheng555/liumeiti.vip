@@ -2203,7 +2203,7 @@ export default function AdminPage() {
       return;
     }
     if (typeof window !== "undefined" && !window.confirm(
-      `确认将 ${emails.length} 封邮件安排在北京时间 18:30 发送？每天最多 ${MARKETING_DAILY_SCHEDULE_LIMIT} 封，预计 ${dailyGroups.length} 个傍晚完成。`,
+      `确认将 ${emails.length} 封邮件加入北京时间 18:30 发送队列？每天最多 ${MARKETING_DAILY_SCHEDULE_LIMIT} 封，预计 ${dailyGroups.length} 个傍晚完成。邮件只会在对应日期提交，不会提前占用 Resend 额度。`,
     )) return;
 
     const campaignId = `MC${Date.now().toString(36).toUpperCase()}`;
@@ -2249,7 +2249,7 @@ export default function AdminPage() {
         type: failedTotal ? "error" : "success",
         message: failedTotal
           ? `已安排 ${scheduledTotal} 封，${failedTotal} 封排期失败，请在邮件投递中核对。`
-          : `已安排 ${scheduledTotal} 封，将从最近一个北京时间 18:30 起分 ${dailyGroups.length} 天发送。`,
+          : `已安排 ${scheduledTotal} 封，将从最近一个北京时间 18:30 起分 ${dailyGroups.length} 天发送；未来批次不会提前占用 Resend 额度。`,
       });
       await loadMailLogs();
     } catch (e) {

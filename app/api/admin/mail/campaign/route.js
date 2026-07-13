@@ -1,14 +1,12 @@
-import { createHash } from "node:crypto";
 import {
   adminActorFromSession,
   adminPermissionProfile,
   adminSessionFromRequest,
   clean,
   pushAdminActionLog,
-  pushAdminMailLog,
-  sendSimpleEmail,
   validEmail,
 } from "../../../_utils.js";
+import { enqueueMarketingCampaign } from "../../../_marketing-campaign-queue.js";
 import { getSettings } from "../../../_settings.js";
 import { buildMarketingArgs } from "../marketing-data.js";
 import {
@@ -29,11 +27,6 @@ function recipientsFrom(value) {
 
 function safeCampaignId(value) {
   return clean(value, 80).replace(/[^A-Za-z0-9_-]/g, "");
-}
-
-function recipientKey(campaignId, email, scheduledAt) {
-  const digest = createHash("sha256").update(`${campaignId}:${email}:${scheduledAt}`).digest("hex").slice(0, 32);
-  return `campaign/${campaignId}/${digest}`;
 }
 
 function cleanHtml(value) {
@@ -97,54 +90,33 @@ export async function POST(request) {
   const html = customHtml || buildMarketingMailHtml(marketingArgs);
   const text = customHtml ? (htmlToText(customHtml) || buildMarketingMailText(marketingArgs)) : buildMarketingMailText(marketingArgs);
   const actor = adminActorFromSession(session);
-  const results = [];
-
-  for (let index = 0; index < recipients.length; index += 1) {
-    const to = recipients[index];
-    const result = await sendSimpleEmail({
-      to,
-      subject,
-      html,
-      text,
-      fromName: brandName,
-      marketing: true,
-      category: "marketing",
-      relatedType: "scheduled_campaign",
-      relatedId: campaignId,
-      scheduledAt,
-      idempotencyKey: recipientKey(campaignId, to, scheduledAt),
-      support: settings.support,
-    });
-    const reason = result?.ok ? "" : clean(result?.reason || result?.error || result?.code || "schedule_failed", 180);
-    await pushAdminMailLog({
-      to,
-      subject,
-      content: `${MARKETING_MAIL_PREVIEW}（计划发送：${scheduledAt}）`,
-      preview: MARKETING_MAIL_PREVIEW,
-      ok: Boolean(result?.ok),
-      reason,
-      messageId: result?.messageId || "",
-      scheduledAt,
-      staffId: actor.staffId,
-      staffUsername: actor.staffUsername,
-    });
-    results.push({ to, ok: Boolean(result?.ok), reason, messageId: result?.messageId || "", scheduledAt });
-    if (index < recipients.length - 1) await new Promise((resolve) => setTimeout(resolve, 260));
-  }
-
-  const scheduledCount = results.filter((item) => item.ok).length;
+  const queued = await enqueueMarketingCampaign({
+    campaignId,
+    recipients,
+    scheduledAt,
+    subject,
+    html,
+    text,
+    preview: MARKETING_MAIL_PREVIEW,
+    brandName,
+    support: settings.support,
+    actor,
+  });
+  const scheduledCount = Number(queued.queuedCount || 0);
+  const failedCount = Number(queued.failedCount || (recipients.length - scheduledCount));
   await pushAdminActionLog({
     action: "marketing_campaign_schedule",
     actor,
     target: `campaign:${campaignId}`,
-    detail: { campaignId, scheduledAt, requested: recipients.length, scheduledCount, failedCount: recipients.length - scheduledCount },
+    detail: { campaignId, scheduledAt, requested: recipients.length, scheduledCount, failedCount, queue: true },
   });
   return Response.json({
-    ok: scheduledCount === recipients.length,
+    ok: queued.ok && scheduledCount === recipients.length,
     campaignId,
     scheduledAt,
     scheduledCount,
-    failedCount: recipients.length - scheduledCount,
-    results,
+    failedCount,
+    queued: true,
+    results: queued.results || [],
   }, { status: scheduledCount ? 200 : 502 });
 }

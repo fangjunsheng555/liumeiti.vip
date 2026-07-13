@@ -64,11 +64,17 @@ async function orderSlaTick() {
   await scanOverdueOrderSla({ limit: 30 });
 }
 
+async function marketingCampaignTick() {
+  const { dispatchDueMarketingCampaigns } = await import("./_marketing-campaign-queue.js");
+  await dispatchDueMarketingCampaigns({ limit: 40 });
+}
+
 export async function runMaintenanceTick() {
   if (!redisConfig()) return;
   try { await quoteExpiryTick(); } catch (e) {}
   try { await usdtTick(); } catch (e) {}
   try { await renewalTick(); } catch (e) {}
   try { await orderSlaTick(); } catch (e) {}
+  try { await marketingCampaignTick(); } catch (e) {}
   try { await weeklyBackupTick(); } catch (e) {}
 }

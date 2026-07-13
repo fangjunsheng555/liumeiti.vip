@@ -1529,10 +1529,12 @@ export async function sendSimpleEmail(args) {
     }
   }
   const trackingTasks = [];
-  try {
-    const { registerEmailDelivery } = await import("./_mail-delivery.js");
-    trackingTasks.push(registerEmailDelivery({ args: prepared, result }));
-  } catch (e) {}
+  if (!args?.skipDeliveryTracking) {
+    try {
+      const { registerEmailDelivery } = await import("./_mail-delivery.js");
+      trackingTasks.push(registerEmailDelivery({ args: prepared, result }));
+    } catch (e) {}
+  }
   try {
     const { recordHealthStatus } = await import("./_health.js");
     trackingTasks.push(recordHealthStatus("resend", {

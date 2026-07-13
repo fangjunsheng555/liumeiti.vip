@@ -187,7 +187,8 @@ export async function registerEmailDelivery({ args = {}, result = {} } = {}) {
   const messageId = canonicalMessageId(result?.messageId);
   const existing = messageId ? await getRecordByMessageId(messageId) : null;
   const recipients = normalizeRecipients(args.to);
-  const status = result?.ok ? (result?.scheduled ? "scheduled" : "sent") : "failed";
+  const requestedStatus = DELIVERY_STATUSES.includes(result?.status) ? result.status : "";
+  const status = requestedStatus || (result?.ok ? (result?.scheduled ? "scheduled" : "sent") : "failed");
   const fallbackError = clean(result?.fallbackError || "", 260);
   const sendError = clean(result?.error || result?.reason || "send_failed", 260);
   const failureReason = result?.fallbackAttempted && fallbackError
@@ -211,7 +212,7 @@ export async function registerEmailDelivery({ args = {}, result = {} } = {}) {
     category: normalizedCategory(args.category || existing?.category, args.marketing),
     relatedType: clean(args.relatedType || existing?.relatedType || "", 40),
     relatedId: clean(args.relatedId || existing?.relatedId || "", 120),
-    status: nextStatus(existing?.status, status),
+    status: result?.forceStatus ? status : nextStatus(existing?.status, status),
     reason: result?.ok ? (existing?.reason || "") : failureReason,
     attempt: Number(result?.attempt || 1),
     events: Array.isArray(existing?.events) ? existing.events.slice(-MAX_EVENTS) : [],

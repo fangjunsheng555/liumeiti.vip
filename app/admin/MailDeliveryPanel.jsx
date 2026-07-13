@@ -56,6 +56,7 @@ function providerLabel(record) {
   if (record?.fallbackAttempted) return "Resend → SMTP2GO";
   if (record?.fallback || record?.provider === "smtp2go") return "SMTP2GO 备用";
   if (record?.provider === "smtp") return "SMTP";
+  if (record?.provider === "queue") return "站内排期";
   return "Resend";
 }
 
