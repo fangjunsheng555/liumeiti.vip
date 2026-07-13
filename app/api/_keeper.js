@@ -11,6 +11,8 @@ const RENEWAL_TICK_LOCK = "lm:keeper:renewal-tick";
 const RENEWAL_TICK_INTERVAL_SEC = 6 * 60 * 60; // 到期提醒扫描至多每 6 小时一次
 const QUOTE_EXPIRY_TICK_LOCK = "lm:keeper:quote-expiry-tick";
 const QUOTE_EXPIRY_TICK_INTERVAL_SEC = 60;
+const ORDER_SLA_TICK_LOCK = "lm:keeper:order-sla-tick";
+const ORDER_SLA_TICK_INTERVAL_SEC = 5 * 60;
 
 async function quoteExpiryTick() {
   const acquired = await redisCmd(["SET", QUOTE_EXPIRY_TICK_LOCK, "1", "NX", "EX", String(QUOTE_EXPIRY_TICK_INTERVAL_SEC)]);
@@ -55,10 +57,18 @@ async function weeklyBackupTick() {
   await runWeeklyTelegramBackup();
 }
 
+async function orderSlaTick() {
+  const acquired = await redisCmd(["SET", ORDER_SLA_TICK_LOCK, "1", "NX", "EX", String(ORDER_SLA_TICK_INTERVAL_SEC)]);
+  if (acquired !== "OK") return;
+  const { scanOverdueOrderSla } = await import("./_order-sla.js");
+  await scanOverdueOrderSla({ limit: 30 });
+}
+
 export async function runMaintenanceTick() {
   if (!redisConfig()) return;
   try { await quoteExpiryTick(); } catch (e) {}
   try { await usdtTick(); } catch (e) {}
   try { await renewalTick(); } catch (e) {}
+  try { await orderSlaTick(); } catch (e) {}
   try { await weeklyBackupTick(); } catch (e) {}
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, MailCheck, RefreshCw, Search, X } from "lucide-react";
 
 const STATUS = {
+  scheduled: { label: "已排期", tone: "neutral" },
   sent: { label: "已发送", tone: "neutral" },
   delivered: { label: "已送达", tone: "ok" },
   delayed: { label: "延迟", tone: "warn" },
@@ -83,7 +84,7 @@ export default function MailDeliveryPanel() {
       <div className="admin-status-strip" aria-label="邮件投递概览">
         <span><b>{records.length}</b>当前结果</span>
         <span className="ok"><b>{Number(counts.delivered || 0)}</b>已送达</span>
-        <span><b>{Number(counts.sent || 0)}</b>已发送</span>
+        <span><b>{Number(counts.sent || 0)}</b>已发送 · {Number(counts.scheduled || 0)} 排期</span>
         <span className={problemCount ? "error" : ""}><b>{problemCount}</b>异常</span>
       </div>
 
@@ -127,6 +128,7 @@ export default function MailDeliveryPanel() {
               <div><dt>关联记录</dt><dd>{selected.relatedId || "--"}</dd></div>
               <div><dt>Resend ID</dt><dd className="mono">{selected.messageId || "--"}</dd></div>
               <div><dt>当前状态</dt><dd><span className={`admin-state-label ${statusMeta(selected.status).tone}`}>{statusMeta(selected.status).label}</span></dd></div>
+              {selected.scheduledAtBeijing ? <div><dt>计划发送</dt><dd>{selected.scheduledAtBeijing}</dd></div> : null}
               {selected.reason ? <div><dt>原因</dt><dd className="error-text">{selected.reason}</dd></div> : null}
             </dl>
             <section className="admin-event-timeline">

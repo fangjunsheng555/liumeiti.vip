@@ -6940,7 +6940,7 @@ summary:focus-visible {
 .admin-filter-btn {
   flex: 1; padding: 8px 10px; border-radius: 10px;
   background: #fff; border: 1px solid var(--line);
-  color: var(--muted); font-size: 12.5px; font-weight: 700; cursor: pointer;
+  color: var(--muted); font-size: 12.5px; font-weight: 700; cursor: pointer; white-space: nowrap;
 }
 .admin-filter-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 .admin-filter-btn.danger { color: #b91c1c; border-color: rgba(239, 68, 68, 0.28); }
@@ -7024,6 +7024,23 @@ summary:focus-visible {
 .admin-order-paid { font-size: 14px; font-weight: 900; color: #134e4a; letter-spacing: -.01em; }
 .admin-order-time { font-size: 11px; color: var(--muted); }
 .admin-order-email { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.admin-order-ownership {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #64748b;
+  font-size: 10px;
+  line-height: 1.35;
+  font-weight: 750;
+}
+.admin-order-ownership span { white-space: nowrap; }
+.admin-order-ownership .assigned { color: #155e75; }
+.admin-order-ownership .unassigned { color: #94a3b8; }
+.admin-order-ownership .on-time::before,
+.admin-order-ownership .overdue::before { content: "·"; margin-right: 8px; color: #cbd5e1; }
+.admin-order-ownership .on-time { color: #047857; }
+.admin-order-ownership .overdue { color: #c2410c; }
 
 .admin-modal-mask {
   position: fixed; inset: 0; z-index: 60;
@@ -7064,6 +7081,33 @@ summary:focus-visible {
   background: #f1f5f9; border: none; color: #475569; cursor: pointer;
 }
 .admin-modal-body { overflow-y: auto; padding: 14px 16px 18px; display: grid; gap: 14px; }
+.admin-order-assignment-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+.admin-order-assignment-bar > div:first-child { display: flex; align-items: baseline; gap: 7px; min-width: 0; flex-wrap: wrap; }
+.admin-order-assignment-bar span { color: var(--muted); font-size: 10.5px; font-weight: 800; }
+.admin-order-assignment-bar b { color: var(--primary); font-size: 12px; font-weight: 900; }
+.admin-order-assignment-bar em { color: #047857; font-size: 10px; font-style: normal; font-weight: 750; }
+.admin-order-assignment-bar em.overdue { color: #c2410c; }
+.admin-order-assignment-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.admin-order-assignment-actions button,
+.admin-order-assignment-actions select {
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 800;
+}
+.admin-order-assignment-actions button { padding: 0 10px; color: #0f766e; cursor: pointer; }
+.admin-order-assignment-actions select { min-width: 124px; max-width: 170px; padding: 0 26px 0 9px; }
+.admin-order-assignment-actions :disabled { opacity: .55; cursor: not-allowed; }
 .admin-modal-section h3 { font-size: 13px; font-weight: 800; color: var(--primary); margin-bottom: 8px; letter-spacing: -.01em; }
 .admin-summary-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
@@ -12940,6 +12984,10 @@ summary:focus-visible {
   .admin-filter-btn { padding: 7px 8px; font-size: 11.5px; }
   .admin-modal { max-height: calc(100dvh - 10px); border-radius: 14px 14px 0 0; }
   .admin-modal-head { padding: 10px 12px; }
+  .admin-order-assignment-bar { align-items: stretch; flex-direction: column; gap: 8px; }
+  .admin-order-assignment-actions { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); width: 100%; }
+  .admin-order-assignment-actions button,
+  .admin-order-assignment-actions select { width: 100%; max-width: none; min-width: 0; }
   .admin-modal-id { font-size: 13px; }
   .admin-summary-grid,
   .admin-withdraw-info-grid { gap: 5px; }
@@ -13171,6 +13219,15 @@ summary:focus-visible {
     backdrop-filter: blur(16px);
     box-shadow: 0 8px 18px rgba(15, 23, 42, 0.045);
   }
+  .admin-filter {
+    width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  .admin-filter::-webkit-scrollbar { display: none; }
+  .admin-filter .admin-filter-btn { flex: 0 0 auto; min-height: 34px; }
 }
 
 /* After-sales entry and customer ticket sheet */

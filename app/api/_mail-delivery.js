@@ -9,7 +9,7 @@ const MAX_RECORDS = 2000;
 const MAX_EVENTS = 24;
 const EVENT_TTL_SECONDS = 180 * 24 * 60 * 60;
 
-export const DELIVERY_STATUSES = ["sent", "delivered", "delayed", "bounced", "complained", "failed", "suppressed"];
+export const DELIVERY_STATUSES = ["scheduled", "sent", "delivered", "delayed", "bounced", "complained", "failed", "suppressed"];
 
 const EVENT_STATUS = {
   "email.sent": "sent",
@@ -22,6 +22,7 @@ const EVENT_STATUS = {
 };
 
 const STATUS_PRIORITY = {
+  scheduled: 5,
   sent: 10,
   delayed: 20,
   delivered: 30,
@@ -120,7 +121,7 @@ export async function registerEmailDelivery({ args = {}, result = {} } = {}) {
   const messageId = clean(result?.messageId, 180);
   const existing = messageId ? await getRecordByMessageId(messageId) : null;
   const recipients = normalizeRecipients(args.to);
-  const status = result?.ok ? "sent" : "failed";
+  const status = result?.ok ? (result?.scheduled ? "scheduled" : "sent") : "failed";
   const record = {
     ...(existing || {}),
     id: existing?.id || makeDeliveryId(),
@@ -140,6 +141,10 @@ export async function registerEmailDelivery({ args = {}, result = {} } = {}) {
     createdAtBeijing: existing?.createdAtBeijing || formatBeijingTime(now),
     updatedAt: now.toISOString(),
     updatedAtBeijing: formatBeijingTime(now),
+    scheduledAt: clean(result?.scheduledAt || args?.scheduledAt || existing?.scheduledAt || "", 80),
+    scheduledAtBeijing: result?.scheduledAt || args?.scheduledAt
+      ? formatBeijingTime(result?.scheduledAt || args?.scheduledAt)
+      : (existing?.scheduledAtBeijing || ""),
   };
   return (await persistRecord(record)) ? record : null;
 }

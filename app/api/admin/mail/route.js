@@ -12,34 +12,7 @@ import {
   buildMarketingMailHtml,
   buildMarketingMailText,
 } from "./marketing-template.js";
-
-// 营销邮件的服务清单:价格取合并目录(后台改价即时同步),客服取站点设置。
-async function buildMarketingArgs(brandName, siteDomain, siteUrl) {
-  const origin = String(siteUrl || "https://www.liumeiti.vip").replace(/\/$/, "");
-  const base = { brandName, siteDomain, siteUrl };
-  try {
-    const [{ getMergedCatalog }, { getSettings }] = await Promise.all([
-      import("../../_catalog.js"),
-      import("../../_settings.js"),
-    ]);
-    const [catalog, settings] = await Promise.all([getMergedCatalog(), getSettings()]);
-    const byKey = {};
-    for (const p of catalog) byKey[p.key] = p;
-    const priceOf = (key, fb) => (byKey[key] && byKey[key].active !== false && byKey[key].priceText) || fb;
-    const parseYuan = (t) => { const m = String(t || "").match(/¥\s*(\d+)/); return m ? Number(m[1]) : Infinity; };
-    const streamMin = Math.min(parseYuan(priceOf("netflix")), parseYuan(priceOf("disney")), parseYuan(priceOf("max")));
-    const streamPrice = Number.isFinite(streamMin) ? `¥${streamMin}/年起` : "¥108/年起";
-    const products = [
-      { name: "Spotify", subtitle: "欧美日高价区多规格订阅", price: priceOf("spotify", "¥128/年起"), href: origin + "/services/spotify", icon: "spotify.jpg" },
-      { name: "4K 影音会员", subtitle: "Netflix · Disney+ · HBO Max", price: streamPrice, href: origin + "/shop", icon: "streaming-4k-edm-v2.jpg" },
-      { name: "AI 会员", subtitle: "ChatGPT · Claude 官方会员", price: priceOf("ai", "¥198/三个月起"), href: origin + "/services/ai", icon: "ai.jpg" },
-      { name: "机场节点", subtitle: "稳定高速科学上网节点", price: priceOf("rocket", "¥128/年起"), href: origin + "/services/airport-node", icon: "rocket.jpg" },
-    ].filter((p) => p.name !== "4K 影音会员" || streamMin !== Infinity || true);
-    return { ...base, products, support: settings.support };
-  } catch (e) {
-    return base;
-  }
-}
+import { buildMarketingArgs } from "./marketing-data.js";
 
 function cleanMailBody(value) {
   return String(value || "")

@@ -4,8 +4,10 @@ import {
   adminSessionFromRequest,
   isRootAdminSession,
   adminPermissionProfile,
+  listAssignableAdminStaff,
 } from "../../_utils.js";
 import { hasPendingSpotifyPasswordCorrection } from "../../../lib/order-attention.js";
+import { getOrderSla } from "../../../lib/order-sla.js";
 import { effectiveQuoteStatus } from "../../_quote-expiry.js";
 
 function subscriptionLinks(username) {
@@ -16,25 +18,14 @@ function subscriptionLinks(username) {
   };
 }
 
-function minutesSince(value) {
-  const time = new Date(value || "").getTime();
-  if (!Number.isFinite(time)) return 0;
-  return Math.max(0, Math.floor((Date.now() - time) / 60000));
-}
-
 function abnormalInfo(order, status = effectiveQuoteStatus(order)) {
   if (status === "invalid") return { abnormal: true, reason: "已标记无效", level: "danger" };
   if (status === "quote_expired") return { abnormal: true, reason: "报价已失效，等待重新报价", level: "warn" };
   if (hasPendingSpotifyPasswordCorrection(order)) {
     return { abnormal: true, reason: "Spotify 登录资料待用户更新", level: "warn" };
   }
-  if (status !== "received") return { abnormal: false, reason: "", level: "" };
-  const age = minutesSince(order.createdAt);
-  const paymentMethod = order.paymentMethod || "alipay";
-  if ((paymentMethod === "redeem" || paymentMethod === "balance") && age >= 15) {
-    return { abnormal: true, reason: `免支付订单待处理 ${age} 分钟`, level: "warn" };
-  }
-  if (age >= 30) return { abnormal: true, reason: `待处理 ${age} 分钟`, level: "warn" };
+  const sla = getOrderSla({ ...order, status });
+  if (sla.overdue) return { abnormal: true, reason: `已超过预计处理时间 ${sla.overdueMinutes} 分钟`, level: "warn" };
   return { abnormal: false, reason: "", level: "" };
 }
 
@@ -81,6 +72,7 @@ function normalizeOrder(order) {
     }];
   }
   const abnormal = abnormalInfo(order, status);
+  const sla = getOrderSla({ ...order, status });
   const referralEntries = Array.isArray(order.referralCommissionEntries)
     ? order.referralCommissionEntries.map((entry) => ({
       email: entry?.email || "",
@@ -171,6 +163,11 @@ function normalizeOrder(order) {
     staffNotes: order.staffNotes || "",
     staffAudit: Array.isArray(order.staffAudit) ? order.staffAudit : [],
     lastStaffId: Array.isArray(order.staffAudit) && order.staffAudit[0]?.staffId ? Number(order.staffAudit[0].staffId) : null,
+    assignedStaffId: Number(order.assignedStaffId || 0),
+    assignedStaffUsername: order.assignedStaffUsername || "",
+    assignedAt: order.assignedAt || "",
+    assignedAtBeijing: order.assignedAtBeijing || "",
+    sla,
     abnormal: abnormal.abnormal,
     abnormalReason: abnormal.reason,
     abnormalLevel: abnormal.level,
@@ -204,6 +201,8 @@ export async function GET(request) {
   const format = String(url.searchParams.get("format") || "").trim();
   const offset = Math.max(0, Number(url.searchParams.get("offset") || 0));
   const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 100)));
+  const permissions = adminPermissionProfile(session);
+  const assignableStaff = permissions.canEditOrders ? await listAssignableAdminStaff() : [];
 
   // 性能:无任何筛选/搜索/导出时,走快速分页(只 GET 当前页的完整订单),避免订单量大时全量拉取。
   const noFilter = !q && !status && !from && !to && format !== "csv";
@@ -217,6 +216,7 @@ export async function GET(request) {
         filteredCount: fast.total,
         offset, limit,
         hasMore: fast.hasMore,
+        assignableStaff,
         currentStaff: {
           id: Number(session.staffId || 1),
           username: session.staffUsername || "admin",
@@ -232,6 +232,8 @@ export async function GET(request) {
   let filtered = all.map(normalizeOrder);
   if (status === "abnormal") {
     filtered = filtered.filter((o) => o.abnormal);
+  } else if (status === "sla_overdue") {
+    filtered = filtered.filter((o) => o.sla?.overdue);
   } else if (["awaiting_quote", "pending_payment", "quote_expired", "received", "completed", "invalid"].includes(status)) {
     filtered = filtered.filter((o) => o.status === status);
   }
@@ -246,7 +248,7 @@ export async function GET(request) {
   if (q) {
     filtered = filtered.filter((o) => {
       const hay = [
-        o.orderId, o.email, o.contact, o.serviceLabel, o.staffNotes, o.remark, o.platformUrl, o.productPrice,
+        o.orderId, o.email, o.contact, o.serviceLabel, o.staffNotes, o.remark, o.platformUrl, o.productPrice, o.assignedStaffUsername,
         ...o.items.flatMap((i) => [i.label, i.account, i.password, i.staffAccount, i.staffPassword, i.platformUrl, i.productPrice]),
       ].join(" ").toLowerCase();
       return hay.includes(q);
@@ -272,6 +274,7 @@ export async function GET(request) {
     filteredCount: filtered.length,
     offset, limit,
     hasMore: offset + limit < filtered.length,
+    assignableStaff,
     currentStaff: {
       id: Number(session.staffId || 1),
       username: session.staffUsername || "admin",

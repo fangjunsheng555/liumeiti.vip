@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
-  getAllOrdersWithIndex, getOrderById, setOrderAt, softDeleteOrderAt,
+  getAllOrdersWithIndex, getOrderById, getOrderEntryById, setOrderAt, softDeleteOrderAt,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
   pushAdminActionLog, formatBeijingTime, clean, isRootAdminSession,
   settleOrderReferralCommission, reverseOrderReferralCommission, sendSimpleEmail, adminPermissionProfile,
   restoreStock, reserveStock, refundVoidedOrder, reclaimRefundOnReactivate, validEmail,
+  listAssignableAdminStaff, redisCmd,
 } from "../../../_utils.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
@@ -13,6 +14,7 @@ import { getSettings } from "../../../_settings.js";
 import { supportText } from "../../../../lib/settings-defaults.js";
 import { buildSpotifyPasswordErrorEmail } from "../../../order-password-update/email.js";
 import { effectiveQuoteStatus, normalizeQuoteValidDays } from "../../../_quote-expiry.js";
+import { getOrderSla } from "../../../../lib/order-sla.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
@@ -22,9 +24,11 @@ const SUPPORT_CONTACT_EN = process.env.SUPPORT_CONTACT_EN
   || ("Reach our online support via " + SUPPORT_CONTACT.replace(/^请通过\s*/, "").replace(/\s*联系在线客服\s*$/, "").trim());
 
 function orderForAdminResponse(order) {
+  const status = effectiveQuoteStatus(order);
   const response = {
     ...order,
-    status: effectiveQuoteStatus(order),
+    status,
+    sla: getOrderSla({ ...order, status }),
     items: Array.isArray(order?.items)
       ? order.items.map(({ passwordCorrectionTokenHash, ...item }) => item)
       : [],
@@ -151,6 +155,96 @@ export async function PATCH(request, { params }) {
   const { orderId } = await params;
   let body = {};
   try { body = await request.json(); } catch (e) {}
+
+  if (body.action === "claim" || body.action === "assign") {
+    const lockKey = `lm:order:assignment:${clean(orderId, 80)}`;
+    const lockToken = randomBytes(12).toString("hex");
+    const locked = await redisCmd(["SET", lockKey, lockToken, "NX", "EX", "10"]);
+    if (locked !== "OK") {
+      return Response.json({ ok: false, error: "assignment_busy" }, { status: 409 });
+    }
+    try {
+      const entry = await getOrderEntryById(orderId);
+      if (!entry?.order || entry.order.deleted) {
+        return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
+      }
+      const order = entry.order;
+      const previousStaffId = Number(order.assignedStaffId || 0);
+      const previousStaffUsername = order.assignedStaffUsername || "";
+      let target = null;
+
+      if (body.action === "claim") {
+        if (previousStaffId && previousStaffId !== actor.staffId) {
+          return Response.json({
+            ok: false,
+            error: "order_already_assigned",
+            assignment: { staffId: previousStaffId, username: previousStaffUsername },
+          }, { status: 409 });
+        }
+        target = { id: actor.staffId, username: actor.staffUsername };
+      } else {
+        const targetId = Number(body.assignedStaffId || 0);
+        if (targetId > 0) {
+          const staff = await listAssignableAdminStaff();
+          target = staff.find((item) => Number(item.id) === targetId) || null;
+          if (!target) return Response.json({ ok: false, error: "staff_not_assignable" }, { status: 400 });
+        }
+      }
+
+      const now = new Date();
+      order.assignedStaffId = Number(target?.id || 0);
+      order.assignedStaffUsername = target?.username || "";
+      order.assignedAt = target ? now.toISOString() : "";
+      order.assignedAtBeijing = target ? formatBeijingTime(now) : "";
+      order.assignedByStaffId = actor.staffId;
+      order.assignedByStaffUsername = actor.staffUsername;
+      if (previousStaffId !== Number(target?.id || 0)) {
+        order.slaReminderKey = "";
+        order.slaReminderSentAt = "";
+        order.slaReminderSentAtBeijing = "";
+      }
+      order.staffAudit = Array.isArray(order.staffAudit) ? order.staffAudit : [];
+      order.staffAudit.unshift({
+        id: "OA" + Date.now().toString(36).toUpperCase(),
+        staffId: actor.staffId,
+        staffUsername: actor.staffUsername,
+        label: adminActorLabel(actor),
+        action: target ? (body.action === "claim" ? "claim" : "assign") : "unassign",
+        assignedStaffId: Number(target?.id || 0),
+        assignedStaffUsername: target?.username || "",
+        status: order.status,
+        createdAt: now.toISOString(),
+        createdAtBeijing: formatBeijingTime(now),
+      });
+      order.staffAudit = order.staffAudit.slice(0, 30);
+
+      const saved = await setOrderAt(entry.index, order);
+      if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
+      await pushAdminActionLog({
+        action: target ? (body.action === "claim" ? "order_claim" : "order_assign") : "order_unassign",
+        actor,
+        target: "order:" + orderId,
+        detail: {
+          previousStaffId,
+          assignedStaffId: Number(target?.id || 0),
+          assignedStaffUsername: target?.username || "",
+        },
+      });
+      return Response.json({
+        ok: true,
+        order: orderForAdminResponse(order),
+        assignment: {
+          staffId: Number(order.assignedStaffId || 0),
+          username: order.assignedStaffUsername || "",
+          assignedAt: order.assignedAt || "",
+          assignedAtBeijing: order.assignedAtBeijing || "",
+        },
+      });
+    } finally {
+      const currentToken = await redisCmd(["GET", lockKey]);
+      if (currentToken === lockToken) await redisCmd(["DEL", lockKey]);
+    }
+  }
 
   const ALLOWED_STATUS = ["awaiting_quote", "pending_payment", "quote_expired", "received", "completed", "invalid"];
   let newStatus = ALLOWED_STATUS.includes(body.status) ? body.status : null;

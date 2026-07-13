@@ -51,10 +51,12 @@ const WITHDRAWAL_STATUS = [
   ["success", "提现成功"],
   ["failed", "审核失败"],
 ];
-const MARKETING_MAIL_TEMPLATE_ID = "membership_edm_v4";
-const MARKETING_MAIL_SUBJECT = "常用会员服务，立即下单开通";
-const MARKETING_MAIL_PREVIEW = "Spotify、4K 影音、AI 会员与机场节点，明码标价，付款后开通。";
+const MARKETING_MAIL_TEMPLATE_ID = "service_selection_edm_v5";
+const MARKETING_MAIL_SUBJECT = "Spotify 与机场节点｜本期服务精选";
+const MARKETING_MAIL_PREVIEW = "高价区 Spotify、多档流量节点，AI 与 4K 影音服务一并可选。";
 const MAIL_BATCH_LIMIT = 20;
+const MARKETING_DAILY_SCHEDULE_LIMIT = 40;
+const MARKETING_SCHEDULE_REQUEST_LIMIT = 5;
 
 function copyText(text) {
   if (typeof window === "undefined") return;
@@ -79,6 +81,21 @@ function normalizeEmailList(values) {
 
 function extractEmailsFromText(value) {
   return String(value || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+}
+
+function nextBeijingEveningSlots(count) {
+  const slots = [];
+  const now = Date.now();
+  const beijingNow = new Date(now + 8 * 60 * 60 * 1000);
+  const year = beijingNow.getUTCFullYear();
+  const month = beijingNow.getUTCMonth();
+  const day = beijingNow.getUTCDate();
+  for (let offset = 0; slots.length < count && offset < 30; offset += 1) {
+    const scheduledMs = Date.UTC(year, month, day + offset, 10, 30, 0); // 18:30 Beijing = 10:30 UTC
+    if (scheduledMs < now + 10 * 60 * 1000) continue;
+    slots.push(new Date(scheduledMs).toISOString());
+  }
+  return slots;
 }
 
 function referralCommissionTotal(order) {
@@ -1151,6 +1168,8 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(false);
   const [ordersLoadingMore, setOrdersLoadingMore] = useState(false);
   const [ordersMeta, setOrdersMeta] = useState({ filteredCount: 0, total: 0, hasMore: false });
+  const [assignableStaff, setAssignableStaff] = useState([]);
+  const [assignmentBusy, setAssignmentBusy] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
@@ -1261,6 +1280,7 @@ export default function AdminPage() {
   const [mailLogType, setMailLogType] = useState("customer");
   const [mailRecipientBusy, setMailRecipientBusy] = useState(false);
   const [mailBatchProgress, setMailBatchProgress] = useState(null);
+  const [mailScheduleBusy, setMailScheduleBusy] = useState(false);
   const [mailMarketingHtml, setMailMarketingHtml] = useState("");
   const [mailMarketingLoading, setMailMarketingLoading] = useState(false);
   const [mailRecipientPool, setMailRecipientPool] = useState({ emails: [], registered: 0, orders: 0, label: "" });
@@ -2163,6 +2183,84 @@ export default function AdminPage() {
     }
   }
 
+  async function scheduleMarketingMailForEvenings() {
+    if (mailBusy || mailRecipientBusy) return;
+    if (mailMode !== "marketing") applyMailComposerMode("marketing");
+    if (!mailMarketingHtml.trim()) {
+      setMailResult({ type: "error", message: "请先等待营销邮件模板加载完成" });
+      return;
+    }
+    const manualEmails = normalizeEmailList(extractEmailsFromText(mailForm.to));
+    const emails = manualEmails.length ? manualEmails : normalizeEmailList(mailRecipientPool.emails || []);
+    if (!emails.length) {
+      setMailResult({ type: "error", message: "请填写收件邮箱，或先读取现有用户邮箱" });
+      return;
+    }
+    const dailyGroups = splitIntoBatches(emails, MARKETING_DAILY_SCHEDULE_LIMIT);
+    const slots = nextBeijingEveningSlots(dailyGroups.length);
+    if (slots.length !== dailyGroups.length) {
+      setMailResult({ type: "error", message: "排期超出可用日期范围，请减少收件邮箱后重试" });
+      return;
+    }
+    if (typeof window !== "undefined" && !window.confirm(
+      `确认将 ${emails.length} 封邮件安排在北京时间 18:30 发送？每天最多 ${MARKETING_DAILY_SCHEDULE_LIMIT} 封，预计 ${dailyGroups.length} 个傍晚完成。`,
+    )) return;
+
+    const campaignId = `MC${Date.now().toString(36).toUpperCase()}`;
+    let scheduledTotal = 0;
+    let failedTotal = 0;
+    let requestDone = 0;
+    const totalRequests = dailyGroups.reduce((sum, group) => sum + Math.ceil(group.length / MARKETING_SCHEDULE_REQUEST_LIMIT), 0);
+    setMailBusy(true);
+    setMailScheduleBusy(true);
+    setMailBatchProgress({ sent: 0, failed: 0, total: emails.length, batch: 0, batches: totalRequests, day: 0, days: dailyGroups.length });
+    try {
+      for (let dayIndex = 0; dayIndex < dailyGroups.length; dayIndex += 1) {
+        const requestGroups = splitIntoBatches(dailyGroups[dayIndex], MARKETING_SCHEDULE_REQUEST_LIMIT);
+        for (const recipients of requestGroups) {
+          const response = await fetch("/api/admin/mail/campaign", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              campaignId,
+              recipients,
+              scheduledAt: slots[dayIndex],
+              subject: mailForm.subject || MARKETING_MAIL_SUBJECT,
+              html: mailMarketingHtml,
+            }),
+          });
+          const data = await response.json();
+          scheduledTotal += Number(data.scheduledCount || 0);
+          failedTotal += Number(data.failedCount ?? (response.ok ? 0 : recipients.length));
+          requestDone += 1;
+          setMailBatchProgress({
+            sent: scheduledTotal,
+            failed: failedTotal,
+            total: emails.length,
+            batch: requestDone,
+            batches: totalRequests,
+            day: dayIndex + 1,
+            days: dailyGroups.length,
+          });
+        }
+      }
+      setMailResult({
+        type: failedTotal ? "error" : "success",
+        message: failedTotal
+          ? `已安排 ${scheduledTotal} 封，${failedTotal} 封排期失败，请在邮件投递中核对。`
+          : `已安排 ${scheduledTotal} 封，将从最近一个北京时间 18:30 起分 ${dailyGroups.length} 天发送。`,
+      });
+      await loadMailLogs();
+    } catch (e) {
+      setMailResult({ type: "error", message: `排期中断：已安排 ${scheduledTotal} 封，请在邮件投递中核对后重试剩余邮箱。` });
+      await loadMailLogs();
+    } finally {
+      setMailScheduleBusy(false);
+      setMailBusy(false);
+    }
+  }
+
   // ── 客服发信快捷模板 ──
   async function saveMailTemplate() {
     if (mailTplBusy) return;
@@ -2776,6 +2874,7 @@ export default function AdminPage() {
       if (data.ok) {
         setOrders((prev) => (append ? [...prev, ...(data.orders || [])] : (data.orders || [])));
         setOrdersMeta({ filteredCount: Number(data.filteredCount || 0), total: Number(data.total || 0), hasMore: Boolean(data.hasMore) });
+        if (Array.isArray(data.assignableStaff)) setAssignableStaff(data.assignableStaff);
         if (data.currentStaff) applyCurrentStaff(data.currentStaff);
         setAuthed(true);
       }
@@ -3083,6 +3182,46 @@ export default function AdminPage() {
     setSaveResult(null);
     setConfirmDelete(false);
     setSpotifyPasswordMail(null);
+  }
+
+  async function updateOrderAssignment(action, assignedStaffId = 0) {
+    if (!activeOrder?.orderId || assignmentBusy) return;
+    setAssignmentBusy(true);
+    setSaveResult(null);
+    try {
+      const response = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ action, assignedStaffId }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        const message = data.error === "order_already_assigned"
+          ? `该订单已由 ${data.assignment?.username || "其他工作人员"} 负责`
+          : data.error === "assignment_busy"
+            ? "订单正在分配，请稍后重试"
+            : data.error === "staff_not_assignable"
+              ? "该工作人员当前不可分配订单"
+              : "负责人更新失败";
+        setSaveResult({ type: "error", message });
+        return;
+      }
+      const assignment = data.assignment || {};
+      const fields = {
+        assignedStaffId: Number(assignment.staffId || 0),
+        assignedStaffUsername: assignment.username || "",
+        assignedAt: assignment.assignedAt || "",
+        assignedAtBeijing: assignment.assignedAtBeijing || "",
+      };
+      setActiveOrder((current) => current ? { ...current, ...fields } : current);
+      setOrders((current) => current.map((order) => order.orderId === activeOrder.orderId ? { ...order, ...fields } : order));
+      setSaveResult({ type: "success", message: fields.assignedStaffId ? `负责人已更新为 ${fields.assignedStaffUsername}` : "已取消负责人" });
+    } catch (e) {
+      setSaveResult({ type: "error", message: "网络错误，请稍后重试" });
+    } finally {
+      setAssignmentBusy(false);
+    }
   }
 
   async function openRelatedOrder(orderId) {
@@ -4662,6 +4801,7 @@ export default function AdminPage() {
                 { v: "awaiting_quote", label: "待报价" },
                 { v: "pending_payment", label: "待付款" },
                 { v: "quote_expired", label: "报价失效" },
+                { v: "sla_overdue", label: `SLA超时${overview?.slaOverdueOrders ? ` ${overview.slaOverdueOrders}` : ""}` },
                 { v: "received", label: "未完成" },
                 { v: "completed", label: "已完成" },
                 { v: "invalid", label: "无效" },
@@ -4793,6 +4933,16 @@ export default function AdminPage() {
                     <div className="admin-order-mid">
                       <span className="admin-order-service">{o.serviceLabel}</span>
                       {o.itemCount > 1 && <span className="admin-order-count">{o.itemCount} 件</span>}
+                    </div>
+                    <div className="admin-order-ownership">
+                      <span className={o.assignedStaffId ? "assigned" : "unassigned"}>
+                        {o.assignedStaffId ? `负责人 · ${o.assignedStaffUsername}` : "尚未认领"}
+                      </span>
+                      {o.sla?.active && (
+                        <span className={o.sla.overdue ? "overdue" : "on-time"}>
+                          {o.sla.overdue ? `超时 ${o.sla.overdueMinutes} 分钟` : `剩余 ${o.sla.remainingMinutes} 分钟`}
+                        </span>
+                      )}
                     </div>
                     {tab === "abnormal" && o.abnormalReason && (
                       <div className={`admin-order-abnormal ${o.abnormalLevel || ""}`}>
@@ -4939,6 +5089,35 @@ export default function AdminPage() {
             </div>
 
             <div className="admin-modal-body">
+              <div className="admin-order-assignment-bar">
+                <div>
+                  <span>订单负责人</span>
+                  <b>{activeOrder.assignedStaffUsername || "尚未分配"}</b>
+                  {activeOrder.sla?.active && (
+                    <em className={activeOrder.sla.overdue ? "overdue" : ""}>
+                      {activeOrder.sla.overdue ? `已超时 ${activeOrder.sla.overdueMinutes} 分钟` : `预计处理剩余 ${activeOrder.sla.remainingMinutes} 分钟`}
+                    </em>
+                  )}
+                </div>
+                <div className="admin-order-assignment-actions">
+                  <button
+                    type="button"
+                    onClick={() => updateOrderAssignment("claim")}
+                    disabled={assignmentBusy || Number(activeOrder.assignedStaffId || 0) === Number(currentStaff?.id || 0)}
+                  >
+                    {Number(activeOrder.assignedStaffId || 0) === Number(currentStaff?.id || 0) ? "我已认领" : "认领此单"}
+                  </button>
+                  <select
+                    aria-label="分配订单负责人"
+                    value={String(activeOrder.assignedStaffId || 0)}
+                    onChange={(event) => updateOrderAssignment("assign", Number(event.target.value || 0))}
+                    disabled={assignmentBusy}
+                  >
+                    <option value="0">不指定负责人</option>
+                    {assignableStaff.map((staff) => <option key={staff.id} value={staff.id}>{staff.username}</option>)}
+                  </select>
+                </div>
+              </div>
               {/* Order summary */}
               <section className="admin-modal-section">
                 <h3>订单概览</h3>
@@ -5349,14 +5528,18 @@ export default function AdminPage() {
                       {mailRecipientBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Users size={12} />}
                       读取全部来源
                     </button>
-                    <button type="button" className="primary" onClick={sendMarketingMailToRegisteredUsers} disabled={mailRecipientBusy || mailBusy || (mailRecipientPool.emails || []).length === 0}>
-                      {mailBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Megaphone size={12} />}
-                      批量发送已读取
+                    <button type="button" onClick={sendMarketingMailToRegisteredUsers} disabled={mailRecipientBusy || mailBusy || (mailRecipientPool.emails || []).length === 0}>
+                      {mailBusy && !mailScheduleBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Megaphone size={12} />}
+                      立即批量发送
+                    </button>
+                    <button type="button" className="primary" onClick={scheduleMarketingMailForEvenings} disabled={mailRecipientBusy || mailBusy || (!mailForm.to.trim() && (mailRecipientPool.emails || []).length === 0)}>
+                      {mailScheduleBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Clock size={12} />}
+                      傍晚排期
                     </button>
                     <span>
                       {mailRecipientPool.emails.length
-                        ? `已读取 ${mailRecipientPool.emails.length} 个去重邮箱（注册 ${mailRecipientPool.registered} / 订单 ${mailRecipientPool.orders}），发送时每批 ${MAIL_BATCH_LIMIT} 个自动发完`
-                        : canViewUsers ? `可读取注册用户与历史订单联系邮箱，每批 ${MAIL_BATCH_LIMIT} 个自动发送` : "读取注册用户邮箱需要用户查看权限；历史订单邮箱可单独读取"}
+                        ? `已读取 ${mailRecipientPool.emails.length} 个去重邮箱（注册 ${mailRecipientPool.registered} / 订单 ${mailRecipientPool.orders}）。傍晚排期每天 40 封，保留 60 封事务邮件额度。`
+                        : canViewUsers ? "可粘贴邮箱，或读取现有用户与历史订单邮箱；傍晚排期为北京时间 18:30。" : "可粘贴邮箱或读取历史订单邮箱；傍晚排期为北京时间 18:30。"}
                     </span>
                   </div>
                 )}
@@ -5406,6 +5589,7 @@ export default function AdminPage() {
                 </div>
                 {mailBatchProgress && mailMode === "marketing" && (
                   <div className="admin-mail-progress">
+                    {mailScheduleBusy ? `排期 ${mailBatchProgress.day || 0}/${mailBatchProgress.days || 0} 天 · ` : ""}
                     已处理 {mailBatchProgress.batch}/{mailBatchProgress.batches} 批 · 成功 {mailBatchProgress.sent}/{mailBatchProgress.total} · 失败 {mailBatchProgress.failed}
                   </div>
                 )}

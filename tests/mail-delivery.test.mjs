@@ -42,6 +42,7 @@ test("Resend webhook signature rejects tampering and stale timestamps", () => {
 });
 
 test("delivery status never regresses from a terminal problem or delivery", () => {
+  assert.equal(mailDeliveryInternals.nextStatus("scheduled", "sent"), "sent");
   const { nextStatus } = mailDeliveryInternals;
   assert.equal(nextStatus("sent", "delivered"), "delivered");
   assert.equal(nextStatus("delivered", "sent"), "delivered");

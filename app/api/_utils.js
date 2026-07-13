@@ -13,7 +13,7 @@ export const ORDER_EMAIL_INDEX_PREFIX = ORDERS_KEY + ":email:";
 export const USDT_PENDING_ORDER_INDEX_KEY = ORDERS_KEY + ":usdt-pending";
 export const QUOTE_EXPIRY_ORDER_INDEX_KEY = ORDERS_KEY + ":quote-expiry";
 export const ORDER_OVERVIEW_HASH_KEY = ORDERS_KEY + ":overview";
-const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v3"; // v3: snapshot 增补 completedAt/items.cycle 等到期字段,换 key 触发一次性重建
+const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v4"; // v4: 增补负责人/SLA 字段,换 key 触发一次性重建
 const ORDER_INDEX_MIGRATION_READY_KEY = ORDER_INDEX_KEY + ":legacy-ready";
 const ORDER_INDEX_MIGRATION_LOCK_KEY = ORDER_INDEX_KEY + ":legacy-lock";
 export const USERS_KEY = "liumeiti:users";
@@ -147,12 +147,19 @@ function orderOverviewSnapshot(order) {
     serviceLabel: order.serviceLabel || "",
     quoteAmount: Number(order.quoteAmount || 0),
     quoteExpiresAt: order.quoteExpiresAt || "",
+    paymentSubmittedAt: order.paymentSubmittedAt || "",
     items,
     usdtPayAmount: Number(order.usdtPayAmount || 0),
     usdtQuoteId: order.usdtQuoteId || "",
     usdtConfirmedAt: order.usdtConfirmedAt || "",
     passwordCorrectionPending: hasPendingSpotifyPasswordCorrection(order),
     renewalReminderForExpiresAt: order.renewalReminderForExpiresAt || "",
+    assignedStaffId: Number(order.assignedStaffId || 0),
+    assignedStaffUsername: order.assignedStaffUsername || "",
+    assignedAt: order.assignedAt || "",
+    assignedAtBeijing: order.assignedAtBeijing || "",
+    slaReminderKey: order.slaReminderKey || "",
+    slaReminderSentAt: order.slaReminderSentAt || "",
   };
 }
 
@@ -1306,7 +1313,10 @@ function resendTag(value, fallback = "") {
   return clean(value || fallback, 120).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 120);
 }
 
-async function sendViaResend({ to, subject, text, html, fromName, marketing = false, category = "", relatedType = "", relatedId = "" }) {
+async function sendViaResend({
+  to, subject, text, html, fromName, marketing = false, category = "", relatedType = "", relatedId = "",
+  scheduledAt = "", idempotencyKey = "",
+}) {
   const apiKey = process.env.RESEND_API_KEY;
   const from = mailFromAddress();
   if (!apiKey || !from || !to) return { ok: false, reason: "resend_or_to_missing" };
@@ -1320,6 +1330,7 @@ async function sendViaResend({ to, subject, text, html, fromName, marketing = fa
     ...(html ? { html } : {}),
     ...(text ? { text } : {}),
     ...(headers ? { headers } : {}),
+    ...(scheduledAt ? { scheduled_at: scheduledAt } : {}),
     tags: [
       { name: "category", value: resendTag(category, marketing ? "marketing" : "transactional") },
       ...(relatedType ? [{ name: "related_type", value: resendTag(relatedType) }] : []),
@@ -1336,6 +1347,7 @@ async function sendViaResend({ to, subject, text, html, fromName, marketing = fa
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
+          ...(idempotencyKey ? { "Idempotency-Key": clean(idempotencyKey, 256) } : {}),
         },
         body: JSON.stringify(payload),
         signal: controller.signal,
@@ -1343,7 +1355,15 @@ async function sendViaResend({ to, subject, text, html, fromName, marketing = fa
       clearTimeout(timer);
       if (!res.ok) return { ok: false, error: await readEmailApiError(res), code: res.status, attempt };
       const data = await res.json();
-      return { ok: true, messageId: data?.id || "", provider: "resend", attempt };
+      return {
+        ok: true,
+        messageId: data?.id || "",
+        provider: "resend",
+        attempt,
+        scheduledAt: scheduledAt || "",
+        scheduled: Boolean(scheduledAt),
+        rateLimitRemaining: res.headers.get("ratelimit-remaining") || "",
+      };
     } catch (e) {
       clearTimeout(timer);
       return { ok: false, error: e.message, code: e.name || "fetch_error", attempt };
@@ -2664,6 +2684,30 @@ export async function listAdminStaff() {
   ];
 }
 
+export async function listAssignableAdminStaff() {
+  const records = await adminStaffRecords();
+  return [
+    {
+      id: 1,
+      username: envAdminUsername(),
+      role: "owner",
+      active: Boolean(process.env.ADMIN_PASSWORD),
+    },
+    ...records.map((item) => ({
+      id: Number(item.id),
+      username: item.username || "",
+      role: item.role || "operator",
+      active: item.active !== false,
+      perms: sanitizeStaffPerms(item.perms),
+    })),
+  ].filter((item) => item.active && adminPermissionProfile({
+    staffId: item.id,
+    staffRoot: item.id === 1,
+    staffRole: item.role,
+    staffPerms: item.perms,
+  }).canEditOrders).map(({ perms, ...item }) => item);
+}
+
 export async function createAdminStaff(input, actor) {
   const username = clean(input?.username, 60);
   const password = String(input?.password || "");
@@ -2847,6 +2891,8 @@ export async function pushAdminMailLog(entry) {
     ok: Boolean(entry?.ok),
     reason: clean(entry?.reason || entry?.error || "", 200),
     messageId: clean(entry?.messageId, 180),
+    scheduledAt: clean(entry?.scheduledAt, 80),
+    scheduledAtBeijing: entry?.scheduledAt ? formatBeijingTime(entry.scheduledAt) : "",
     staffId: actor.staffId,
     staffUsername: actor.staffUsername,
     createdAt: now.toISOString(),

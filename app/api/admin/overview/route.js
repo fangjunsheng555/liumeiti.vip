@@ -7,6 +7,7 @@ import { getSettings } from "../../_settings.js";
 import { getAfterSalesCounts } from "../../after-sales/_store.js";
 import { hasPendingSpotifyPasswordCorrection } from "../../../lib/order-attention.js";
 import { orderExpirySummary } from "../../../lib/order-expiry.js";
+import { getOrderSla } from "../../../lib/order-sla.js";
 import { effectiveQuoteStatus } from "../../_quote-expiry.js";
 
 function beijingDateKey(value = new Date()) {
@@ -36,22 +37,12 @@ function orderRevenueAmount(order) {
   return Number(order.finalAmount || (order.paidCurrency === "CNY" ? order.paidAmount : 0) || 0);
 }
 
-function minutesSince(value) {
-  const time = new Date(value || "").getTime();
-  if (!Number.isFinite(time)) return 0;
-  return Math.max(0, Math.floor((Date.now() - time) / 60000));
-}
-
 function isAbnormalOrder(order) {
-  const status = effectiveQuoteStatus(order);
+  const status = order.status || effectiveQuoteStatus(order);
   if (status === "invalid") return true;
   if (status === "quote_expired") return true;
-  if (hasPendingSpotifyPasswordCorrection(order)) return true;
-  if (status !== "received") return false;
-  const age = minutesSince(order.createdAt);
-  const paymentMethod = order.paymentMethod || "alipay";
-  if ((paymentMethod === "redeem" || paymentMethod === "balance") && age >= 15) return true;
-  return age >= 30;
+  if (order.passwordCorrectionPending || hasPendingSpotifyPasswordCorrection(order)) return true;
+  return Boolean(order.sla?.overdue);
 }
 
 export async function GET(request) {
@@ -68,9 +59,11 @@ export async function GET(request) {
   ]);
 
   const orders = ordersRaw
-    .map((order) => ({
+    .map((order) => {
+      const status = effectiveQuoteStatus(order);
+      return ({
       orderId: order.orderId || "",
-      status: effectiveQuoteStatus(order),
+      status,
       paymentMethod: order.paymentMethod || "alipay",
       paidCurrency: order.paidCurrency || (order.paymentMethod === "usdt" ? "USDT" : "CNY"),
       usdtPayAmount: Number(order.usdtPayAmount || 0),
@@ -80,11 +73,15 @@ export async function GET(request) {
       createdAtBeijing: order.createdAtBeijing || "",
       email: order.email || "",
       serviceLabel: order.serviceLabel || "",
+      assignedStaffId: Number(order.assignedStaffId || 0),
+      assignedStaffUsername: order.assignedStaffUsername || "",
+      passwordCorrectionPending: Boolean(order.passwordCorrectionPending),
+      sla: getOrderSla({ ...order, status }),
       displayAmount: order.paymentMethod === "redeem"
         ? orderServiceAmount(order)
         : Number(order.finalAmount || order.paidAmount || orderServiceAmount(order) || 0),
       revenueAmount: orderRevenueAmount(order),
-    }))
+    }); })
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
   const latestOrder = orders[0] || null;
   const todayKey = beijingDateKey();
@@ -104,6 +101,8 @@ export async function GET(request) {
     awaitingQuotes: orders.filter((order) => order.status === "awaiting_quote").length,
     pendingQuotePayments: orders.filter((order) => order.status === "pending_payment").length,
     abnormalOrders: orders.filter(isAbnormalOrder).length,
+    slaOverdueOrders: orders.filter((order) => order.sla?.overdue).length,
+    unassignedActiveOrders: orders.filter((order) => order.sla?.active && !order.assignedStaffId).length,
     usdtPendingConfirm: orders.filter((order) =>
       order.paidCurrency === "USDT" && order.status === "received" && !order.usdtConfirmedAt
       && order.usdtPayAmount > 0 && order.usdtQuoteId
