@@ -29,12 +29,36 @@ const CATEGORY = {
   test: "测试邮件",
 };
 
+const EVENT_LABEL = {
+  "email.sent": "Resend 已接收",
+  "email.delivered": "已送达收件服务器",
+  "email.delivery_delayed": "投递延迟",
+  "email.bounced": "收件服务器退信",
+  "email.complained": "收件人标记为垃圾邮件",
+  "email.failed": "投递失败",
+  "email.suppressed": "地址已被拦截",
+  "smtp2go.processed": "SMTP2GO 已接收",
+  "smtp2go.delivered": "已送达收件服务器",
+  "smtp2go.bounce": "收件服务器退信",
+  "smtp2go.spam": "收件人标记为垃圾邮件",
+  "smtp2go.reject": "SMTP2GO 已拒绝",
+};
+
 function compactTime(value) {
   const match = String(value || "").match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/);
   return match ? `${match[1].slice(5)} ${match[2]}` : String(value || "--");
 }
 
 function statusMeta(status) { return STATUS[status] || STATUS.sent; }
+
+function providerLabel(record) {
+  if (record?.fallbackAttempted) return "Resend → SMTP2GO";
+  if (record?.fallback || record?.provider === "smtp2go") return "SMTP2GO 备用";
+  if (record?.provider === "smtp") return "SMTP";
+  return "Resend";
+}
+
+function eventLabel(type) { return EVENT_LABEL[type] || type || "状态更新"; }
 
 export default function MailDeliveryPanel() {
   const [records, setRecords] = useState([]);
@@ -77,7 +101,7 @@ export default function MailDeliveryPanel() {
   return (
     <div className="admin-compact-page">
       <header className="admin-compact-head">
-        <div><h2><MailCheck size={18} />邮件投递</h2><p>Resend 发送与送达状态</p></div>
+        <div><h2><MailCheck size={18} />邮件投递</h2><p>Resend 主通道与 SMTP2GO 备用通道</p></div>
         <button type="button" onClick={load} disabled={loading} aria-label="刷新邮件投递"><RefreshCw size={14} className={loading ? "spin-icon" : ""} />刷新</button>
       </header>
 
@@ -110,7 +134,10 @@ export default function MailDeliveryPanel() {
             <button type="button" key={record.id} className="admin-delivery-row" onClick={() => setSelected(record)}>
               <span className={`admin-state-dot ${meta.tone}`} />
               <span className="admin-delivery-main"><strong>{record.to || "收件人未记录"}</strong><small>{record.subject || "无主题"}</small></span>
-              <span className="admin-delivery-related">{CATEGORY[record.category] || record.category || "事务邮件"}{record.relatedId ? <small>{record.relatedId}</small> : null}</span>
+              <span className="admin-delivery-related">
+                <span className="admin-delivery-meta"><em>{providerLabel(record)}</em>{CATEGORY[record.category] || record.category || "事务邮件"}</span>
+                {record.relatedId ? <small>{record.relatedId}</small> : null}
+              </span>
               <span className={`admin-state-label ${meta.tone}`}>{meta.label}</span>
               <time>{compactTime(record.updatedAtBeijing || record.createdAtBeijing)}</time>
             </button>
@@ -126,16 +153,22 @@ export default function MailDeliveryPanel() {
               <div><dt>收件人</dt><dd>{selected.to || "--"}</dd></div>
               <div><dt>类型</dt><dd>{CATEGORY[selected.category] || selected.category || "事务邮件"}</dd></div>
               <div><dt>关联记录</dt><dd>{selected.relatedId || "--"}</dd></div>
-              <div><dt>Resend ID</dt><dd className="mono">{selected.messageId || "--"}</dd></div>
+              <div><dt>发送服务</dt><dd>{providerLabel(selected)}</dd></div>
+              <div><dt>邮件 ID</dt><dd className="mono">{selected.messageId || "--"}</dd></div>
+              {selected.providerMessageId && selected.providerMessageId !== selected.messageId
+                ? <div><dt>服务商 ID</dt><dd className="mono">{selected.providerMessageId}</dd></div>
+                : null}
               <div><dt>当前状态</dt><dd><span className={`admin-state-label ${statusMeta(selected.status).tone}`}>{statusMeta(selected.status).label}</span></dd></div>
               {selected.scheduledAtBeijing ? <div><dt>计划发送</dt><dd>{selected.scheduledAtBeijing}</dd></div> : null}
+              {selected.fallback && selected.primaryError ? <div><dt>切换原因</dt><dd>{selected.primaryError}</dd></div> : null}
+              {selected.fallbackAttempted && selected.fallbackError ? <div><dt>备用通道</dt><dd className="error-text">{selected.fallbackError}</dd></div> : null}
               {selected.reason ? <div><dt>原因</dt><dd className="error-text">{selected.reason}</dd></div> : null}
             </dl>
             <section className="admin-event-timeline">
               <h3>事件时间线</h3>
-              {(selected.events || []).length === 0 ? <p>等待 Resend Webhook 回传</p> : [...selected.events].reverse().map((event) => {
+              {(selected.events || []).length === 0 ? <p>等待 {providerLabel(selected)} 投递回执</p> : [...selected.events].reverse().map((event) => {
                 const meta = statusMeta(event.status || selected.status);
-                return <div key={event.id || `${event.type}-${event.createdAt}`}><span className={`admin-state-dot ${meta.tone}`} /><strong>{event.type}</strong><time>{event.createdAtBeijing || event.createdAt}</time>{event.reason ? <small>{event.reason}</small> : null}</div>;
+                return <div key={event.id || `${event.type}-${event.createdAt}`}><span className={`admin-state-dot ${meta.tone}`} /><strong>{eventLabel(event.type)}</strong><time>{event.createdAtBeijing || event.createdAt}</time>{event.reason ? <small>{event.reason}</small> : null}</div>;
               })}
             </section>
           </aside>

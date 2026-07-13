@@ -1380,20 +1380,43 @@ async function sendViaResend({
   return { ok: false, provider: "resend", reason: "send_failed_after_retry", error: r2.error, code: r2.code };
 }
 
-async function sendViaSmtp({ to, subject, text, html, fromName, marketing = false }) {
-  const host = process.env.SMTP_HOST;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  const from = mailFromAddress() || user;
+function smtpTransportConfig(prefix = "SMTP") {
+  const host = process.env[`${prefix}_HOST`];
+  const user = process.env[`${prefix}_USER`];
+  const pass = process.env[`${prefix}_PASS`];
+  const port = Number(process.env[`${prefix}_PORT`]) || 587;
+  const from = clean(process.env[`${prefix}_FROM`] || mailFromAddress() || user, 200);
+  return {
+    host,
+    user,
+    pass,
+    port,
+    from,
+    provider: prefix === "FALLBACK_SMTP" ? "smtp2go" : "smtp",
+  };
+}
+
+export function shouldFallbackToBackupSmtp(args, result) {
+  if (result?.ok || args?.marketing || args?.scheduledAt) return false;
+  if (clean(args?.category, 40).toLowerCase() === "marketing") return false;
+  const code = Number(result?.code || 0);
+  const detail = clean(`${result?.reason || ""} ${result?.error || ""}`, 500).toLowerCase();
+  return code === 429
+    || detail.includes("daily_quota_exceeded")
+    || detail.includes("monthly_quota_exceeded");
+}
+
+async function sendViaSmtp({ to, subject, text, html, fromName, marketing = false }, config = smtpTransportConfig()) {
+  const { host, user, pass, port, from, provider } = config;
   const brandName = fromName || process.env.BRAND_NAME || "冒央会社";
   if (!host || !user || !pass || !from || !to) {
-    return { ok: false, reason: "smtp_or_to_missing" };
+    return { ok: false, provider, reason: "smtp_or_to_missing" };
   }
   let nodemailer;
   try { nodemailer = (await import("nodemailer")).default; }
-  catch (e) { return { ok: false, reason: "nodemailer_import_failed" }; }
-  const port = Number(process.env.SMTP_PORT) || 587;
+  catch (e) { return { ok: false, provider, reason: "nodemailer_import_failed" }; }
   const secure = port === 465;
+  const messageId = `<lm-${randomBytes(16).toString("hex")}@liumeiti.vip>`;
   // 群发/营销邮件:普通优先级(高优先级=垃圾信号)+ List-Unsubscribe 头(Gmail/Yahoo 对群发的进箱硬要求)。
   // 事务邮件(验证码/订单)保持 high 以求快达。
   const priority = marketing ? "normal" : "high";
@@ -1414,14 +1437,15 @@ async function sendViaSmtp({ to, subject, text, html, fromName, marketing = fals
       const info = await transporter.sendMail({
         from: formatMailFrom(mailFromName(brandName), from),
         to, subject, text, html,
+        messageId,
         priority,
         ...(extraHeaders ? { headers: extraHeaders } : {}),
       });
       try { transporter.close(); } catch (e) {}
-      return { ok: true, messageId: info.messageId, attempt };
+      return { ok: true, messageId: info.messageId || messageId, provider, attempt };
     } catch (e) {
       try { transporter.close(); } catch (er) {}
-      return { ok: false, error: e.message, code: e.code, response: e.response, attempt };
+      return { ok: false, provider, error: e.message, code: e.code, response: e.response, attempt };
     }
   }
 
@@ -1437,7 +1461,7 @@ async function sendViaSmtp({ to, subject, text, html, fromName, marketing = fals
     return r2;
   }
   console.error(`[email] both attempts failed for ${to}: ${r2.error}`);
-  return { ok: false, reason: "send_failed_after_retry", error: r2.error, code: r2.code };
+  return { ok: false, provider, reason: "send_failed_after_retry", error: r2.error, code: r2.code };
 }
 
 // ── Account extensions: coupons, transfers, redeem codes, withdrawals ──
@@ -1485,6 +1509,25 @@ export async function sendSimpleEmail(args) {
   if (provider === "smtp") result = await sendViaSmtp(prepared);
   else if (process.env.RESEND_API_KEY) result = await sendViaResend(prepared);
   else result = { ok: false, provider: "resend", reason: "resend_api_key_missing" };
+  if (provider !== "smtp" && shouldFallbackToBackupSmtp(prepared, result)) {
+    const primaryResult = result;
+    const fallbackResult = await sendViaSmtp(prepared, smtpTransportConfig("FALLBACK_SMTP"));
+    if (fallbackResult.ok) {
+      result = {
+        ...fallbackResult,
+        fallback: true,
+        primaryProvider: "resend",
+        primaryError: primaryResult.error || primaryResult.reason || "resend_quota_exceeded",
+      };
+    } else {
+      result = {
+        ...primaryResult,
+        fallbackAttempted: true,
+        fallbackProvider: "smtp2go",
+        fallbackError: fallbackResult.reason || fallbackResult.error || "smtp_fallback_failed",
+      };
+    }
+  }
   const trackingTasks = [];
   try {
     const { registerEmailDelivery } = await import("./_mail-delivery.js");
@@ -1493,10 +1536,16 @@ export async function sendSimpleEmail(args) {
   try {
     const { recordHealthStatus } = await import("./_health.js");
     trackingTasks.push(recordHealthStatus("resend", {
-      status: result?.ok ? "ok" : "error",
-      summary: result?.ok ? "最近一封邮件已提交发送" : "最近一次发信失败",
+      status: result?.fallback ? "warning" : (result?.ok ? "ok" : "error"),
+      summary: result?.fallback
+        ? "Resend 额度受限，事务邮件已由 SMTP2GO 提交"
+        : (result?.ok ? "最近一封邮件已提交发送" : "最近一次发信失败"),
       error: result?.ok ? "" : (result?.reason || result?.error || "send_failed"),
-      metrics: { provider: result?.provider || provider, attempt: Number(result?.attempt || 1) },
+      metrics: {
+        provider: result?.provider || provider,
+        fallback: Boolean(result?.fallback || result?.fallbackAttempted),
+        attempt: Number(result?.attempt || 1),
+      },
     }));
   } catch (e) {}
   if (trackingTasks.length) await settleWithin(Promise.allSettled(trackingTasks), 1500);

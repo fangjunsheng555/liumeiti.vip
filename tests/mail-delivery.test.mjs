@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   mailDeliveryInternals,
   verifyResendWebhookSignature,
+  verifySmtp2goWebhookAuthorization,
 } from "../app/api/_mail-delivery.js";
 
 test("Resend webhook signature accepts a valid current payload", () => {
@@ -55,4 +56,25 @@ test("recipient and category metadata is normalized without message content", ()
   assert.deepEqual(normalizeRecipients([" User@Example.com ", "bad", "user@example.com"]), ["user@example.com"]);
   assert.equal(normalizedCategory("Password Update"), "password_update");
   assert.equal(normalizedCategory("", true), "marketing");
+});
+
+test("SMTP2GO webhook authorization requires the configured bearer token", () => {
+  assert.equal(verifySmtp2goWebhookAuthorization("Bearer webhook-secret", "webhook-secret"), true);
+  assert.equal(verifySmtp2goWebhookAuthorization("Bearer wrong-secret", "webhook-secret"), false);
+  assert.equal(verifySmtp2goWebhookAuthorization("", "webhook-secret"), false);
+});
+
+test("SMTP2GO identifiers, timestamps and delivery events normalize for shared tracking", () => {
+  const { SMTP2GO_EVENT_STATUS, canonicalMessageId, normalizeEventTime, smtp2goEventKey } = mailDeliveryInternals;
+  assert.equal(canonicalMessageId(" <lm-test@liumeiti.vip> "), "lm-test@liumeiti.vip");
+  assert.equal(normalizeEventTime("2026-07-14 10:30:00"), "2026-07-14T10:30:00.000Z");
+  assert.equal(SMTP2GO_EVENT_STATUS.processed, "sent");
+  assert.equal(SMTP2GO_EVENT_STATUS.delivered, "delivered");
+  assert.equal(SMTP2GO_EVENT_STATUS.bounce, "bounced");
+  assert.equal(SMTP2GO_EVENT_STATUS.spam, "complained");
+  assert.equal(SMTP2GO_EVENT_STATUS.reject, "suppressed");
+  const processed = { id: "same-webhook", event: "processed", time: "2026-07-14 10:30:00", email_id: "email-1", rcpt: "user@example.com" };
+  const delivered = { ...processed, event: "delivered", time: "2026-07-14 10:31:00" };
+  assert.equal(smtp2goEventKey(processed), smtp2goEventKey({ ...processed }));
+  assert.notEqual(smtp2goEventKey(processed), smtp2goEventKey(delivered));
 });
