@@ -6696,33 +6696,41 @@ summary:focus-visible {
 .aiq-tab:hover { background: #eef2f7 !important; color: #0f172a !important; }
 @media (max-width: 900px) { .aiq-sticky { top: 49px; } }
 
-/* ===== 状态总览 · KPI 仪表盘 ===== */
-.admin-overview-page { display: grid; gap: 14px; }
-.admin-overview-card {
+/* ===== 状态总览 · 紧凑数据面板 ===== */
+.admin-overview-page {
   display: grid;
-  gap: 12px;
-  padding: 18px;
-  border-radius: 18px;
-  background: #fff;
-  border: 1px solid var(--line);
-  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.05);
+  gap: 1px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: #dfe6ec;
+}
+.admin-overview-card {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #dfe6ec;
+  box-shadow: none;
 }
 .admin-overview-page .admin-overview-card {
-  grid-template-columns: repeat(auto-fit, minmax(166px, 1fr));
-  gap: 12px;
+  gap: 1px;
 }
-.admin-overview-page .admin-overview-head,
-.admin-overview-page .admin-overview-latest {
-  grid-column: 1 / -1;
+.admin-overview-page .admin-overview-head {
+  flex: 1 0 100%;
 }
 .admin-overview-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 6px;
-  padding: 0 2px 12px;
+  min-height: 40px;
+  padding: 8px 12px;
+  background: #fff;
   color: #0f172a;
-  border-bottom: 1px solid var(--line);
+  border: 0;
 }
 .admin-overview-head span {
   display: inline-flex;
@@ -6733,17 +6741,17 @@ summary:focus-visible {
 }
 .admin-overview-head span svg { color: #0f766e; }
 .admin-overview-item,
-.admin-overview-mini,
-.admin-overview-latest {
+.admin-overview-mini {
   position: relative;
-  width: 100%;
+  flex: 1 1 136px;
+  min-width: 0;
   display: grid;
-  gap: 8px;
+  gap: 5px;
   text-align: left;
-  padding: 15px 15px 14px;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #fbfdff 0%, #f4f8fc 100%);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
   color: var(--primary);
   overflow: hidden;
 }
@@ -6752,32 +6760,31 @@ summary:focus-visible {
   content: "";
   position: absolute;
   left: 0;
-  top: 14px;
-  bottom: 14px;
-  width: 3px;
+  top: 9px;
+  bottom: 9px;
+  width: 2px;
   border-radius: 0 3px 3px 0;
   background: #14b8a6;
 }
 .admin-overview-item {
+  appearance: none;
+  font: inherit;
   cursor: pointer;
-  transition: border-color 0.16s, box-shadow 0.16s, transform 0.14s;
+  transition: background 0.16s;
 }
 .admin-overview-item:hover {
-  border-color: rgba(20, 184, 166, 0.5);
-  box-shadow: 0 10px 24px rgba(15, 118, 110, 0.12);
-  transform: translateY(-2px);
+  background: #f3faf8;
 }
 .admin-overview-item.urgent::before { background: #f59e0b; }
 .admin-overview-item span,
-.admin-overview-mini span,
-.admin-overview-latest span {
+.admin-overview-mini span {
   font-size: 11px;
   color: var(--muted);
   font-weight: 800;
 }
 .admin-overview-item b,
 .admin-overview-mini b {
-  font-size: 30px;
+  font-size: 24px;
   line-height: 1;
   font-weight: 950;
   color: #0f172a;
@@ -6786,153 +6793,9 @@ summary:focus-visible {
 .admin-overview-item.urgent b { color: #b45309; }
 .admin-overview-mini.money::before { background: #0f766e; }
 .admin-overview-mini.money b {
-  font-size: 26px;
+  font-size: 22px;
   color: #0f766e;
 }
-.admin-overview-latest {
-  gap: 5px;
-  background: linear-gradient(135deg, #ecfdf5 0%, #f8fafc 100%);
-  border-color: rgba(20, 184, 166, 0.22);
-}
-.admin-overview-latest::before {
-  content: "";
-  display: block;
-  position: absolute;
-  left: 0;
-  top: 14px;
-  bottom: 14px;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: #0f766e;
-}
-.admin-overview-latest span { color: #0f766e; }
-.admin-overview-latest b {
-  font-size: 14px;
-  color: #0f172a;
-  font-family: ui-monospace, Menlo, monospace;
-  word-break: break-all;
-  font-weight: 850;
-}
-.admin-overview-latest small {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.3;
-}
-.admin-overview-latest {
-  appearance: none;
-  grid-template-columns: 36px minmax(0, 1fr) minmax(170px, auto) 64px;
-  align-items: center;
-  gap: 12px;
-  min-height: 62px;
-  padding: 9px 12px;
-  font: inherit;
-  cursor: pointer;
-  transition: border-color 0.16s, box-shadow 0.16s, background 0.16s;
-}
-.admin-overview-latest:hover:not(:disabled) {
-  background: #f7fffd;
-  border-color: rgba(15, 118, 110, 0.42);
-  box-shadow: 0 7px 18px rgba(15, 118, 110, 0.09);
-}
-.admin-overview-latest:disabled { cursor: default; opacity: 0.72; }
-.admin-overview-latest::before { top: 10px; bottom: 10px; }
-.admin-overview-latest .admin-overview-latest-icon {
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  color: #0f766e;
-  background: #dcf7f1;
-}
-.admin-overview-latest .admin-overview-latest-copy {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-.admin-overview-latest .admin-overview-latest-eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  color: #0f766e;
-  font-size: 10px;
-  line-height: 1.2;
-  font-weight: 850;
-}
-.admin-overview-latest-eyebrow em {
-  display: inline-flex;
-  align-items: center;
-  min-height: 19px;
-  padding: 0 7px;
-  border-radius: 999px;
-  background: #e2e8f0;
-  color: #475569;
-  font-size: 9px;
-  font-style: normal;
-  white-space: nowrap;
-}
-.admin-overview-latest-eyebrow em.status-received,
-.admin-overview-latest-eyebrow em.status-completed { background: #dcfce7; color: #166534; }
-.admin-overview-latest-eyebrow em.status-awaiting_quote { background: #fef3c7; color: #92400e; }
-.admin-overview-latest-eyebrow em.status-pending_payment { background: #dbeafe; color: #1d4ed8; }
-.admin-overview-latest-eyebrow em.status-quote_expired { background: #ffedd5; color: #9a3412; }
-.admin-overview-latest-eyebrow em.status-invalid { background: #fee2e2; color: #b91c1c; }
-.admin-overview-latest-copy > strong {
-  overflow: hidden;
-  color: #0f172a;
-  font-size: 13px;
-  line-height: 1.35;
-  font-weight: 850;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.admin-overview-latest .admin-overview-latest-copy > small {
-  overflow: hidden;
-  color: #64748b;
-  font-size: 10.5px;
-  line-height: 1.3;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.admin-overview-latest .admin-overview-latest-meta {
-  display: grid;
-  gap: 2px;
-  justify-items: end;
-  min-width: 0;
-}
-.admin-overview-latest-meta > strong {
-  color: #0f766e;
-  font-size: 14px;
-  line-height: 1.2;
-  font-weight: 900;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.admin-overview-latest .admin-overview-latest-meta > small {
-  overflow: hidden;
-  max-width: 230px;
-  color: #94a3b8;
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 9px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.admin-overview-latest .admin-overview-latest-open {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-height: 32px;
-  border-left: 1px solid #dbe5ea;
-  color: #0f766e;
-  font-size: 10.5px;
-  font-weight: 800;
-}
-
 /* ===== 平板/移动端:侧边栏转抽屉 ===== */
 @media (max-width: 900px) {
   .admin-shell { display: block; }
@@ -8599,7 +8462,7 @@ summary:focus-visible {
 }
 .admin-mail-tpl-save:hover { border-color: var(--accent); color: var(--accent); }
 
-/* 总览:环比徽章 + 趋势卡 + 库存预警 */
+/* 总览:环比徽章 + 趋势卡 */
 .admin-delta {
   display: inline-block; margin-left: 5px; padding: 1px 6px; border-radius: 999px;
   font-size: 10px; font-style: normal; font-weight: 800; vertical-align: middle;
@@ -8607,19 +8470,27 @@ summary:focus-visible {
 .admin-delta.up { background: #ecfdf5; color: #047857; }
 .admin-delta.down { background: #fef2f2; color: #dc2626; }
 .admin-overview-revenue {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  background: #dfe6ec;
 }
 .admin-overview-revenue-item {
-  padding: 12px 14px; border-radius: 12px; background: #fff;
-  border: 1px solid var(--line); box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+  flex: 1 1 150px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  box-shadow: none;
 }
-.admin-overview-revenue-item span { display: block; font-size: 11.5px; color: var(--muted); font-weight: 600; margin-bottom: 5px; }
-.admin-overview-revenue-item b { font-size: 18px; font-weight: 900; color: var(--accent); letter-spacing: -0.01em; }
+.admin-overview-revenue-item span { display: block; font-size: 10.5px; color: var(--muted); font-weight: 650; margin-bottom: 3px; }
+.admin-overview-revenue-item b { font-size: 16px; font-weight: 900; color: var(--accent); letter-spacing: 0; }
 .admin-overview-trends {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 12px;
-  margin-top: 12px;
+  gap: 1px;
+  background: #dfe6ec;
 }
 
 /* Secure Spotify order-detail correction */
@@ -8680,11 +8551,11 @@ summary:focus-visible {
 
 .admin-overview-trend-card {
   min-width: 0;
-  padding: 15px 16px 12px;
-  border-radius: 14px;
+  padding: 12px 13px 10px;
+  border-radius: 0;
   background: #fff;
-  border: 1px solid var(--line);
-  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.05);
+  border: 0;
+  box-shadow: none;
 }
 .admin-overview-chart-head {
   display: flex;
@@ -9422,8 +9293,10 @@ summary:focus-visible {
   .admin-insights-lifetime-grid > div:nth-child(odd) { border-left: 0; }
 }
 .admin-overview-lowstock {
-  margin-top: 12px; padding: 13px 15px; border-radius: 14px;
-  background: #fffbeb; border: 1px solid #fde68a;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 0;
+  background: #fffbeb;
 }
 .admin-overview-lowstock .admin-overview-trend-head { color: #92400e; margin-bottom: 10px; }
 .admin-overview-lowstock-chips { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -13010,47 +12883,20 @@ summary:focus-visible {
 }
 @media (max-width: 560px) {
   .admin-main { width: calc(100% - 14px); margin-top: 8px; }
-  .admin-overview-page .admin-overview-card { gap: 10px; }
-  .admin-overview-card { padding: 13px; border-radius: 16px; gap: 10px; }
-  .admin-overview-page .admin-overview-card { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
-  .admin-overview-head { padding-bottom: 10px; }
+  .admin-overview-page .admin-overview-card,
+  .admin-overview-card { gap: 1px; padding: 0; border-radius: 0; }
+  .admin-overview-head { padding: 8px 10px; }
   .admin-overview-head span { font-size: 12.5px; gap: 5px; }
   .admin-overview-head svg { width: 13px; height: 13px; }
   .admin-overview-item,
-  .admin-overview-mini { padding: 12px 12px 11px; border-radius: 12px; gap: 6px; }
+  .admin-overview-mini { flex-basis: 132px; padding: 9px 10px; border-radius: 0; gap: 4px; }
   .admin-overview-item span,
   .admin-overview-mini span { font-size: 10px; line-height: 1.2; }
   .admin-overview-item b,
   .admin-overview-mini b { font-size: 23px; }
   .admin-overview-mini.money b { font-size: 20px; }
-  .admin-overview-latest {
-    grid-template-columns: 32px minmax(0, 1fr) 44px;
-    grid-template-areas: "icon copy open" "icon meta meta";
-    gap: 5px 9px;
-    min-height: 68px;
-    padding: 9px 10px;
-    border-radius: 12px;
-  }
-  .admin-overview-latest .admin-overview-latest-icon { grid-area: icon; width: 32px; height: 32px; }
-  .admin-overview-latest .admin-overview-latest-copy { grid-area: copy; }
-  .admin-overview-latest .admin-overview-latest-meta {
-    grid-area: meta;
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 8px;
-  }
-  .admin-overview-latest-meta > strong { font-size: 12px; }
-  .admin-overview-latest .admin-overview-latest-meta > small { max-width: min(210px, 62vw); font-size: 8.5px; }
-  .admin-overview-latest .admin-overview-latest-open {
-    grid-area: open;
-    min-height: 30px;
-    border-left: 0;
-    font-size: 0;
-  }
-  .admin-overview-latest-open svg { width: 15px; height: 15px; }
-  .admin-overview-trends { grid-template-columns: minmax(0, 1fr); gap: 10px; }
-  .admin-overview-trend-card { padding: 12px; }
+  .admin-overview-trends { grid-template-columns: minmax(0, 1fr); gap: 1px; }
+  .admin-overview-trend-card { padding: 10px; }
   .admin-overview-chart-kpis span { padding: 0 5px; }
   .admin-insights-chart-card { margin-top: 16px; padding: 12px; border-radius: 12px; }
   .admin-insights-chart-head { display: grid; gap: 10px; margin-bottom: 10px; }

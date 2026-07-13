@@ -56,11 +56,6 @@ const MARKETING_MAIL_SUBJECT = "常用会员服务，立即下单开通";
 const MARKETING_MAIL_PREVIEW = "Spotify、4K 影音、AI 会员与机场节点，明码标价，付款后开通。";
 const MAIL_BATCH_LIMIT = 20;
 
-function compactAdminTime(value) {
-  const match = String(value || "").match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/);
-  return match ? `${match[1].slice(5)} ${match[2]}` : "时间未记录";
-}
-
 function copyText(text) {
   if (typeof window === "undefined") return;
   if (navigator.clipboard && window.isSecureContext) {
@@ -3001,16 +2996,6 @@ export default function AdminPage() {
     }
   }
 
-  function openLatestOrder() {
-    const orderId = String(overview?.latestOrderId || "").trim();
-    if (!orderId) return;
-    setTab("orders");
-    setSearchInput(orderId);
-    setAppliedSearch(orderId);
-    setFilterStatus("all");
-    loadOrders(orderId, "all", { silent: true });
-  }
-
   // 总览「即将到期」芯片 → 跳到订单列表并定位该单
   function openExpiringOrder(orderId) {
     const id = String(orderId || "").trim();
@@ -3665,29 +3650,6 @@ export default function AdminPage() {
                 <span>累计营收</span>
                 <b>¥{Number(overview?.totalRevenue || 0).toFixed(2)}</b>
               </div>
-              <button
-                type="button"
-                className="admin-overview-latest"
-                onClick={openLatestOrder}
-                disabled={!overview?.latestOrderId}
-              >
-                <span className="admin-overview-latest-icon"><ClipboardList size={17} /></span>
-                <span className="admin-overview-latest-copy">
-                  <span className="admin-overview-latest-eyebrow">
-                    最新订单
-                    {overview?.latestOrderStatus && (
-                      <em className={`status-${overview.latestOrderStatus}`}>{STATUS_LABEL[overview.latestOrderStatus] || overview.latestOrderStatus}</em>
-                    )}
-                  </span>
-                  <strong>{overview?.latestOrderService || "暂无订单"}</strong>
-                  <small>{overview?.latestOrderEmail || "尚无订单记录"}</small>
-                </span>
-                <span className="admin-overview-latest-meta">
-                  <strong>{Number(overview?.latestOrderAmount || 0) > 0 ? `¥${Number(overview.latestOrderAmount).toFixed(2)}` : (STATUS_LABEL[overview?.latestOrderStatus] || "待处理")}</strong>
-                  <small>{overview?.latestOrderId || "—"} · {compactAdminTime(overview?.latestOrderTime)}</small>
-                </span>
-                <span className="admin-overview-latest-open"><Eye size={14} />查看</span>
-              </button>
             </div>
 
             <div className="admin-overview-revenue">
@@ -3708,28 +3670,6 @@ export default function AdminPage() {
                 <b>¥{Number(overview?.avgOrderValue || 0).toFixed(2)}</b>
               </div>
             </div>
-
-            {Array.isArray(overview?.lowStock) && overview.lowStock.length > 0 && (
-              <div className="admin-overview-lowstock">
-                <div className="admin-overview-trend-head">
-                  <AlertTriangle size={13} />库存预警
-                  <small>受限库存 ≤3 的规格,点击去补货</small>
-                </div>
-                <div className="admin-overview-lowstock-chips">
-                  {overview.lowStock.map((it) => (
-                    <button
-                      key={`${it.key}:${it.planId}`}
-                      type="button"
-                      className={`admin-lowstock-chip${it.stock <= 0 ? " out" : ""}`}
-                      onClick={() => setTab("catalog")}
-                    >
-                      {it.title} · {it.planLabel}
-                      <b>{it.stock <= 0 ? "售罄" : `剩 ${it.stock}`}</b>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {Array.isArray(overview?.expiringSoon) && overview.expiringSoon.length > 0 && (
               <div className="admin-overview-lowstock admin-overview-expiring">
