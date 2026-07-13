@@ -10,7 +10,11 @@ const MAX_RECORDS = 2000;
 const MAX_EVENTS = 24;
 const EVENT_TTL_SECONDS = 180 * 24 * 60 * 60;
 
-export const DELIVERY_STATUSES = ["scheduled", "sent", "delivered", "delayed", "bounced", "complained", "failed", "suppressed"];
+export const DELIVERY_STATUSES = ["scheduled", "sent", "delivered", "recovered", "delayed", "bounced", "complained", "failed", "suppressed"];
+
+const RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const RECOVERABLE_STATUSES = new Set(["failed", "bounced", "suppressed"]);
+const SUCCESSFUL_STATUSES = new Set(["sent", "delivered"]);
 
 const EVENT_STATUS = {
   "email.sent": "sent",
@@ -71,6 +75,55 @@ function normalizedCategory(value, marketing = false) {
     .toLowerCase()
     .replace(/[^a-z0-9_-]/g, "_");
   return safe || "transactional";
+}
+
+function deliveryRecoveryFingerprint(record) {
+  const recipient = clean(record?.to || record?.recipients?.[0] || "", 200).toLowerCase();
+  const subject = clean(record?.subject || "", 180).toLowerCase();
+  if (!recipient || !subject) return "";
+  return [
+    recipient,
+    normalizedCategory(record?.category),
+    clean(record?.relatedType || "", 40).toLowerCase(),
+    clean(record?.relatedId || "", 120).toLowerCase(),
+    subject,
+  ].join("\u001f");
+}
+
+function recordTime(record) {
+  const value = new Date(record?.createdAt || record?.updatedAt || 0).getTime();
+  return Number.isFinite(value) ? value : 0;
+}
+
+function reconcileDeliveryStatuses(records, windowMs = RECOVERY_WINDOW_MS) {
+  const latestSuccess = new Map();
+  return (Array.isArray(records) ? records : []).map((record) => {
+    const fingerprint = deliveryRecoveryFingerprint(record);
+    const timestamp = recordTime(record);
+    if (fingerprint && SUCCESSFUL_STATUSES.has(record?.status)) {
+      if (!latestSuccess.has(fingerprint)) latestSuccess.set(fingerprint, record);
+      return record;
+    }
+    const success = fingerprint ? latestSuccess.get(fingerprint) : null;
+    const successTime = recordTime(success);
+    if (
+      success
+      && RECOVERABLE_STATUSES.has(record?.status)
+      && successTime >= timestamp
+      && successTime - timestamp <= windowMs
+    ) {
+      return {
+        ...record,
+        status: "recovered",
+        originalStatus: record.status,
+        reason: "",
+        recoveredBy: success.messageId || success.id || "",
+        recoveredAt: success.updatedAt || success.createdAt || "",
+        recoveredAtBeijing: success.updatedAtBeijing || success.createdAtBeijing || "",
+      };
+    }
+    return record;
+  });
 }
 
 function resendEventReason(event) {
@@ -351,7 +404,7 @@ export async function listEmailDeliveries({ query = "", status = "all", category
   const ids = await redisCmd(["ZREVRANGE", DELIVERY_INDEX_KEY, "0", "499"]);
   if (!Array.isArray(ids) || !ids.length) return { records: [], counts: {}, total: 0 };
   const rows = pipelineRows(await redisPipeline(ids.map((id) => ["GET", recordKey(id)])));
-  const records = rows.map(parseJson).filter(Boolean);
+  const records = reconcileDeliveryStatuses(rows.map(parseJson).filter(Boolean));
   const counts = records.reduce((out, record) => {
     out[record.status || "sent"] = (out[record.status || "sent"] || 0) + 1;
     return out;
@@ -380,4 +433,6 @@ export const mailDeliveryInternals = {
   normalizedCategory,
   normalizeEventTime,
   smtp2goEventKey,
+  deliveryRecoveryFingerprint,
+  reconcileDeliveryStatuses,
 };

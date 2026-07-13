@@ -7,6 +7,7 @@ const STATUS = {
   scheduled: { label: "已排期", tone: "neutral" },
   sent: { label: "已发送", tone: "neutral" },
   delivered: { label: "已送达", tone: "ok" },
+  recovered: { label: "重发成功", tone: "ok" },
   delayed: { label: "延迟", tone: "warn" },
   bounced: { label: "退信", tone: "error" },
   complained: { label: "投诉", tone: "error" },
@@ -159,6 +160,7 @@ export default function MailDeliveryPanel() {
                 ? <div><dt>服务商 ID</dt><dd className="mono">{selected.providerMessageId}</dd></div>
                 : null}
               <div><dt>当前状态</dt><dd><span className={`admin-state-label ${statusMeta(selected.status).tone}`}>{statusMeta(selected.status).label}</span></dd></div>
+              {selected.recoveredAtBeijing ? <div><dt>恢复时间</dt><dd>{selected.recoveredAtBeijing}</dd></div> : null}
               {selected.scheduledAtBeijing ? <div><dt>计划发送</dt><dd>{selected.scheduledAtBeijing}</dd></div> : null}
               {selected.fallback && selected.primaryError ? <div><dt>切换原因</dt><dd>{selected.primaryError}</dd></div> : null}
               {selected.fallbackAttempted && selected.fallbackError ? <div><dt>备用通道</dt><dd className="error-text">{selected.fallbackError}</dd></div> : null}

@@ -2954,10 +2954,53 @@ export async function pushAdminMailLog(entry) {
   return saved ? item : null;
 }
 
+const ADMIN_MAIL_RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function adminMailRecoveryFingerprint(entry) {
+  const to = clean(entry?.to, 180).toLowerCase();
+  const subject = clean(entry?.subject || "客服服务通知", 180).toLowerCase();
+  if (!to || !subject) return "";
+  return `${to}\u001f${subject}`;
+}
+
+function adminMailLogTime(entry) {
+  const value = new Date(entry?.createdAt || 0).getTime();
+  return Number.isFinite(value) ? value : 0;
+}
+
+export function reconcileAdminMailLogStatuses(entries, windowMs = ADMIN_MAIL_RECOVERY_WINDOW_MS) {
+  const latestSuccess = new Map();
+  return (Array.isArray(entries) ? entries : []).map((entry) => {
+    const fingerprint = adminMailRecoveryFingerprint(entry);
+    const timestamp = adminMailLogTime(entry);
+    const isCompletedSend = entry?.ok !== false && !entry?.scheduledAt;
+    if (fingerprint && isCompletedSend) {
+      if (!latestSuccess.has(fingerprint)) latestSuccess.set(fingerprint, entry);
+      return entry;
+    }
+    const success = fingerprint ? latestSuccess.get(fingerprint) : null;
+    const successTime = adminMailLogTime(success);
+    if (success && entry?.ok === false && successTime >= timestamp && successTime - timestamp <= windowMs) {
+      return {
+        ...entry,
+        ok: true,
+        recovered: true,
+        originalReason: entry.reason || "",
+        reason: "",
+        recoveredBy: success.messageId || success.id || "",
+        recoveredAt: success.createdAt || "",
+        recoveredAtBeijing: success.createdAtBeijing || "",
+      };
+    }
+    return entry;
+  });
+}
+
 export async function getAdminMailLog() {
   const rows = await redisCmd(["LRANGE", ADMIN_MAIL_LOG_KEY, "0", "499"]);
   if (!Array.isArray(rows)) return [];
-  return rows.map((s) => { try { return JSON.parse(s); } catch (e) { return null; } }).filter(Boolean);
+  const entries = rows.map((s) => { try { return JSON.parse(s); } catch (e) { return null; } }).filter(Boolean);
+  return reconcileAdminMailLogStatuses(entries);
 }
 
 export async function deleteAdminMailLogEntries(ids, actor = null) {

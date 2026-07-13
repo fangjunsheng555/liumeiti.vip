@@ -4481,7 +4481,7 @@ export default function AdminPage() {
                           <strong>{item.to}</strong>
                           {item.staffId && <span className="staff-mini-badge">{item.staffId}</span>}
                           <span className={`admin-mail-type ${itemIsMarketing ? "marketing" : "customer"}`}>{itemIsMarketing ? "营销" : "客服"}</span>
-                          <span className={`admin-mail-status ${ok ? "ok" : "failed"}`}>{ok ? "已发送" : "失败"}</span>
+                          <span className={`admin-mail-status ${ok ? "ok" : "failed"}`}>{item.recovered ? "重发成功" : (ok ? "已发送" : "失败")}</span>
                         </div>
                         <small>{item.subject || "客服服务通知"} · {item.createdAtBeijing || item.createdAt}</small>
                         {!ok && item.reason && <em>{item.reason}</em>}
@@ -5609,7 +5609,7 @@ export default function AdminPage() {
             <div className="admin-modal-head">
               <div>
                 <div className="admin-modal-id">发信记录</div>
-                <div className={`admin-modal-status ${activeMailLog.ok === false ? "status-invalid" : "status-received"}`}>{activeMailLog.ok === false ? "发送失败" : "已发送"}</div>
+                <div className={`admin-modal-status ${activeMailLog.ok === false ? "status-invalid" : "status-received"}`}>{activeMailLog.ok === false ? "发送失败" : (activeMailLog.recovered ? "重发成功" : "已发送")}</div>
               </div>
               <button type="button" className="admin-modal-close" onClick={() => setActiveMailLog(null)}><X size={16} /></button>
             </div>

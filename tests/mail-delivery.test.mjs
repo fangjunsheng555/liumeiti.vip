@@ -78,3 +78,35 @@ test("SMTP2GO identifiers, timestamps and delivery events normalize for shared t
   assert.equal(smtp2goEventKey(processed), smtp2goEventKey({ ...processed }));
   assert.notEqual(smtp2goEventKey(processed), smtp2goEventKey(delivered));
 });
+
+test("an older failed delivery is recovered only by a matching newer successful resend", () => {
+  const { reconcileDeliveryStatuses } = mailDeliveryInternals;
+  const base = {
+    to: "user@example.com",
+    subject: "冒央会社 · 客服服务通知",
+    category: "support",
+    relatedType: "admin_mail",
+    relatedId: "",
+  };
+  const records = reconcileDeliveryStatuses([
+    { ...base, id: "new-success", messageId: "success@example", status: "sent", createdAt: "2026-07-14T10:01:00.000Z", updatedAt: "2026-07-14T10:01:00.000Z", updatedAtBeijing: "2026-07-14 18:01:00 北京时间 (UTC+8)" },
+    { ...base, id: "old-failure", status: "failed", reason: "quota", createdAt: "2026-07-14T10:00:00.000Z", updatedAt: "2026-07-14T10:00:00.000Z" },
+    { ...base, id: "other-recipient", to: "other@example.com", status: "failed", createdAt: "2026-07-14T10:00:00.000Z", updatedAt: "2026-07-14T10:00:00.000Z" },
+    { ...base, id: "other-subject", subject: "另一封通知", status: "failed", createdAt: "2026-07-14T10:00:00.000Z", updatedAt: "2026-07-14T10:00:00.000Z" },
+  ]);
+
+  assert.equal(records[1].status, "recovered");
+  assert.equal(records[1].reason, "");
+  assert.equal(records[1].recoveredBy, "success@example");
+  assert.equal(records[2].status, "failed");
+  assert.equal(records[3].status, "failed");
+});
+
+test("a newer failed retry does not recover an earlier failure", () => {
+  const { reconcileDeliveryStatuses } = mailDeliveryInternals;
+  const records = reconcileDeliveryStatuses([
+    { id: "new-failure", to: "user@example.com", subject: "通知", category: "support", status: "failed", createdAt: "2026-07-14T10:01:00.000Z" },
+    { id: "old-failure", to: "user@example.com", subject: "通知", category: "support", status: "failed", createdAt: "2026-07-14T10:00:00.000Z" },
+  ]);
+  assert.deepEqual(records.map((record) => record.status), ["failed", "failed"]);
+});
