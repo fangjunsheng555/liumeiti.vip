@@ -16,9 +16,9 @@ function normalizeOrigin(siteDomain, siteUrl) {
   return "https://" + domain;
 }
 
-export const MARKETING_MAIL_TEMPLATE_ID = "service_selection_edm_v5";
-export const MARKETING_MAIL_SUBJECT = "Spotify 与机场节点｜本期服务精选";
-export const MARKETING_MAIL_PREVIEW = "高价区 Spotify、多档流量节点，AI 与 4K 影音服务一并可选。";
+export const MARKETING_MAIL_TEMPLATE_ID = "service_selection_edm_v6";
+export const MARKETING_MAIL_SUBJECT = "Spotify 高价区会员与高速节点｜让音乐更尽兴，让连接更稳定";
+export const MARKETING_MAIL_PREVIEW = "Spotify、机场节点、AI 会员与 4K 影音服务，按使用场景轻松选择。";
 
 function defaultProducts(origin) {
   return [
@@ -128,38 +128,38 @@ export function buildMarketingMailHtml({ brandName, siteDomain, siteUrl, product
         </td></tr>
 
         <tr><td style="padding:42px 28px 38px;background:#f4f8ff;border-bottom:1px solid #dce5f3;">
-          <div style="color:#1457d9;font-size:12px;line-height:1.3;font-weight:800;letter-spacing:1.5px;">本期服务精选 · JULY</div>
-          <h1 style="margin:13px 0 12px;color:#101c36;font-size:34px;line-height:1.18;font-weight:900;letter-spacing:0;">听歌、稳定连接与<br />数字会员，一次选好</h1>
-          <p style="margin:0;max-width:500px;color:#53647f;font-size:15px;line-height:1.75;">以 Spotify 高价区订阅与多档机场节点为本期重点；AI 会员、Netflix 及其他影音服务同页可选。规格与价格以网站实时目录为准。</p>
+          <div style="color:#1457d9;font-size:12px;line-height:1.3;font-weight:800;letter-spacing:1.5px;">MUSIC · CONNECTIVITY · ENTERTAINMENT</div>
+          <h1 style="margin:13px 0 12px;color:#101c36;font-size:34px;line-height:1.18;font-weight:900;letter-spacing:0;">让音乐更尽兴，<br />让连接更稳定</h1>
+          <p style="margin:0;max-width:500px;color:#53647f;font-size:15px;line-height:1.75;">Spotify 高价区会员、稳定高速机场节点，以及 AI 会员与 4K 影音服务，满足听歌、连接、工作与娱乐的日常需要。</p>
           <table role="presentation" cellspacing="0" cellpadding="0" style="margin-top:24px;"><tr>
-            <td style="background:#1457d9;"><a href="${shopUrl}" style="display:inline-block;padding:14px 25px;color:#fff;font-size:14px;line-height:1;font-weight:800;text-decoration:none;">查看本期服务&nbsp; →</a></td>
-            <td style="padding-left:18px;"><a href="${guideUrl}" style="color:#31415c;font-size:13.5px;line-height:1.4;font-weight:700;text-decoration:none;">先看购买指南</a></td>
+            <td style="background:#1457d9;"><a href="${shopUrl}" style="display:inline-block;padding:14px 25px;color:#fff;font-size:14px;line-height:1;font-weight:800;text-decoration:none;">查看服务与价格&nbsp; →</a></td>
+            <td style="padding-left:18px;"><a href="${guideUrl}" style="color:#31415c;font-size:13.5px;line-height:1.4;font-weight:700;text-decoration:none;">查看使用指南</a></td>
           </tr></table>
         </td></tr>
 
         <tr><td style="padding:27px 28px 6px;">
-          <div style="color:#1457d9;font-size:11px;line-height:1.3;font-weight:800;letter-spacing:1.4px;">重点推荐</div>
-          <div style="margin-top:5px;color:#101c36;font-size:23px;line-height:1.35;font-weight:900;">Spotify 与机场节点</div>
+          <div style="color:#1457d9;font-size:11px;line-height:1.3;font-weight:800;letter-spacing:1.4px;">MUSIC &amp; CONNECTIVITY</div>
+          <div style="margin-top:5px;color:#101c36;font-size:23px;line-height:1.35;font-weight:900;">Spotify 与稳定高速节点</div>
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:16px;">
-            ${primaryService(byKey.spotify, origin, "使用自己的 Spotify 账号开通；家庭成员、个人、双人及家庭套餐可选，也可由我们提供账号。", "家庭成员性价比更高，日常使用与个人订阅无异。")}
-            ${primaryService(byKey.rocket, origin, "50GB、100GB、200GB 月流量，全年无限流量与 10GB 测试套餐可选。", "交付订阅链接并提供 iPhone、Android、Windows 与 macOS 配置指南。")}
+            ${primaryService(byKey.spotify, origin, "使用自己的 Spotify 账号即可开通，家庭成员、个人、双人及家庭套餐可选；需要时也可由我们提供账号。", "家庭成员方案更具性价比，日常使用体验与个人订阅一致。")}
+            ${primaryService(byKey.rocket, origin, "50GB/月、100GB/月、200GB/月及全年无限流量可选，适合日常浏览、流媒体与高频连接。", "想先体验，可选择 5 元 10GB 测试；支持 iPhone、Android、Windows 与 macOS。")}
           </table>
         </td></tr>
 
         <tr><td style="padding:24px 28px;background:#f7f9fc;border-top:1px solid #dce5f3;border-bottom:1px solid #dce5f3;">
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>
-            <td width="33.33%" style="color:#101c36;font-size:13px;line-height:1.45;font-weight:800;">实时规格与价格</td>
-            <td width="33.33%" style="color:#101c36;font-size:13px;line-height:1.45;font-weight:800;text-align:center;">订单进度可查询</td>
-            <td width="33.33%" style="color:#101c36;font-size:13px;line-height:1.45;font-weight:800;text-align:right;">售后工单可追踪</td>
+            <td width="33.33%" style="color:#101c36;font-size:13px;line-height:1.45;font-weight:800;">方案选择清晰</td>
+            <td width="33.33%" style="color:#101c36;font-size:13px;line-height:1.45;font-weight:800;text-align:center;">覆盖多种设备</td>
+            <td width="33.33%" style="color:#101c36;font-size:13px;line-height:1.45;font-weight:800;text-align:right;">在线客服答疑</td>
           </tr></table>
         </td></tr>
 
         <tr><td style="padding:28px 28px 8px;">
-          <div style="color:#1457d9;font-size:11px;line-height:1.3;font-weight:800;letter-spacing:1.4px;">更多常用服务</div>
-          <div style="margin-top:5px;color:#101c36;font-size:22px;line-height:1.35;font-weight:900;">AI 与 4K 影音</div>
+          <div style="color:#1457d9;font-size:11px;line-height:1.3;font-weight:800;letter-spacing:1.4px;">AI &amp; STREAMING</div>
+          <div style="margin-top:5px;color:#101c36;font-size:22px;line-height:1.35;font-weight:900;">从高效工作到 4K 影音</div>
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:15px;">
-            ${secondaryService(byKey.ai, origin, "ChatGPT 与 Claude 官方会员，多档额度与周期可选。")}
-            ${secondaryService(byKey.netflix, origin, "最高级别 4K 杜比套餐，单独车位或整号可选。")}
+            ${secondaryService(byKey.ai, origin, "ChatGPT Plus、Claude Pro 与更高额度方案，适合学习、创作及专业工作。")}
+            ${secondaryService(byKey.netflix, origin, "Netflix 最高级别 4K 杜比方案，单独车位与整号均可选择。")}
           </table>
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:5px;"><tr>
             ${compactService(byKey.disney, origin)}
@@ -170,8 +170,8 @@ export function buildMarketingMailHtml({ brandName, siteDomain, siteUrl, product
 
         <tr><td style="padding:28px;background:#fff7f1;border-top:1px solid #f1dfd1;">
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>
-            <td><div style="color:#101c36;font-size:18px;line-height:1.4;font-weight:900;">按需求选规格，不必多买</div><div style="margin-top:5px;color:#66758d;font-size:13px;line-height:1.65;">商品页列出全部规格、交付说明与购买指南；提交订单后可在服务中心查询进度或申请售后。</div></td>
-            <td align="right" style="padding-left:16px;white-space:nowrap;"><a href="${shopUrl}" style="display:inline-block;background:#ff633e;padding:13px 18px;color:#fff;font-size:13.5px;line-height:1;font-weight:800;text-decoration:none;">进入服务目录</a></td>
+            <td><div style="color:#101c36;font-size:18px;line-height:1.4;font-weight:900;">找到适合你的数字服务</div><div style="margin-top:5px;color:#66758d;font-size:13px;line-height:1.65;">音乐、连接、AI 与影音均可按使用需求选择，购买与使用问题可咨询在线客服。</div></td>
+            <td align="right" style="padding-left:16px;white-space:nowrap;"><a href="${shopUrl}" style="display:inline-block;background:#ff633e;padding:13px 18px;color:#fff;font-size:13.5px;line-height:1;font-weight:800;text-decoration:none;">查看全部服务</a></td>
           </tr></table>
         </td></tr>
 
@@ -196,7 +196,7 @@ export function buildMarketingMailText({ brandName, siteUrl, products } = {}) {
   return [
     `${brandName || "冒央会社"} · ${MARKETING_MAIL_SUBJECT}`,
     "",
-    "Spotify 高价区订阅与多档机场节点为本期重点，AI 会员与 4K 影音服务一并可选。",
+    "Spotify 高价区会员、稳定高速机场节点，以及 AI 会员与 4K 影音服务，满足听歌、连接、工作与娱乐的日常需要。",
     "",
     ...ordered.map((product) => `${product.name}｜${product.price || "查看实时价格"}\n${product.href}`),
     "",

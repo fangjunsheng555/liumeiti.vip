@@ -51,9 +51,9 @@ const WITHDRAWAL_STATUS = [
   ["success", "提现成功"],
   ["failed", "审核失败"],
 ];
-const MARKETING_MAIL_TEMPLATE_ID = "service_selection_edm_v5";
-const MARKETING_MAIL_SUBJECT = "Spotify 与机场节点｜本期服务精选";
-const MARKETING_MAIL_PREVIEW = "高价区 Spotify、多档流量节点，AI 与 4K 影音服务一并可选。";
+const MARKETING_MAIL_TEMPLATE_ID = "service_selection_edm_v6";
+const MARKETING_MAIL_SUBJECT = "Spotify 高价区会员与高速节点｜让音乐更尽兴，让连接更稳定";
+const MARKETING_MAIL_PREVIEW = "Spotify、机场节点、AI 会员与 4K 影音服务，按使用场景轻松选择。";
 const MAIL_BATCH_LIMIT = 20;
 const MARKETING_DAILY_SCHEDULE_LIMIT = 40;
 const MARKETING_SCHEDULE_REQUEST_LIMIT = 5;

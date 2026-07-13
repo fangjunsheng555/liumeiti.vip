@@ -18,12 +18,13 @@ const products = [
 
 test("marketing mail follows service priority and live catalog prices", () => {
   const html = buildMarketingMailHtml({ brandName: "冒央会社", siteUrl: "https://www.liumeiti.vip", products });
-  assert.match(MARKETING_MAIL_SUBJECT, /Spotify 与机场节点/);
+  assert.match(MARKETING_MAIL_SUBJECT, /让音乐更尽兴，让连接更稳定/);
   for (const product of products) {
     assert.match(html, new RegExp(product.name.replace("+", "\\+")));
     assert.match(html, new RegExp(product.price.replace("+", "\\+")));
   }
-  assert.ok(html.indexOf("Spotify 与机场节点") < html.indexOf("AI 与 4K 影音"));
+  assert.ok(html.indexOf("Spotify 与稳定高速节点") < html.indexOf("从高效工作到 4K 影音"));
+  assert.doesNotMatch(html, /主推|重点推荐|同步开放|实时目录|订单进度可查询|售后工单可追踪|按需求选规格/);
   assert.doesNotMatch(html, /付款秒开通|全网最低价|官方渠道/);
   assert.match(html, /服务中心/);
 });
