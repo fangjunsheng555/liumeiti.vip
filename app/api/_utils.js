@@ -1284,7 +1284,11 @@ async function readEmailApiError(res) {
   }
 }
 
-async function sendViaResend({ to, subject, text, html, fromName, marketing = false }) {
+function resendTag(value, fallback = "") {
+  return clean(value || fallback, 120).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 120);
+}
+
+async function sendViaResend({ to, subject, text, html, fromName, marketing = false, category = "", relatedType = "", relatedId = "" }) {
   const apiKey = process.env.RESEND_API_KEY;
   const from = mailFromAddress();
   if (!apiKey || !from || !to) return { ok: false, reason: "resend_or_to_missing" };
@@ -1298,6 +1302,11 @@ async function sendViaResend({ to, subject, text, html, fromName, marketing = fa
     ...(html ? { html } : {}),
     ...(text ? { text } : {}),
     ...(headers ? { headers } : {}),
+    tags: [
+      { name: "category", value: resendTag(category, marketing ? "marketing" : "transactional") },
+      ...(relatedType ? [{ name: "related_type", value: resendTag(relatedType) }] : []),
+      ...(relatedId ? [{ name: "related_id", value: resendTag(relatedId) }] : []),
+    ],
   };
 
   async function attemptSend(attempt) {
@@ -1421,6 +1430,16 @@ async function alertMailFailure(prepared, result) {
   } catch (e) {}
 }
 
+function settleWithin(promise, timeoutMs) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), timeoutMs);
+    Promise.resolve(promise).then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      () => { clearTimeout(timer); resolve(null); },
+    );
+  });
+}
+
 export async function sendSimpleEmail(args) {
   const prepared = applyEmailSupportContacts(args, args?.support || await currentEmailSupport());
   const provider = String(process.env.EMAIL_PROVIDER || "resend").toLowerCase();
@@ -1428,6 +1447,21 @@ export async function sendSimpleEmail(args) {
   if (provider === "smtp") result = await sendViaSmtp(prepared);
   else if (process.env.RESEND_API_KEY) result = await sendViaResend(prepared);
   else result = { ok: false, provider: "resend", reason: "resend_api_key_missing" };
+  const trackingTasks = [];
+  try {
+    const { registerEmailDelivery } = await import("./_mail-delivery.js");
+    trackingTasks.push(registerEmailDelivery({ args: prepared, result }));
+  } catch (e) {}
+  try {
+    const { recordHealthStatus } = await import("./_health.js");
+    trackingTasks.push(recordHealthStatus("resend", {
+      status: result?.ok ? "ok" : "error",
+      summary: result?.ok ? "最近一封邮件已提交发送" : "最近一次发信失败",
+      error: result?.ok ? "" : (result?.reason || result?.error || "send_failed"),
+      metrics: { provider: result?.provider || provider, attempt: Number(result?.attempt || 1) },
+    }));
+  } catch (e) {}
+  if (trackingTasks.length) await settleWithin(Promise.allSettled(trackingTasks), 1500);
   if (!result?.ok) await alertMailFailure(prepared, result);
   return result;
 }

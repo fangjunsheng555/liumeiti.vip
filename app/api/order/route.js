@@ -213,6 +213,9 @@ async function sendOrderEmail(order) {
 
   const result = await sendSimpleEmail({
     to: order.email,
+    category: "order",
+    relatedType: "order",
+    relatedId: order.orderId,
     subject,
     text,
     html,

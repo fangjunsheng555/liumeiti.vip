@@ -85,7 +85,7 @@ export async function POST(request) {
     const html = buildRecoveryEmailHtml(params);
     const text = buildRecoveryEmailText(params);
     let sent = false;
-    try { const r = await sendSimpleEmail({ to, subject, text, html, fromName: brandName, support: settings.support, locale }); sent = !!(r && (r.messageId || r.ok !== false)); }
+    try { const r = await sendSimpleEmail({ to, subject, text, html, category: "marketing", relatedType: "abandoned", relatedId: id, fromName: brandName, support: settings.support, locale }); sent = !!(r && (r.messageId || r.ok !== false)); }
     catch (e) { sent = false; }
     if (!sent) return Response.json({ ok: false, error: "send_failed" }, { status: 502 });
     // 召回邮件已发出 → 从列表移除

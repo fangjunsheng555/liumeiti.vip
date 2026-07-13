@@ -193,6 +193,8 @@ export async function POST(request) {
       subject: mailSubject,
       text,
       html,
+      category: isMarketingMail ? "marketing" : "support",
+      relatedType: "admin_mail",
       fromName: `${brandName}客服`,
       marketing: isMarketingMail,
       support: settings.support,

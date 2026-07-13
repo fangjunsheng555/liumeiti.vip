@@ -42,7 +42,7 @@ export async function POST(request) {
   ].join("\n");
   const subject = "【工具站建议】" + content.replace(/\s+/g, " ").slice(0, 28);
 
-  const r = await sendSimpleEmail({ to: TO, subject, text });
+  const r = await sendSimpleEmail({ to: TO, subject, text, category: "feedback" });
   if (!r || !r.ok) return Response.json({ ok: false, error: "send_failed" }, { status: 502 });
   return Response.json({ ok: true });
 }

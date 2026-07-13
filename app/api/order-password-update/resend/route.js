@@ -85,6 +85,9 @@ export async function POST(request) {
     });
     const result = await sendSimpleEmail({
       to: order.email,
+      category: "password_update",
+      relatedType: "order",
+      relatedId: order.orderId,
       ...mail,
       fromName: brandName,
       support: settings.support,

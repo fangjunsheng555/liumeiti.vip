@@ -71,7 +71,7 @@ export async function POST(request, { params }) {
   });
 
   const result = await sendSimpleEmail({
-    to, subject, text, html, fromName: brandName, support: settings.support, locale,
+    to, subject, text, html, category: "redeem", relatedType: "redeem_code", relatedId: info.code, fromName: brandName, support: settings.support, locale,
   });
 
   const previewLine = info.type === "service"

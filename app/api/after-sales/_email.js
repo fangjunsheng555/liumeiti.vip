@@ -79,6 +79,9 @@ export async function sendAfterSalesEmail(ticket, kind = "received") {
   const text = `${brandName}\n\n${title}\n${description}\n\n${L("工单编号", "Ticket")}: ${ticket.ticketId}\n${L("关联订单", "Order")}: ${ticket.orderId}\n${L("服务内容", "Service")}: ${ticket.serviceLabel}${noteText}${credentialText}\n${detailUrl}\n\n${support}`;
   return sendSimpleEmail({
     to: ticket.email,
+    category: "after_sales",
+    relatedType: "order",
+    relatedId: ticket.orderId,
     subject: `${title} · ${ticket.ticketId} · ${brandName}`,
     text,
     html,

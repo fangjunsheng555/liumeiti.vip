@@ -3,7 +3,9 @@ import {
   adminSessionFromRequest, isRootAdminSession, adminActorFromRequest,
   pushAdminActionLog, roundMoney, clean, getCatalogStockMap, setStock,
 } from "../../_utils.js";
-import { getMergedCatalog, getCatalogOverrides, saveCatalogOverrides } from "../../_catalog.js";
+import { getMergedCatalog, getCatalogOverrides } from "../../_catalog.js";
+import { commitCatalogVersion, ensureCatalogBaseline, listCatalogVersions } from "../../_catalog-versions.js";
+import { recordHealthStatus } from "../../_health.js";
 import { CATALOG_DEFAULTS } from "../../../lib/catalog-defaults.js";
 
 export const runtime = "nodejs";
@@ -24,10 +26,13 @@ async function catalogWithStock(overrides) {
 }
 
 export async function GET(request) {
-  if (!gate(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const session = gate(request);
+  if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const overrides = await getCatalogOverrides();
+  await ensureCatalogBaseline(overrides, adminActorFromRequest(request));
+  const versionState = await listCatalogVersions(20);
   const catalog = await catalogWithStock(overrides);
-  return Response.json({ ok: true, defaults: CATALOG_DEFAULTS, overrides, catalog });
+  return Response.json({ ok: true, defaults: CATALOG_DEFAULTS, overrides, catalog, ...versionState });
 }
 
 // 把后台编辑面板提交的「合并后目录」反推成「覆盖」:只存与默认不同的字段,保持覆盖层精简、
@@ -76,9 +81,21 @@ export async function PUT(request) {
   if (!gate(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   let body = {};
   try { body = await request.json(); } catch (e) {}
+  const previousOverrides = await getCatalogOverrides();
   const overrides = diffToOverrides(body.catalog);
-  const ok = await saveCatalogOverrides(overrides);
-  if (!ok) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
+  const actor = adminActorFromRequest(request);
+  const committed = await commitCatalogVersion({
+    overrides,
+    previousOverrides,
+    expectedVersion: body.baseVersion,
+    actor,
+    source: "save",
+    note: clean(body.note || "后台保存目录", 160),
+  });
+  if (committed.conflict) {
+    return Response.json({ ok: false, error: "version_conflict", currentVersion: committed.currentVersion }, { status: 409 });
+  }
+  if (!committed.ok) return Response.json({ ok: false, error: committed.error || "save_failed" }, { status: 500 });
 
   // 库存编辑(只对面板里实际改过的规格生效,key 形如 "<service>:<planId>",值 ""=不限/整数≥0)
   const stockEdits = (body.stockEdits && typeof body.stockEdits === "object") ? body.stockEdits : {};
@@ -93,11 +110,15 @@ export async function PUT(request) {
     if (await setStock(svc, pid, val)) stockChanged += 1;
   }
 
-  const actor = adminActorFromRequest(request);
   await pushAdminActionLog({
     action: "catalog_update", actor, target: "catalog",
-    detail: { changedProducts: Object.keys(overrides.products), stockChanged },
+    detail: { changedProducts: Object.keys(overrides.products), stockChanged, version: committed.currentVersion },
   });
+  await recordHealthStatus("catalog", {
+    status: "ok",
+    summary: "商品目录已发布",
+    metrics: { version: committed.currentVersion, products: Object.keys(overrides.products).length, stockChanged },
+  }).catch(() => {});
   const catalog = await catalogWithStock(overrides);
-  return Response.json({ ok: true, overrides, catalog });
+  return Response.json({ ok: true, overrides, catalog, currentVersion: committed.currentVersion, version: committed.version });
 }

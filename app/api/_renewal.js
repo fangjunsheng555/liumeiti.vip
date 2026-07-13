@@ -105,6 +105,9 @@ export async function sendDueRenewalReminders({ now = Date.now() } = {}) {
     const mail = buildRenewalEmail({ order, summary, renewUrl: SITE_URL + renewUrl + "&utm_source=renewal-email", brandName, locale });
     const delivery = await sendSimpleEmail({
       to: order.email,
+      category: "renewal",
+      relatedType: "order",
+      relatedId: order.orderId,
       subject: mail.subject,
       text: mail.text,
       html: mail.html,

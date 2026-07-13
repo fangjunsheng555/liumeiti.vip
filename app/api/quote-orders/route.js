@@ -206,7 +206,7 @@ export async function POST(request) {
     (settings.notify.telegramEnabled ? sendTelegram(requestNotice(order)) : Promise.resolve(null))
       .then((ok) => { if (ok !== null) deliveries.push({ channel: "telegram", ok }); }),
     sendWebhook(order).then((ok) => { if (ok !== null) deliveries.push({ channel: "webhook", ok }); }),
-    sendSimpleEmail({ to: email, ...emailContent, fromName: brandName, support: settings.support, locale })
+    sendSimpleEmail({ to: email, ...emailContent, category: "quote", relatedType: "order", relatedId: order.orderId, fromName: brandName, support: settings.support, locale })
       .then((result) => deliveries.push({ channel: "email", ok: result.ok })),
   ];
   await Promise.allSettled(tasks);

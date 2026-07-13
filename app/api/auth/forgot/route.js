@@ -67,6 +67,8 @@ export async function POST(request) {
     // was causing emails to never reach the provider queue.
     const result = await sendSimpleEmail({
       to: email,
+      category: "verification",
+      relatedType: "account",
       subject: L(`${brandName} · 密码重置验证码 ${code}`, `${brandName} · Password reset code ${code}`),
       text, html,
       support: settings.support,

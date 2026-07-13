@@ -235,6 +235,9 @@ async function sendQueryCode(email, code, query, locale) {
   const text = L(`${brandName} 订单查询验证码\n\n订单查询: ${query}\n验证码: ${code}\n有效期 10 分钟\n\n若非本人操作，请忽略本邮件。`, `${brandName} order lookup code\n\nOrder lookup: ${query}\nCode: ${code}\nValid for 10 minutes\n\nIf this wasn't you, please ignore this email.`);
   return sendSimpleEmail({
     to: email,
+    category: "verification",
+    relatedType: "order_lookup",
+    relatedId: query,
     subject: L(`${brandName} · 订单查询验证码 ${code}`, `${brandName} · Order lookup code ${code}`),
     text,
     html,

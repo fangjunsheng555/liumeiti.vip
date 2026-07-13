@@ -16,6 +16,8 @@ import CatalogPanel from "./CatalogPanel";
 import SettingsPanel from "./SettingsPanel";
 import SecurityPanel from "./SecurityPanel";
 import AfterSalesPanel from "./AfterSalesPanel";
+import MailDeliveryPanel from "./MailDeliveryPanel";
+import SystemHealthPanel from "./SystemHealthPanel";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff, ExternalLink,
   LoaderCircle, LogOut, Search, ShieldCheck,
@@ -23,7 +25,7 @@ import {
   Gift, CreditCard, Plus, UserPlus, Mail, BellRing, BarChart3, Download, FileText,
   LayoutDashboard, ClipboardList, ShoppingCart, Users, Wallet, Coins,
   Megaphone, Footprints, Menu, Newspaper, Gauge, Package, SlidersHorizontal,
-  LifeBuoy,
+  LifeBuoy, MailCheck, Activity,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -3487,6 +3489,7 @@ export default function AdminPage() {
         { key: "catalog", label: "商品价格", icon: Package, show: isRootStaff },
         { key: "codes", label: "兑换码", icon: Gift, show: canViewCodes },
         { key: "mail", label: "客服发信", icon: Mail, show: canSendMail },
+        { key: "mail-delivery", label: "邮件投递", icon: MailCheck, show: isRootStaff },
         { key: "announce", label: "站内公告", icon: Megaphone, show: isRootStaff },
         { key: "announce-posts", label: "公告中心", icon: Newspaper, show: isRootStaff },
       ],
@@ -3501,6 +3504,7 @@ export default function AdminPage() {
     {
       title: "系统",
       items: [
+        { key: "health", label: "系统健康", icon: Activity, show: isRootStaff },
         { key: "settings", label: "站点设置", icon: SlidersHorizontal, show: isRootStaff },
         { key: "ai-quota", label: "AI 限额", icon: Gauge, show: isRootStaff },
         { key: "staff", label: "工作人员", icon: ShieldCheck, show: isRootStaff },
@@ -4403,6 +4407,10 @@ export default function AdminPage() {
           </div>
         ) : tab === "insights" ? (
           <InsightsPanel />
+        ) : tab === "mail-delivery" ? (
+          <MailDeliveryPanel />
+        ) : tab === "health" ? (
+          <SystemHealthPanel />
         ) : tab === "visitors" ? (
           <VisitorsPanel />
         ) : tab === "abandoned" ? (

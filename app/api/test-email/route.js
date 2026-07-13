@@ -73,7 +73,7 @@ export async function POST(request) {
 </body>
 </html>`;
 
-  const result = await sendSimpleEmail({ to, subject, text, html, fromName: brand });
+  const result = await sendSimpleEmail({ to, subject, text, html, category: "test", fromName: brand });
   if (!result.ok) {
     return Response.json({
       ok: false,

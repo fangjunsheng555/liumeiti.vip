@@ -3,7 +3,7 @@
 // 商品/价格/库存管理 — 仅超级管理员。读写 /api/admin/catalog。
 // 改价格/规格/文案/上下架/库存,保存后前端(首页/选购/服务页/结账)与结账实收价即时同步。
 import { useEffect, useState, useCallback } from "react";
-import { LoaderCircle, Save, RotateCcw, Package, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { LoaderCircle, Save, RotateCcw, Package, AlertTriangle, CheckCircle2, History, Undo2, X } from "lucide-react";
 
 export default function CatalogPanel() {
   const [catalog, setCatalog] = useState(null);
@@ -11,13 +11,22 @@ export default function CatalogPanel() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
   const [stockEdits, setStockEdits] = useState({}); // { "<key>:<planId>": "" | "整数" }
+  const [currentVersion, setCurrentVersion] = useState("");
+  const [versions, setVersions] = useState([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [rollbackBusy, setRollbackBusy] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true); setMsg(null);
     try {
       const r = await fetch("/api/admin/catalog", { credentials: "same-origin", cache: "no-store" });
       const j = await r.json();
-      if (j.ok) { setCatalog(j.catalog); setStockEdits({}); }
+      if (j.ok) {
+        setCatalog(j.catalog);
+        setStockEdits({});
+        setCurrentVersion(j.currentVersion || "");
+        setVersions(j.versions || []);
+      }
       else setMsg({ type: "error", text: j.error === "unauthorized" ? "仅超级管理员可管理商品" : (j.error || "加载失败") });
     } catch (e) { setMsg({ type: "error", text: "网络错误" }); }
     finally { setLoading(false); }
@@ -49,13 +58,62 @@ export default function CatalogPanel() {
       const r = await fetch("/api/admin/catalog", {
         method: "PUT", credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ catalog, stockEdits }),
+        body: JSON.stringify({ catalog, stockEdits, baseVersion: currentVersion }),
       });
       const j = await r.json();
-      if (j.ok) { setCatalog(j.catalog); setStockEdits({}); setMsg({ type: "ok", text: "已保存 · 前端展示/结账价格与库存已即时更新" }); }
-      else setMsg({ type: "error", text: j.error || "保存失败" });
+      if (j.ok) {
+        setCatalog(j.catalog);
+        setStockEdits({});
+        setCurrentVersion(j.currentVersion || currentVersion);
+        if (j.version) setVersions((items) => [j.version, ...items].slice(0, 60));
+        setMsg({ type: "ok", text: "已保存 · 前端展示、结账价格与库存已同步" });
+      } else if (r.status === 409 || j.error === "version_conflict") {
+        setMsg({ type: "error", text: "目录已被其他后台页面更新，请重载后再修改" });
+      } else setMsg({ type: "error", text: j.error || "保存失败" });
     } catch (e) { setMsg({ type: "error", text: "网络错误" }); }
     finally { setSaving(false); }
+  }
+
+  async function openHistory() {
+    setHistoryOpen(true);
+    try {
+      const response = await fetch("/api/admin/catalog/versions", { credentials: "same-origin", cache: "no-store" });
+      const data = await response.json();
+      if (response.ok && data.ok) {
+        setVersions(data.versions || []);
+        setCurrentVersion(data.currentVersion || currentVersion);
+      }
+    } catch (e) {}
+  }
+
+  async function rollback(version) {
+    if (!version?.id || version.id === currentVersion) return;
+    if (!window.confirm(`恢复到版本 ${version.id}？实时库存不会回滚。`)) return;
+    setRollbackBusy(version.id);
+    setMsg(null);
+    try {
+      const response = await fetch("/api/admin/catalog/rollback", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ versionId: version.id, baseVersion: currentVersion }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        if (response.status === 409 || data.error === "version_conflict") throw new Error("目录已被更新，请关闭记录后重载");
+        throw new Error(data.error || "rollback_failed");
+      }
+      setCatalog(data.catalog);
+      setStockEdits({});
+      setCurrentVersion(data.currentVersion || currentVersion);
+      if (data.version) setVersions((items) => [data.version, ...items].slice(0, 60));
+      setHistoryOpen(false);
+      setMsg({ type: "ok", text: "目录版本已恢复，实时库存保持不变" });
+    } catch (error) {
+      setMsg({ type: "error", text: error?.message === "rollback_failed" ? "版本恢复失败" : (error?.message || "版本恢复失败") });
+    } finally {
+      setRollbackBusy("");
+    }
   }
 
   if (loading && !catalog) return <div style={{ display: "inline-flex", gap: 8, alignItems: "center", color: "var(--muted)", fontSize: 13 }}><LoaderCircle size={16} className="spin-icon" />加载商品…</div>;
@@ -67,6 +125,7 @@ export default function CatalogPanel() {
         <h2><Package size={19} />商品 / 价格管理</h2>
         <span className="sub">价格/规格/文案/上下架/库存,保存即全站+结账生效</span>
         <span className="spacer" />
+        <button type="button" className="admin-settings-btn" onClick={openHistory} disabled={saving}><History size={13} />版本记录</button>
         <button type="button" className="admin-settings-btn" onClick={load} disabled={saving}><RotateCcw size={13} />重载</button>
         <button type="button" className="admin-settings-btn primary" onClick={save} disabled={saving}>
           {saving ? <LoaderCircle size={14} className="spin-icon" /> : <Save size={14} />}{saving ? "保存中" : "保存全部"}
@@ -127,6 +186,36 @@ export default function CatalogPanel() {
           )}
         </div>
       ))}
+
+      {historyOpen && (
+        <div className="admin-drawer-mask" onMouseDown={(event) => event.target === event.currentTarget && setHistoryOpen(false)}>
+          <aside className="admin-compact-drawer admin-version-drawer" role="dialog" aria-modal="true" aria-label="商品目录版本记录">
+            <header>
+              <div><span>商品目录</span><strong>版本记录</strong></div>
+              <button type="button" onClick={() => setHistoryOpen(false)} aria-label="关闭"><X size={18} /></button>
+            </header>
+            <p className="admin-version-note">恢复价格、规格与商品文案；实时库存不会回滚。</p>
+            <div className="admin-version-list">
+              {versions.length === 0 ? <div className="admin-compact-empty">暂无版本记录</div> : versions.map((version) => {
+                const current = version.id === currentVersion;
+                const summary = version.summary || {};
+                return (
+                  <div className={`admin-version-row${current ? " current" : ""}`} key={version.id}>
+                    <div>
+                      <strong>{version.source === "rollback" ? "恢复版本" : version.source === "baseline" ? "初始版本" : "目录更新"}{current ? <em>当前</em> : null}</strong>
+                      <small>{version.createdAtBeijing || version.createdAt}</small>
+                      <span>{summary.productCount || 0} 个商品 · {summary.fieldCount || 0} 项变更 · {version.actor?.staffUsername || "system"}</span>
+                    </div>
+                    <button type="button" onClick={() => rollback(version)} disabled={current || Boolean(rollbackBusy)}>
+                      {rollbackBusy === version.id ? <LoaderCircle size={13} className="spin-icon" /> : <Undo2 size={13} />}{current ? "使用中" : "恢复"}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </aside>
+        </div>
+      )}
     </div>
   );
 }

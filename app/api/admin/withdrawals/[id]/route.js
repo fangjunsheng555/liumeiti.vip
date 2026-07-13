@@ -47,6 +47,9 @@ async function sendWithdrawalResultEmail(withdrawal) {
     const text = `${brandName} 提现通知\n\n${title}\n${bodyLine}\n金额: ¥${amount}\n时间: ${withdrawal.updatedAtBeijing || ""}\n\n${support}`;
     return await sendSimpleEmail({
       to,
+      category: "withdrawal",
+      relatedType: "withdrawal",
+      relatedId: withdrawal.id,
       subject: `${okStatus ? "✅" : "⚠️"} ${title} · ¥${amount} · ${brandName}`,
       text, html, fromName: brandName, support: settings.support, locale: "zh",
     });

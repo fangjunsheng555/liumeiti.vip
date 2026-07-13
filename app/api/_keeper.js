@@ -17,18 +17,38 @@ async function usdtTick() {
   const { confirmPendingUsdtPayments } = await import("./_usdt-confirm.js");
   const settings = await getSettings();
   // 未开启 autoConfirm 时 confirmPendingUsdtPayments 直接返回 disabled,零链上请求。
-  await confirmPendingUsdtPayments({ settings, actor: { staffId: 0, staffUsername: "keeper" } });
+  const result = await confirmPendingUsdtPayments({ settings, actor: { staffId: 0, staffUsername: "keeper" } });
+  const { recordHealthStatus } = await import("./_health.js");
+  await recordHealthStatus("usdt", {
+    status: result?.disabled ? "disabled" : result?.ok ? "ok" : "error",
+    summary: result?.disabled ? "自动确认未开启" : result?.ok ? "链上扫描完成" : "链上扫描失败",
+    error: result?.ok ? "" : (result?.error || "usdt_check_failed"),
+    metrics: { scanned: Number(result?.scanned || 0), matched: Number(result?.matched || 0), pending: Number(result?.pending || 0) },
+  });
 }
 
 async function renewalTick() {
   const acquired = await redisCmd(["SET", RENEWAL_TICK_LOCK, "1", "NX", "EX", String(RENEWAL_TICK_INTERVAL_SEC)]);
   if (acquired !== "OK") return;
   const { sendDueRenewalReminders } = await import("./_renewal.js");
-  await sendDueRenewalReminders();
+  const result = await sendDueRenewalReminders();
+  const { recordHealthStatus } = await import("./_health.js");
+  await recordHealthStatus("renewal", {
+    status: result?.ok ? "ok" : "error",
+    summary: result?.ok ? "续费提醒扫描完成" : "续费提醒扫描失败",
+    error: result?.ok ? "" : (result?.error || "renewal_check_failed"),
+    metrics: { scanned: Number(result?.scanned || 0), due: Number(result?.due || 0), sent: Number(result?.sent || 0) },
+  });
+}
+
+async function weeklyBackupTick() {
+  const { runWeeklyTelegramBackup } = await import("./_backup.js");
+  await runWeeklyTelegramBackup();
 }
 
 export async function runMaintenanceTick() {
   if (!redisConfig()) return;
   try { await usdtTick(); } catch (e) {}
   try { await renewalTick(); } catch (e) {}
+  try { await weeklyBackupTick(); } catch (e) {}
 }
