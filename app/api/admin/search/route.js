@@ -13,7 +13,7 @@ export async function GET(request) {
   const q = String(new URL(request.url).searchParams.get("q") || "").trim().toLowerCase();
   if (q.length < 2) return Response.json({ ok: true, orders: [], users: [], codes: [] });
 
-  const statusLabel = { awaiting_quote: "待报价", pending_payment: "待付款", received: "未完成", completed: "已完成", invalid: "无效" };
+  const statusLabel = { awaiting_quote: "待报价", pending_payment: "待付款", quote_expired: "报价已失效", received: "未完成", completed: "已完成", invalid: "无效" };
 
   // 订单(所有可看订单的角色)
   const allOrders = await getAllOrders();

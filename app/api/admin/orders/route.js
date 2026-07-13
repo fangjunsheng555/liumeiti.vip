@@ -6,6 +6,7 @@ import {
   adminPermissionProfile,
 } from "../../_utils.js";
 import { hasPendingSpotifyPasswordCorrection } from "../../../lib/order-attention.js";
+import { effectiveQuoteStatus } from "../../_quote-expiry.js";
 
 function subscriptionLinks(username) {
   const encoded = encodeURIComponent(String(username || "").trim());
@@ -21,9 +22,9 @@ function minutesSince(value) {
   return Math.max(0, Math.floor((Date.now() - time) / 60000));
 }
 
-function abnormalInfo(order) {
-  const status = order.status || "received";
+function abnormalInfo(order, status = effectiveQuoteStatus(order)) {
   if (status === "invalid") return { abnormal: true, reason: "已标记无效", level: "danger" };
+  if (status === "quote_expired") return { abnormal: true, reason: "报价已失效，等待重新报价", level: "warn" };
   if (hasPendingSpotifyPasswordCorrection(order)) {
     return { abnormal: true, reason: "Spotify 登录资料待用户更新", level: "warn" };
   }
@@ -38,6 +39,7 @@ function abnormalInfo(order) {
 }
 
 function normalizeOrder(order) {
+  const status = effectiveQuoteStatus(order);
   // Ensure items array exists; add defaults
   let items;
   if (Array.isArray(order.items) && order.items.length > 0) {
@@ -78,7 +80,7 @@ function normalizeOrder(order) {
       subscriptionLinks: order.service === "rocket" && order.account ? subscriptionLinks(order.account) : null,
     }];
   }
-  const abnormal = abnormalInfo(order);
+  const abnormal = abnormalInfo(order, status);
   const referralEntries = Array.isArray(order.referralCommissionEntries)
     ? order.referralCommissionEntries.map((entry) => ({
       email: entry?.email || "",
@@ -99,7 +101,7 @@ function normalizeOrder(order) {
   return {
     orderId: order.orderId || "",
     orderType: order.orderType || "standard",
-    status: order.status || "received",
+    status,
     createdAt: order.createdAt || "",
     createdAtBeijing: order.createdAtBeijing || "",
     completedAt: order.completedAt || null,
@@ -131,6 +133,9 @@ function normalizeOrder(order) {
     quoteAmount: Number(order.quoteAmount || 0),
     quotedAtBeijing: order.quotedAtBeijing || "",
     quoteExpiresAt: order.quoteExpiresAt || "",
+    quoteExpiresAtBeijing: order.quoteExpiresAtBeijing || "",
+    quoteValidDays: Number(order.quoteValidDays || 7),
+    quoteExpiredAtBeijing: order.quoteExpiredAtBeijing || "",
     quoteEmailSentAtBeijing: order.quoteEmailSentAtBeijing || "",
     quoteEmailOk: order.quoteEmailOk !== false,
     paymentSubmittedAtBeijing: order.paymentSubmittedAtBeijing || "",
@@ -178,7 +183,7 @@ function csvCell(v) {
 }
 function ordersToCsv(orders) {
   const head = ["订单号", "状态", "下单时间", "完成时间", "服务", "件数", "支付方式", "实付金额", "实付币种", "折后CNY", "优惠券抵扣", "下单邮箱", "联系方式", "用户IP", "买家备注", "客服备注"];
-  const statusLabel = { awaiting_quote: "待报价", pending_payment: "待付款", received: "已收到", completed: "已完成", invalid: "无效" };
+  const statusLabel = { awaiting_quote: "待报价", pending_payment: "待付款", quote_expired: "报价已失效", received: "已收到", completed: "已完成", invalid: "无效" };
   const rows = orders.map((o) => [
     o.orderId, statusLabel[o.status] || o.status, o.createdAtBeijing, o.completedAtBeijing || "",
     o.serviceLabel, o.itemCount, o.paymentMethod, o.paidAmount, o.paidCurrency,
@@ -227,7 +232,7 @@ export async function GET(request) {
   let filtered = all.map(normalizeOrder);
   if (status === "abnormal") {
     filtered = filtered.filter((o) => o.abnormal);
-  } else if (["awaiting_quote", "pending_payment", "received", "completed", "invalid"].includes(status)) {
+  } else if (["awaiting_quote", "pending_payment", "quote_expired", "received", "completed", "invalid"].includes(status)) {
     filtered = filtered.filter((o) => o.status === status);
   }
   if (from || to) {

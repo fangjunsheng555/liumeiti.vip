@@ -19,8 +19,8 @@ import {
 const INVITE_LINK_ORIGIN = "https://www.liumeiti.vip";
 const GOOGLE_OAUTH_START = "/api/auth/oauth/google/start";
 
-const STATUS_LABEL = { awaiting_quote: "等待人工报价", pending_payment: "等待付款", received: "订单已收到", completed: "订单已完成", invalid: "订单无效·未收到付款" };
-const STATUS_LABEL_EN = { awaiting_quote: "Awaiting quote", pending_payment: "Awaiting payment", received: "Order received", completed: "Completed", invalid: "Invalid · unpaid" };
+const STATUS_LABEL = { awaiting_quote: "等待人工报价", pending_payment: "等待付款", quote_expired: "报价已失效", received: "订单已收到", completed: "订单已完成", invalid: "订单无效·未收到付款" };
+const STATUS_LABEL_EN = { awaiting_quote: "Awaiting quote", pending_payment: "Awaiting payment", quote_expired: "Quote expired", received: "Order received", completed: "Completed", invalid: "Invalid · unpaid" };
 const TX_STATUS_EN = { "待审核": "Pending review", "提现中": "Processing", "提现成功": "Withdrawn", "审核失败": "Rejected" };
 
 // 到期日文案(北京时间日期)
@@ -913,7 +913,7 @@ export default function AccountPage() {
                     {o.itemCount > 1 && <em>{L(`${o.itemCount} 件`, `${o.itemCount} items`)}</em>}
                   </div>
                   <div className="account-order-bot">
-                    <span>{o.status === "awaiting_quote" ? L("待报价", "Custom quote") : o.status === "pending_payment" ? `${L("报价", "Quote")} ¥${Number(o.quoteAmount || 0).toFixed(2)}` : o.paidCurrency === "CODE" ? L("兑换码", "Code") : o.paidCurrency === "USDT" ? `${o.paidAmount} USDT` : `¥${o.paidAmount}`}</span>
+                    <span>{o.status === "awaiting_quote" ? L("待报价", "Custom quote") : o.status === "pending_payment" ? `${L("报价", "Quote")} ¥${Number(o.quoteAmount || 0).toFixed(2)}` : o.status === "quote_expired" ? `${L("报价已失效", "Quote expired")} · ¥${Number(o.quoteAmount || 0).toFixed(2)}` : o.paidCurrency === "CODE" ? L("兑换码", "Code") : o.paidCurrency === "USDT" ? `${o.paidAmount} USDT` : `¥${o.paidAmount}`}</span>
                     <small>{o.createdAtBeijing?.split(" ")[0] || ""}</small>
                   </div>
                 </button>
@@ -1186,8 +1186,8 @@ export default function AccountPage() {
                 ) : null}
               </div>
               <div className="account-modal-amount">
-                <span>{activeOrder.status === "awaiting_quote" ? L("当前进度", "Current status") : activeOrder.status === "pending_payment" ? L("报价金额", "Quote") : L("实付金额", "Amount paid")}</span>
-                <b>{activeOrder.status === "awaiting_quote" ? L("等待报价", "Awaiting quote") : activeOrder.status === "pending_payment" ? `¥${Number(activeOrder.quoteAmount || 0).toFixed(2)}` : activeOrder.paidCurrency === "CODE" ? L("服务兑换码", "Service code") : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b>
+                <span>{activeOrder.status === "awaiting_quote" ? L("当前进度", "Current status") : ["pending_payment", "quote_expired"].includes(activeOrder.status) ? L("报价金额", "Quote") : L("实付金额", "Amount paid")}</span>
+                <b>{activeOrder.status === "awaiting_quote" ? L("等待报价", "Awaiting quote") : activeOrder.status === "pending_payment" ? `¥${Number(activeOrder.quoteAmount || 0).toFixed(2)}` : activeOrder.status === "quote_expired" ? L("本次报价已失效", "This quote has expired") : activeOrder.paidCurrency === "CODE" ? L("服务兑换码", "Service code") : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b>
                 <em>{activeOrder.paymentMethod === "quote" ? L("人工报价", "Custom quote") : activeOrder.paymentMethod === "redeem" ? L("兑换码", "Code") : activeOrder.paymentMethod === "usdt" ? "USDT" : L("支付宝", "Alipay")}</em>
               </div>
 
@@ -1195,7 +1195,7 @@ export default function AccountPage() {
                 <div className="account-proxy-order-info">
                   <div className="span-2"><span>{L("网站 / 平台", "Website / platform")}</span><a href={activeOrder.platformUrl} target="_blank" rel="noopener noreferrer">{activeOrder.platformUrl}<ExternalLink size={12} /></a></div>
                   <div><span>{L("商品标价", "Listed price")}</span><b>{activeOrder.productPrice}</b></div>
-                  <div><span>{L("付款提示", "Payment")}</span><b>{activeOrder.status === "pending_payment" ? L("请查收报价邮件", "Check your quote email") : activeOrder.status === "awaiting_quote" ? L("报价将发送至邮箱", "Quote will be emailed") : L("已提交付款信息", "Payment submitted")}</b></div>
+                  <div><span>{L("下一步", "Next")}</span><b>{activeOrder.status === "pending_payment" ? L(`请在 ${activeOrder.quoteExpiresAtBeijing || "有效期内"} 完成付款`, `Pay by ${activeOrder.quoteExpiresAtBeijing || "the deadline"}`) : activeOrder.status === "quote_expired" ? L("重新报价后将发送新邮件", "A new link will be emailed after requoting") : activeOrder.status === "awaiting_quote" ? L("报价将发送至邮箱", "Quote will be emailed") : L("已提交付款信息", "Payment submitted")}</b></div>
                 </div>
               )}
 

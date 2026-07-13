@@ -18,6 +18,7 @@ import {
   percent,
   round2,
 } from "./metrics.js";
+import { effectiveQuoteStatus } from "../../_quote-expiry.js";
 
 export const runtime = "nodejs";
 
@@ -256,10 +257,10 @@ export async function GET(request) {
 
   const statusCounts = {};
   rangeOrders.forEach((order) => {
-    const key = order.status || "received";
+    const key = effectiveQuoteStatus(order);
     statusCounts[key] = (statusCounts[key] || 0) + 1;
   });
-  const statusPriority = ["completed", "received", "awaiting_quote", "pending_payment", "invalid"];
+  const statusPriority = ["completed", "received", "awaiting_quote", "pending_payment", "quote_expired", "invalid"];
   const statusKeys = Array.from(new Set(statusPriority.concat(Object.keys(statusCounts))));
   const statuses = statusKeys.map((key) => ({
     key,

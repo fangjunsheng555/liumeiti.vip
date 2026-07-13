@@ -1,29 +1,18 @@
 // 公告中心 — 后台 CRUD（仅超级管理员）。
-import { adminSessionFromRequest, isRootAdminSession, redisCmd } from "../../_utils.js";
+import { adminSessionFromRequest, isRootAdminSession } from "../../_utils.js";
+import { getMergedCatalog } from "../../_catalog.js";
+import { readAnnouncementPosts, saveAnnouncementPosts } from "./_store.js";
 
 export const runtime = "nodejs";
 function gate(request) { const s = adminSessionFromRequest(request); return s && isRootAdminSession(s) ? s : null; }
 
-const POSTS_KEY = "lm:announce:posts";
 const CATEGORIES = ["company", "business", "system", "promo"];
-
-function loadPosts(raw) {
-  if (!raw) return [];
-  try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch (e) { return []; }
-}
-
-async function readPosts() {
-  try { return loadPosts(await redisCmd(["GET", POSTS_KEY])); } catch (e) { return []; }
-}
-
-async function savePosts(posts) {
-  await redisCmd(["SET", POSTS_KEY, JSON.stringify(posts)]);
-}
 
 export async function GET(request) {
   if (!gate(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
-  const posts = await readPosts();
-  return Response.json({ ok: true, posts });
+  const [posts, catalog] = await Promise.all([readAnnouncementPosts(), getMergedCatalog()]);
+  const services = catalog.map((product) => ({ key: product.key, label: product.title, active: product.active !== false }));
+  return Response.json({ ok: true, posts, services });
 }
 
 export async function POST(request) {
@@ -31,6 +20,8 @@ export async function POST(request) {
   let body = {};
   try { body = await request.json(); } catch (e) {}
   const input = body.post || {};
+  const catalog = await getMergedCatalog();
+  const serviceKeys = new Set(catalog.map((product) => product.key));
   const category = CATEGORIES.includes(input.category) ? input.category : "";
   const clean = {
     title: String(input.title || "").slice(0, 160),
@@ -42,9 +33,10 @@ export async function POST(request) {
     pinned: Boolean(input.pinned),
     published: Boolean(input.published),
     inBar: Boolean(input.inBar),   // 在站内公告顶栏轮播(只轮播标题)
+    affectedService: serviceKeys.has(String(input.affectedService || "")) ? String(input.affectedService) : "",
   };
   const now = Date.now();
-  const posts = await readPosts();
+  const posts = await readAnnouncementPosts();
   const idx = posts.findIndex((p) => p && Number(p.id) === Number(input.id));
   let post;
   if (idx >= 0) {
@@ -54,7 +46,7 @@ export async function POST(request) {
     post = { ...clean, id: now, createdAt: now, updatedAt: now };
     posts.push(post);
   }
-  await savePosts(posts);
+  await saveAnnouncementPosts(posts);
   return Response.json({ ok: true, post });
 }
 
@@ -62,8 +54,8 @@ export async function DELETE(request) {
   if (!gate(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   let body = {};
   try { body = await request.json(); } catch (e) {}
-  const posts = (await readPosts()).filter((p) => p && Number(p.id) !== Number(body.id));
-  await savePosts(posts);
+  const posts = (await readAnnouncementPosts()).filter((p) => p && Number(p.id) !== Number(body.id));
+  await saveAnnouncementPosts(posts);
   return Response.json({ ok: true });
 }
 

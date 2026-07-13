@@ -3,7 +3,8 @@
 // 后台「公告中心」编辑。仅超级管理员。管理多条带日期/分类的公告，前端在 /announcements 列表展示。
 // 列表 = GET /api/admin/announce-posts。保存 = POST { post }（含 id 即编辑）。删除 = DELETE { id }。
 import { useCallback, useEffect, useState } from "react";
-import { Inbox, LoaderCircle, CheckCircle2, AlertTriangle, Pin, Plus, Pencil, Trash2, Eye, EyeOff, Megaphone } from "lucide-react";
+import { Inbox, LoaderCircle, CheckCircle2, AlertTriangle, Pin, Plus, Pencil, Trash2, Eye, EyeOff, Megaphone, Send } from "lucide-react";
+import ServiceNoticeDialog from "./ServiceNoticeDialog";
 
 const C = {
   text: "var(--text, #1d1d1f)", muted: "var(--muted, #6e6e73)", faint: "var(--faint, #8a8a8e)", border: "var(--border, #d2d2d7)",
@@ -26,7 +27,7 @@ const CAT_MAP = {
 };
 const catLabel = (c) => (CAT_MAP[c] ? CAT_MAP[c].zh : "");
 
-const EMPTY = { id: 0, title: "", titleEn: "", body: "", bodyEn: "", date: "", category: "", pinned: false, published: true, inBar: false };
+const EMPTY = { id: 0, title: "", titleEn: "", body: "", bodyEn: "", date: "", category: "", affectedService: "", pinned: false, published: true, inBar: false };
 
 // 显示排序：置顶优先，其次日期字符串倒序（新在前）。
 function sortPosts(list) {
@@ -42,6 +43,8 @@ export default function AnnouncePostsPanel() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null); // { type: "ok"|"error", text } | null
   const [form, setForm] = useState(EMPTY);
+  const [services, setServices] = useState([]);
+  const [noticePost, setNoticePost] = useState(null);
 
   const ok = (text) => setMsg({ type: "ok", text });
   const err = (text) => setMsg({ type: "error", text });
@@ -52,7 +55,10 @@ export default function AnnouncePostsPanel() {
     try {
       const r = await fetch("/api/admin/announce-posts", { credentials: "same-origin", cache: "no-store" });
       const d = await r.json();
-      if (d && d.ok) setPosts(sortPosts(Array.isArray(d.posts) ? d.posts : []));
+      if (d && d.ok) {
+        setPosts(sortPosts(Array.isArray(d.posts) ? d.posts : []));
+        setServices(Array.isArray(d.services) ? d.services : []);
+      }
       else if (r.status === 401) err("无权限（仅超级管理员可管理公告）");
       else err("加载失败，请重试");
     } catch (e) { err("加载失败，请重试"); }
@@ -67,6 +73,7 @@ export default function AnnouncePostsPanel() {
     setForm({
       id: p.id || 0, title: p.title || "", titleEn: p.titleEn || "", body: p.body || "", bodyEn: p.bodyEn || "",
       date: p.date || "", category: p.category || "", pinned: !!p.pinned, published: p.published !== false, inBar: !!p.inBar,
+      affectedService: p.affectedService || "",
     });
     setMsg(null);
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
@@ -81,6 +88,7 @@ export default function AnnouncePostsPanel() {
       title: form.title.trim(), titleEn: form.titleEn.trim(),
       body: form.body, bodyEn: form.bodyEn,
       date: form.date.trim(), category: form.category,
+      affectedService: form.affectedService,
       pinned: !!form.pinned, published: !!form.published, inBar: !!form.inBar,
     };
     try {
@@ -174,6 +182,14 @@ export default function AnnouncePostsPanel() {
                 {CATS.map((c) => <option key={c.value || "none"} value={c.value}>{c.label}</option>)}
               </select>
             </div>
+            <div>
+              <label style={label}>关联服务（可选）</label>
+              <select style={{ ...inp, cursor: "pointer" }} value={form.affectedService} onChange={(e) => setF("affectedService", e.target.value)}>
+                <option value="">不关联服务</option>
+                {services.map((service) => <option key={service.key} value={service.key}>{service.label}{service.active ? "" : "（已下架）"}</option>)}
+              </select>
+              <small style={{ display: "block", marginTop: 5, color: C.faint, fontSize: 11.5, lineHeight: 1.5 }}>关联后可向相关用户发送邮件，不会在商品页显示提示。</small>
+            </div>
           </div>
 
           <div style={{ marginBottom: 14 }}>
@@ -243,11 +259,13 @@ export default function AnnouncePostsPanel() {
                         ? <Badge fg={C.ok} bg="#f0fdf4" bd="#bbf7d0"><Eye size={10} />已发布</Badge>
                         : <Badge fg={C.muted} bg={C.surface2} bd={C.border}><EyeOff size={10} />草稿</Badge>}
                       {p.inBar && <Badge fg={C.accent} bg={C.accentSoft} bd="#bbe7df"><Megaphone size={10} />顶栏轮播</Badge>}
+                      {p.affectedService && <Badge fg="#0f6675" bg="#ecfeff" bd="#bae6fd">{services.find((service) => service.key === p.affectedService)?.label || p.affectedService}</Badge>}
                     </div>
                     <div style={{ fontSize: 14, fontWeight: 700, color: C.text, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title || "（无标题）"}</div>
                     {p.body && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3, lineHeight: 1.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.body}</div>}
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: "none" }}>
+                    {p.affectedService && <button type="button" onClick={() => setNoticePost(p)} disabled={busy} style={iconBtn(C.accent)}><Send size={13} />通知用户</button>}
                     <button type="button" onClick={() => editPost(p)} disabled={busy} style={iconBtn(C.accent)}><Pencil size={13} />编辑</button>
                     <button type="button" onClick={() => del(p.id, p.title)} disabled={busy} style={iconBtn(C.danger)}><Trash2 size={13} />删除</button>
                   </div>
@@ -257,6 +275,7 @@ export default function AnnouncePostsPanel() {
           )}
         </div>
       </div>
+      {noticePost && <ServiceNoticeDialog post={noticePost} onClose={() => setNoticePost(null)} />}
     </div>
   );
 }

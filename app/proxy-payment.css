@@ -599,12 +599,23 @@
   border-color: #cbdff4;
 }
 
+.admin-order-status.status-quote_expired,
+.admin-modal-status.status-quote_expired {
+  color: #9a3412;
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
 .admin-order-card.status-awaiting_quote {
   border-left-color: #d97706;
 }
 
 .admin-order-card.status-pending_payment {
   border-left-color: #3978b8;
+}
+
+.admin-order-card.status-quote_expired {
+  border-left-color: #ea580c;
 }
 
 .admin-proxy-order-section {
@@ -683,10 +694,21 @@
 
 .admin-proxy-quote-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 116px auto;
   gap: 10px;
   align-items: end;
   margin-top: 14px;
+}
+
+.admin-proxy-validity-field select {
+  width: 100%;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid #cad7e0;
+  border-radius: 9px;
+  background: #fff;
+  color: #172033;
+  font: inherit;
 }
 
 .admin-proxy-amount-input {
@@ -759,6 +781,14 @@
   color: #245a91;
   background: #edf5ff;
   border-color: #cbdff4;
+}
+
+.account-order-status.status-quote_expired,
+.account-modal-status.status-quote_expired,
+.query-modal-status.status-quote_expired {
+  color: #9a3412;
+  background: #fff7ed;
+  border-color: #fed7aa;
 }
 
 .account-proxy-order-info {

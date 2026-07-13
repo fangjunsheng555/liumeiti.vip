@@ -7,6 +7,7 @@ import { getSettings } from "../../_settings.js";
 import { getAfterSalesCounts } from "../../after-sales/_store.js";
 import { hasPendingSpotifyPasswordCorrection } from "../../../lib/order-attention.js";
 import { orderExpirySummary } from "../../../lib/order-expiry.js";
+import { effectiveQuoteStatus } from "../../_quote-expiry.js";
 
 function beijingDateKey(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
@@ -42,8 +43,9 @@ function minutesSince(value) {
 }
 
 function isAbnormalOrder(order) {
-  const status = order.status || "received";
+  const status = effectiveQuoteStatus(order);
   if (status === "invalid") return true;
+  if (status === "quote_expired") return true;
   if (hasPendingSpotifyPasswordCorrection(order)) return true;
   if (status !== "received") return false;
   const age = minutesSince(order.createdAt);
@@ -68,7 +70,7 @@ export async function GET(request) {
   const orders = ordersRaw
     .map((order) => ({
       orderId: order.orderId || "",
-      status: order.status || "received",
+      status: effectiveQuoteStatus(order),
       paymentMethod: order.paymentMethod || "alipay",
       paidCurrency: order.paidCurrency || (order.paymentMethod === "usdt" ? "USDT" : "CNY"),
       usdtPayAmount: Number(order.usdtPayAmount || 0),
@@ -97,7 +99,7 @@ export async function GET(request) {
     todayOrders: orders.filter((order) => orderBeijingDateKey(order) === todayKey).length,
     todayRevenue: Math.round(todayRevenue * 100) / 100,
     totalRevenue: Math.round(totalRevenue * 100) / 100,
-    pendingOrders: orders.filter((order) => ["awaiting_quote", "pending_payment", "received"].includes(order.status)).length,
+    pendingOrders: orders.filter((order) => ["awaiting_quote", "pending_payment", "quote_expired", "received"].includes(order.status)).length,
     receivedOrders: orders.filter((order) => order.status === "received").length,
     awaitingQuotes: orders.filter((order) => order.status === "awaiting_quote").length,
     pendingQuotePayments: orders.filter((order) => order.status === "pending_payment").length,

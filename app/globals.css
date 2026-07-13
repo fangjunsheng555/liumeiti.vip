@@ -6877,6 +6877,7 @@ summary:focus-visible {
 .admin-overview-latest-eyebrow em.status-completed { background: #dcfce7; color: #166534; }
 .admin-overview-latest-eyebrow em.status-awaiting_quote { background: #fef3c7; color: #92400e; }
 .admin-overview-latest-eyebrow em.status-pending_payment { background: #dbeafe; color: #1d4ed8; }
+.admin-overview-latest-eyebrow em.status-quote_expired { background: #ffedd5; color: #9a3412; }
 .admin-overview-latest-eyebrow em.status-invalid { background: #fee2e2; color: #b91c1c; }
 .admin-overview-latest-copy > strong {
   overflow: hidden;
@@ -9047,6 +9048,7 @@ summary:focus-visible {
 .admin-insights-status-list .status-received i { background: #2563eb; }
 .admin-insights-status-list .status-awaiting_quote i,
 .admin-insights-status-list .status-pending_payment i { background: #d97706; }
+.admin-insights-status-list .status-quote_expired i { background: #ea580c; }
 .admin-insights-status-list .status-invalid i { background: #dc2626; }
 .admin-insights-status-list strong { color: #0f172a; font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; }
 .admin-insights-status-list small { color: #94a3b8; font-size: 8.5px; text-align: right; }

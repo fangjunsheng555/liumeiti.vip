@@ -12,6 +12,7 @@ import { buildProxyOrderEmail } from "../../../quote-orders/_email.js";
 import { getSettings } from "../../../_settings.js";
 import { supportText } from "../../../../lib/settings-defaults.js";
 import { buildSpotifyPasswordErrorEmail } from "../../../order-password-update/email.js";
+import { effectiveQuoteStatus, normalizeQuoteValidDays } from "../../../_quote-expiry.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
@@ -23,6 +24,7 @@ const SUPPORT_CONTACT_EN = process.env.SUPPORT_CONTACT_EN
 function orderForAdminResponse(order) {
   const response = {
     ...order,
+    status: effectiveQuoteStatus(order),
     items: Array.isArray(order?.items)
       ? order.items.map(({ passwordCorrectionTokenHash, ...item }) => item)
       : [],
@@ -150,7 +152,7 @@ export async function PATCH(request, { params }) {
   let body = {};
   try { body = await request.json(); } catch (e) {}
 
-  const ALLOWED_STATUS = ["awaiting_quote", "pending_payment", "received", "completed", "invalid"];
+  const ALLOWED_STATUS = ["awaiting_quote", "pending_payment", "quote_expired", "received", "completed", "invalid"];
   let newStatus = ALLOWED_STATUS.includes(body.status) ? body.status : null;
   const quoteRequested = Object.prototype.hasOwnProperty.call(body, "quoteAmount");
   const staffNotes = clean(body.staffNotes, 1500);
@@ -248,14 +250,17 @@ export async function PATCH(request, { params }) {
     });
   }
 
-  if (order.orderType !== "proxy_payment" && ["awaiting_quote", "pending_payment"].includes(newStatus)) {
+  if (order.orderType !== "proxy_payment" && ["awaiting_quote", "pending_payment", "quote_expired"].includes(newStatus)) {
     return Response.json({ ok: false, error: "invalid_status" }, { status: 400 });
   }
   if (order.orderType === "proxy_payment" && !quoteRequested) {
+    if (order.status === "quote_expired" && newStatus === "pending_payment") {
+      return Response.json({ ok: false, error: "requote_required" }, { status: 409 });
+    }
     if (newStatus === "pending_payment" && (!Number(order.quoteAmount || 0) || !order.quotePaymentTokenHash)) {
       return Response.json({ ok: false, error: "quote_required" }, { status: 409 });
     }
-    if (newStatus === "received" && order.status === "awaiting_quote") {
+    if (newStatus === "received" && ["awaiting_quote", "quote_expired"].includes(order.status)) {
       return Response.json({ ok: false, error: "quote_required" }, { status: 409 });
     }
     if (newStatus === "completed" && !["received", "completed"].includes(order.status)) {
@@ -268,7 +273,7 @@ export async function PATCH(request, { params }) {
     if (order.orderType !== "proxy_payment") {
       return Response.json({ ok: false, error: "not_proxy_order" }, { status: 400 });
     }
-    if (!["awaiting_quote", "pending_payment"].includes(order.status)) {
+    if (!["awaiting_quote", "pending_payment", "quote_expired"].includes(order.status)) {
       return Response.json({ ok: false, error: "quote_status_locked" }, { status: 409 });
     }
     const quoteAmount = Math.round(Number(body.quoteAmount) * 100) / 100;
@@ -277,6 +282,8 @@ export async function PATCH(request, { params }) {
     }
     const now = new Date();
     const token = randomBytes(32).toString("base64url");
+    const quoteValidDays = normalizeQuoteValidDays(body.quoteValidDays);
+    const quoteExpiresAt = new Date(now.getTime() + quoteValidDays * 24 * 60 * 60 * 1000);
     order.quoteAmount = quoteAmount;
     order.subtotal = quoteAmount;
     order.bundleFinalAmount = quoteAmount;
@@ -287,7 +294,11 @@ export async function PATCH(request, { params }) {
     order.paymentMethod = "quote";
     order.quotedAt = now.toISOString();
     order.quotedAtBeijing = formatBeijingTime(now);
-    order.quoteExpiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    order.quoteValidDays = quoteValidDays;
+    order.quoteExpiresAt = quoteExpiresAt.toISOString();
+    order.quoteExpiresAtBeijing = formatBeijingTime(quoteExpiresAt);
+    order.quoteExpiredAt = null;
+    order.quoteExpiredAtBeijing = null;
     order.quotePaymentTokenHash = createHash("sha256").update(token).digest("hex");
     order.quoteVersion = Number(order.quoteVersion || 0) + 1;
     if (order.items?.[0]) order.items[0].amount = quoteAmount;
@@ -427,7 +438,13 @@ export async function PATCH(request, { params }) {
     commission: commissionResult,
     refund: refundResult,
     reclaim: reclaimResult,
-    quote: quotePaymentUrl ? { email: quoteEmailResult, amount: order.quoteAmount, expiresAt: order.quoteExpiresAt } : null,
+    quote: quotePaymentUrl ? {
+      email: quoteEmailResult,
+      amount: order.quoteAmount,
+      validDays: order.quoteValidDays,
+      expiresAt: order.quoteExpiresAt,
+      expiresAtBeijing: order.quoteExpiresAtBeijing,
+    } : null,
     statusChange: newStatus,
   });
 }

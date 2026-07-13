@@ -31,6 +31,7 @@ import {
 const STATUS_LABEL = {
   awaiting_quote: "等待报价",
   pending_payment: "等待付款",
+  quote_expired: "报价已失效",
   received: "订单已收到",
   completed: "订单已完成",
   invalid: "无效·未收到付款",
@@ -39,6 +40,7 @@ const STATUS_LABEL = {
 const STATUS_ICON_KEY = {
   awaiting_quote: "clock",
   pending_payment: "clock",
+  quote_expired: "clock",
   received: "clock",
   completed: "check",
   invalid: "x",
@@ -1091,7 +1093,7 @@ function exportOrderPdf(order, note = "") {
     eyebrow: "Order Certificate",
     title: "订单详情凭证",
     description: "用于核对订单状态、付款信息、用户资料与商品配置",
-    stamp: order.status === "awaiting_quote" ? "待报价" : order.status === "pending_payment" ? "待付款" : order.status === "completed" ? "已完成" : order.status === "invalid" ? "无效" : "已收到",
+    stamp: order.status === "awaiting_quote" ? "待报价" : order.status === "pending_payment" ? "待付款" : order.status === "quote_expired" ? "报价失效" : order.status === "completed" ? "已完成" : order.status === "invalid" ? "无效" : "已收到",
     mainLabel: "Order ID",
     mainValue: order.orderId || "",
     summaryFields: [
@@ -2955,7 +2957,7 @@ export default function AdminPage() {
   }
 
   function openOverviewTarget(target) {
-    if (target === "awaiting_quote" || target === "pending_payment") {
+    if (target === "awaiting_quote" || target === "pending_payment" || target === "quote_expired") {
       setTab("orders");
       setSearchInput("");
       setAppliedSearch("");
@@ -3073,6 +3075,7 @@ export default function AdminPage() {
     setEditForm({
       status: order.status,
       quoteAmount: order.quoteAmount ? String(order.quoteAmount) : "",
+      quoteValidDays: String(order.quoteValidDays || 7),
       staffNotes: order.staffNotes || "",
       items: order.items.map((it) => ({
         index: order.items.indexOf(it),
@@ -3331,7 +3334,11 @@ export default function AdminPage() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ quoteAmount: amount, staffNotes: editForm.staffNotes }),
+        body: JSON.stringify({
+          quoteAmount: amount,
+          quoteValidDays: Number(editForm.quoteValidDays || 7),
+          staffNotes: editForm.staffNotes,
+        }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
@@ -3344,7 +3351,12 @@ export default function AdminPage() {
       const mailText = data.quote?.email?.ok ? "报价邮件已发送" : "报价已保存，但邮件发送失败，请检查邮件配置后重新发送";
       setSaveResult({ type: data.quote?.email?.ok ? "success" : "error", message: mailText });
       setActiveOrder(data.order);
-      setEditForm((current) => ({ ...current, status: "pending_payment", quoteAmount: String(data.quote?.amount || amount) }));
+      setEditForm((current) => ({
+        ...current,
+        status: "pending_payment",
+        quoteAmount: String(data.quote?.amount || amount),
+        quoteValidDays: String(data.quote?.validDays || current.quoteValidDays || 7),
+      }));
       loadOrders(appliedSearch, filterStatus);
       loadOverview({ silent: true });
     } catch (error) {
@@ -4705,6 +4717,7 @@ export default function AdminPage() {
                 { v: "all", label: "全部" },
                 { v: "awaiting_quote", label: "待报价" },
                 { v: "pending_payment", label: "待付款" },
+                { v: "quote_expired", label: "报价失效" },
                 { v: "received", label: "未完成" },
                 { v: "completed", label: "已完成" },
                 { v: "invalid", label: "无效" },
@@ -4848,6 +4861,8 @@ export default function AdminPage() {
                           ? "待报价"
                           : o.status === "pending_payment"
                           ? `报价 ¥${Number(o.quoteAmount || 0).toFixed(2)}`
+                          : o.status === "quote_expired"
+                          ? `报价 ¥${Number(o.quoteAmount || 0).toFixed(2)} · 已失效`
                           : o.paidCurrency === "CODE"
                           ? "兑换码"
                           : o.paidCurrency === "USDT"
@@ -4974,7 +4989,7 @@ export default function AdminPage() {
                   {STATUS_LABEL[activeOrder.status]}
                 </div>
               </div>
-              <button type="button" className="admin-modal-close" onClick={() => !saving && setActiveOrder(null)} disabled={saving}>
+              <button type="button" className="admin-modal-close" onClick={() => !saving && setActiveOrder(null)} disabled={saving} aria-label="关闭订单详情">
                 <X size={16} />
               </button>
             </div>
@@ -4986,7 +5001,7 @@ export default function AdminPage() {
                 <div className="admin-summary-grid">
                   <div><span>下单时间</span><b>{activeOrder.createdAtBeijing}</b></div>
                   <div><span>支付方式</span><b>{activeOrder.paymentMethod === "quote" ? "等待报价付款" : activeOrder.paymentMethod === "redeem" ? "服务兑换码" : activeOrder.paymentMethod === "usdt" ? "USDT-TRC20" : "支付宝"}</b></div>
-                  <div><span>{activeOrder.status === "pending_payment" ? "报价金额" : "实付金额"}</span><b>{activeOrder.status === "awaiting_quote" ? "尚未报价" : activeOrder.status === "pending_payment" ? `¥${Number(activeOrder.quoteAmount || 0).toFixed(2)} · 未付款` : activeOrder.paidCurrency === "CODE" ? "兑换码抵扣" : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b></div>
+                  <div><span>{["pending_payment", "quote_expired"].includes(activeOrder.status) ? "报价金额" : "实付金额"}</span><b>{activeOrder.status === "awaiting_quote" ? "尚未报价" : activeOrder.status === "pending_payment" ? `¥${Number(activeOrder.quoteAmount || 0).toFixed(2)} · 未付款` : activeOrder.status === "quote_expired" ? `¥${Number(activeOrder.quoteAmount || 0).toFixed(2)} · 已失效` : activeOrder.paidCurrency === "CODE" ? "兑换码抵扣" : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b></div>
                   <div><span>件数</span><b>{activeOrder.itemCount} 件</b></div>
                   {activeOrder.paidCurrency === "USDT" && (
                     <div className="span-2">
@@ -5061,16 +5076,26 @@ export default function AdminPage() {
                     <div><span>商品标价</span><b>{activeOrder.productPrice || "--"}</b></div>
                     <div><span>联系用户</span><b>{activeOrder.contact || "--"}</b></div>
                     {activeOrder.quotedAtBeijing && <div><span>报价时间</span><b>{activeOrder.quotedAtBeijing}</b></div>}
+                    {activeOrder.quoteExpiresAtBeijing && <div><span>付款截止</span><b>{activeOrder.quoteExpiresAtBeijing}</b></div>}
                     {activeOrder.paymentSubmittedAtBeijing && <div><span>用户提交付款</span><b>{activeOrder.paymentSubmittedAtBeijing}</b></div>}
                   </div>
-                  {["awaiting_quote", "pending_payment"].includes(activeOrder.status) && (
+                  {["awaiting_quote", "pending_payment", "quote_expired"].includes(activeOrder.status) && (
                     <div className="admin-proxy-quote-row">
                       <label className="admin-field">
                         <span>报价金额(CNY) <em>*</em></span>
                         <div className="admin-proxy-amount-input"><i>¥</i><input type="number" min="0.01" max="1000000" step="0.01" value={editForm.quoteAmount} onChange={(e) => setEditForm({ ...editForm, quoteAmount: e.target.value })} placeholder="0.00" /></div>
                       </label>
+                      <label className="admin-field admin-proxy-validity-field">
+                        <span>报价有效期</span>
+                        <select value={editForm.quoteValidDays || "7"} onChange={(e) => setEditForm({ ...editForm, quoteValidDays: e.target.value })}>
+                          <option value="1">1 天</option>
+                          <option value="3">3 天</option>
+                          <option value="7">7 天</option>
+                          <option value="14">14 天</option>
+                        </select>
+                      </label>
                       <button type="button" className="admin-save-btn admin-proxy-quote-btn" onClick={sendProxyQuote} disabled={saving || !editForm.quoteAmount}>
-                        {saving ? <><LoaderCircle size={13} className="spin-icon" />发送中</> : <><Mail size={13} />{activeOrder.status === "pending_payment" ? "更新并重发报价" : "发送报价邮件"}</>}
+                        {saving ? <><LoaderCircle size={13} className="spin-icon" />发送中</> : <><Mail size={13} />{activeOrder.status === "awaiting_quote" ? "发送报价邮件" : "重新报价并发送"}</>}
                       </button>
                     </div>
                   )}
@@ -5205,8 +5230,9 @@ export default function AdminPage() {
                   {activeOrder.orderType === "proxy_payment" ? (
                     <>
                       <option value="awaiting_quote">等待报价</option>
-                      <option value="pending_payment" disabled={!activeOrder.quoteAmount}>等待付款</option>
-                      <option value="received" disabled={activeOrder.status === "awaiting_quote"}>订单已收到</option>
+                      <option value="pending_payment" disabled={!activeOrder.quoteAmount || activeOrder.status === "quote_expired"}>等待付款</option>
+                      <option value="quote_expired" disabled>报价已失效</option>
+                      <option value="received" disabled={["awaiting_quote", "quote_expired"].includes(activeOrder.status)}>订单已收到</option>
                       <option value="completed" disabled={!['received', 'completed'].includes(activeOrder.status)}>代付已完成(发送邮件)</option>
                       <option value="invalid">订单无效</option>
                     </>

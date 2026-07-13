@@ -8,6 +8,7 @@ import {
 import { localizeOrderItemLabel, localizeCycle } from "../../../lib/order-i18n.js";
 import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../../after-sales/_store.js";
 import { orderExpirySummary, renewalCheckoutPath } from "../../../lib/order-expiry.js";
+import { effectiveQuoteStatus } from "../../_quote-expiry.js";
 
 function subscriptionLinks(username) {
   const encoded = encodeURIComponent(String(username || "").trim());
@@ -54,7 +55,7 @@ function publicOrder(order, locale = "zh") {
   return {
     orderId: order.orderId || "",
     orderType: order.orderType || "standard",
-    status: order.status || "received",
+    status: effectiveQuoteStatus(order),
     createdAt: order.createdAt || "",
     createdAtBeijing: order.createdAtBeijing || "",
     completedAtBeijing: order.completedAtBeijing || "",
@@ -70,6 +71,9 @@ function publicOrder(order, locale = "zh") {
     productPrice: order.productPrice || items[0]?.productPrice || "",
     quoteAmount: Number(order.quoteAmount || 0),
     quotedAtBeijing: order.quotedAtBeijing || "",
+    quoteExpiresAt: order.quoteExpiresAt || "",
+    quoteExpiresAtBeijing: order.quoteExpiresAtBeijing || "",
+    quoteValidDays: Number(order.quoteValidDays || 7),
     paymentSubmittedAtBeijing: order.paymentSubmittedAtBeijing || "",
     couponDiscount: Number(order.couponDiscount || 0),
     couponTitle: order.couponTitle || "",

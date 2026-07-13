@@ -19,6 +19,22 @@ function clean(value, max = 1500) {
   return String(value || "").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, " ").trim().slice(0, max);
 }
 
+function quoteDeadline(order, locale) {
+  if (order?.quoteExpiresAtBeijing) return clean(order.quoteExpiresAtBeijing, 80);
+  const date = new Date(order?.quoteExpiresAt || 0);
+  if (!Number.isFinite(date.getTime())) return "";
+  const value = new Intl.DateTimeFormat(locale === "en" ? "en-GB" : "zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+  return `${value} ${locale === "en" ? "Beijing time (UTC+8)" : "北京时间（UTC+8）"}`;
+}
+
 function copyFor(kind, locale, order) {
   const en = locale === "en";
   const L = (zh, english) => (en ? english : zh);
@@ -80,6 +96,13 @@ export function buildProxyOrderEmail({ kind = "application", order, paymentUrl =
   const quoteRow = Number(order.quoteAmount || 0) > 0
     ? `<tr><td style="padding:8px 0;color:#64748b;font-size:13px;">${L("报价金额", "Quote")}</td><td style="padding:8px 0;text-align:right;color:#0f172a;font-size:18px;font-weight:900;">${money(order.quoteAmount)}</td></tr>`
     : "";
+  const deadline = kind === "quote" ? quoteDeadline(order, locale) : "";
+  const deadlineRow = deadline
+    ? `<tr><td style="padding:8px 0;color:#64748b;font-size:13px;">${L("付款截止", "Pay by")}</td><td style="padding:8px 0;text-align:right;color:#334155;font-size:13px;font-weight:700;">${escapeHtml(deadline)}</td></tr>`
+    : "";
+  const validityCopy = deadline
+    ? L(`请在 ${deadline} 前完成付款。此链接仅供本订单使用，请勿转发。`, `Please pay before ${deadline}. This link is for this order only; do not forward it.`)
+    : L("请在报价有效期内完成付款。此链接仅供本订单使用，请勿转发。", "Please pay while the quote is valid. This link is for this order only; do not forward it.");
   // 无效/无法处理时,把客服备注一起带给用户(说明原因)
   const staffNote = clean(order.staffNotes);
   const noteBlock = kind === "invalid" && staffNote
@@ -105,12 +128,13 @@ export function buildProxyOrderEmail({ kind = "application", order, paymentUrl =
             <tr><td style="padding:8px 0;color:#64748b;font-size:13px;">${L("网站 / 平台", "Website / platform")}</td><td style="padding:8px 0;text-align:right;font-size:13px;font-weight:700;word-break:break-all;">${escapeHtml(order.platformUrl)}</td></tr>
             <tr><td style="padding:8px 0;color:#64748b;font-size:13px;">${L("商品标价", "Listed price")}</td><td style="padding:8px 0;text-align:right;font-size:13px;font-weight:700;">${escapeHtml(order.productPrice)}</td></tr>
             ${quoteRow}
+            ${deadlineRow}
           </table>
         </td></tr>
         ${noteBlock}
         <tr><td style="padding:22px 30px 6px;text-align:center;">
           <a href="${escapeHtml(actionUrl)}" style="display:block;background:#0f766e;color:#fff;text-decoration:none;font-size:14px;font-weight:800;padding:14px 20px;border-radius:12px;">${escapeHtml(copy.button)}</a>
-          ${kind === "quote" ? `<p style="margin:10px 0 0;color:#94a3b8;font-size:11px;line-height:1.6;">${L("付款链接 7 天内有效，请勿转发。", "The payment link is valid for 7 days. Do not forward it.")}</p>` : ""}
+          ${kind === "quote" ? `<p style="margin:10px 0 0;color:#64748b;font-size:11px;line-height:1.6;">${escapeHtml(validityCopy)}</p>` : ""}
         </td></tr>
         <tr><td style="padding:22px 30px 28px;color:#64748b;font-size:12px;line-height:1.8;text-align:center;border-top:1px solid #eef2f7;">${supportLineHtml}</td></tr>
       </table>
@@ -125,6 +149,7 @@ export function buildProxyOrderEmail({ kind = "application", order, paymentUrl =
     `${L("网站 / 平台", "Website / platform")}: ${order.platformUrl}`,
     `${L("商品标价", "Listed price")}: ${order.productPrice}`,
     Number(order.quoteAmount || 0) > 0 ? `${L("报价金额", "Quote")}: ${money(order.quoteAmount)}` : "",
+    deadline ? `${L("付款截止", "Pay by")}: ${deadline}` : "",
     kind === "invalid" && staffNote ? `${L("客服说明", "Note from support")}: ${staffNote}` : "",
     `${copy.button}: ${actionUrl}`,
     supportLineText,

@@ -131,6 +131,7 @@ export const ORDER_STATUS_LABELS = {
   received: "已收到",
   awaiting_quote: "待报价",
   pending_payment: "待付款",
+  quote_expired: "报价已失效",
   invalid: "无效订单",
 };
 

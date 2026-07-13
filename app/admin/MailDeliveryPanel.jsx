@@ -21,6 +21,7 @@ const CATEGORY = {
   after_sales: "售后工单",
   password_update: "资料更正",
   renewal: "续费提醒",
+  service_incident: "服务通知",
   redeem: "兑换码",
   verification: "验证码",
   withdrawal: "提现通知",

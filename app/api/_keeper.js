@@ -9,6 +9,15 @@ const USDT_TICK_LOCK = "lm:keeper:usdt-tick";
 const USDT_TICK_INTERVAL_SEC = 120;          // 链上扫描至多每 2 分钟一次
 const RENEWAL_TICK_LOCK = "lm:keeper:renewal-tick";
 const RENEWAL_TICK_INTERVAL_SEC = 6 * 60 * 60; // 到期提醒扫描至多每 6 小时一次
+const QUOTE_EXPIRY_TICK_LOCK = "lm:keeper:quote-expiry-tick";
+const QUOTE_EXPIRY_TICK_INTERVAL_SEC = 60;
+
+async function quoteExpiryTick() {
+  const acquired = await redisCmd(["SET", QUOTE_EXPIRY_TICK_LOCK, "1", "NX", "EX", String(QUOTE_EXPIRY_TICK_INTERVAL_SEC)]);
+  if (acquired !== "OK") return;
+  const { expireDueQuoteOrders } = await import("./_quote-expiry.js");
+  await expireDueQuoteOrders({ limit: 100 });
+}
 
 async function usdtTick() {
   const acquired = await redisCmd(["SET", USDT_TICK_LOCK, "1", "NX", "EX", String(USDT_TICK_INTERVAL_SEC)]);
@@ -48,6 +57,7 @@ async function weeklyBackupTick() {
 
 export async function runMaintenanceTick() {
   if (!redisConfig()) return;
+  try { await quoteExpiryTick(); } catch (e) {}
   try { await usdtTick(); } catch (e) {}
   try { await renewalTick(); } catch (e) {}
   try { await weeklyBackupTick(); } catch (e) {}

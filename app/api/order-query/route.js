@@ -18,6 +18,7 @@ import { buildEmailBrandHeader } from "../email-brand.js";
 import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../after-sales/_store.js";
 import { orderExpirySummary, renewalCheckoutPath } from "../../lib/order-expiry.js";
 import { getSpotifyPasswordAttention } from "../../lib/order-attention.js";
+import { effectiveQuoteStatus } from "../_quote-expiry.js";
 
 const QUERY_CODE_TTL_SECONDS = 10 * 60;
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
@@ -100,7 +101,7 @@ function publicOrder(order, type, locale = "zh") {
     matchType: type || "",
     orderId: order.orderId || "",
     orderType: order.orderType || "standard",
-    status: order.status || "received",
+    status: effectiveQuoteStatus(order),
     createdAt: order.createdAt || "",
     createdAtBeijing: order.createdAtBeijing || "",
     completedAtBeijing: order.completedAtBeijing || "",
@@ -121,6 +122,9 @@ function publicOrder(order, type, locale = "zh") {
     productPrice: order.productPrice || items[0]?.productPrice || "",
     quoteAmount: Number(order.quoteAmount || 0),
     quotedAtBeijing: order.quotedAtBeijing || "",
+    quoteExpiresAt: order.quoteExpiresAt || "",
+    quoteExpiresAtBeijing: order.quoteExpiresAtBeijing || "",
+    quoteValidDays: Number(order.quoteValidDays || 7),
     paymentSubmittedAtBeijing: order.paymentSubmittedAtBeijing || "",
     email: order.email || "",
     contact: order.contact || "",
@@ -142,7 +146,7 @@ function publicOrder(order, type, locale = "zh") {
   // Spotify 密码修正待办:修正邮件可能进垃圾箱,查询结果里也要可见
   if (getSpotifyPasswordAttention(order).pending) output.passwordCorrectionPending = true;
   // 无效/未付订单不释放开通凭据（账号/密码/订阅链接）——仅 received/completed 可见。
-  if (order.status === "invalid") {
+  if (["invalid", "awaiting_quote", "pending_payment", "quote_expired"].includes(output.status)) {
     output.account = "";
     output.password = "";
     delete output.subscriptionLinks;

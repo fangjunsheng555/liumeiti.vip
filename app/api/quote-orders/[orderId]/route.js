@@ -4,7 +4,7 @@ import {
   clean,
   clientIpFromRequest,
   formatBeijingTime,
-  getAllOrdersWithIndex,
+  getOrderEntryById,
   pushAdminActionLog,
   rateLimitResponse,
   redisCmd,
@@ -13,6 +13,7 @@ import {
   getUsdtRate,
 } from "../../_utils.js";
 import { getSettings } from "../../_settings.js";
+import { expireQuoteOrderEntry } from "../../_quote-expiry.js";
 import { buildProxyOrderEmail } from "../_email.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
@@ -35,8 +36,8 @@ function tokenMatches(order, token) {
 }
 
 async function findOrder(orderId) {
-  const all = await getAllOrdersWithIndex();
-  return all.find((entry) => entry.order?.orderId === orderId && !entry.order.deleted) || null;
+  const entry = await getOrderEntryById(orderId);
+  return entry?.order && !entry.order.deleted ? entry : null;
 }
 
 function publicQuoteOrder(order) {
@@ -52,6 +53,9 @@ function publicQuoteOrder(order) {
     paidCurrency: order.paidCurrency || "CNY",
     paidAmount: Number(order.paidAmount || 0),
     quotedAtBeijing: order.quotedAtBeijing || "",
+    quoteExpiresAt: order.quoteExpiresAt || "",
+    quoteExpiresAtBeijing: order.quoteExpiresAtBeijing || "",
+    quoteValidDays: Number(order.quoteValidDays || 7),
     paymentSubmittedAtBeijing: order.paymentSubmittedAtBeijing || "",
     completedAtBeijing: order.completedAtBeijing || "",
   };
@@ -111,14 +115,15 @@ export async function GET(request, { params }) {
   if (!tokenMatches(entry.order, token)) {
     return Response.json({ ok: false, error: "invalid_payment_link" }, { status: 403 });
   }
+  await expireQuoteOrderEntry(entry);
   if (entry.order.status === "invalid") {
     return Response.json({ ok: false, error: "order_invalid" }, { status: 409 });
   }
+  if (entry.order.status === "quote_expired") {
+    return Response.json({ ok: false, error: "quote_expired" }, { status: 410 });
+  }
   if (!["pending_payment", "received", "completed"].includes(entry.order.status)) {
     return Response.json({ ok: false, error: "quote_not_ready" }, { status: 409 });
-  }
-  if (entry.order.status === "pending_payment" && new Date(entry.order.quoteExpiresAt || 0).getTime() < Date.now()) {
-    return Response.json({ ok: false, error: "quote_expired" }, { status: 410 });
   }
   return Response.json({ ok: true, order: publicQuoteOrder(entry.order) }, { headers: { "cache-control": "no-store" } });
 }
@@ -135,14 +140,13 @@ export async function POST(request, { params }) {
   }
   const order = entry.order;
   if (!tokenMatches(order, token)) return Response.json({ ok: false, error: "invalid_payment_link" }, { status: 403 });
+  await expireQuoteOrderEntry(entry);
   if (["received", "completed"].includes(order.status)) {
     return Response.json({ ok: true, status: order.status, order: publicQuoteOrder(order), alreadySubmitted: true });
   }
   if (order.status === "invalid") return Response.json({ ok: false, error: "order_invalid" }, { status: 409 });
+  if (order.status === "quote_expired") return Response.json({ ok: false, error: "quote_expired" }, { status: 410 });
   if (order.status !== "pending_payment") return Response.json({ ok: false, error: "quote_not_ready" }, { status: 409 });
-  if (new Date(order.quoteExpiresAt || 0).getTime() < Date.now()) {
-    return Response.json({ ok: false, error: "quote_expired" }, { status: 410 });
-  }
   const guard = await checkIdentityRateLimit({
     namespace: "quote-order:payment-submit",
     identity: `${clientIpFromRequest(request)}:${orderId}`,

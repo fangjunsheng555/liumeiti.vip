@@ -11,6 +11,7 @@ export const ORDER_DELETED_INDEX_KEY = ORDERS_KEY + ":deleted-index"; // SET of 
 export const ORDER_RECORD_PREFIX = ORDERS_KEY + ":record:";
 export const ORDER_EMAIL_INDEX_PREFIX = ORDERS_KEY + ":email:";
 export const USDT_PENDING_ORDER_INDEX_KEY = ORDERS_KEY + ":usdt-pending";
+export const QUOTE_EXPIRY_ORDER_INDEX_KEY = ORDERS_KEY + ":quote-expiry";
 export const ORDER_OVERVIEW_HASH_KEY = ORDERS_KEY + ":overview";
 const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v3"; // v3: snapshot 增补 completedAt/items.cycle 等到期字段,换 key 触发一次性重建
 const ORDER_INDEX_MIGRATION_READY_KEY = ORDER_INDEX_KEY + ":legacy-ready";
@@ -99,6 +100,12 @@ function isPendingUsdtOrder(order) {
   );
 }
 
+function pendingQuoteExpiryScore(order) {
+  if (!order || order.deleted || order.orderType !== "proxy_payment" || order.status !== "pending_payment") return 0;
+  const score = new Date(order.quoteExpiresAt || 0).getTime();
+  return Number.isFinite(score) && score > 0 ? score : 0;
+}
+
 function orderCreatedScore(order) {
   const score = new Date(order?.createdAt || 0).getTime();
   return Number.isFinite(score) && score > 0 ? score : Date.now();
@@ -125,6 +132,7 @@ function orderOverviewSnapshot(order) {
   return {
     orderId: normalizeOrderIdForStorage(order.orderId),
     status: order.status || "received",
+    orderType: order.orderType || "standard",
     paymentMethod: order.paymentMethod || "alipay",
     paidCurrency: order.paidCurrency || (order.paymentMethod === "usdt" ? "USDT" : "CNY"),
     paidAmount: Number(order.paidAmount || 0),
@@ -137,6 +145,8 @@ function orderOverviewSnapshot(order) {
     completedAt: order.completedAt || "",
     email: order.email || "",
     serviceLabel: order.serviceLabel || "",
+    quoteAmount: Number(order.quoteAmount || 0),
+    quoteExpiresAt: order.quoteExpiresAt || "",
     items,
     usdtPayAmount: Number(order.usdtPayAmount || 0),
     usdtQuoteId: order.usdtQuoteId || "",
@@ -208,6 +218,10 @@ export async function saveOrderRecord(order) {
   commands.push(isPendingUsdtOrder(order)
     ? ["ZADD", USDT_PENDING_ORDER_INDEX_KEY, String(orderCreatedScore(order)), orderId]
     : ["ZREM", USDT_PENDING_ORDER_INDEX_KEY, orderId]);
+  const quoteExpiryScore = pendingQuoteExpiryScore(order);
+  commands.push(quoteExpiryScore
+    ? ["ZADD", QUOTE_EXPIRY_ORDER_INDEX_KEY, String(quoteExpiryScore), orderId]
+    : ["ZREM", QUOTE_EXPIRY_ORDER_INDEX_KEY, orderId]);
   const overview = orderOverviewSnapshot(order);
   if (overview) commands.push(["HSET", ORDER_OVERVIEW_HASH_KEY, orderId, JSON.stringify(overview)]);
   const buyerEmailKey = orderEmailIndexKey(order.email);
@@ -396,6 +410,10 @@ export async function setOrderAt(index, order) {
     commands.push(isPendingUsdtOrder(order)
       ? ["ZADD", USDT_PENDING_ORDER_INDEX_KEY, String(orderCreatedScore(order)), orderId]
       : ["ZREM", USDT_PENDING_ORDER_INDEX_KEY, orderId]);
+    const quoteExpiryScore = pendingQuoteExpiryScore(order);
+    commands.push(quoteExpiryScore
+      ? ["ZADD", QUOTE_EXPIRY_ORDER_INDEX_KEY, String(quoteExpiryScore), orderId]
+      : ["ZREM", QUOTE_EXPIRY_ORDER_INDEX_KEY, orderId]);
     const overview = orderOverviewSnapshot(order);
     commands.push(overview
       ? ["HSET", ORDER_OVERVIEW_HASH_KEY, orderId, JSON.stringify(overview)]

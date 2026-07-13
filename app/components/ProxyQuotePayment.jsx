@@ -23,7 +23,7 @@ export default function ProxyQuotePayment({ orderId }) {
   const settings = useSiteSettings();
   const [token, setToken] = useState("");
   const [order, setOrder] = useState(null);
-  const [state, setState] = useState({ loading: true, error: "", notice: "" });
+  const [state, setState] = useState({ loading: true, error: "", errorCode: "", notice: "" });
   const [submitting, setSubmitting] = useState(false);
   const [paymentReadyAt, setPaymentReadyAt] = useState(0);
   const [payMethod, setPayMethod] = useState("alipay"); // alipay | usdt
@@ -38,7 +38,7 @@ export default function ProxyQuotePayment({ orderId }) {
     const value = params.get("token") || "";
     setToken(value);
     if (!value) {
-      setState({ loading: false, error: L("付款链接不完整", "Payment link is incomplete"), notice: "" });
+      setState({ loading: false, error: L("付款链接不完整", "Payment link is incomplete"), errorCode: "invalid_payment_link", notice: "" });
       return;
     }
     fetch(`/api/quote-orders/${encodeURIComponent(orderId)}`, {
@@ -50,17 +50,19 @@ export default function ProxyQuotePayment({ orderId }) {
         if (!response.ok || !data.ok) {
           const message = {
             invalid_payment_link: L("付款链接无效", "Invalid payment link"),
-            quote_expired: L("报价已过期，请联系客服重新报价", "This quote expired. Contact support for a new quote."),
+            quote_expired: L("本次报价已失效。重新报价后，我们会向您发送新的付款邮件。", "This quote has expired. We will email a new payment link after the quote is renewed."),
             order_not_found: L("未找到订单", "Order not found"),
             order_invalid: L("订单已失效，请联系在线客服", "This order is no longer valid. Contact support."),
             quote_not_ready: L("报价尚未生效，请联系在线客服", "The quote isn't active yet. Contact support."),
           }[data.error] || data.error || L("无法读取报价", "Couldn't load the quote");
-          throw new Error(message);
+          const error = new Error(message);
+          error.code = data.error || "quote_load_failed";
+          throw error;
         }
         setOrder(data.order);
-        setState({ loading: false, error: "", notice: "" });
+        setState({ loading: false, error: "", errorCode: "", notice: "" });
       })
-      .catch((error) => setState({ loading: false, error: error.message, notice: "" }));
+      .catch((error) => setState({ loading: false, error: error.message, errorCode: error.code || "quote_load_failed", notice: "" }));
   }, [orderId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // USDT 汇率(固定汇率优先,否则每日自动),用于展示 USDT 应付额
@@ -92,7 +94,7 @@ export default function ProxyQuotePayment({ orderId }) {
     setPayMethod(method);
     setQrReady(false);
     setPaymentReadyAt(0);
-    setState((current) => ({ ...current, error: "", notice: "" }));
+    setState((current) => ({ ...current, error: "", errorCode: "", notice: "" }));
   }
 
   async function confirmPayment() {
@@ -112,16 +114,18 @@ export default function ProxyQuotePayment({ orderId }) {
       const data = await response.json();
       if (!response.ok || !data.ok) {
         const message = {
-          quote_expired: L("报价已过期，请联系客服重新报价", "This quote expired. Contact support for a new quote."),
+          quote_expired: L("本次报价已失效。重新报价后，我们会向您发送新的付款邮件。", "This quote has expired. We will email a new payment link after the quote is renewed."),
           order_invalid: L("订单已失效", "This order is no longer valid"),
           invalid_payment_link: L("付款链接无效", "Invalid payment link"),
           payment_processing: L("付款信息正在提交，请稍后刷新订单状态", "Payment is being submitted. Check the order status shortly."),
         }[data.error] || data.error || L("提交失败，请稍后再试", "Couldn't submit. Try again shortly.");
-        throw new Error(message);
+        const error = new Error(message);
+        error.code = data.error || "payment_submit_failed";
+        throw error;
       }
       setOrder(data.order);
     } catch (error) {
-      setState((current) => ({ ...current, error: error.message }));
+      setState((current) => ({ ...current, error: error.message, errorCode: error.code || "payment_submit_failed" }));
     } finally {
       setSubmitting(false);
     }
@@ -147,7 +151,12 @@ export default function ProxyQuotePayment({ orderId }) {
         {state.loading ? (
           <section className="proxy-payment-state"><LoaderCircle size={38} className="spin-icon" /><h1>{L("正在读取报价", "Loading your quote")}</h1></section>
         ) : state.error && !order ? (
-          <section className="proxy-payment-state error"><ShieldCheck size={38} /><h1>{L("无法打开付款链接", "Can't open this payment link")}</h1><p>{state.error}</p><Link href="/service-center#contact" className="primary-btn">{L("联系客服", "Contact support")}</Link></section>
+          <section className="proxy-payment-state error">
+            <ShieldCheck size={38} />
+            <h1>{state.errorCode === "quote_expired" ? L("本次报价已失效", "This quote has expired") : L("无法打开付款链接", "Can't open this payment link")}</h1>
+            <p>{state.errorCode === "quote_expired" ? L("工作人员重新报价后，新的付款链接将发送至您的邮箱。", "After our team renews the quote, a new payment link will be sent to your email.") : state.error}</p>
+            <Link href="/service-center#contact" className="primary-btn">{L("联系客服", "Contact support")}</Link>
+          </section>
         ) : finished ? (
           <section className="proxy-request-success proxy-paid-success">
             <div className="proxy-success-icon"><CheckCircle2 size={34} /></div>
@@ -166,6 +175,7 @@ export default function ProxyQuotePayment({ orderId }) {
                 <div><span>{L("商品标价", "Listed price")}</span><b>{order.productPrice}</b></div>
                 <div className="span-2"><span>{L("网站 / 平台", "Website / platform")}</span><b style={{ wordBreak: "break-all", fontWeight: 600 }}>{order.platformUrl}</b></div>
                 <div><span>{L("报价时间", "Quoted at")}</span><b>{order.quotedAtBeijing || "--"}</b></div>
+                <div><span>{L("付款截止", "Pay by")}</span><b>{order.quoteExpiresAtBeijing || "--"}</b></div>
                 <div><span>{L("接收邮箱", "Email")}</span><b>{order.email}</b></div>
               </div>
             </section>

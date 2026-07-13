@@ -122,8 +122,10 @@ globalThis.fetch = async (input, options = {}) => {
 const expiryLib = await import("../app/lib/order-expiry.js");
 const renewal = await import("../app/api/_renewal.js");
 const keeper = await import("../app/api/_keeper.js");
+const quoteExpiry = await import("../app/api/_quote-expiry.js");
 const utils = await import("../app/api/_utils.js");
 const resendRoute = await import("../app/api/order-password-update/resend/route.js");
+const adminOrderRoute = await import("../app/api/admin/orders/[orderId]/route.js");
 
 function seedOrder(order) {
   values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
@@ -203,6 +205,78 @@ test("sendDueRenewalReminders emails once per expiry and is idempotent", async (
 
   const second = await renewal.sendDueRenewalReminders({ now });
   assert.equal(second.sent, 0); // 同一到期点不重复发
+});
+
+test("due proxy-payment quotes are persisted as expired and removed from the due index", async () => {
+  const now = Date.now();
+  seedOrder({
+    orderId: "LMQUOTEEXPIRED1",
+    orderType: "proxy_payment",
+    status: "pending_payment",
+    quoteAmount: 400,
+    quoteExpiresAt: new Date(now - 1000).toISOString(),
+    createdAt: new Date(now - 86400000).toISOString(),
+    items: [{ service: "proxy-pay", label: "全球代付", cycle: "按单", amount: 400 }],
+  });
+  sortedSet(utils.QUOTE_EXPIRY_ORDER_INDEX_KEY).set("LMQUOTEEXPIRED1", now - 1000);
+
+  const first = await quoteExpiry.expireDueQuoteOrders({ now, limit: 20 });
+  assert.equal(first.expired, 1);
+  const stored = await utils.getOrderById("LMQUOTEEXPIRED1");
+  assert.equal(stored.status, "quote_expired");
+  assert.ok(stored.quoteExpiredAtBeijing);
+  assert.equal(sortedSet(utils.QUOTE_EXPIRY_ORDER_INDEX_KEY).has("LMQUOTEEXPIRED1"), false);
+
+  const second = await quoteExpiry.expireDueQuoteOrders({ now: now + 1000, limit: 20 });
+  assert.equal(second.expired, 0);
+});
+
+test("an expired proxy-payment quote can only resume through a fresh quote and email", async () => {
+  const oldHash = createHash("sha256").update("old-quote-token").digest("hex");
+  seedOrder({
+    orderId: "LMQUOTERENEW1",
+    orderType: "proxy_payment",
+    status: "quote_expired",
+    locale: "zh",
+    email: "quote@example.com",
+    platformUrl: "https://example.com/checkout",
+    productPrice: "USD 99.00",
+    quoteAmount: 400,
+    quoteValidDays: 7,
+    quoteExpiresAt: new Date(Date.now() - 60_000).toISOString(),
+    quotePaymentTokenHash: oldHash,
+    createdAt: new Date().toISOString(),
+    items: [{ service: "proxy-pay", label: "全球代付 · 人工报价", amount: 400 }],
+  });
+  const adminToken = utils.signSession({
+    role: "admin",
+    staffId: 1,
+    staffUsername: "admin",
+    staffRole: "owner",
+    staffRoot: true,
+    iat: Date.now(),
+    exp: Date.now() + 60_000,
+  });
+  const mailsBefore = sentEmails.length;
+  const response = await adminOrderRoute.PATCH(new Request("https://www.liumeiti.vip/api/admin/orders/LMQUOTERENEW1", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Cookie: `lm_admin=${adminToken}` },
+    body: JSON.stringify({ quoteAmount: 450, quoteValidDays: 3, staffNotes: "" }),
+  }), { params: Promise.resolve({ orderId: "LMQUOTERENEW1" }) });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.ok, true);
+  assert.equal(payload.order.status, "pending_payment");
+  assert.equal(payload.quote.validDays, 3);
+  assert.equal(sentEmails.length, mailsBefore + 1);
+
+  const stored = await utils.getOrderById("LMQUOTERENEW1");
+  assert.equal(stored.quoteAmount, 450);
+  assert.equal(stored.quoteValidDays, 3);
+  assert.equal(stored.quoteExpiredAt, null);
+  assert.notEqual(stored.quotePaymentTokenHash, oldHash);
+  const remainingHours = (new Date(stored.quoteExpiresAt).getTime() - new Date(stored.quotedAt).getTime()) / 3_600_000;
+  assert.equal(remainingHours, 72);
 });
 
 test("maintenance tick sets throttle locks and runs at most once per window", async () => {
