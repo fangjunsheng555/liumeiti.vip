@@ -6706,8 +6706,7 @@ summary:focus-visible {
   background: #dfe6ec;
 }
 .admin-overview-card {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 1px;
   padding: 0;
   border: 0;
@@ -6719,7 +6718,7 @@ summary:focus-visible {
   gap: 1px;
 }
 .admin-overview-page .admin-overview-head {
-  flex: 1 0 100%;
+  width: 100%;
 }
 .admin-overview-head {
   display: flex;
@@ -6740,13 +6739,24 @@ summary:focus-visible {
   font-weight: 900;
 }
 .admin-overview-head span svg { color: #0f766e; }
+.admin-overview-operations {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: #dfe6ec;
+}
+.admin-overview-operations > :last-child:nth-child(3n + 1) { grid-column: 1 / -1; }
+.admin-overview-operations > :last-child:nth-child(3n + 2) { grid-column: span 2; }
+.admin-overview-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: #dfe6ec;
+}
 .admin-overview-item,
 .admin-overview-mini {
   position: relative;
-  flex: 1 1 136px;
   min-width: 0;
-  display: grid;
-  gap: 5px;
   text-align: left;
   padding: 10px 12px;
   border: 0;
@@ -6755,8 +6765,21 @@ summary:focus-visible {
   color: var(--primary);
   overflow: hidden;
 }
-.admin-overview-item::before,
-.admin-overview-mini::before {
+.admin-overview-item {
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.admin-overview-mini {
+  min-height: 62px;
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  background: #f8fafc;
+}
+.admin-overview-item::before {
   content: "";
   position: absolute;
   left: 0;
@@ -6784,14 +6807,13 @@ summary:focus-visible {
 }
 .admin-overview-item b,
 .admin-overview-mini b {
-  font-size: 24px;
+  font-size: 22px;
   line-height: 1;
   font-weight: 950;
   color: #0f172a;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 .admin-overview-item.urgent b { color: #b45309; }
-.admin-overview-mini.money::before { background: #0f766e; }
 .admin-overview-mini.money b {
   font-size: 22px;
   color: #0f766e;
@@ -8470,13 +8492,12 @@ summary:focus-visible {
 .admin-delta.up { background: #ecfdf5; color: #047857; }
 .admin-delta.down { background: #fef2f2; color: #dc2626; }
 .admin-overview-revenue {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1px;
   background: #dfe6ec;
 }
 .admin-overview-revenue-item {
-  flex: 1 1 150px;
   min-width: 0;
   padding: 10px 12px;
   border: 0;
@@ -12885,11 +12906,17 @@ summary:focus-visible {
   .admin-main { width: calc(100% - 14px); margin-top: 8px; }
   .admin-overview-page .admin-overview-card,
   .admin-overview-card { gap: 1px; padding: 0; border-radius: 0; }
+  .admin-overview-operations { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-overview-operations > :last-child:nth-child(3n + 1),
+  .admin-overview-operations > :last-child:nth-child(3n + 2) { grid-column: auto; }
+  .admin-overview-operations > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .admin-overview-summary,
+  .admin-overview-revenue { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .admin-overview-head { padding: 8px 10px; }
   .admin-overview-head span { font-size: 12.5px; gap: 5px; }
   .admin-overview-head svg { width: 13px; height: 13px; }
   .admin-overview-item,
-  .admin-overview-mini { flex-basis: 132px; padding: 9px 10px; border-radius: 0; gap: 4px; }
+  .admin-overview-mini { padding: 9px 10px; border-radius: 0; gap: 4px; }
   .admin-overview-item span,
   .admin-overview-mini span { font-size: 10px; line-height: 1.2; }
   .admin-overview-item b,

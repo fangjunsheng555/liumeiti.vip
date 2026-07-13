@@ -3588,67 +3588,71 @@ export default function AdminPage() {
                 {usdtCheckMsg && <em className="admin-overview-toast">{usdtCheckMsg}</em>}
                 {overviewLoading && <LoaderCircle size={12} className="spin-icon" />}
               </div>
-              <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("orders")}>
-                <span>待处理订单</span>
-                <b>{overview?.receivedOrders ?? 0}</b>
-              </button>
-              <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("awaiting_quote")}>
-                <span>代付待报价</span>
-                <b>{overview?.awaitingQuotes ?? 0}</b>
-              </button>
-              <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("pending_payment")}>
-                <span>代付待付款</span>
-                <b>{overview?.pendingQuotePayments ?? 0}</b>
-              </button>
-              <button type="button" className="admin-overview-item warn" onClick={() => openOverviewTarget("abnormal")}>
-                <span>异常订单</span>
-                <b>{overview?.abnormalOrders ?? 0}</b>
-              </button>
-              {overview?.usdtAutoConfirm && (
-                <button type="button" className="admin-overview-item" onClick={() => runUsdtCheck(true)} title="立即检查 TRON 链上到账">
-                  <span>USDT 待确认 {usdtChecking && <LoaderCircle size={11} className="spin-icon" />}</span>
-                  <b>{overview?.usdtPendingConfirm ?? 0}</b>
+              <div className="admin-overview-operations">
+                <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("orders")}>
+                  <span>待处理订单</span>
+                  <b>{overview?.receivedOrders ?? 0}</b>
                 </button>
-              )}
-              {canReviewWithdrawals && (
-                <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("withdrawals")}>
-                  <span>待审核提现</span>
-                  <b>{overview?.pendingWithdrawals ?? 0}</b>
+                <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("awaiting_quote")}>
+                  <span>代付待报价</span>
+                  <b>{overview?.awaitingQuotes ?? 0}</b>
                 </button>
-              )}
-              {canViewCodes && (
-                <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("codes")}>
-                  <span>可用兑换码</span>
-                  <b>{overview?.activeCodes ?? 0}</b>
+                <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("pending_payment")}>
+                  <span>代付待付款</span>
+                  <b>{overview?.pendingQuotePayments ?? 0}</b>
                 </button>
-              )}
-              {canSendMail && (
-                <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("mail")}>
-                  <span>失败邮件</span>
-                  <b>{overview?.failedMails ?? 0}</b>
+                <button type="button" className="admin-overview-item warn" onClick={() => openOverviewTarget("abnormal")}>
+                  <span>异常订单</span>
+                  <b>{overview?.abnormalOrders ?? 0}</b>
                 </button>
-              )}
-              {canViewUsers && (
-                <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("users")}>
-                  <span>注册用户</span>
-                  <b>{overview?.usersTotal ?? 0}</b>
-                </button>
-              )}
-              <div className="admin-overview-mini">
-                <span>今日订单 <DeltaBadge cur={overview?.todayOrders} prev={overview?.yesterdayOrders} /></span>
-                <b>{overview?.todayOrders ?? 0}</b>
+                {overview?.usdtAutoConfirm && (
+                  <button type="button" className="admin-overview-item" onClick={() => runUsdtCheck(true)} title="立即检查 TRON 链上到账">
+                    <span>USDT 待确认 {usdtChecking && <LoaderCircle size={11} className="spin-icon" />}</span>
+                    <b>{overview?.usdtPendingConfirm ?? 0}</b>
+                  </button>
+                )}
+                {canReviewWithdrawals && (
+                  <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("withdrawals")}>
+                    <span>待审核提现</span>
+                    <b>{overview?.pendingWithdrawals ?? 0}</b>
+                  </button>
+                )}
+                {canViewCodes && (
+                  <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("codes")}>
+                    <span>可用兑换码</span>
+                    <b>{overview?.activeCodes ?? 0}</b>
+                  </button>
+                )}
+                {canSendMail && (
+                  <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("mail")}>
+                    <span>失败邮件</span>
+                    <b>{overview?.failedMails ?? 0}</b>
+                  </button>
+                )}
+                {canViewUsers && (
+                  <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("users")}>
+                    <span>注册用户</span>
+                    <b>{overview?.usersTotal ?? 0}</b>
+                  </button>
+                )}
               </div>
-              <div className="admin-overview-mini money">
-                <span>今日营收 <DeltaBadge cur={overview?.todayRevenue} prev={overview?.yesterdayRevenue} /></span>
-                <b>¥{Number(overview?.todayRevenue || 0).toFixed(2)}</b>
-              </div>
-              <div className="admin-overview-mini">
-                <span>累计订单</span>
-                <b>{overview?.ordersTotal ?? 0}</b>
-              </div>
-              <div className="admin-overview-mini money">
-                <span>累计营收</span>
-                <b>¥{Number(overview?.totalRevenue || 0).toFixed(2)}</b>
+              <div className="admin-overview-summary">
+                <div className="admin-overview-mini">
+                  <span>今日订单 <DeltaBadge cur={overview?.todayOrders} prev={overview?.yesterdayOrders} /></span>
+                  <b>{overview?.todayOrders ?? 0}</b>
+                </div>
+                <div className="admin-overview-mini money">
+                  <span>今日营收 <DeltaBadge cur={overview?.todayRevenue} prev={overview?.yesterdayRevenue} /></span>
+                  <b>¥{Number(overview?.todayRevenue || 0).toFixed(2)}</b>
+                </div>
+                <div className="admin-overview-mini">
+                  <span>累计订单</span>
+                  <b>{overview?.ordersTotal ?? 0}</b>
+                </div>
+                <div className="admin-overview-mini money">
+                  <span>累计营收</span>
+                  <b>¥{Number(overview?.totalRevenue || 0).toFixed(2)}</b>
+                </div>
               </div>
             </div>
 
