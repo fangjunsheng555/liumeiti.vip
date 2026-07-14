@@ -630,7 +630,7 @@ export default function ServiceCenterPage() {
               <div className="section-head simple-head">
                 <div>
                   <div className="section-kicker">{L("订单查询/申请售后", "Order lookup / after-sales")}</div>
-                  <h2 className="section-title">{L("订单查询/申请售后", "Order lookup / after-sales")}</h2>
+                  <h1 className="section-title">{L("订单查询/申请售后", "Order lookup / after-sales")}</h1>
                 </div>
                 <Link
                   href="/guides/how-to-request-after-sales-support"
