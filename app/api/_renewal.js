@@ -54,12 +54,12 @@ function buildRenewalEmail({ order, summary, renewUrl, brandName, locale }) {
         ${buildEmailBrandHeader({ brandName, siteDomain: SITE_DOMAIN, label: L("续费提醒", "Renewal Reminder") })}
         <tr><td style="padding:30px 32px 10px;">
           <h2 style="margin:0 0 8px;font-size:20px;font-weight:900;color:#0f172a;letter-spacing:-0.02em;">${L("您的服务即将到期", "Your service is expiring soon")}</h2>
-          <p style="margin:0 0 16px;font-size:13.5px;line-height:1.7;color:#475569;">${L(`您在 ${brandName} 的订单 ${escapeHtml(order.orderId)} 中的服务${dueText}。为避免使用中断,建议提前续费,我们会为您安排无缝衔接。`, `The service in your ${brandName} order ${escapeHtml(order.orderId)} ${dueText}. Renew ahead of time and we'll arrange a seamless hand-over so nothing is interrupted.`)}</p>
+          <p style="margin:0 0 16px;font-size:13.5px;line-height:1.7;color:#475569;">${L(`您在 ${brandName} 的订单 ${escapeHtml(order.orderId)} 中的服务${dueText}。点击下方按钮可按原规格续费。`, `The service in your ${brandName} order ${escapeHtml(order.orderId)} ${dueText}. Use the button below to renew the same plan.`)}</p>
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 6px;">${itemsHtml}</table>
         </td></tr>
         <tr><td style="padding:8px 32px 26px;" align="center">
           <a href="${escapeHtml(renewUrl)}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:13px 34px;border-radius:999px;background:linear-gradient(135deg,#071627 0%,#0f766e 100%);color:#ffffff;font-size:14.5px;font-weight:800;text-decoration:none;letter-spacing:.01em;">${L("一键续费", "Renew now")}</a>
-          <p style="margin:12px 0 0;font-size:11.5px;color:#94a3b8;line-height:1.6;">${L("链接已为您预填相同规格,确认后即可下单。", "The link pre-fills the same plan — review and place the order.")}</p>
+          <p style="margin:12px 0 0;font-size:11.5px;color:#94a3b8;line-height:1.6;">${L("页面已预填相同规格，核对后提交订单。", "The same plan is pre-filled; review it before placing the order.")}</p>
         </td></tr>
         <tr><td style="padding:0 32px 28px;">
           <hr style="border:none;border-top:1px solid #e2e8f0;margin:0 0 14px;">
@@ -71,8 +71,8 @@ function buildRenewalEmail({ order, summary, renewUrl, brandName, locale }) {
 </body></html>`;
   const itemsText = summary.items.map((item) => `- ${item.label || item.service}: ${L("到期", "expires")} ${expiryDateLabel(item.expiresAt, en)}`).join("\n");
   const text = L(
-    `${brandName} 续费提醒\n\n您的订单 ${order.orderId} 中的服务${dueText}。\n\n${itemsText}\n\n一键续费(已预填相同规格): ${renewUrl}\n\n如已续费或不再需要,请忽略本邮件。`,
-    `${brandName} renewal reminder\n\nThe service in your order ${order.orderId} ${dueText}.\n\n${itemsText}\n\nRenew now (same plan pre-filled): ${renewUrl}\n\nIf you've already renewed or no longer need the service, please ignore this email.`,
+    `${brandName} 续费提醒\n\n您的订单 ${order.orderId} 中的服务${dueText}。\n\n${itemsText}\n\n点击下方链接可按原规格续费: ${renewUrl}\n\n如已续费或不再需要,请忽略本邮件。`,
+    `${brandName} renewal reminder\n\nThe service in your order ${order.orderId} ${dueText}.\n\n${itemsText}\n\nUse the link below to renew the same plan: ${renewUrl}\n\nIf you've already renewed or no longer need the service, please ignore this email.`,
   );
   return {
     subject: L(`${brandName} · 服务到期提醒 — 订单 ${order.orderId}`, `${brandName} · Service expiring soon — order ${order.orderId}`),

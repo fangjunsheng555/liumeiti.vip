@@ -61,7 +61,7 @@ export function buildCustomerMailHtml({ subject, content, brandName, siteDomain,
             <tr>
               <td style="padding:14px 20px 22px;">
                 <div style="border-top:1px solid #e2e8f0;padding-top:14px;font-size:12px;line-height:1.7;color:#64748b;">
-                  本邮件由${safeBrand}客服人员发送，工作人员编号 ${staffBadge},如仍需协助可直接回复此邮件或访问
+                  本邮件由${safeBrand}客服发送，客服编号 ${staffBadge}。如仍需协助，可直接回复此邮件或访问
                   <a href="${safeSiteUrl}" style="color:#0f766e;text-decoration:none;font-weight:700;">${safeSiteDomain}</a>
                   联系在线客服
                 </div>
@@ -87,7 +87,7 @@ export function buildCustomerMailText({ subject, content, brandName, siteDomain,
     "",
     `如仍需帮助，直接回复本邮件即可。 / Need more help? Just reply to this email.`,
     "",
-    `工作人员编号 #${staffId || 1}`,
+    `客服编号 #${staffId || 1}`,
     `${siteDomain || "www.liumeiti.vip"} ${siteUrl || "https://www.liumeiti.vip"}`,
   ].join("\n");
 }

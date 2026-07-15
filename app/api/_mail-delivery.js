@@ -208,7 +208,7 @@ export async function registerEmailDelivery({ args = {}, result = {} } = {}) {
   const sendError = clean(result?.error || result?.reason || "send_failed", 260);
   const fallbackLabel = result?.fallbackProvider === "brevo"
     ? "Brevo"
-    : (result?.fallbackProvider === "smtp2go" ? "SMTP2GO" : "备用 SMTP");
+    : (result?.fallbackProvider === "smtp2go" ? "历史 SMTP2GO" : "备用 SMTP");
   const failureReason = result?.fallbackAttempted && fallbackError
     ? clean(`${sendError}; ${fallbackLabel}: ${fallbackError}`, 300)
     : sendError;

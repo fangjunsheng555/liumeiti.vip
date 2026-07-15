@@ -30,8 +30,8 @@ export async function sendAfterSalesEmail(ticket, kind = "received") {
   const completed = kind === "completed";
   const title = completed ? L("售后工单已处理完成", "Your after-sales ticket is complete") : L("您的售后工单已收到", "We received your after-sales ticket");
   const description = completed
-    ? L(`关于订单 ${ticket.orderId} 的售后工单已完成处理。`, `The after-sales ticket for order ${ticket.orderId} has been completed.`)
-    : L(`我们已收到关于订单 ${ticket.orderId} 的售后申请，工作人员会尽快核查并处理。处理结果将发送至此邮箱。`, `We received your after-sales request for order ${ticket.orderId}. Our team will review it as soon as possible and email you when it is complete.`);
+    ? L(`订单 ${ticket.orderId} 的售后工单已处理完成。点击下方按钮可查看处理结果。`, `The after-sales ticket for order ${ticket.orderId} is complete. Use the button below to view the result.`)
+    : L(`我们已收到订单 ${ticket.orderId} 的售后申请，将尽快核查处理。点击下方按钮可查看工单进度。`, `We received your after-sales request for order ${ticket.orderId}. We will review it shortly; use the button below to track progress.`);
   const detailUrl = `${SITE_URL}/service-center?order=${encodeURIComponent(ticket.orderId)}#order-query`;
   const accent = completed ? "#047857" : "#0f766e";
   const noteBlock = completed && ticket.staffNote

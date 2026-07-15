@@ -7,6 +7,7 @@ const quoteExpiry = await import("../app/api/_quote-expiry.js");
 const serviceNotices = await import("../app/api/_service-notices.js");
 const { buildProxyOrderEmail } = await import("../app/api/quote-orders/_email.js");
 const { buildServiceNoticeEmail } = await import("../app/api/service-notices/_email.js");
+const { buildInvalidOrderEmailHtml } = await import("../app/api/order/invalid-email.js");
 
 test("quote validity accepts only supported options and defaults to seven days", () => {
   assert.equal(quoteExpiry.normalizeQuoteValidDays(1), 1);
@@ -53,6 +54,23 @@ test("quote email uses the stored payment deadline instead of fixed copy", () =>
   assert.match(email.html, /2026-07-20 18:30:00/);
   assert.doesNotMatch(email.html, /付款链接 7 天内有效/);
   assert.match(email.text, /付款截止: 2026-07-20/);
+  assert.match(email.html, /点击下方按钮进入专属付款页面/);
+  assert.doesNotMatch(email.html, /通过专属链接完成付款/);
+  const emailEn = buildProxyOrderEmail({
+    kind: "quote",
+    order: {
+      orderId: "LMQUOTE2EN",
+      quoteAmount: 400,
+      platformUrl: "https://example.com/item",
+      productPrice: "USD 99",
+    },
+    paymentUrl: "https://www.liumeiti.vip/checkout/quote/LMQUOTE2EN#token=test",
+    brandName: "Maoyang Taiwan Inc.",
+    siteDomain: "www.liumeiti.vip",
+    siteUrl: "https://www.liumeiti.vip",
+    locale: "en",
+  });
+  assert.match(emailEn.html, /use the button below to open your secure payment page/);
 });
 
 test("service notice audience keeps current paid users, excludes expired orders and deduplicates email", () => {
@@ -111,5 +129,23 @@ test("service notice email stays transactional and links to the announcement cen
   assert.match(email.html, /部分订单可能短时无法登录。<br>我们正在处理。/);
   assert.match(email.html, /https:\/\/www\.liumeiti\.vip\/announcements/);
   assert.match(email.html, /关于您使用的Spotify服务，有一项重要更新。/);
+  assert.match(email.html, /点击下方按钮查看完整公告。/);
   assert.doesNotMatch(email.html, /立即购买|限时|优惠/);
+});
+
+test("invalid-order email clearly points customers to the order button", () => {
+  const html = buildInvalidOrderEmailHtml({
+    order: {
+      orderId: "LMINVALID1",
+      serviceLabel: "Spotify",
+      cycle: "1年",
+      finalAmount: 128,
+    },
+    brandName: "冒央会社",
+    siteDomain: "www.liumeiti.vip",
+    siteUrl: "https://www.liumeiti.vip",
+    locale: "zh",
+  });
+  assert.match(html, /点击下方按钮可查看订单详情与当前状态。/);
+  assert.match(html, /订单通知/);
 });

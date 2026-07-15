@@ -53,7 +53,7 @@ export function buildInvalidOrderEmailHtml({ order, brandName, siteDomain, siteU
       <tr>
         <td align="center">
           <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:580px;background:#ffffff;border-radius:20px;overflow:hidden;border:1px solid #dbe7ef;box-shadow:0 16px 40px rgba(15,23,42,.08);">
-            ${buildEmailBrandHeader({ brandName, siteDomain, label: "Order Notice" })}
+            ${buildEmailBrandHeader({ brandName, siteDomain, label: L("订单通知", "Order Notice") })}
             <tr>
               <td style="padding:28px 24px 8px;text-align:center;">
                 <div style="display:inline-block;padding:9px 14px;border-radius:999px;background:#fff7ed;border:1px solid #fed7aa;color:#c2410c;font-size:12px;font-weight:900;letter-spacing:.08em;text-transform:uppercase;">Payment Not Received</div>
@@ -94,6 +94,7 @@ export function buildInvalidOrderEmailHtml({ order, brandName, siteDomain, siteU
             </tr>
             <tr>
               <td style="padding:22px 24px 0;">
+                <p style="margin:0 0 10px;text-align:center;font-size:12.5px;line-height:1.7;color:#64748b;">${L("点击下方按钮可查看订单详情与当前状态。", "Use the button below to view the order details and current status.")}</p>
                 <a href="${escapeHtml(queryUrl)}" style="display:block;text-align:center;text-decoration:none;border-radius:14px;background:#0f172a;color:#ffffff;font-size:14px;font-weight:900;padding:14px 16px;">${L("查看订单状态", "View order status")}</a>
               </td>
             </tr>
@@ -126,7 +127,7 @@ export function buildInvalidOrderEmailText({ order, brandName, siteDomain, siteU
     "",
     `${L("订单号", "Order ID")}: ${order.orderId}`,
     `${L("状态", "Status")}: ${L("无效 · 未收到付款", "Invalid · unpaid")}`,
-    `${L("查询", "Track")}: ${queryUrl}`,
+    `${L("查看订单详情与状态", "View order details and status")}: ${queryUrl}`,
     "",
     `${L("订单内容:", "Order items:")}`,
   ];

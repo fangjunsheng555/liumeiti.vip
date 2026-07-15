@@ -28,6 +28,9 @@ export function buildServiceNoticeEmail({ post, service, serviceLabel, locale, b
     ? `There is an important update for your ${displayService} service.`
     : `关于您使用的${displayService}服务，有一项重要更新。`;
   const button = en ? (post.published === false ? "Open Service Center" : "View announcement") : (post.published === false ? "进入服务中心" : "查看公告详情");
+  const actionHint = en
+    ? (post.published === false ? "Use the button below to open the Service Center." : "Use the button below to view the full announcement.")
+    : (post.published === false ? "点击下方按钮进入服务中心。" : "点击下方按钮查看完整公告。");
   const help = en
     ? "For order support, open the Service Center to look up your order or submit an after-sales request."
     : "如需订单协助，可前往服务中心查询订单或提交售后申请。";
@@ -52,6 +55,7 @@ export function buildServiceNoticeEmail({ post, service, serviceLabel, locale, b
           <div style="padding:16px 0;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;color:#334155;font-size:14px;line-height:1.8;word-break:break-word;">${safeBody}</div>
         </td></tr>
         <tr><td style="padding:18px 30px 10px;">
+          <p style="margin:0 0 10px;color:#475569;font-size:13px;line-height:1.7;">${escapeHtml(actionHint)}</p>
           <a href="${escapeHtml(actionUrl)}" style="display:inline-block;padding:12px 20px;border-radius:9px;background:#0f766e;color:#fff;text-decoration:none;font-size:13px;font-weight:800;">${button}</a>
         </td></tr>
         <tr><td style="padding:10px 30px 26px;color:#64748b;font-size:12px;line-height:1.7;">${escapeHtml(help)}</td></tr>
@@ -60,6 +64,6 @@ export function buildServiceNoticeEmail({ post, service, serviceLabel, locale, b
   </table>
 </body></html>`;
 
-  const text = [title, lead, "", body, "", `${button}: ${actionUrl}`, help].join("\n");
+  const text = [title, lead, "", body, "", actionHint, `${button}: ${actionUrl}`, help].join("\n");
   return { subject, html, text };
 }

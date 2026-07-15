@@ -127,7 +127,7 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
                 <span style="font-size:32px;color:#047857;">✓</span>
               </div>
               <h1 style="margin:0 0 6px;font-size:22px;font-weight:900;letter-spacing:-0.03em;color:#0f172a;">${L("订单已收到", "Order received")}</h1>
-              <p style="margin:0;color:#64748b;font-size:13.5px;line-height:1.6;">${en ? `Our team will process your order <strong style="color:#0f172a;">within 10 minutes</strong><br>Please keep your email and contact reachable` : `工作人员将在 <strong style="color:#0f172a;">10 分钟内</strong> 处理您的订单<br>请保持邮箱及联系方式畅通`}</p>
+              <p style="margin:0;color:#64748b;font-size:13.5px;line-height:1.6;">${en ? `We'll process your order <strong style="color:#0f172a;">within 10 minutes</strong><br>Please keep your email and contact reachable` : `我们将在 <strong style="color:#0f172a;">10 分钟内</strong> 处理您的订单<br>请保持邮箱及联系方式畅通`}</p>
             </td>
           </tr>
 
@@ -220,7 +220,7 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
                 <tr><td style="padding:16px 18px;">
                   <div style="font-size:13px;font-weight:800;color:#0f766e;margin-bottom:8px;">${L("接下来:", "What happens next:")}</div>
                   <ol style="margin:0;padding-left:18px;color:#134e4a;font-size:13px;line-height:1.85;">
-                    <li>${L("工作人员将在 10 分钟内处理订单", "Our team will process your order within 10 minutes")}</li>
+                    <li>${L("我们将在 10 分钟内处理订单", "We'll process your order within 10 minutes")}</li>
                     <li>${L("必要时将通过邮箱/联系方式联系您", "If needed, we'll reach you by email or your contact")}</li>
                     <li>${en ? `Once it's set up you'll get another email — you can also tap the order ID or visit <a href="${escapeHtml(siteUrl || "https://" + siteDomain)}" style="color:#0f766e;font-weight:700;">${escapeHtml(siteDomain)}</a> to track it` : `开通完成后您将再次收到邮件，也可点击订单号或访问 <a href="${escapeHtml(siteUrl || "https://" + siteDomain)}" style="color:#0f766e;font-weight:700;">${escapeHtml(siteDomain)}</a> 查询订单`}</li>
                   </ol>
@@ -308,6 +308,6 @@ export function buildOrderEmailText({ order, brandName, siteDomain, siteUrl, usd
   } else {
     lines.push(`${L("实付", "Paid")}: ¥${order.finalAmount}`);
   }
-  lines.push(``, L("工作人员将在 10 分钟内处理您的订单", "Our team will process your order within 10 minutes"), `${L("查询订单请访问", "Track your order at")}: ${queryUrl}`);
+  lines.push(``, L("我们将在 10 分钟内处理您的订单", "We'll process your order within 10 minutes"), `${L("查询订单请访问", "Track your order at")}: ${queryUrl}`);
   return lines.join("\n");
 }

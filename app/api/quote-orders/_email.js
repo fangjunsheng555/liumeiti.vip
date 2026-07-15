@@ -42,7 +42,7 @@ function copyFor(kind, locale, order) {
     return {
       label: L("代付报价", "Proxy Pay Quote"),
       title: L("报价已完成", "Your quote is ready"),
-      lead: L("请核对报价，并通过专属链接完成付款。", "Review the quote and use your secure link to pay."),
+      lead: L("请核对报价，点击下方按钮进入专属付款页面。", "Review the quote, then use the button below to open your secure payment page."),
       subject: L(`代付报价 ${order.orderId} · ${money(order.quoteAmount)}`, `Proxy Pay quote ${order.orderId} · ${money(order.quoteAmount)}`),
       button: L("查看报价并付款", "Review quote & pay"),
     };
@@ -51,7 +51,7 @@ function copyFor(kind, locale, order) {
     return {
       label: L("付款确认", "Payment Confirmation"),
       title: L("付款信息已提交", "Payment submitted"),
-      lead: L("工作人员正在核对款项，确认后将开始处理代付。", "Our team is verifying the payment and will process the request once confirmed."),
+      lead: L("我们正在核对款项，确认后开始处理。点击下方按钮可查询进度。", "We are verifying the payment and will begin processing once confirmed. Use the button below to track progress."),
       subject: L(`代付订单 ${order.orderId} 已收到付款信息`, `Payment submitted for ${order.orderId}`),
       button: L("查询订单", "Track order"),
     };
@@ -60,7 +60,7 @@ function copyFor(kind, locale, order) {
     return {
       label: L("代付完成", "Proxy Pay Complete"),
       title: L("代付已完成", "Proxy payment completed"),
-      lead: L("您的代付订单已处理完成。", "Your proxy-payment order has been completed."),
+      lead: L("您的代付已完成。点击下方按钮可查看订单详情。", "Your proxy payment is complete. Use the button below to view the order details."),
       subject: L(`代付订单 ${order.orderId} 已完成`, `Proxy Pay order ${order.orderId} completed`),
       button: L("查看订单", "View order"),
     };
@@ -69,7 +69,7 @@ function copyFor(kind, locale, order) {
     return {
       label: L("申请状态", "Request Status"),
       title: L("本次申请无法处理", "This request can't be processed"),
-      lead: L("请在订单详情中查看客服备注，或联系在线客服确认其他方案。", "Check the support note in your order, or contact support for another option."),
+      lead: L("点击下方按钮查看客服说明，或联系在线客服确认其他方案。", "Use the button below to view the support note, or contact support for another option."),
       subject: L(`代付申请 ${order.orderId} 无法处理`, `Proxy Pay request ${order.orderId} can't be processed`),
       button: L("查看订单", "View order"),
     };
@@ -77,7 +77,7 @@ function copyFor(kind, locale, order) {
   return {
     label: L("代付申请", "Proxy Pay Request"),
     title: L("申请已收到", "Request received"),
-    lead: L("工作人员将核验平台与商品，无需现在付款。报价会发送至此邮箱。", "We will verify the platform and item. No payment is due now; the quote will be emailed here."),
+    lead: L("我们会核验平台与商品，无需现在付款。报价将发送至此邮箱，点击下方按钮可查询进度。", "We will verify the platform and item. No payment is due now; the quote will be emailed here. Use the button below to track progress."),
     subject: L(`代付申请 ${order.orderId} 已收到`, `Proxy Pay request ${order.orderId} received`),
     button: L("查询订单", "Track order"),
   };

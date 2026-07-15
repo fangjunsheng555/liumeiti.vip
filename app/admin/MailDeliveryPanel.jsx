@@ -38,11 +38,11 @@ const EVENT_LABEL = {
   "email.complained": "收件人标记为垃圾邮件",
   "email.failed": "投递失败",
   "email.suppressed": "地址已被拦截",
-  "smtp2go.processed": "SMTP2GO 已接收",
+  "smtp2go.processed": "历史 SMTP2GO 已接收",
   "smtp2go.delivered": "已送达收件服务器",
   "smtp2go.bounce": "收件服务器退信",
   "smtp2go.spam": "收件人标记为垃圾邮件",
-  "smtp2go.reject": "SMTP2GO 已拒绝",
+  "smtp2go.reject": "历史 SMTP2GO 已拒绝",
   "brevo.request": "Brevo 已接收",
   "brevo.sent": "Brevo 已接收",
   "brevo.delivered": "已送达收件服务器",
@@ -64,7 +64,7 @@ function statusMeta(status) { return STATUS[status] || STATUS.sent; }
 
 function providerName(provider) {
   if (provider === "brevo") return "Brevo";
-  if (provider === "smtp2go") return "SMTP2GO";
+  if (provider === "smtp2go") return "历史 SMTP2GO";
   if (provider === "smtp") return "SMTP";
   return "备用 SMTP";
 }
@@ -72,7 +72,7 @@ function providerName(provider) {
 function providerLabel(record) {
   if (record?.fallbackAttempted) return `Resend → ${providerName(record?.fallbackProvider)}`;
   if (record?.provider === "brevo") return "Brevo 备用";
-  if (record?.provider === "smtp2go") return "SMTP2GO 备用";
+  if (record?.provider === "smtp2go") return "历史 SMTP2GO";
   if (record?.fallback) return `${providerName(record?.provider)} 备用`;
   if (record?.provider === "smtp") return "SMTP";
   if (record?.provider === "queue") return "站内排期";
@@ -122,7 +122,7 @@ export default function MailDeliveryPanel() {
   return (
     <div className="admin-compact-page">
       <header className="admin-compact-head">
-        <div><h2><MailCheck size={18} />邮件投递</h2><p>Resend 主通道与 Brevo 备用通道</p></div>
+        <div><h2><MailCheck size={18} />邮件投递</h2><p>当前配置：Resend 主通道 · Brevo 备用通道</p></div>
         <button type="button" onClick={load} disabled={loading} aria-label="刷新邮件投递"><RefreshCw size={14} className={loading ? "spin-icon" : ""} />刷新</button>
       </header>
 
