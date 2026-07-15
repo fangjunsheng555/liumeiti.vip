@@ -6,6 +6,7 @@ const DELIVERY_RECORD_PREFIX = "lm:mail:delivery:record:";
 const DELIVERY_MESSAGE_PREFIX = "lm:mail:delivery:message:";
 const DELIVERY_EVENT_PREFIX = "lm:mail:delivery:event:";
 const SMTP2GO_EVENT_PREFIX = "lm:mail:delivery:smtp2go-event:";
+const BREVO_EVENT_PREFIX = "lm:mail:delivery:brevo-event:";
 const MAX_RECORDS = 2000;
 const MAX_EVENTS = 24;
 const EVENT_TTL_SECONDS = 180 * 24 * 60 * 60;
@@ -32,6 +33,20 @@ const SMTP2GO_EVENT_STATUS = {
   bounce: "bounced",
   spam: "complained",
   reject: "suppressed",
+};
+
+const BREVO_EVENT_STATUS = {
+  request: "sent",
+  sent: "sent",
+  delivered: "delivered",
+  deferred: "delayed",
+  soft_bounce: "delayed",
+  hard_bounce: "bounced",
+  spam: "complained",
+  complaint: "complained",
+  invalid: "suppressed",
+  blocked: "suppressed",
+  error: "failed",
 };
 
 const STATUS_PRIORITY = {
@@ -191,8 +206,11 @@ export async function registerEmailDelivery({ args = {}, result = {} } = {}) {
   const status = requestedStatus || (result?.ok ? (result?.scheduled ? "scheduled" : "sent") : "failed");
   const fallbackError = clean(result?.fallbackError || "", 260);
   const sendError = clean(result?.error || result?.reason || "send_failed", 260);
+  const fallbackLabel = result?.fallbackProvider === "brevo"
+    ? "Brevo"
+    : (result?.fallbackProvider === "smtp2go" ? "SMTP2GO" : "备用 SMTP");
   const failureReason = result?.fallbackAttempted && fallbackError
-    ? clean(`${sendError}; SMTP2GO: ${fallbackError}`, 300)
+    ? clean(`${sendError}; ${fallbackLabel}: ${fallbackError}`, 300)
     : sendError;
   const record = {
     ...(existing || {}),
@@ -335,6 +353,115 @@ export async function applySmtp2goWebhookEvent(event) {
   }
 }
 
+function brevoEventName(event) {
+  return clean(event?.event || event?.msg_status || "", 40)
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+function brevoCustomMessageId(event) {
+  const raw = event?.["X-Mailin-custom"] || event?.["x-mailin-custom"];
+  if (!raw) return "";
+  if (typeof raw === "object") return canonicalMessageId(raw.site_message_id || raw.message_id);
+  try {
+    const parsed = JSON.parse(String(raw));
+    return canonicalMessageId(parsed?.site_message_id || parsed?.message_id);
+  } catch (error) {
+    const match = String(raw).match(/site_message_id["'=:\s]+<?([^>"',\s}]+)/i);
+    return canonicalMessageId(match?.[1]);
+  }
+}
+
+function brevoEventReason(event) {
+  return clean(event?.reason || event?.description || event?.status || "", 300);
+}
+
+function brevoEventItem(event, eventId) {
+  const eventName = brevoEventName(event);
+  const createdAt = normalizeEventTime(event?.ts_event || event?.ts_epoch || event?.ts || event?.date);
+  return {
+    id: clean(eventId, 160),
+    type: `brevo.${eventName}`,
+    status: BREVO_EVENT_STATUS[eventName] || "",
+    reason: brevoEventReason(event),
+    createdAt,
+    createdAtBeijing: formatBeijingTime(createdAt),
+  };
+}
+
+function brevoEventKey(event, eventName = brevoEventName(event)) {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      webhookId: event?.id || "",
+      event: eventName,
+      time: event?.ts_event || event?.ts_epoch || event?.ts || event?.date || "",
+      messageId: event?.["message-id"] || event?.messageId || "",
+      recipient: event?.email || event?.to || "",
+    }))
+    .digest("hex")
+    .slice(0, 40);
+}
+
+export function verifyBrevoWebhookToken(supplied, secret) {
+  const expected = String(secret || "").trim();
+  const actual = String(supplied || "").trim().replace(/^Bearer\s+/i, "");
+  if (!expected || !actual) return false;
+  const left = Buffer.from(actual);
+  const right = Buffer.from(expected);
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+export async function applyBrevoWebhookEvent(event) {
+  const eventName = brevoEventName(event);
+  const incoming = BREVO_EVENT_STATUS[eventName];
+  if (!incoming) return { ok: true, ignored: true };
+  const safeEventId = brevoEventKey(event, eventName);
+  const lockKey = BREVO_EVENT_PREFIX + safeEventId;
+  const locked = await redisCmd(["SET", lockKey, "processing", "NX", "EX", "300"]);
+  if (locked !== "OK") return { ok: true, duplicate: true };
+  try {
+    const senderMessageId = brevoCustomMessageId(event);
+    const providerMessageId = canonicalMessageId(event?.["message-id"] || event?.messageId);
+    let record = senderMessageId ? await getRecordByMessageId(senderMessageId) : null;
+    if (!record && providerMessageId) record = await getRecordByMessageId(providerMessageId);
+    const now = new Date();
+    const item = brevoEventItem(event, safeEventId);
+    const recipients = normalizeRecipients(event?.email || event?.to);
+    const createdAt = normalizeEventTime(event?.ts || event?.ts_event || event?.date, now);
+    record = {
+      ...(record || {}),
+      id: record?.id || makeDeliveryId(),
+      messageId: senderMessageId || record?.messageId || providerMessageId,
+      providerMessageId: providerMessageId || record?.providerMessageId || "",
+      provider: "brevo",
+      fallback: Boolean(record?.fallback),
+      primaryProvider: clean(record?.primaryProvider || "", 30),
+      primaryError: clean(record?.primaryError || "", 300),
+      recipients: recipients.length ? recipients : (record?.recipients || []),
+      to: recipients[0] || record?.to || "",
+      subject: clean(event?.subject || record?.subject || "", 180),
+      category: normalizedCategory(record?.category),
+      relatedType: clean(record?.relatedType || "", 40),
+      relatedId: clean(record?.relatedId || "", 120),
+      status: nextStatus(record?.status, incoming),
+      reason: item.reason || record?.reason || "",
+      attempt: Number(record?.attempt || 1),
+      events: [...(Array.isArray(record?.events) ? record.events.filter((entry) => entry.id !== safeEventId) : []), item].slice(-MAX_EVENTS),
+      createdAt: record?.createdAt || createdAt,
+      createdAtBeijing: record?.createdAtBeijing || formatBeijingTime(createdAt),
+      updatedAt: item.createdAt,
+      updatedAtBeijing: item.createdAtBeijing,
+    };
+    const saved = await persistRecord(record);
+    if (!saved) throw new Error("delivery_save_failed");
+    await redisCmd(["SET", lockKey, "1", "EX", String(EVENT_TTL_SECONDS)]);
+    return { ok: true, record };
+  } catch (error) {
+    await redisCmd(["DEL", lockKey]);
+    return { ok: false, error: clean(error?.message || "delivery_event_failed", 160) };
+  }
+}
+
 export function verifyResendWebhookSignature({ payload, id, timestamp, signature, secret, now = Date.now() }) {
   const rawPayload = String(payload || "");
   const safeId = clean(id, 180);
@@ -428,12 +555,15 @@ export async function getEmailDelivery(id) {
 export const mailDeliveryInternals = {
   EVENT_STATUS,
   SMTP2GO_EVENT_STATUS,
+  BREVO_EVENT_STATUS,
   canonicalMessageId,
   nextStatus,
   normalizeRecipients,
   normalizedCategory,
   normalizeEventTime,
   smtp2goEventKey,
+  brevoEventKey,
+  brevoCustomMessageId,
   deliveryRecoveryFingerprint,
   reconcileDeliveryStatuses,
 };

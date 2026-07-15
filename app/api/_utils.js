@@ -1386,13 +1386,14 @@ function smtpTransportConfig(prefix = "SMTP") {
   const pass = process.env[`${prefix}_PASS`];
   const port = Number(process.env[`${prefix}_PORT`]) || 587;
   const from = clean(process.env[`${prefix}_FROM`] || mailFromAddress() || user, 200);
+  const configuredProvider = clean(process.env[`${prefix}_PROVIDER`] || "", 30).toLowerCase();
   return {
     host,
     user,
     pass,
     port,
     from,
-    provider: prefix === "FALLBACK_SMTP" ? "smtp2go" : "smtp",
+    provider: configuredProvider || "smtp",
   };
 }
 
@@ -1439,7 +1440,12 @@ async function sendViaSmtp({ to, subject, text, html, fromName, marketing = fals
         to, subject, text, html,
         messageId,
         priority,
-        ...(extraHeaders ? { headers: extraHeaders } : {}),
+        headers: {
+          ...(extraHeaders || {}),
+          ...(provider === "brevo"
+            ? { "X-Mailin-custom": JSON.stringify({ site_message_id: messageId.replace(/^<|>$/g, "") }) }
+            : {}),
+        },
       });
       try { transporter.close(); } catch (e) {}
       return { ok: true, messageId: info.messageId || messageId, provider, attempt };
@@ -1523,7 +1529,7 @@ export async function sendSimpleEmail(args) {
       result = {
         ...primaryResult,
         fallbackAttempted: true,
-        fallbackProvider: "smtp2go",
+        fallbackProvider: fallbackResult.provider || "smtp",
         fallbackError: fallbackResult.reason || fallbackResult.error || "smtp_fallback_failed",
       };
     }
@@ -1540,7 +1546,7 @@ export async function sendSimpleEmail(args) {
     trackingTasks.push(recordHealthStatus("resend", {
       status: result?.fallback ? "warning" : (result?.ok ? "ok" : "error"),
       summary: result?.fallback
-        ? "Resend 额度受限，事务邮件已由 SMTP2GO 提交"
+        ? `Resend 额度受限，事务邮件已由 ${result?.provider === "brevo" ? "Brevo" : "备用 SMTP"} 提交`
         : (result?.ok ? "最近一封邮件已提交发送" : "最近一次发信失败"),
       error: result?.ok ? "" : (result?.reason || result?.error || "send_failed"),
       metrics: {

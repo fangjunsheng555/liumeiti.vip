@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   mailDeliveryInternals,
+  verifyBrevoWebhookToken,
   verifyResendWebhookSignature,
   verifySmtp2goWebhookAuthorization,
 } from "../app/api/_mail-delivery.js";
@@ -77,6 +78,30 @@ test("SMTP2GO identifiers, timestamps and delivery events normalize for shared t
   const delivered = { ...processed, event: "delivered", time: "2026-07-14 10:31:00" };
   assert.equal(smtp2goEventKey(processed), smtp2goEventKey({ ...processed }));
   assert.notEqual(smtp2goEventKey(processed), smtp2goEventKey(delivered));
+});
+
+test("Brevo webhook token and delivery events normalize for shared tracking", () => {
+  const { BREVO_EVENT_STATUS, brevoCustomMessageId, brevoEventKey } = mailDeliveryInternals;
+  assert.equal(verifyBrevoWebhookToken("brevo-secret", "brevo-secret"), true);
+  assert.equal(verifyBrevoWebhookToken("Bearer brevo-secret", "brevo-secret"), true);
+  assert.equal(verifyBrevoWebhookToken("wrong", "brevo-secret"), false);
+  assert.equal(BREVO_EVENT_STATUS.request, "sent");
+  assert.equal(BREVO_EVENT_STATUS.delivered, "delivered");
+  assert.equal(BREVO_EVENT_STATUS.soft_bounce, "delayed");
+  assert.equal(BREVO_EVENT_STATUS.hard_bounce, "bounced");
+  assert.equal(BREVO_EVENT_STATUS.spam, "complained");
+  assert.equal(BREVO_EVENT_STATUS.blocked, "suppressed");
+  const delivered = {
+    id: 77,
+    event: "delivered",
+    ts_event: 1784100000,
+    email: "user@example.com",
+    "message-id": "brevo-message@example",
+    "X-Mailin-custom": JSON.stringify({ site_message_id: "lm-site@example" }),
+  };
+  assert.equal(brevoCustomMessageId(delivered), "lm-site@example");
+  assert.equal(brevoEventKey(delivered), brevoEventKey({ ...delivered }));
+  assert.notEqual(brevoEventKey(delivered), brevoEventKey({ ...delivered, event: "hard_bounce" }));
 });
 
 test("an older failed delivery is recovered only by a matching newer successful resend", () => {
