@@ -59,6 +59,25 @@ const MARKETING_DAILY_SCHEDULE_LIMIT = 40;
 const MARKETING_SCHEDULE_REQUEST_LIMIT = 5;
 const ABNORMAL_SEEN_STORAGE_PREFIX = "lm_admin_abnormal_seen_v1";
 
+function initialAdminPollState() {
+  return {
+    overview: { failures: 0, lastSuccessAt: 0, error: "" },
+    orders: { failures: 0, lastSuccessAt: 0, error: "" },
+    orderDetail: { failures: 0, lastSuccessAt: 0, error: "" },
+  };
+}
+
+function adminPollTime(value) {
+  if (!value) return "尚未取得最新数据";
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+}
+
 function copyText(text) {
   if (typeof window === "undefined") return;
   if (navigator.clipboard && window.isSecureContext) {
@@ -1294,6 +1313,10 @@ export default function AdminPage() {
   const [activeMailLog, setActiveMailLog] = useState(null);
   const [overview, setOverview] = useState(null);
   const [overviewLoading, setOverviewLoading] = useState(false);
+  const [pollState, setPollState] = useState(initialAdminPollState);
+  const [orderDetailRefreshToken, setOrderDetailRefreshToken] = useState(0);
+  const pollControllersRef = useRef({});
+  const pollSequenceRef = useRef({});
   const [seenAbnormalCount, setSeenAbnormalCount] = useState(null);
   const [usdtChecking, setUsdtChecking] = useState(false);
   const [usdtCheckMsg, setUsdtCheckMsg] = useState("");
@@ -1378,18 +1401,56 @@ export default function AdminPage() {
     }
   }, []);
 
+  const beginPollRequest = useCallback((key) => {
+    pollControllersRef.current[key]?.abort?.();
+    const controller = new AbortController();
+    const sequence = Number(pollSequenceRef.current[key] || 0) + 1;
+    pollControllersRef.current[key] = controller;
+    pollSequenceRef.current[key] = sequence;
+    return { controller, sequence };
+  }, []);
+
+  const isCurrentPollRequest = useCallback((key, sequence) => (
+    Number(pollSequenceRef.current[key] || 0) === Number(sequence)
+  ), []);
+
+  const markPollSuccess = useCallback((key) => {
+    setPollState((current) => {
+      const previous = current[key] || {};
+      const now = Date.now();
+      if (!previous.failures && previous.lastSuccessAt && now - previous.lastSuccessAt < 30000) return current;
+      return {
+        ...current,
+        [key]: { failures: 0, lastSuccessAt: now, error: "" },
+      };
+    });
+  }, []);
+
+  const markPollFailure = useCallback((key, error) => {
+    setPollState((current) => ({
+      ...current,
+      [key]: {
+        ...current[key],
+        failures: Number(current[key]?.failures || 0) + 1,
+        error: String(error?.message || error || "refresh_failed").slice(0, 120),
+      },
+    }));
+  }, []);
+
   const loadOverview = useCallback(async (options = {}) => {
     const silent = Boolean(options.silent);
     const watch = Boolean(options.watch);
+    const { controller, sequence } = beginPollRequest("overview");
     if (!silent) setOverviewLoading(true);
     try {
-      const res = await fetch("/api/admin/overview", { credentials: "same-origin", cache: "no-store" });
+      const res = await fetch("/api/admin/overview", { credentials: "same-origin", cache: "no-store", signal: controller.signal });
       if (res.status === 401) {
         setAuthed(false);
         return;
       }
       const data = await res.json();
-      if (data.ok) {
+      if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (isCurrentPollRequest("overview", sequence)) {
         if (data.currentStaff) applyCurrentStaff(data.currentStaff);
         const previous = overviewRef.current;
         const nextOverview = data.overview || null;
@@ -1404,13 +1465,17 @@ export default function AdminPage() {
         }
         overviewRef.current = nextOverview;
         setOverview(nextOverview);
+        markPollSuccess("overview");
       }
     } catch (e) {
-      console.error(e);
+      if (e?.name !== "AbortError" && isCurrentPollRequest("overview", sequence)) {
+        console.error(e);
+        markPollFailure("overview", e);
+      }
     } finally {
-      if (!silent) setOverviewLoading(false);
+      if (!silent && isCurrentPollRequest("overview", sequence)) setOverviewLoading(false);
     }
-  }, [triggerNewOrderNotice, applyCurrentStaff]);
+  }, [triggerNewOrderNotice, applyCurrentStaff, beginPollRequest, isCurrentPollRequest, markPollSuccess, markPollFailure]);
 
   const runUsdtCheck = useCallback(async (manual = false) => {
     if (usdtCheckingRef.current) return;
@@ -2886,6 +2951,7 @@ export default function AdminPage() {
     const append = Boolean(options.append);
     const offset = Math.max(0, Number(options.offset || 0));
     const limit = Math.min(200, Math.max(1, Number(options.limit || 100)));
+    const { controller, sequence } = beginPollRequest("orders");
     if (!silent && !append) setLoading(true);
     if (append) setOrdersLoadingMore(true);
     try {
@@ -2896,26 +2962,37 @@ export default function AdminPage() {
       if (options.to) params.set("to", options.to);
       params.set("offset", String(offset));
       params.set("limit", String(limit));
-      const res = await fetch("/api/admin/orders?" + params.toString(), { credentials: "same-origin" });
+      const res = await fetch("/api/admin/orders?" + params.toString(), {
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      });
       if (res.status === 401) {
         setAuthed(false);
         return;
       }
       const data = await res.json();
-      if (data.ok) {
+      if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (isCurrentPollRequest("orders", sequence)) {
         setOrders((prev) => (append ? [...prev, ...(data.orders || [])] : (data.orders || [])));
         setOrdersMeta({ filteredCount: Number(data.filteredCount || 0), total: Number(data.total || 0), hasMore: Boolean(data.hasMore) });
         if (Array.isArray(data.assignableStaff)) setAssignableStaff(data.assignableStaff);
         if (data.currentStaff) applyCurrentStaff(data.currentStaff);
         setAuthed(true);
+        markPollSuccess("orders");
       }
     } catch (e) {
-      console.error(e);
+      if (e?.name !== "AbortError" && isCurrentPollRequest("orders", sequence)) {
+        console.error(e);
+        markPollFailure("orders", e);
+      }
     } finally {
-      if (!silent && !append) setLoading(false);
-      if (append) setOrdersLoadingMore(false);
+      if (isCurrentPollRequest("orders", sequence)) {
+        if (!silent && !append) setLoading(false);
+        if (append) setOrdersLoadingMore(false);
+      }
     }
-  }, [applyCurrentStaff]);
+  }, [applyCurrentStaff, beginPollRequest, isCurrentPollRequest, markPollSuccess, markPollFailure]);
 
   useEffect(() => {
     if (authed === true && tab !== "orders" && tab !== "abnormal") return;
@@ -2926,30 +3003,42 @@ export default function AdminPage() {
     if (!authed || (tab !== "orders" && tab !== "abnormal")) return;
     const timer = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      if (activeOrder) return;
+      if (activeOrder || loading || ordersLoadingMore) return;
       // 原位刷新当前已加载的条数(限 200),让新订单出现而不丢失已翻页内容
       loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, offset: 0, limit: Math.min(200, Math.max(100, orders.length)), from: dateFrom, to: dateTo });
     }, 10000);
     return () => clearInterval(timer);
-  }, [authed, tab, activeOrder, loadOrders, appliedSearch, filterStatus, dateFrom, dateTo, orders.length]);
+  }, [authed, tab, activeOrder, loading, ordersLoadingMore, loadOrders, appliedSearch, filterStatus, dateFrom, dateTo, orders.length]);
+
+  useEffect(() => {
+    setPollState((current) => ({
+      ...current,
+      orderDetail: { failures: 0, lastSuccessAt: 0, error: "" },
+    }));
+  }, [activeOrder?.orderId]);
 
   useEffect(() => {
     const orderId = String(activeOrder?.orderId || "").trim();
     if (!authed || !orderId) return;
     let disposed = false;
     let busy = false;
+    let controller = null;
     let knownRevision = customerDetailsRevision(activeOrder);
 
     const refreshCustomerDetails = async () => {
       if (busy) return;
       busy = true;
+      controller = new AbortController();
       try {
         const response = await fetch(`/api/admin/orders/${encodeURIComponent(orderId)}`, {
           credentials: "same-origin",
           cache: "no-store",
+          signal: controller.signal,
         });
         const data = await response.json();
-        if (disposed || !response.ok || !data.ok || !data.order) return;
+        if (disposed) return;
+        if (!response.ok || !data.ok || !data.order) throw new Error(data.error || `HTTP ${response.status}`);
+        markPollSuccess("orderDetail");
         const latest = data.order;
         const revision = customerDetailsRevision(latest);
         if (revision === knownRevision) return;
@@ -2980,7 +3069,7 @@ export default function AdminPage() {
           };
         });
       } catch (error) {
-        // Keep the current editor usable if a background refresh fails.
+        if (!disposed && error?.name !== "AbortError") markPollFailure("orderDetail", error);
       } finally {
         busy = false;
       }
@@ -2990,9 +3079,37 @@ export default function AdminPage() {
     const timer = setInterval(refreshCustomerDetails, 5000);
     return () => {
       disposed = true;
+      controller?.abort?.();
       clearInterval(timer);
     };
-  }, [authed, activeOrder?.orderId]);
+  }, [authed, activeOrder?.orderId, orderDetailRefreshToken, markPollSuccess, markPollFailure]);
+
+  useEffect(() => {
+    if (!authed || typeof window === "undefined") return undefined;
+    const refreshVisibleData = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      loadOverview({ silent: true, watch: true });
+      if ((tab === "orders" || tab === "abnormal") && !activeOrder) {
+        loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, {
+          silent: true,
+          offset: 0,
+          limit: Math.min(200, Math.max(100, orders.length)),
+          from: dateFrom,
+          to: dateTo,
+        });
+      }
+    };
+    window.addEventListener("online", refreshVisibleData);
+    window.addEventListener("focus", refreshVisibleData);
+    return () => {
+      window.removeEventListener("online", refreshVisibleData);
+      window.removeEventListener("focus", refreshVisibleData);
+    };
+  }, [authed, tab, activeOrder, loadOverview, loadOrders, appliedSearch, filterStatus, dateFrom, dateTo, orders.length]);
+
+  useEffect(() => () => {
+    Object.values(pollControllersRef.current).forEach((controller) => controller?.abort?.());
+  }, []);
 
   function downloadOrdersCsv() {
     const params = new URLSearchParams();
@@ -3538,6 +3655,21 @@ export default function AdminPage() {
     setPdfExportModal(null);
   }
 
+  const visiblePollKey = tab === "overview" ? "overview" : (["orders", "abnormal"].includes(tab) ? "orders" : "");
+  const visiblePoll = visiblePollKey ? pollState[visiblePollKey] : null;
+  const retryVisiblePoll = () => {
+    if (visiblePollKey === "overview") {
+      loadOverview({ silent: false, watch: true });
+      return;
+    }
+    if (visiblePollKey === "orders") {
+      loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, {
+        from: dateFrom,
+        to: dateTo,
+      });
+    }
+  };
+
   // ── Login screen ──
   if (authed === false) {
     return (
@@ -3745,6 +3877,17 @@ export default function AdminPage() {
         <button type="button" className="admin-global-search-trigger" onClick={() => setSearchOpen(true)}>
           <Search size={14} /><span>搜索订单 / 用户 / 兑换码…</span><kbd>⌘K</kbd>
         </button>
+
+        {visiblePoll?.failures > 0 && (
+          <div className="admin-poll-status" role="status">
+            <AlertTriangle size={14} />
+            <span>
+              <b>数据暂未更新</b>
+              当前显示 {adminPollTime(visiblePoll.lastSuccessAt)} 的内容
+            </span>
+            <button type="button" onClick={retryVisiblePoll}>重新加载</button>
+          </div>
+        )}
 
         {newOrderAlert && (
           <button type="button" className="admin-new-order-alert" onClick={openNewOrderNotice}>
@@ -5122,6 +5265,14 @@ export default function AdminPage() {
                 <X size={16} />
               </button>
             </div>
+
+            {pollState.orderDetail.failures > 0 && (
+              <div className="admin-modal-poll-status" role="status">
+                <AlertTriangle size={13} />
+                <span>订单资料暂未更新 · 当前显示 {adminPollTime(pollState.orderDetail.lastSuccessAt)} 的内容</span>
+                <button type="button" onClick={() => setOrderDetailRefreshToken((value) => value + 1)}>重试</button>
+              </div>
+            )}
 
             <div className="admin-modal-body">
               <div className="admin-order-assignment-bar">

@@ -1400,14 +1400,34 @@ function smtpTransportConfig(prefix = "SMTP") {
 export function shouldFallbackToBackupSmtp(args, result) {
   if (result?.ok || args?.marketing || args?.scheduledAt) return false;
   if (clean(args?.category, 40).toLowerCase() === "marketing") return false;
+  const recipients = (Array.isArray(args?.to) ? args.to : [args?.to]).filter(Boolean);
+  if (!recipients.length || recipients.some((address) => !validEmail(address))) return false;
   const code = Number(result?.code || 0);
   const detail = clean(`${result?.reason || ""} ${result?.error || ""}`, 500).toLowerCase();
-  return code === 429
+  if (
+    detail.includes("domain_not_verified")
+    || detail.includes("domain is not verified")
+    || detail.includes("verify a domain")
+    || detail.includes("not authorized to send")
+  ) return true;
+  if ([400, 404, 409, 413, 422].includes(code)) return false;
+  if ([401, 403, 408, 425, 429].includes(code) || (code >= 500 && code <= 599)) return true;
+  return detail.includes("resend_api_key_missing")
     || detail.includes("daily_quota_exceeded")
-    || detail.includes("monthly_quota_exceeded");
+    || detail.includes("monthly_quota_exceeded")
+    || detail.includes("rate_limit")
+    || detail.includes("fetch failed")
+    || detail.includes("network")
+    || detail.includes("timeout")
+    || detail.includes("timed out")
+    || detail.includes("abort")
+    || detail.includes("econnreset")
+    || detail.includes("econnrefused")
+    || detail.includes("enotfound")
+    || detail.includes("socket hang up");
 }
 
-async function sendViaSmtp({ to, subject, text, html, fromName, marketing = false }, config = smtpTransportConfig()) {
+async function sendViaSmtp({ to, subject, text, html, fromName, marketing = false, idempotencyKey = "" }, config = smtpTransportConfig()) {
   const { host, user, pass, port, from, provider } = config;
   const brandName = fromName || process.env.BRAND_NAME || "冒央会社";
   if (!host || !user || !pass || !from || !to) {
@@ -1417,7 +1437,10 @@ async function sendViaSmtp({ to, subject, text, html, fromName, marketing = fals
   try { nodemailer = (await import("nodemailer")).default; }
   catch (e) { return { ok: false, provider, reason: "nodemailer_import_failed" }; }
   const secure = port === 465;
-  const messageId = `<lm-${randomBytes(16).toString("hex")}@liumeiti.vip>`;
+  const messageToken = idempotencyKey
+    ? createHash("sha256").update(String(idempotencyKey)).digest("hex").slice(0, 32)
+    : randomBytes(16).toString("hex");
+  const messageId = `<lm-${messageToken}@liumeiti.vip>`;
   // 群发/营销邮件:普通优先级(高优先级=垃圾信号)+ List-Unsubscribe 头(Gmail/Yahoo 对群发的进箱硬要求)。
   // 事务邮件(验证码/订单)保持 high 以求快达。
   const priority = marketing ? "normal" : "high";
@@ -1471,8 +1494,8 @@ async function sendViaSmtp({ to, subject, text, html, fromName, marketing = fals
 }
 
 // ── Account extensions: coupons, transfers, redeem codes, withdrawals ──
-// Send a generic email. Resend is the default provider; SMTP requires explicit
-// EMAIL_PROVIDER=smtp and is kept only as an emergency fallback.
+// Send a generic email. Resend is primary; transactional provider/transport
+// failures can use the configured fallback SMTP channel.
 // 关键邮件发送失败 → Telegram 运维告警(10 分钟节流防告警风暴)。
 // 订单确认/报价/密码修正/验证码等全部经 sendSimpleEmail,此处是唯一出口:
 // 客户收不到关键邮件(如修正链接)= 订单死锁,必须即时知道而不是等着翻邮件日志。
@@ -1509,15 +1532,21 @@ function settleWithin(promise, timeoutMs) {
 }
 
 export async function sendSimpleEmail(args) {
-  const prepared = applyEmailSupportContacts(args, args?.support || await currentEmailSupport());
+  const prepared = {
+    ...applyEmailSupportContacts(args, args?.support || await currentEmailSupport()),
+    // One key is reused by both Resend attempts and the fallback transport.
+    idempotencyKey: clean(args?.idempotencyKey, 256) || `lm-${Date.now().toString(36)}-${randomBytes(12).toString("hex")}`,
+  };
   const provider = String(process.env.EMAIL_PROVIDER || "resend").toLowerCase();
   let result;
+  let primaryResult = null;
+  let fallbackResult = null;
   if (provider === "smtp") result = await sendViaSmtp(prepared);
   else if (process.env.RESEND_API_KEY) result = await sendViaResend(prepared);
   else result = { ok: false, provider: "resend", reason: "resend_api_key_missing" };
+  primaryResult = result;
   if (provider !== "smtp" && shouldFallbackToBackupSmtp(prepared, result)) {
-    const primaryResult = result;
-    const fallbackResult = await sendViaSmtp(prepared, smtpTransportConfig("FALLBACK_SMTP"));
+    fallbackResult = await sendViaSmtp(prepared, smtpTransportConfig("FALLBACK_SMTP"));
     if (fallbackResult.ok) {
       result = {
         ...fallbackResult,
@@ -1543,18 +1572,31 @@ export async function sendSimpleEmail(args) {
   }
   try {
     const { recordHealthStatus } = await import("./_health.js");
-    trackingTasks.push(recordHealthStatus("resend", {
-      status: result?.fallback ? "warning" : (result?.ok ? "ok" : "error"),
-      summary: result?.fallback
-        ? `Resend 额度受限，事务邮件已由 ${result?.provider === "brevo" ? "Brevo" : "备用 SMTP"} 提交`
-        : (result?.ok ? "最近一封邮件已提交发送" : "最近一次发信失败"),
-      error: result?.ok ? "" : (result?.reason || result?.error || "send_failed"),
-      metrics: {
-        provider: result?.provider || provider,
-        fallback: Boolean(result?.fallback || result?.fallbackAttempted),
-        attempt: Number(result?.attempt || 1),
-      },
-    }));
+    if (provider !== "smtp") {
+      trackingTasks.push(recordHealthStatus("resend", {
+        status: primaryResult?.ok ? "ok" : "error",
+        summary: primaryResult?.ok
+          ? "最近一封邮件已由 Resend 提交"
+          : (fallbackResult?.ok ? "Resend 发送失败，邮件已切换至备用通道" : "最近一次 Resend 发信失败"),
+        error: primaryResult?.ok ? "" : (primaryResult?.reason || primaryResult?.error || "send_failed"),
+        metrics: {
+          fallback: Boolean(fallbackResult),
+          attempt: Number(primaryResult?.attempt || 1),
+        },
+      }));
+    }
+    const brevoResult = provider === "smtp" && result?.provider === "brevo" ? result : fallbackResult;
+    if (brevoResult && brevoResult.provider === "brevo") {
+      trackingTasks.push(recordHealthStatus("brevo", {
+        status: brevoResult.ok ? "ok" : "error",
+        summary: brevoResult.ok ? "最近一封邮件已由 Brevo 提交" : "最近一次 Brevo 发信失败",
+        error: brevoResult.ok ? "" : (brevoResult.reason || brevoResult.error || "send_failed"),
+        metrics: {
+          fallback: provider !== "smtp",
+          attempt: Number(brevoResult.attempt || 1),
+        },
+      }));
+    }
   } catch (e) {}
   if (trackingTasks.length) await settleWithin(Promise.allSettled(trackingTasks), 1500);
   if (!result?.ok) await alertMailFailure(prepared, result);

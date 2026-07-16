@@ -8,6 +8,8 @@ const LABELS = {
   redis: "Redis 数据库",
   resend: "Resend 发信",
   resend_webhook: "Resend 回执",
+  brevo: "Brevo 备用发信",
+  brevo_webhook: "Brevo 回执",
   telegram_backup: "Telegram 备份",
   restore_drill: "恢复演练",
   usdt: "USDT 自动确认",
@@ -16,7 +18,28 @@ const LABELS = {
 };
 
 function fallback(component, status, summary, metrics = {}) {
-  return { component, status, summary, error: "", metrics, checkedAt: "", checkedAtBeijing: "", lastSuccessAt: "", lastSuccessAtBeijing: "" };
+  return {
+    component,
+    status,
+    summary,
+    error: "",
+    metrics,
+    checkedAt: "",
+    checkedAtBeijing: "",
+    lastSuccessAt: "",
+    lastSuccessAtBeijing: "",
+    lastFailureAt: "",
+    lastFailureAtBeijing: "",
+    stale: false,
+  };
+}
+
+function brevoSmtpConfigured() {
+  return Boolean(
+    process.env.FALLBACK_SMTP_HOST
+    && process.env.FALLBACK_SMTP_USER
+    && process.env.FALLBACK_SMTP_PASS,
+  );
 }
 
 export async function GET(request) {
@@ -41,6 +64,16 @@ export async function GET(request) {
     stored.resend_webhook = process.env.RESEND_WEBHOOK_SECRET
       ? fallback("resend_webhook", "warning", "已配置，等待投递回执")
       : fallback("resend_webhook", "error", "Webhook 签名密钥未配置");
+  }
+  if (!stored.brevo) {
+    stored.brevo = brevoSmtpConfigured()
+      ? fallback("brevo", "warning", "备用通道已配置，等待发送验证")
+      : fallback("brevo", "error", "Brevo 备用通道未完整配置");
+  }
+  if (!stored.brevo_webhook) {
+    stored.brevo_webhook = process.env.BREVO_WEBHOOK_TOKEN
+      ? fallback("brevo_webhook", "warning", "已配置，等待投递回执")
+      : fallback("brevo_webhook", "error", "Brevo 回执令牌未配置");
   }
   if (!stored.telegram_backup) {
     stored.telegram_backup = process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID

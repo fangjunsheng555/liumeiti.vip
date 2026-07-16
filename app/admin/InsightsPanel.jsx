@@ -61,7 +61,7 @@ const TREND_METRICS = [
   { key: "codeRevenue", label: "服务码", money: true, color: "#c2410c", fill: "rgba(194, 65, 12, 0.1)" },
   { key: "paid", label: "成交订单", color: "#7c3aed", fill: "rgba(124, 58, 237, 0.1)" },
   { key: "orders", label: "有效订单", color: "#0e7490", fill: "rgba(14, 116, 144, 0.1)" },
-  { key: "checkoutStarted", label: "结算发起", color: "#475569", fill: "rgba(71, 85, 105, 0.1)" },
+  { key: "checkoutStarted", label: "结算访客", color: "#475569", fill: "rgba(71, 85, 105, 0.1)" },
 ];
 
 const DETAIL_VIEWS = [
@@ -133,7 +133,7 @@ export default function InsightsPanel() {
       <div className="admin-insights-scope-line">
         <Info size={13} />
         <strong>统计口径</strong>
-        <span>成交额包含服务码等值；余额码仅在余额支付时计入，无效订单不计。</span>
+        <span>访客、服务浏览与结算按周期内独立访客统计；成交额包含服务码等值，无效订单不计。</span>
       </div>
 
       {message && <div className="admin-insights-error"><AlertTriangle size={15} />{message}</div>}
@@ -164,8 +164,8 @@ export default function InsightsPanel() {
           <section className="admin-insights-funnel" aria-label="经营漏斗">
             {[
               ["独立访客", funnel.visitors],
-              ["服务浏览", funnel.serviceViews],
-              ["结算发起", funnel.checkoutStarted],
+              ["浏览服务访客", funnel.serviceViews],
+              ["发起结算访客", funnel.checkoutStarted],
               ["有效订单", funnel.orders],
               ["成交订单", funnel.paid],
             ].map(([label, value], index) => (

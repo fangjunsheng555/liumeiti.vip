@@ -27,10 +27,13 @@ const UACT = "lm:uact:";
 const MAX_PAGES = 300;
 const MAX_EVENTS = 120;
 const DEDUP_SEC = 12;
+const ANALYTICS_UNIQUE_TTL = 180 * 24 * 60 * 60;
+const VISITOR_DAY_PREFIX = "lm:visit:day:";
+const EVENT_UNIQUE_DAY_PREFIX = "lm:ev:uniq:";
 const MAX_PATH = 300;
 const BOT_RE = /bot|crawl|spider|slurp|bingpreview|facebookexternalhit|headless|phantom|python-requests|curl\/|wget|axios\/|node-fetch|go-http|libwww|httpclient|monitor|uptime|pingdom|semrush|ahrefs|mj12|dotbot/i;
 // 允许的事件名 → 去重窗口秒（0=不去重）
-const EVENT_DEDUP = { service_view: 1800, cta_click: 5, checkout_started: 0, signup: 0 };
+const EVENT_DEDUP = { service_view: 1800, cta_click: 5, checkout_started: 1800, signup: 0 };
 
 function vid(ip, ua) { return createHash("sha256").update(ip + "|" + ua).digest("hex").slice(0, 24); }
 function beijingDay(now) { return new Date(now + 8 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, ""); }
@@ -98,9 +101,13 @@ export async function POST(request) {
       const slug = cleanStr(meta.slug, 40).replace(/[^a-z0-9-]/gi, "");
       const label = cleanStr(meta.label, 60);
       const win = EVENT_DEDUP[name];
+      let duplicateEvent = false;
       if (win > 0) {
         const dk = PREFIX + "edup:" + id + ":" + name + ":" + createHash("sha256").update(slug + "|" + label).digest("hex").slice(0, 10);
-        if ((await redisCmd(["SET", dk, "1", "NX", "EX", String(win)])) !== "OK") return noContent();
+        duplicateEvent = (await redisCmd(["SET", dk, "1", "NX", "EX", String(win)])) !== "OK";
+        // A second checkout beacon can add the email to the abandoned-cart record,
+        // but must not increment the funnel or activity stream again.
+        if (duplicateEvent && name !== "checkout_started") return noContent();
       }
       const day = beijingDay(now);
       const evJson = JSON.stringify({ name, slug: slug || undefined, label: label || undefined, ts: now });
@@ -108,25 +115,31 @@ export async function POST(request) {
         ["ZADD", INDEX, String(now), id],
         ["HSET", vkey, "ip", ip, "ua", ua, "lastSeen", String(now)],
         ["HSETNX", vkey, "firstSeen", String(now)],
+        ["SADD", VISITOR_DAY_PREFIX + day, id],
+        ["EXPIRE", VISITOR_DAY_PREFIX + day, String(ANALYTICS_UNIQUE_TTL)],
+      ];
+      if (!duplicateEvent) cmds.push(
+        ["SADD", EVENT_UNIQUE_DAY_PREFIX + day + ":" + name, id],
+        ["EXPIRE", EVENT_UNIQUE_DAY_PREFIX + day + ":" + name, String(ANALYTICS_UNIQUE_TTL)],
         ["LPUSH", vkey + ":events", evJson],
         ["LTRIM", vkey + ":events", "0", String(MAX_EVENTS - 1)],
         ["HINCRBY", "lm:ev:day:" + day, name, "1"],
         ["EXPIRE", "lm:ev:day:" + day, "7776000"], // 按日事件桶保留 90 天，避免孤儿 key 无界增长
-        ["HINCRBY", "lm:ev:total", name, "1"], // 全局累计(给后台漏斗一次读取)
-      ];
+        ["HINCRBY", "lm:ev:total", name, "1"], // 全局累计
+      );
       if (email) {
         cmds.push(["HSET", vkey, "email", email], ["SADD", "lm:visit:email:" + email, id]);
         // 账号级活动流(用户360 来源)
-        cmds.push(
-          ["LPUSH", UACT + email + ":events", evJson],
-          ["LTRIM", UACT + email + ":events", "0", String(MAX_EVENTS - 1)],
-          ["HSET", UACT + email, "lastSeen", String(now)],
-          ["HSETNX", UACT + email, "firstSeen", String(now)],
-        );
+        if (!duplicateEvent) cmds.push(
+            ["LPUSH", UACT + email + ":events", evJson],
+            ["LTRIM", UACT + email + ":events", "0", String(MAX_EVENTS - 1)],
+            ["HSET", UACT + email, "lastSeen", String(now)],
+            ["HSETNX", UACT + email, "firstSeen", String(now)],
+          );
         if (attr) cmds.push(["HSETNX", UACT + email, "attr", JSON.stringify(attr)]);
       }
       if (attr) cmds.push(["HSETNX", vkey, "attr", JSON.stringify(attr)]);
-      if (slug && (name === "service_view" || name === "cta_click")) {
+      if (!duplicateEvent && slug && (name === "service_view" || name === "cta_click")) {
         cmds.push(["HINCRBY", "lm:svc:" + slug, name === "service_view" ? "views" : "cta", "1"]);
       }
       // 弃单：到结算页即记一条「待召回」（下单成功后由 /api/order 清除）
@@ -152,6 +165,7 @@ export async function POST(request) {
     const dk = PREFIX + "dedup:" + id + ":" + createHash("sha256").update(site + path).digest("hex").slice(0, 12);
     if ((await redisCmd(["SET", dk, "1", "NX", "EX", String(DEDUP_SEC)])) !== "OK") return noContent();
     const pageEntry = JSON.stringify({ site, path, ts: now });
+    const day = beijingDay(now);
     const hset = ["HSET", vkey, "ip", ip, "ua", ua, "lastSeen", String(now), "lastPath", path, "lastSite", site];
     if (email) hset.push("email", email);
     const cmds = [
@@ -161,6 +175,8 @@ export async function POST(request) {
       ["HINCRBY", vkey, "count", "1"],
       ["LPUSH", vkey + ":pages", pageEntry],
       ["LTRIM", vkey + ":pages", "0", String(MAX_PAGES - 1)],
+      ["SADD", VISITOR_DAY_PREFIX + day, id],
+      ["EXPIRE", VISITOR_DAY_PREFIX + day, String(ANALYTICS_UNIQUE_TTL)],
     ];
     if (email) {
       cmds.push(["SADD", "lm:visit:email:" + email, id]); // 邮箱→访客 反向索引(历史访客用)

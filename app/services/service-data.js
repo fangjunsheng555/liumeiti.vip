@@ -287,6 +287,82 @@ const SERVICE_EN = {
   },
 };
 
+// Catalog plans can be reordered or extended in the admin. English copy is
+// therefore keyed by the stable catalog plan id instead of the array position.
+export const SERVICE_PLAN_COPY_EN = {
+  spotify: {
+    member: { name: "Family Member", description: "Best value, with the same everyday experience as Individual" },
+    individual: { name: "Individual", description: "Standalone subscription at a higher price" },
+    duo: { name: "Duo", description: "Invite 1 account to use the subscription free" },
+    family: { name: "Family", description: "Invite up to 5 accounts to use the subscription free" },
+  },
+  ai: {
+    "gpt-plus": { name: "GPT Plus", description: "ChatGPT Plus official membership, 3 months" },
+    "gpt-pro": { name: "GPT 5x Pro", description: "ChatGPT Pro 5x higher limits, 3 months" },
+    "gpt-20x-pro": { name: "GPT 20x Pro", description: "ChatGPT Pro 20x much higher limits, 3 months" },
+    "claude-pro": { name: "Claude Pro", description: "Claude Pro official membership, 3 months" },
+    "claude-max": { name: "Claude 5x Max", description: "Claude Max 5x higher limits, 3 months" },
+    "claude-20x-max": { name: "Claude 20x Max", description: "Claude Max 20x much higher limits, 3 months" },
+  },
+  netflix: {
+    seat: { name: "Dedicated Profile", description: "Your own profile — PIN lock supported" },
+    full: { name: "Full account", description: "Supports up to 5 user profiles" },
+  },
+  disney: {
+    seat: { name: "Dedicated Profile", description: "Your own profile, kept separate from others" },
+    full: { name: "Full account", description: "Supports up to 7 user profiles" },
+  },
+  "hbo-max": {
+    seat: { name: "Dedicated Profile", description: "Your own profile, with after-sales support" },
+    full: { name: "Full account", description: "Supports up to 5 user profiles" },
+  },
+  "airport-node": {
+    basic: { name: "Standard", description: "50 GB/mo real traffic" },
+    pro: { name: "Plus", description: "100 GB/mo real traffic" },
+    luxury: { name: "Premium", description: "200 GB/mo real traffic" },
+    unlimited: { name: "Unlimited", description: "Unlimited traffic" },
+    trial: { name: "¥5 / 10 GB trial", description: "10 GB trial traffic" },
+  },
+  "proxy-payment": {
+    quote: { name: "Custom quote", description: "Submit the request and pay after accepting the quote" },
+  },
+};
+
+export function getLocalizedServicePlanCopy(serviceSlug, planId, locale, fallback = {}) {
+  const defaultCopy = {
+    name: String(fallback.label || planId || ""),
+    description: String(fallback.description || ""),
+  };
+  if (locale !== "en") return defaultCopy;
+  const localized = SERVICE_PLAN_COPY_EN[serviceSlug]?.[planId];
+  return localized ? { ...localized } : defaultCopy;
+}
+
+export function localizeServicePlanCycle(value, locale) {
+  const source = String(value || "").trim();
+  if (locale !== "en") return source.replace(/^1(?=年|个月|月|次)/, "");
+  const direct = {
+    "1年": "yr",
+    "一年": "yr",
+    "三个月": "3 mo",
+    "6个月": "6 mo",
+    "六个月": "6 mo",
+    "12个月": "12 mo",
+    "十二个月": "12 mo",
+    "1个月": "mo",
+    "一个月": "mo",
+    "次": "one-time",
+    "1次": "one-time",
+    "按单": "per order",
+  };
+  if (direct[source]) return direct[source];
+  const years = source.match(/^(\d+)年$/);
+  if (years) return Number(years[1]) === 1 ? "yr" : `${years[1]} yrs`;
+  const months = source.match(/^(\d+)个月$/);
+  if (months) return Number(months[1]) === 1 ? "mo" : `${months[1]} mo`;
+  return source || "plan";
+}
+
 export function localizeService(service, locale) {
   if (!service || locale !== "en") return service;
   const en = SERVICE_EN[service.slug];

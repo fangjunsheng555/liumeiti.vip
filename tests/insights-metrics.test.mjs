@@ -2,13 +2,30 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  intersectionSize,
   isRecognizedSale,
+  orderVisitorId,
   orderServiceAllocations,
   orderServiceValue,
   orderSource,
   orderValueBreakdown,
   paymentChannel,
 } from "../app/api/admin/insights/metrics.js";
+
+test("funnel cohorts use unique visitor intersections", () => {
+  const viewers = new Set(["a", "b", "c"]);
+  const checkoutVisitors = new Set(["b", "c", "d", "e"]);
+  assert.equal(intersectionSize(viewers, checkoutVisitors), 2);
+  assert.equal(intersectionSize(checkoutVisitors, viewers), 2);
+  assert.equal(intersectionSize(viewers, null), 0);
+});
+
+test("orders reuse the same anonymous visitor identity as tracking", () => {
+  const id = orderVisitorId({ clientIp: "203.0.113.8", userAgent: "Example Browser" });
+  assert.equal(id.length, 24);
+  assert.equal(id, orderVisitorId({ clientIp: "203.0.113.8", userAgent: "Example Browser" }));
+  assert.equal(orderVisitorId({ clientIp: "203.0.113.8" }), "");
+});
 
 test("service-code orders use their product value instead of zero checkout total", () => {
   const order = {

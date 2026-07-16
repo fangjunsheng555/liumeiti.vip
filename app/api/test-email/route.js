@@ -16,7 +16,7 @@ function maskedEnv() {
     MAIL_FROM: process.env.MAIL_FROM || process.env.SMTP_FROM || null,
     MAIL_FROM_NAME: process.env.MAIL_FROM_NAME || process.env.BRAND_NAME || null,
     EMAIL_PROVIDER: process.env.EMAIL_PROVIDER || "resend",
-    SMTP_FALLBACK: process.env.EMAIL_PROVIDER === "smtp" && process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS ? "***set***" : null,
+    BREVO_FALLBACK: process.env.FALLBACK_SMTP_HOST && process.env.FALLBACK_SMTP_USER && process.env.FALLBACK_SMTP_PASS ? "***set***" : null,
   };
 }
 
@@ -35,11 +35,11 @@ export async function POST(request) {
   if (!validEmail(to)) {
     return Response.json({ ok: false, stage: "request", message: "Provide a valid recipient email.", env }, { status: 400 });
   }
-  if (!process.env.RESEND_API_KEY && !env.SMTP_FALLBACK) {
+  if (!process.env.RESEND_API_KEY && !env.BREVO_FALLBACK) {
     return Response.json({
       ok: false,
       stage: "env",
-      message: "Set RESEND_API_KEY plus MAIL_FROM=info@liumeiti.vip and MAIL_FROM_NAME=冒央会社.",
+      message: "Resend 与 Brevo 发信通道均未完整配置。",
       env,
     }, { status: 500 });
   }
@@ -47,7 +47,7 @@ export async function POST(request) {
   const brand = process.env.MAIL_FROM_NAME || process.env.BRAND_NAME || "冒央会社";
   const siteDomain = process.env.SITE_DOMAIN || "www.liumeiti.vip";
   const now = new Date().toISOString();
-  const provider = String(process.env.EMAIL_PROVIDER || "resend").toLowerCase() === "smtp" ? "Resend SMTP" : "Resend";
+  const provider = String(process.env.EMAIL_PROVIDER || "resend").toLowerCase() === "smtp" ? "Brevo" : "Resend";
   const subject = `${brand} · ${provider} 测试`;
   const text = `这是一封 ${provider} 测试邮件。\n\n如果你收到了它，说明全站发信通道正常。\n\n${now}`;
   const html = `<!doctype html>

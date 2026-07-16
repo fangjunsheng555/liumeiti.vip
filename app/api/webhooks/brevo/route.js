@@ -16,7 +16,15 @@ export async function POST(request) {
     return Response.json({ ok: false, error: "invalid_payload" }, { status: 400 });
   }
   const result = await applyBrevoWebhookEvent(event);
-  if (!result.ok) return Response.json(result, { status: 500 });
+  if (!result.ok) {
+    await recordHealthStatus("brevo_webhook", {
+      status: "error",
+      summary: "Brevo 投递回执处理失败",
+      error: result.error || "webhook_processing_failed",
+      metrics: { event: event?.event || event?.msg_status || "unknown" },
+    }).catch(() => {});
+    return Response.json(result, { status: 500 });
+  }
   await recordHealthStatus("brevo_webhook", {
     status: "ok",
     summary: "最近一条 Brevo 投递回执已接收",

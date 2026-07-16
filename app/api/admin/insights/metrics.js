@@ -1,4 +1,21 @@
+import { createHash } from "node:crypto";
+
 const round2 = (value) => Math.round((Number(value) || 0) * 100) / 100;
+
+export function intersectionSize(left, right) {
+  if (!(left instanceof Set) || !(right instanceof Set)) return 0;
+  const [small, large] = left.size <= right.size ? [left, right] : [right, left];
+  let count = 0;
+  small.forEach((value) => { if (large.has(value)) count += 1; });
+  return count;
+}
+
+export function orderVisitorId(order) {
+  const ip = String(order?.clientIp || "");
+  const userAgent = String(order?.userAgent || "");
+  if (!ip || !userAgent) return "";
+  return createHash("sha256").update(ip + "|" + userAgent).digest("hex").slice(0, 24);
+}
 
 function safeAmount(value) {
   const amount = Number(value);

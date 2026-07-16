@@ -3,7 +3,14 @@ import { notFound, permanentRedirect } from "next/navigation";
 import { ArrowRight, BadgeCheck, CheckCircle2, ShieldCheck } from "lucide-react";
 import FloatingSupport from "../../components/FloatingSupport";
 import MobileNav from "../../components/MobileNav";
-import { getServiceBySlug, localizeService, SERVICE_ALIASES, SERVICE_PAGES } from "../service-data";
+import {
+  getLocalizedServicePlanCopy,
+  getServiceBySlug,
+  localizeService,
+  localizeServicePlanCycle,
+  SERVICE_ALIASES,
+  SERVICE_PAGES,
+} from "../service-data";
 import ServiceOrderActions from "../ServiceOrderActions";
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../../social-meta";
 import { getServerLocale } from "../../lib/i18n-server";
@@ -38,14 +45,15 @@ function applyCatalogToService(service, catProd, locale, soldOutMap = {}) {
       : catProd.priceText;
   }
   if (catProd.quoteOnly || catProd.key === "proxy-pay") return next;
-  const cycleShort = (c) => String(c || "").replace(/^1/, "");
   if (Array.isArray(service.plans) && activePlans.length) {
     // 第4位 = 该规格是否售罄(库存0),供下方规格卡用
-    next.plans = activePlans.map((pl, i) => {
-      const orig = service.plans[i] || [];
-      const name = locale === "en" ? (orig[0] || pl.label) : pl.label;
-      const desc = locale === "en" ? (orig[2] || pl.desc) : pl.desc;
-      return [name, `¥${pl.amount}/${cycleShort(pl.cycle)}`, desc, !!soldOutMap[catProd.key + ":" + pl.id]];
+    next.plans = activePlans.map((pl) => {
+      const copy = getLocalizedServicePlanCopy(service.slug, pl.id, locale, {
+        label: pl.label,
+        description: pl.desc,
+      });
+      const cycle = localizeServicePlanCycle(pl.cycle, locale);
+      return [copy.name, `¥${pl.amount}/${cycle}`, copy.description, !!soldOutMap[catProd.key + ":" + pl.id]];
     });
     next.planIds = activePlans.map((pl) => pl.id);
   }
