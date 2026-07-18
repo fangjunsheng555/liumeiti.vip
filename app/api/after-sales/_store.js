@@ -246,13 +246,33 @@ async function syncOrderCredentials(ticket, items, actor) {
     const index = Number(item.index);
     const target = Number.isFinite(index) ? order.items[index] : null;
     if (!target) return { ok: false, error: "order_item_not_found" };
-    target.staffAccount = item.account;
-    target.staffPassword = item.password;
+    const service = clean(item.service || target.service, 40).toLowerCase();
+    if (service === "spotify") {
+      // Spotify credentials are buyer-provided and edited through account/password
+      // throughout the order UI. Remove stale staff overrides so the latest values
+      // are also returned by the customer-facing order views.
+      target.account = item.account;
+      target.password = item.password;
+      target.staffAccount = "";
+      target.staffPassword = "";
+    } else {
+      target.staffAccount = item.account;
+      target.staffPassword = item.password;
+    }
   }
 
   if (order.items.length === 1 && credentialItems.length === 1) {
-    order.staffAccount = credentialItems[0].account;
-    order.staffPassword = credentialItems[0].password;
+    const item = credentialItems[0];
+    const service = clean(item.service || order.items[0]?.service || order.service, 40).toLowerCase();
+    if (service === "spotify") {
+      order.account = item.account;
+      order.password = item.password;
+      order.staffAccount = "";
+      order.staffPassword = "";
+    } else {
+      order.staffAccount = item.account;
+      order.staffPassword = item.password;
+    }
   }
   const now = new Date();
   order.staffAudit = Array.isArray(order.staffAudit) ? order.staffAudit : [];
@@ -268,7 +288,22 @@ async function syncOrderCredentials(ticket, items, actor) {
   });
   order.staffAudit = order.staffAudit.slice(0, 30);
   const saved = await setOrderAt({ orderId: order.orderId, legacyIndex: null }, order);
-  return saved ? { ok: true } : { ok: false, error: "order_sync_failed" };
+  if (!saved) return { ok: false, error: "order_sync_failed" };
+
+  const persisted = await getOrderById(order.orderId);
+  const persistedItems = Array.isArray(persisted?.items) ? persisted.items : [];
+  const credentialsMatch = credentialItems.every((item) => {
+    const target = persistedItems[Number(item.index)];
+    if (!target) return false;
+    const service = clean(item.service || target.service, 40).toLowerCase();
+    return service === "spotify"
+      ? target.account === item.account
+        && target.password === item.password
+        && !target.staffAccount
+        && !target.staffPassword
+      : target.staffAccount === item.account && target.staffPassword === item.password;
+  });
+  return credentialsMatch ? { ok: true } : { ok: false, error: "order_sync_failed" };
 }
 
 export async function completeAfterSalesTicket(ticketId, completion, actor) {

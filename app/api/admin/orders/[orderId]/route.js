@@ -410,6 +410,12 @@ export async function PATCH(request, { params }) {
         if (typeof upd.password === "string") it.password = clean(upd.password, 120);
         if (typeof upd.staffAccount === "string") it.staffAccount = clean(upd.staffAccount, 80);
         if (typeof upd.staffPassword === "string") it.staffPassword = clean(upd.staffPassword, 120);
+        if (it.service === "spotify") {
+          // Spotify uses the buyer credential fields in the admin editor. Old
+          // staff overrides would otherwise hide a newer account or password.
+          it.staffAccount = "";
+          it.staffPassword = "";
+        }
         // Refresh subscription links if rocket
         if (it.service === "rocket") {
           const u = it.staffAccount || it.account;

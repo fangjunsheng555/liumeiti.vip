@@ -134,6 +134,8 @@ export async function PATCH(request, { params }) {
   const now = new Date();
   item.account = account;
   item.password = password;
+  item.staffAccount = "";
+  item.staffPassword = "";
   item.customerPasswordUpdatedAt = now.toISOString();
   item.customerPasswordUpdatedAtBeijing = formatBeijingTime(now);
   item.customerPasswordUpdateCount = Number(item.customerPasswordUpdateCount || 0) + 1;
@@ -154,6 +156,8 @@ export async function PATCH(request, { params }) {
     && persistedItem
     && persistedItem.account === account
     && persistedItem.password === password
+    && !persistedItem.staffAccount
+    && !persistedItem.staffPassword
     && persistedOrder.email === email
     && persistedOrder.contact === contact
     && persistedOrder.remark === remark
