@@ -1188,7 +1188,7 @@ export default function AccountPage() {
               <div className="account-modal-amount">
                 <span>{activeOrder.status === "awaiting_quote" ? L("当前进度", "Current status") : ["pending_payment", "quote_expired"].includes(activeOrder.status) ? L("报价金额", "Quote") : L("实付金额", "Amount paid")}</span>
                 <b>{activeOrder.status === "awaiting_quote" ? L("等待报价", "Awaiting quote") : activeOrder.status === "pending_payment" ? `¥${Number(activeOrder.quoteAmount || 0).toFixed(2)}` : activeOrder.status === "quote_expired" ? L("本次报价已失效", "This quote has expired") : activeOrder.paidCurrency === "CODE" ? L("服务兑换码", "Service code") : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b>
-                <em>{activeOrder.paymentMethod === "quote" ? L("人工报价", "Custom quote") : activeOrder.paymentMethod === "redeem" ? L("兑换码", "Code") : activeOrder.paymentMethod === "usdt" ? "USDT" : L("支付宝", "Alipay")}</em>
+                <em>{activeOrder.paymentMethod === "quote" ? L("人工报价", "Custom quote") : activeOrder.paymentMethod === "redeem" ? L("兑换码", "Code") : activeOrder.paymentMethod === "usdt" ? "USDT" : activeOrder.paymentMethod === "balance" ? L("账户余额", "Account balance") : L("支付宝", "Alipay")}</em>
               </div>
 
               {activeOrder.orderType === "proxy_payment" && (

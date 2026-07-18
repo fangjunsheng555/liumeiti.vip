@@ -1069,8 +1069,10 @@ function exportRedeemHistoryPdf(record, note = "") {
 }
 
 function paymentLabel(order) {
+  if (order?.paymentMethod === "quote") return "等待报价付款";
   if (order?.paymentMethod === "redeem") return "服务兑换码";
   if (order?.paymentMethod === "usdt") return "USDT-TRC20";
+  if (order?.paymentMethod === "balance") return "账户余额支付";
   return "支付宝";
 }
 
@@ -5309,7 +5311,7 @@ export default function AdminPage() {
                 <h3>订单概览</h3>
                 <div className="admin-summary-grid">
                   <div><span>下单时间</span><b>{activeOrder.createdAtBeijing}</b></div>
-                  <div><span>支付方式</span><b>{activeOrder.paymentMethod === "quote" ? "等待报价付款" : activeOrder.paymentMethod === "redeem" ? "服务兑换码" : activeOrder.paymentMethod === "usdt" ? "USDT-TRC20" : "支付宝"}</b></div>
+                  <div><span>支付方式</span><b>{paymentLabel(activeOrder)}</b></div>
                   <div><span>{["pending_payment", "quote_expired"].includes(activeOrder.status) ? "报价金额" : "实付金额"}</span><b>{activeOrder.status === "awaiting_quote" ? "尚未报价" : activeOrder.status === "pending_payment" ? `¥${Number(activeOrder.quoteAmount || 0).toFixed(2)} · 未付款` : activeOrder.status === "quote_expired" ? `¥${Number(activeOrder.quoteAmount || 0).toFixed(2)} · 已失效` : activeOrder.paidCurrency === "CODE" ? "兑换码抵扣" : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b></div>
                   <div><span>件数</span><b>{activeOrder.itemCount} 件</b></div>
                   {activeOrder.paidCurrency === "USDT" && (

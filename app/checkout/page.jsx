@@ -819,7 +819,7 @@ export default function CheckoutPage() {
         </Link>
         <div className="checkout-secure">
           <Lock size={13} />
-          {serviceRedeemActive ? L("兑换码免支付", "Code · no payment") : paymentMethod === "usdt" ? L("USDT-TRC20 安全结算", "USDT-TRC20 secure checkout") : L("支付宝担保结算", "Alipay secure checkout")}
+          {serviceRedeemActive ? L("兑换码免支付", "Code · no payment") : paymentMethod === "usdt" ? L("USDT-TRC20 安全结算", "USDT-TRC20 secure checkout") : paymentMethod === "balance" ? L("账户余额支付", "Account balance") : L("支付宝担保结算", "Alipay secure checkout")}
         </div>
       </header>
 
@@ -1136,7 +1136,7 @@ export default function CheckoutPage() {
             {/* Mobile sticky bottom CTA */}
             <div className="checkout-mobile-cta">
               <div className="checkout-mobile-cta-info">
-                <small>{serviceRedeemActive ? L("服务兑换码", "Service code") : paymentMethod === "usdt" ? "USDT-TRC20" : L("支付宝", "Alipay")}</small>
+                <small>{serviceRedeemActive ? L("服务兑换码", "Service code") : paymentMethod === "usdt" ? "USDT-TRC20" : paymentMethod === "balance" ? L("账户余额", "Account balance") : L("支付宝", "Alipay")}</small>
                 <b>{serviceRedeemActive ? L("免支付", "No pay") : paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}</b>
               </div>
               <button type="submit" className="primary-btn checkout-mobile-cta-btn" disabled={cartCount === 0 || submitting}>

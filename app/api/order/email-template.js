@@ -20,6 +20,7 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
   const en = locale === "en";
   const L = (zh, e) => (en ? e : zh);
   const isUsdt = order.paymentMethod === "usdt";
+  const isBalance = order.paymentMethod === "balance";
   const isRedeem = order.paymentMethod === "redeem";
   const rawItems = Array.isArray(order.items) && order.items.length > 0
     ? order.items
@@ -102,6 +103,8 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
     ? L("已通过服务兑换码免支付兑换", "Redeemed with a service code — no payment")
     : isUsdt
     ? L(`已通过 USDT-TRC20 网络支付(已享 ${usdtDiscountLabel})`, `Paid via USDT-TRC20 (${usdtDiscountLabel} applied)`)
+    : isBalance
+    ? L("已从账户余额扣款", "Paid from account balance")
     : L("已通过支付宝担保支付", "Paid via Alipay escrow");
 
   return `<!DOCTYPE html>
@@ -264,6 +267,7 @@ export function buildOrderEmailText({ order, brandName, siteDomain, siteUrl, usd
   const en = locale === "en";
   const L = (zh, e) => (en ? e : zh);
   const isUsdt = order.paymentMethod === "usdt";
+  const isBalance = order.paymentMethod === "balance";
   const isRedeem = order.paymentMethod === "redeem";
   const rawItems = Array.isArray(order.items) && order.items.length > 0
     ? order.items
@@ -305,6 +309,8 @@ export function buildOrderEmailText({ order, brandName, siteDomain, siteUrl, usd
   } else if (isUsdt) {
     lines.push(`${L("折后人民币", "Discounted CNY")}: ¥${order.finalAmount}`);
     lines.push(`${L("实付", "Paid")}: ${order.paidAmount} USDT (× 0.9 ÷ ${usdtRate || 6.85})`);
+  } else if (isBalance) {
+    lines.push(`${L("账户余额支付", "Paid from account balance")}: ¥${order.finalAmount}`);
   } else {
     lines.push(`${L("实付", "Paid")}: ¥${order.finalAmount}`);
   }

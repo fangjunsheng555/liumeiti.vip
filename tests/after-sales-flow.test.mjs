@@ -241,8 +241,12 @@ test("after-sales ticket lifecycle enforces one pending ticket per order", async
   assert.equal(completed.ticket.items[0].account, "resolved-account@example.com");
   assert.equal(completed.ticket.items[0].password, "resolved-password");
   const syncedOrder = await utils.getOrderById(order.orderId);
-  assert.equal(syncedOrder.items[0].staffAccount, "resolved-account@example.com");
-  assert.equal(syncedOrder.items[0].staffPassword, "resolved-password");
+  assert.equal(syncedOrder.items[0].account, "resolved-account@example.com");
+  assert.equal(syncedOrder.items[0].password, "resolved-password");
+  assert.equal(syncedOrder.items[0].staffAccount, "");
+  assert.equal(syncedOrder.items[0].staffPassword, "");
+  assert.equal(syncedOrder.account, "resolved-account@example.com");
+  assert.equal(syncedOrder.password, "resolved-password");
   assert.equal(syncedOrder.status, "completed");
   assert.equal((await store.getAfterSalesCounts()).pending, 0);
 

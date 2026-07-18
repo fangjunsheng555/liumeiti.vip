@@ -168,6 +168,7 @@ function expiryDateText(iso, locale = "zh") {
 function paymentLabel(order, locale = "zh") {
   if (order.paymentMethod === "quote") return locale === "en" ? "Custom quote" : "人工报价";
   if (order.paymentMethod === "redeem") return locale === "en" ? "Code" : "兑换码";
+  if (order.paymentMethod === "balance") return locale === "en" ? "Account balance" : "账户余额";
   return order.paymentMethod === "usdt" ? "USDT" : (locale === "en" ? "Alipay" : "支付宝");
 }
 
