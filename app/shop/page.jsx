@@ -18,7 +18,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  PRODUCTS,
   getCatalogProducts,
   useCatalogSync,
   useSiteSettings,
@@ -26,6 +25,7 @@ import {
   DEFAULT_PRODUCT_PLANS,
   getProductPlan,
   getProductPlanOptions,
+  getProductStartingPlan,
   getDefaultProductPlan,
   hasProductPlans,
   localizeProduct,
@@ -41,6 +41,7 @@ import MobileNav from "../components/MobileNav";
 import FloatingSupport from "../components/FloatingSupport";
 import { GUIDE_SLUG_BY_KEY, SERVICE_SLUG_BY_KEY } from "../services/service-data";
 import { useLocale } from "../components/LocaleProvider";
+import { localizeCatalogDisplayPrice } from "../lib/catalog-price";
 
 const PRODUCT_PROMOS = {
   spotify: { badge: "热销 No.1", badgeIcon: Flame, originalPrice: 298, monthlyRange: [5200, 7600] },
@@ -314,9 +315,9 @@ export default function ShopPage() {
               const promo = PRODUCT_PROMOS[item.key] || {};
               const BadgeIcon = promo.badgeIcon || Sparkles;
               const quoteOnly = item.quoteOnly || item.key === "proxy-pay";
-              const defaultPlan = hasProductPlans(item.key) ? localizePlan(item.key, getProductPlan(item.key, getDefaultProductPlan(item.key)), locale) : null;
-              const displayAmount = defaultPlan?.amount || item.amount;
-              const displayCycle = defaultPlan?.unit || defaultPlan?.cycle || (hasProductPlans(item.key) ? L("年起", "yr") : (locale === "en" ? (PRODUCT_EN[item.key]?.cycle || item.cycle) : item.cycle));
+              const startingPlan = hasProductPlans(item.key) ? localizePlan(item.key, getProductStartingPlan(item.key), locale) : null;
+              const displayAmount = startingPlan?.amount || item.amount;
+              const displayPrice = localizeCatalogDisplayPrice(item.price, locale, PRODUCT_EN[item.key]?.price || item.price);
               const saved = Number(promo.originalPrice || 0) - Number(displayAmount || 0);
               const soldThisMonth = productMonthlySold(item.key, promo.monthlyRange, new Date(soldTick));
               const added = isInCart(item.key);
@@ -358,8 +359,7 @@ export default function ShopPage() {
                     ) : (
                       <>
                         <div className="price-main">
-                          <span className="price-now">¥{displayAmount}</span>
-                          <span className="price-cycle">/{displayCycle}</span>
+                          <span className="price-now">{displayPrice}</span>
                           {promo.originalPrice && <span className="price-original">¥{promo.originalPrice}</span>}
                         </div>
                         <div className="price-meta">

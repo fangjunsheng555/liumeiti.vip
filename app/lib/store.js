@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { SETTINGS_DEFAULTS, discountLabel } from "./settings-defaults.js";
+import { getCatalogDisplayPrice, getCatalogStartingPlan, localizeCatalogDisplayPrice } from "./catalog-price.js";
 
 export const USDT_ADDRESS = "TDoUMF4nF244o5GZvBBwX5t9axvnSoP1Cm";
 export const USDT_DISCOUNT = 0.9;
@@ -40,7 +41,7 @@ export const PRODUCTS = [
     highlights: ["高价区订阅", "多规格可选", "售后保障"],
     detailTitle: "欧美日高价区 Spotify 订阅，按需选择成员或套餐",
     detailBody:
-      "支持无损音质、播客、AIDJ、离线下载、合辑歌单与完整曲库。可选家庭成员席位 ¥128/年、个人订阅 ¥388/年、双人订阅 ¥488/年（可邀请 1 个账号免费享用订阅）、家庭套餐 ¥588/年（可邀请 5 个账号免费享用订阅），均为欧美日高价区订阅并包含售后协助",
+      "支持无损音质、播客、AI DJ、离线下载、合辑歌单与完整曲库。家庭成员、个人、双人与家庭套餐均为欧美日高价区订阅，并包含售后协助；最新金额以规格选择为准",
     orderTitle: "Spotify · 多规格年付订阅",
     orderBody:
       "填写联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
@@ -59,7 +60,7 @@ export const PRODUCTS = [
     highlights: ["官方充值", "独立账号", "包售后"],
     detailTitle: "ChatGPT / Claude 官方会员，官方渠道直充",
     detailBody:
-      "官方渠道直充会员/订阅，独立账号、非共享，开通后稳定可用，支持 ChatGPT 与 Claude 全部会员功能。可选 GPT Plus ¥198、GPT 5x Pro ¥998、GPT 20x Pro ¥1888、Claude Pro ¥198、Claude 5x Max ¥998、Claude 20x Max ¥1888（均为三个月），下单后充值人员将在30分钟内联系开通，全程包售后",
+      "官方渠道直充会员/订阅，独立账号、非共享，支持 ChatGPT 与 Claude 多档会员。下单后工作人员将在 30 分钟内联系开通，全程包含售后；最新金额以规格选择为准",
     orderTitle: "AI 会员 · 规格选择",
     orderBody:
       "填写邮箱与联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
@@ -78,7 +79,7 @@ export const PRODUCTS = [
     highlights: ["4K杜比", "车位可锁", "整号可选"],
     detailTitle: "Netflix 最高级别 4K 杜比套餐，车位与整号均可选",
     detailBody:
-      "提供全球可用最高级别 4K 杜比套餐。单独车位 ¥168/年，一人独享一个用户档案，可设置 PIN 锁，高峰不排队不被挤；整号购买 ¥588/年，最多支持 5 个用户档案/车位，适合家庭或多人长期稳定使用",
+      "提供全球可用最高级别 4K 杜比套餐。单独车位可设置 PIN 锁，整号适合家庭或多人长期使用；最新金额以规格选择为准",
     orderTitle: "Netflix · 4K杜比规格选择",
     orderBody:
       "填写联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
@@ -97,7 +98,7 @@ export const PRODUCTS = [
     highlights: ["4K杜比", "全球可用", "整号可选"],
     detailTitle: "Disney+ 顶级 4K 杜比套餐，单独车位与整号可选",
     detailBody:
-      "提供全球可用最高级别 4K 杜比套餐。单独车位 ¥108/年，一人一位置互不干扰；整号购买 ¥588/年，最多支持 7 个用户档案/车位，适合家庭共享与长期使用，订单均包含售后保障",
+      "提供全球可用最高级别 4K 杜比套餐。单独车位一人一位置互不干扰，整号适合家庭共享与长期使用，订单均包含售后保障；最新金额以规格选择为准",
     orderTitle: "Disney+ · 4K杜比规格选择",
     orderBody:
       "填写联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
@@ -132,9 +133,9 @@ export const PRODUCTS = [
     price: "¥128/年起",
     shortIntro: "大厂机房多线路，最高5Gbps带宽，按月提供真实流量，解锁流媒体/AI/社交软件",
     highlights: ["真实流量套餐", "高速稳定多节点", "全加密无日志"],
-    detailTitle: "大厂机房多线路，真实流量套餐可选，年仅 ¥128 起",
+    detailTitle: "大厂机房多线路，多档真实流量套餐可选",
     detailBody:
-      "优选大厂VPS，多线路港日台韩新美英德法等，最高速率可达5Gbps，高峰不拥堵不卡顿，解锁所有主流流媒体/AI软件/社交软件，全加密协议无日志隐私保障，实时维护24×7线路不中断。可选 普通套餐 ¥128/年（50GB/月真实流量）、高级套餐 ¥198/年（100GB/月真实流量）、豪华套餐 ¥398/年（200GB/月真实流量）、无限套餐 ¥698/年（无限流量）。另有 ¥5/次 10GB 测试套餐",
+      "优选大厂 VPS 与多线路节点，最高速率可达 5Gbps，支持主流流媒体、AI 与社交平台，全加密协议并提供持续线路维护。多档流量、无限与测试套餐可选；最新金额和流量以规格选择为准",
     orderTitle: "机场节点 · 支付宝扫码支付",
     orderBody:
       "请在支付完成后点击付款完成提交订单，提交后会生成订阅链接",
@@ -153,7 +154,7 @@ export const PRODUCTS = [
     highlights: ["4K杜比", "全球可用", "整号可选"],
     detailTitle: "HBO Max 最高级别 4K 杜比套餐，车位与整号均可选",
     detailBody:
-      "提供全球可用最高级别 4K 杜比套餐。单独车位 ¥148/年，一人独享一个位置，互不干扰；整号购买 ¥588/年，最多支持 5 个用户档案/车位，适合影迷家庭与多人稳定使用",
+      "提供全球可用最高级别 4K 杜比套餐。单独车位一人独享一个位置，整号适合影迷家庭与多人稳定使用；最新金额以规格选择为准",
     orderTitle: "HBO Max · 4K杜比规格选择",
     orderBody:
       "填写联系方式并完成支付宝付款，提交订单后充值人员将在30分钟内联系您",
@@ -224,7 +225,7 @@ export function applyCatalogOverride(apiProducts) {
     (p.plans || []).forEach((pl) => { plans[pl.id] = { id: pl.id, amount: Number(pl.amount), label: pl.label, desc: pl.desc, cycle: pl.cycle, unit: pl.cycle, soldOut: !!pl.soldOut }; });
     byKey[p.key] = {
       active: true,
-      title: p.title, subtitle: p.subtitle, price: p.priceText, cycle: p.cycle,
+      title: p.title, subtitle: p.subtitle, price: getCatalogDisplayPrice(p), cycle: p.cycle,
       shortIntro: p.shortIntro, highlights: p.highlights,
       detailTitle: p.detailTitle, detailBody: p.detailBody, defaultPlan: p.defaultPlan,
       quoteOnly: !!p.quoteOnly,
@@ -247,11 +248,13 @@ export function getCatalogProducts() {
       const base = baseByKey[key];
       if (!base) return null;
       const ov = CATALOG_OVERRIDE.byKey[key];
+      const startingPlan = getCatalogStartingPlan({ plans: Object.values(ov.plans || {}) });
       return {
         ...base,
         title: ov.title || base.title,
         subtitle: ov.subtitle || base.subtitle,
         price: ov.price || base.price,
+        amount: Number.isFinite(Number(startingPlan?.amount)) ? Number(startingPlan.amount) : base.amount,
         cycle: ov.cycle || base.cycle,
         shortIntro: ov.shortIntro || base.shortIntro,
         highlights: Array.isArray(ov.highlights) && ov.highlights.length ? ov.highlights : base.highlights,
@@ -293,7 +296,7 @@ export const PRODUCT_EN = {
     highlights: ["Premium region", "Multiple plans", "After-sales support"],
     detailTitle: "Premium-region Spotify accounts — choose a seat or plan",
     detailBody:
-      "Includes lossless audio, podcasts, AI DJ, offline downloads, playlists and the full catalog. Choose Family member ¥128/yr, Individual ¥388/yr, Duo ¥488/yr (invite 1 account free) or Family ¥588/yr (invite 5 accounts free) — all on premium-region accounts with after-sales support.",
+      "Includes lossless audio, podcasts, AI DJ, offline downloads, playlists and the full catalog. Family Member, Individual, Duo and Family are premium-region subscriptions with after-sales support; see the plan selector for current prices.",
     orderTitle: "Spotify · annual plans",
     orderBody: "Enter your contact details and pay via Alipay. Once you submit, our team will reach out within 30 minutes.",
   },
@@ -306,7 +309,7 @@ export const PRODUCT_EN = {
     highlights: ["4K Dolby", "Lockable Profile", "Full account"],
     detailTitle: "Netflix's top 4K Dolby tier — Profile or full account",
     detailBody:
-      "Top-tier 4K Dolby, available worldwide. Dedicated Profile ¥168/yr — your own profile with a PIN lock and no peak-time queues. Full account ¥588/yr — up to 5 profiles, ideal for families or long-term multi-user use.",
+      "Top-tier 4K Dolby, available worldwide. A Dedicated Profile supports a PIN lock, while a full account suits families or long-term multi-user use; see the plan selector for current prices.",
     orderTitle: "Netflix · 4K Dolby plan",
     orderBody: "Enter your contact details and pay via Alipay. Once you submit, our team will reach out within 30 minutes.",
   },
@@ -319,7 +322,7 @@ export const PRODUCT_EN = {
     highlights: ["4K Dolby", "Worldwide", "Full account"],
     detailTitle: "Disney+'s top 4K Dolby tier — Profile or full account",
     detailBody:
-      "Top-tier 4K Dolby, available worldwide. Dedicated Profile ¥108/yr — your own private spot, kept separate from others. Full account ¥588/yr — up to 7 profiles, great for family sharing and long-term use; every order includes after-sales support.",
+      "Top-tier 4K Dolby, available worldwide. A Dedicated Profile stays separate from others, while a full account suits family sharing and long-term use; see the plan selector for current prices.",
     orderTitle: "Disney+ · 4K Dolby plan",
     orderBody: "Enter your contact details and pay via Alipay. Once you submit, our team will reach out within 30 minutes.",
   },
@@ -332,7 +335,7 @@ export const PRODUCT_EN = {
     highlights: ["4K Dolby", "Worldwide", "Full account"],
     detailTitle: "HBO Max's top 4K Dolby tier — Profile or full account",
     detailBody:
-      "Top-tier 4K Dolby, available worldwide. Dedicated Profile ¥148/yr — your own private spot, kept separate from others. Full account ¥588/yr — up to 5 profiles, ideal for film-loving families and stable multi-user use.",
+      "Top-tier 4K Dolby, available worldwide. A Dedicated Profile stays separate from others, while a full account suits film-loving families and stable multi-user use; see the plan selector for current prices.",
     orderTitle: "HBO Max · 4K Dolby plan",
     orderBody: "Enter your contact details and pay via Alipay. Once you submit, our team will reach out within 30 minutes.",
   },
@@ -343,9 +346,9 @@ export const PRODUCT_EN = {
     cycle: "1 yr",
     shortIntro: "Premium data centers, multi-line up to 5 Gbps, monthly real traffic — unblocks streaming / AI / social",
     highlights: ["Real-traffic plans", "Fast multi-node", "Encrypted, no logs"],
-    detailTitle: "Premium data centers, multi-line — real-traffic plans from ¥128/yr",
+    detailTitle: "Premium data centers with multiple real-traffic plans",
     detailBody:
-      "Premium VPS across Hong Kong, Japan, Taiwan, Korea, Singapore, the US, UK, Germany, France and more, reaching up to 5 Gbps with no congestion at peak. Unblocks all major streaming / AI / social apps, fully encrypted with no logs, maintained 24/7. Choose Standard ¥128/yr (50 GB/mo), Plus ¥198/yr (100 GB/mo), Premium ¥398/yr (200 GB/mo) or Unlimited ¥698/yr (unlimited). A ¥5 / 10 GB trial is also available.",
+      "Premium VPS and multi-line nodes reach up to 5 Gbps and support major streaming, AI and social platforms. Multiple data, unlimited and trial plans are available; see the plan selector for current traffic allowances and prices.",
     orderTitle: "VPN · Alipay QR payment",
     orderBody: "After paying, tap \"I've paid\" to submit. Your subscription link is generated once the order is submitted.",
   },
@@ -358,7 +361,7 @@ export const PRODUCT_EN = {
     highlights: ["Official top-up", "Private account", "After-sales included"],
     detailTitle: "Official ChatGPT / Claude memberships, topped up through official channels",
     detailBody:
-      "Memberships topped up directly through official channels — private, non-shared accounts that stay stable after activation, with full ChatGPT and Claude membership features. Choose GPT Plus ¥198, GPT 5x Pro ¥998, GPT 20x Pro ¥1888, Claude Pro ¥198, Claude 5x Max ¥998 or Claude 20x Max ¥1888 (all 3 months). Our team reaches out within 30 minutes after you order, with full after-sales support.",
+      "Memberships are topped up through official channels on private, non-shared accounts. Multiple ChatGPT and Claude plans are available; our team reaches out within 30 minutes after you order, with full after-sales support. See the plan selector for current prices.",
     orderTitle: "AI Membership · choose a plan",
     orderBody: "Enter your email and contact details and pay via Alipay. Once you submit, our team will reach out within 30 minutes.",
   },
@@ -415,7 +418,7 @@ export const PRODUCT_PLAN_EN = {
 export function localizeProduct(product, locale) {
   if (locale !== "en" || !product) return product;
   const en = PRODUCT_EN[product.key];
-  return en ? { ...product, ...en } : product;
+  return en ? { ...product, ...en, price: localizeCatalogDisplayPrice(product.price, "en", en.price) } : product;
 }
 
 export function localizePlan(productKey, plan, locale) {
@@ -437,7 +440,7 @@ export function hasProductPlans(productKey) {
 }
 
 export function getDefaultProductPlan(productKey) {
-  return DEFAULT_PRODUCT_PLANS[productKey] || "";
+  return ovProduct(productKey)?.defaultPlan || DEFAULT_PRODUCT_PLANS[productKey] || "";
 }
 
 export function isProductPlan(productKey, planId) {
@@ -490,6 +493,10 @@ export function getProductPlanOptions(productKey) {
       soldOut: !!po.soldOut,
     };
   });
+}
+
+export function getProductStartingPlan(productKey) {
+  return getCatalogStartingPlan({ plans: getProductPlanOptions(productKey) });
 }
 
 // 某规格是否售罄(后台库存=0)。未加载覆盖时一律 false(不误报)。

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
-import { PRODUCTS, getProductPlan, getProductPlanOptions, hasProductPlans, useSiteSettings, getSiteSettings } from "../lib/store";
+import { getCatalogProducts, getProductPlan, getProductPlanOptions, hasProductPlans, useCatalogSync, useSiteSettings, getSiteSettings } from "../lib/store";
 import { getSpotifyPasswordAttention } from "../lib/order-attention";
 import VisitorsPanel from "./VisitorsPanel";
 import AbandonedPanel from "./AbandonedPanel";
@@ -1191,6 +1191,7 @@ export default function AdminPage() {
   const [loggingIn, setLoggingIn] = useState(false);
 
   useSiteSettings(); // 站点设置(PDF 凭证品牌/版权等随设置)
+  useCatalogSync(); // 兑换码商品与规格价格同步后台目录
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
   const [ordersLoadingMore, setOrdersLoadingMore] = useState(false);
@@ -4528,7 +4529,7 @@ export default function AdminPage() {
                 />
               ) : (
                 <div className="admin-code-service-picker">
-                  {PRODUCTS.filter((p) => !p.quoteOnly).flatMap((p) => {
+                  {getCatalogProducts().filter((p) => !p.quoteOnly).flatMap((p) => {
                     if (hasProductPlans(p.key)) {
                       const selectedService = codeServices.find((s) => {
                         const sk = typeof s === "string" ? s : s.key;

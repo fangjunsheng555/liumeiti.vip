@@ -4,6 +4,7 @@
 // 改价格/规格/文案/上下架/库存,保存后前端(首页/选购/服务页/结账)与结账实收价即时同步。
 import { useEffect, useState, useCallback } from "react";
 import { LoaderCircle, Save, RotateCcw, Package, AlertTriangle, CheckCircle2, History, Undo2, X } from "lucide-react";
+import { getCatalogDisplayPrice } from "../lib/catalog-price.js";
 
 export default function CatalogPanel() {
   const [catalog, setCatalog] = useState(null);
@@ -37,9 +38,11 @@ export default function CatalogPanel() {
     setCatalog((c) => c.map((p) => (p.key === key ? { ...p, [field]: value } : p)));
   }
   function patchPlan(key, planId, field, value) {
-    setCatalog((c) => c.map((p) => (p.key === key
-      ? { ...p, plans: p.plans.map((pl) => (pl.id === planId ? { ...pl, [field]: value } : pl)) }
-      : p)));
+    setCatalog((c) => c.map((p) => {
+      if (p.key !== key) return p;
+      const next = { ...p, plans: p.plans.map((pl) => (pl.id === planId ? { ...pl, [field]: value } : pl)) };
+      return { ...next, priceText: getCatalogDisplayPrice(next) };
+    }));
   }
   const skey = (pKey, plId) => pKey + ":" + plId;
   function stockVal(p, pl) {
@@ -152,7 +155,15 @@ export default function CatalogPanel() {
           <div className="admin-settings-grid" style={{ marginBottom: 12 }}>
             <div className="admin-settings-field"><label>名称</label><input value={p.title || ""} onChange={(e) => patchProduct(p.key, "title", e.target.value)} /></div>
             <div className="admin-settings-field"><label>副标题</label><input value={p.subtitle || ""} onChange={(e) => patchProduct(p.key, "subtitle", e.target.value)} /></div>
-            <div className="admin-settings-field"><label>列表展示价(文案)</label><input value={p.priceText || ""} onChange={(e) => patchProduct(p.key, "priceText", e.target.value)} placeholder="如 ¥128/年起" /></div>
+            <div className="admin-settings-field">
+              <label>{p.quoteOnly ? "报价展示文案" : "列表展示价（自动）"}</label>
+              <input
+                value={p.priceText || ""}
+                readOnly={!p.quoteOnly}
+                onChange={p.quoteOnly ? (e) => patchProduct(p.key, "priceText", e.target.value) : undefined}
+                title={p.quoteOnly ? "人工报价商品的前端展示文案" : "自动读取已上架规格中的最低常规价格"}
+              />
+            </div>
             <div className="admin-settings-field"><label>默认规格</label><input value={p.defaultPlan || ""} onChange={(e) => patchProduct(p.key, "defaultPlan", e.target.value)} /></div>
             <div className="admin-settings-field full"><label>短简介</label><input value={p.shortIntro || ""} onChange={(e) => patchProduct(p.key, "shortIntro", e.target.value)} /></div>
             <div className="admin-settings-field full"><label>卖点(用 ｜ 分隔)</label><input value={(p.highlights || []).join("｜")} onChange={(e) => patchProduct(p.key, "highlights", e.target.value.split("｜").map((s) => s.trim()).filter(Boolean))} /></div>

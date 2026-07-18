@@ -8,7 +8,7 @@ import {
 
 const products = [
   ["spotify", "Spotify", "¥128/年起", "spotify.jpg", "spotify"],
-  ["rocket", "机场节点", "¥128/年起", "rocket.jpg", "airport-node"],
+  ["rocket", "机场节点", "¥108/年起", "rocket.jpg", "airport-node"],
   ["ai", "AI 会员", "¥229/三个月起", "ai.jpg", "ai"],
   ["netflix", "Netflix", "¥168/年起", "netflix.jpg", "netflix"],
   ["disney", "Disney+", "¥108/年起", "disney.jpg", "disney"],

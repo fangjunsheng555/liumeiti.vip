@@ -18,20 +18,7 @@ import { getT } from "../../lib/i18n";
 import { getCatalogSoldOutMap } from "../../api/_utils.js";
 import { getMergedCatalog } from "../../api/_catalog.js";
 import { getSettings } from "../../api/_settings.js";
-
-function syncEnglishCatalogPrice(catalogPrice, fallback) {
-  const source = String(catalogPrice || "");
-  const localized = String(fallback || source);
-  const discount = source.match(/(\d+(?:\.\d+)?)\s*折/);
-  if (discount) {
-    const percent = Number(discount[1]) * 10;
-    return Number.isFinite(percent)
-      ? localized.replace(/\d+(?:\.\d+)?%/, `${percent}%`)
-      : localized;
-  }
-  const amount = source.match(/¥\s*([\d,.]+)/);
-  return amount ? localized.replace(/¥\s*[\d,.]+/, `¥${amount[1]}`) : localized;
-}
+import { localizeCatalogDisplayPrice } from "../../lib/catalog-price.js";
 
 // 把后台合并目录的价格/规格覆盖到服务页(与首页/选购/结账完全一致)。
 // 名称/说明保持本地化(中英),价格取目录权威 amount;商品下架则 404。
@@ -41,7 +28,7 @@ function applyCatalogToService(service, catProd, locale, soldOutMap = {}) {
   const next = { ...service };
   if (catProd.priceText) {
     next.price = locale === "en"
-      ? syncEnglishCatalogPrice(catProd.priceText, next.price)
+      ? localizeCatalogDisplayPrice(catProd.priceText, "en", next.price)
       : catProd.priceText;
   }
   if (catProd.quoteOnly || catProd.key === "proxy-pay") return next;
@@ -73,9 +60,11 @@ export async function generateMetadata({ params }) {
   const { slug } = await params;
   const raw = getServiceBySlug(slug);
   if (!raw) notFound();
-  const locale = await getServerLocale();
+  const [locale, catalog] = await Promise.all([getServerLocale(), getMergedCatalog()]);
   const en = locale === "en";
-  const service = localizeService(raw, locale);
+  const catProd = catalog.find((product) => product.key === raw.key);
+  if (catProd?.active === false) notFound();
+  const service = applyCatalogToService(localizeService(raw, locale), catProd, locale);
   const title = `${service.title} ${service.price}`;
   const brand = en ? "Maoyang Taiwan Inc" : "冒央会社";
   return {

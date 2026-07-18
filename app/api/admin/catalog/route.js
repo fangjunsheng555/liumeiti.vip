@@ -7,6 +7,7 @@ import { getMergedCatalog, getCatalogOverrides } from "../../_catalog.js";
 import { commitCatalogVersion, ensureCatalogBaseline, listCatalogVersions } from "../../_catalog-versions.js";
 import { recordHealthStatus } from "../../_health.js";
 import { CATALOG_DEFAULTS } from "../../../lib/catalog-defaults.js";
+import { getCatalogDisplayPrice } from "../../../lib/catalog-price.js";
 
 export const runtime = "nodejs";
 
@@ -44,9 +45,10 @@ function diffToOverrides(edited) {
   for (const p of Array.isArray(edited) ? edited : []) {
     const def = byKey[p.key];
     if (!def) continue; // v1 只允许编辑已有商品
+    const normalized = { ...p, priceText: getCatalogDisplayPrice(p) };
     const ov = {};
     for (const f of ["title", "subtitle", "priceText", "shortIntro", "cycle", "defaultPlan", "detailTitle", "detailBody"]) {
-      const v = clean(p[f], f === "detailBody" ? 4000 : 400);
+      const v = clean(normalized[f], f === "detailBody" ? 4000 : 400);
       if (v && v !== (def[f] || "")) ov[f] = v;
     }
     if (Array.isArray(p.highlights)) {

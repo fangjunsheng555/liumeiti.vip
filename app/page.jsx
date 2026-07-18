@@ -25,6 +25,7 @@ import { useCatalogSync, getCatalogProducts, catalogOverrideLoaded, useSiteSetti
 import LanguageSwitcher from "./components/LanguageSwitcher";
 import { useLocale } from "./components/LocaleProvider";
 import { localizeMetric, localizeTime, serviceCardEn } from "./lib/i18n";
+import { localizeCatalogDisplayPrice } from "./lib/catalog-price";
 
 const OPERATION_SLOT_MINUTES = 10;
 const OPERATION_SLOTS_PER_DAY = 24 * 60 / OPERATION_SLOT_MINUTES;
@@ -41,20 +42,6 @@ const HERO_STATS = [
   { metric: "queueCount", labelKey: "hero.metric.queue", icon: Users },
   { metric: "serviceYears", labelKey: "hero.metric.years", icon: Award },
 ];
-
-function syncEnglishCatalogPrice(catalogPrice, fallback) {
-  const source = String(catalogPrice || "");
-  const localized = String(fallback || source);
-  const discount = source.match(/(\d+(?:\.\d+)?)\s*折/);
-  if (discount) {
-    const percent = Number(discount[1]) * 10;
-    return Number.isFinite(percent)
-      ? localized.replace(/\d+(?:\.\d+)?%/, `${percent}%`)
-      : localized;
-  }
-  const amount = source.match(/¥\s*([\d,.]+)/);
-  return amount ? localized.replace(/¥\s*[\d,.]+/, `¥${amount[1]}`) : localized;
-}
 
 const TRUST_ITEMS = [
   { icon: ShieldCheck, tKey: "trust.stable.t", dKey: "trust.stable.d" },
@@ -710,7 +697,7 @@ export default function Page() {
                 <div className="home-service-foot">
                   <span className="home-service-price">
                     {locale === "en"
-                      ? syncEnglishCatalogPrice(catByKey[s.key]?.price, serviceCardEn[s.slug]?.price || s.price)
+                      ? localizeCatalogDisplayPrice(catByKey[s.key]?.price, "en", serviceCardEn[s.slug]?.price || s.price)
                       : (catByKey[s.key]?.price || s.price)}
                   </span>
                   <ArrowRight size={16} className="home-service-arrow" />

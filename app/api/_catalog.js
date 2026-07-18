@@ -3,6 +3,7 @@
 // 结账价格权威(order/order-quote)、公开 /api/catalog、后台读写共用。无覆盖时 = 默认,行为不变。
 import { redisCmd, roundMoney, clean } from "./_utils.js";
 import { CATALOG_DEFAULTS } from "../lib/catalog-defaults.js";
+import { getCatalogDisplayPrice } from "../lib/catalog-price.js";
 
 const OVERRIDES_KEY = "lm:catalog:overrides";
 
@@ -25,7 +26,7 @@ export async function saveCatalogOverrides(overrides) {
 
 function mergeProduct(def, ov) {
   const out = { ...def, plans: def.plans.map((p) => ({ ...p })) };
-  if (!ov || typeof ov !== "object") return out;
+  if (!ov || typeof ov !== "object") return { ...out, priceText: getCatalogDisplayPrice(out) };
   for (const f of ["title", "subtitle", "priceText", "shortIntro", "cycle", "defaultPlan", "image", "detailTitle", "detailBody"]) {
     if (typeof ov[f] === "string" && ov[f].trim()) out[f] = clean(ov[f], f === "detailBody" ? 4000 : 400);
   }
@@ -53,7 +54,7 @@ function mergeProduct(def, ov) {
       }
     }
   }
-  return out;
+  return { ...out, priceText: getCatalogDisplayPrice(out) };
 }
 
 // 合并后的完整目录(含上下架的,带 active 标记);按 sort 升序。

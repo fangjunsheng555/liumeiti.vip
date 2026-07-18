@@ -14,6 +14,8 @@ import MobileNav from "../components/MobileNav";
 import { SERVICE_PAGES, localizeService } from "../services/service-data";
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../social-meta";
 import { getServerLocale } from "../lib/i18n-server";
+import { getMergedCatalog } from "../api/_catalog.js";
+import { localizeCatalogDisplayPrice } from "../lib/catalog-price.js";
 
 export async function generateMetadata() {
   const locale = await getServerLocale();
@@ -233,11 +235,20 @@ const POLICY_SECTIONS_EN = {
 };
 
 export default async function LegalPage() {
-  const locale = await getServerLocale();
+  const [locale, catalog] = await Promise.all([getServerLocale(), getMergedCatalog()]);
   const en = locale === "en";
   const summaryItems = en ? SUMMARY_ITEMS_EN : SUMMARY_ITEMS;
   const policySections = POLICY_SECTIONS.map((s) => (en && POLICY_SECTIONS_EN[s.id] ? { ...s, ...POLICY_SECTIONS_EN[s.id] } : s));
-  const serviceLinks = SERVICE_PAGES.map((s) => localizeService(s, locale));
+  const catalogByKey = Object.fromEntries(catalog.map((product) => [product.key, product]));
+  const serviceLinks = SERVICE_PAGES
+    .filter((service) => catalogByKey[service.key]?.active !== false)
+    .map((service) => {
+      const localized = localizeService(service, locale);
+      const livePrice = catalogByKey[service.key]?.priceText;
+      return livePrice
+        ? { ...localized, price: localizeCatalogDisplayPrice(livePrice, locale, localized.price) }
+        : localized;
+    });
   const L = (zh, e) => (en ? e : zh);
   const jsonLd = {
     "@context": "https://schema.org",
