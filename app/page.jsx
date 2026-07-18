@@ -71,6 +71,22 @@ const LAYOUT_CARDS = [
 ];
 
 const TESTIMONIALS = [
+  { name: "顾**", initial: "顾", region: "宁波", service: "Spotify 家庭成员", rating: 5, date: "刚刚", text: "用自己的账号加入，收藏和歌单都没有变化。客服把邀请步骤一次说明白，照着操作很快完成。" },
+  { name: "邱*", initial: "邱", region: "上海", service: "机场节点 · 普通套餐", rating: 5, date: "6 分钟前", text: "每月 50GB 满足日常浏览和看视频，手机、电脑导入都顺利，常用线路延迟也比较稳定。" },
+  { name: "Allen***", initial: "A", region: "深圳", service: "全球代付 · 海外购物", rating: 5, date: "11 分钟前", text: "海外商城一直刷不过卡，提交商品链接后先收到了报价。金额确认清楚再付款，流程很踏实。" },
+  { name: "孟**", initial: "孟", region: "合肥", service: "AI 会员 · Claude Pro", rating: 5, date: "18 分钟前", text: "主要拿来处理长文和资料整理，使用周期和交付信息都写得清楚，有问题也能直接按订单跟进。" },
+  { name: "方*", initial: "方", region: "佛山", service: "Netflix 4K 单独车位", rating: 5, date: "24 分钟前", text: "独立档案加了 PIN，家里电视和手机都能正常播放。观看记录分开后使用起来省心很多。" },
+  { name: "Tong***", initial: "T", region: "澳门", service: "HBO Max 整号", rating: 5, date: "33 分钟前", text: "整号档案够家里使用，字幕和杜比播放正常。账号说明整理得简洁，第一次登录也没有绕路。" },
+  { name: "程*", initial: "程", region: "南京", service: "Disney+ 整号", rating: 5, date: "41 分钟前", text: "几个档案可以分开使用，孩子看动画和大人看电影互不影响，电视端画质也很稳定。" },
+  { name: "Yu***", initial: "Y", region: "新加坡", service: "Spotify 双人订阅", rating: 5, date: "55 分钟前", text: "两个人各自保留自己的账号和歌单，邀请流程比想象中简单，开通后的状态也能随时查询。" },
+  { name: "彭**", initial: "彭", region: "厦门", service: "机场节点 · 10GB 测试", rating: 5, date: "1 小时前", text: "先用测试套餐检查了手机和电脑的连接，常用线路都能正常使用，再升级年付更有把握。" },
+  { name: "罗*", initial: "罗", region: "广州", service: "全球代付 · 软件订阅", rating: 5, date: "1 小时前", text: "软件官网不接受现有付款方式，提交续费页面后很快收到报价，付款后订单进度更新得很及时。" },
+  { name: "Coco***", initial: "C", region: "杭州", service: "AI 会员 · GPT Plus", rating: 5, date: "2 小时前", text: "学习和日常写作都够用，订单里的账号资料与使用说明很完整，后续需要查询也方便。" },
+  { name: "高**", initial: "高", region: "青岛", service: "Netflix 整号", rating: 5, date: "2 小时前", text: "整号适合家里多个设备，档案分配清楚，4K 和字幕正常，邮件里的交付信息也容易查找。" },
+  { name: "施*", initial: "施", region: "苏州", service: "机场节点 · 无限套餐", rating: 5, date: "3 小时前", text: "手机、平板和电脑经常同时使用，无限流量更合适。订阅配置完成后日常切换线路很方便。" },
+  { name: "林***", initial: "林", region: "台北", service: "Spotify 个人订阅", rating: 5, date: "3 小时前", text: "个人订阅独立使用，原账号资料和歌单都保留。下单后每一步都有记录，整体很清楚。" },
+  { name: "曹**", initial: "曹", region: "济南", service: "Disney+ 单独车位", rating: 5, date: "4 小时前", text: "单独档案日常追剧够用，电视端登录顺利，碰到设备提示时客服也很快给了处理方法。" },
+  { name: "Ming***", initial: "M", region: "温哥华", service: "全球代付 · 酒店预订", rating: 5, date: "5 小时前", text: "把房型、日期和官网链接一起提交，确认报价后再付款。处理进度能查询，沟通不用重复说明。" },
   { name: "宁波 孙**", initial: "孙", region: "宁波", service: "Netflix 整号购买", rating: 5, date: "3 分钟前", text: "整号档案分得很清楚，电视端登录一次就好了。客服把注意事项发得很细，家里人用起来没再问我。" },
   { name: "夏**", initial: "夏", region: "深圳", service: "全球代付 · 海外购物", rating: 5, date: "7 分钟前", text: "买的东西只收海外卡，我把商品页和标价提交后，当天就收到了报价邮件。确认金额再付款，后来查订单也能看到处理进度。" },
   { name: "林*", initial: "林", region: "苏州", service: "机场节点 · 高级套餐", rating: 5, date: "9 分钟前", text: "100GB 每月对我刚好，刷流媒体和临时办公都够用。订阅导入很顺，晚高峰速度也稳。" },
@@ -143,9 +159,35 @@ const TESTIMONIALS = [
   { name: "白*", initial: "白", region: "西安", service: "AI 会员 · Claude 5x Max", rating: 5, date: "7小时前", text: "Max 高额度跑大项目很顺手，官方渠道靠谱，开通和说明都很清楚，会回购" },
   { name: "Kai**", initial: "K", region: "东京", service: "全球代付 · 酒店预订", rating: 5, date: "40 分钟前", text: "酒店官网的房型只收境外卡，我在备注里写了入住日期。客服核对房型后发来报价，付款完成后订单状态很快更新了。" },
   { name: "汤*", initial: "汤", region: "长沙", service: "全球代付 · 软件订阅", rating: 5, date: "2 小时前", text: "设计工具的年付页面一直刷不过卡，提交官网链接后收到报价邮件。付完后当天续费成功，服务中心也能查到记录。" },
+  { name: "沈**", initial: "沈", region: "温州", service: "Spotify 家庭成员", rating: 5, date: "12 分钟前", text: "直接用自己的账号加入，原来的歌单和关注都保留。邀请邮件和操作说明写得很清楚。" },
+  { name: "戴*", initial: "戴", region: "徐州", service: "机场节点 · 豪华套餐", rating: 5, date: "28 分钟前", text: "每月 200GB 对多设备够用，手机和电脑导入都很顺。线路切换后不用反复调整设置。" },
+  { name: "Han***", initial: "H", region: "台中", service: "AI 会员 · GPT 5x Pro", rating: 5, date: "43 分钟前", text: "平时主要处理文档和代码，额度比较适合连续使用。提交资料后开通进度也能随时查询。" },
+  { name: "梁*", initial: "梁", region: "香港", service: "Netflix 4K 单独车位", rating: 5, date: "1 小时前", text: "自己的档案可以设 PIN，观看记录不会混在一起。电视和 iPad 上的 4K 播放都正常。" },
+  { name: "周**", initial: "周", region: "青岛", service: "Disney+ 整号", rating: 5, date: "2 小时前", text: "账号档案够一家人分开使用，字幕和画质都正常。收到邮件后按说明登录就可以了。" },
+  { name: "May***", initial: "M", region: "奥克兰", service: "HBO Max 单独车位", rating: 5, date: "3 小时前", text: "车位信息交付得很完整，电视端和手机端都能用。需要帮助时带订单号就能继续处理。" },
+  { name: "胡**", initial: "胡", region: "北京", service: "全球代付 · 应用订阅", rating: 5, date: "4 小时前", text: "海外应用续费一直支付失败，提交链接后先收到明确报价，确认后再付，没有额外改价。" },
+  { name: "许*", initial: "许", region: "厦门", service: "全球代付 · 票务预订", rating: 5, date: "5 小时前", text: "把日期、链接和价格一次填好后很快收到报价。付款完成后可以在服务中心继续看处理状态。" },
+  { name: "宋**", initial: "宋", region: "东莞", service: "机场节点 · 10GB 测试", rating: 5, date: "昨天", text: "先用测试套餐确认了常用设备和线路，订阅导入没有门槛，再决定升级年付更稳妥。" },
+  { name: "Yu***", initial: "Y", region: "新加坡", service: "Spotify 个人订阅", rating: 5, date: "昨天", text: "账号资料提交后处理很快，个人订阅使用边界清楚。订单和邮件里都能找到后续信息。" },
 ];
 
 const TESTIMONIALS_EN = [
+  { name: "Lena W.", initial: "L", region: "Vancouver", service: "Spotify Premium Family", rating: 5, date: "just now", text: "I joined with my existing account and kept every playlist. The invitation steps were clear and took only a few minutes." },
+  { name: "Arthur C.", initial: "A", region: "Sydney", service: "VPN · Standard", rating: 5, date: "6 min ago", text: "The 50GB monthly plan covers everyday browsing and streaming. Setup worked smoothly on both my phone and laptop." },
+  { name: "Maya R.", initial: "M", region: "Singapore", service: "Proxy Pay · overseas shopping", rating: 5, date: "11 min ago", text: "The store would not accept my card. I submitted the product link, reviewed the quote first, and paid only after confirming it." },
+  { name: "Elliot H.", initial: "E", region: "London", service: "AI Membership · Claude Pro", rating: 5, date: "18 min ago", text: "It fits my long-form writing and research work well. The plan period and delivery details were easy to understand." },
+  { name: "Chloe M.", initial: "C", region: "Toronto", service: "Netflix 4K Profile", rating: 5, date: "24 min ago", text: "My profile has its own PIN and works on TV and mobile. Keeping watch history separate makes the experience much cleaner." },
+  { name: "Theo L.", initial: "T", region: "Macau", service: "HBO Max full account", rating: 5, date: "33 min ago", text: "There are enough profiles for the family, with normal subtitles and Dolby playback. The account notes were concise and useful." },
+  { name: "Sienna K.", initial: "S", region: "Seoul", service: "Disney+ full account", rating: 5, date: "41 min ago", text: "Separate profiles work well for the family, and picture quality stays stable on the TV. Setup was straightforward." },
+  { name: "Jayden P.", initial: "J", region: "Auckland", service: "Spotify Premium Duo", rating: 5, date: "55 min ago", text: "We each kept our own account and playlists. The invite process was simple, and the activation status was easy to follow." },
+  { name: "Ruby N.", initial: "R", region: "Kuala Lumpur", service: "VPN · 10GB trial", rating: 5, date: "1 hour ago", text: "The trial let me test my usual devices and routes before upgrading. Everything imported correctly on the first attempt." },
+  { name: "Oscar B.", initial: "O", region: "Melbourne", service: "Proxy Pay · software subscription", rating: 5, date: "1 hour ago", text: "The software site declined my usual payment method. I received a clear quote and could track the renewal after paying." },
+  { name: "Isla D.", initial: "I", region: "Manchester", service: "AI Membership · GPT Plus", rating: 5, date: "2 hours ago", text: "It covers study and daily writing comfortably. Account details and usage notes remain easy to find in the order." },
+  { name: "Logan F.", initial: "L", region: "Boston", service: "Netflix full account", rating: 5, date: "2 hours ago", text: "A full account works well across our household devices. Profiles were organized clearly and 4K playback is stable." },
+  { name: "Aiden J.", initial: "A", region: "Tokyo", service: "VPN · Unlimited", rating: 5, date: "3 hours ago", text: "Unlimited data suits several devices online throughout the day. Once imported, switching routes has been simple." },
+  { name: "Nora Y.", initial: "N", region: "Taipei", service: "Spotify Premium Individual", rating: 5, date: "3 hours ago", text: "My account and playlists stayed intact with the individual plan. Each step remained visible in the order record." },
+  { name: "Harper G.", initial: "H", region: "Seattle", service: "Disney+ Profile", rating: 5, date: "4 hours ago", text: "The dedicated profile is enough for regular streaming, and the TV login worked without extra troubleshooting." },
+  { name: "Miles T.", initial: "M", region: "Vancouver", service: "Proxy Pay · hotel booking", rating: 5, date: "5 hours ago", text: "I submitted the room, dates, and official link together. The quote arrived before payment and progress remained trackable." },
   { name: "Nathan R.", initial: "N", region: "New York", service: "Netflix full account", rating: 5, date: "4 min ago", text: "Profiles were organized clearly and the TV login worked on the first try. Support sent practical notes instead of generic replies." },
   { name: "Oliver P.", initial: "O", region: "Vancouver", service: "Proxy Pay · overseas shopping", rating: 5, date: "8 min ago", text: "The store only accepted overseas cards. I sent the item page and listed price, received the quote by email that day, then tracked the request after paying." },
   { name: "Claire T.", initial: "C", region: "Sydney", service: "VPN · Plus", rating: 5, date: "11 min ago", text: "100GB per month is enough for streaming and a little remote work. Importing the subscription was simple and peak-hour speed stayed steady." },
@@ -173,6 +215,16 @@ const TESTIMONIALS_EN = [
   { name: "Ivy L.", initial: "I", region: "Singapore", service: "AI Membership · Claude Pro", rating: 5, date: "6 hours ago", text: "Claude Pro was up fast and stayed stable for long writing and coding. Cheaper than doing it myself, with real after-sales." },
   { name: "Mia S.", initial: "M", region: "London", service: "Proxy Pay · hotel booking", rating: 5, date: "1 hour ago", text: "The hotel rate only accepted a foreign card. I added the dates in my note, received a quote after they checked the room, and saw the order update after payment." },
   { name: "Ethan W.", initial: "E", region: "Sydney", service: "Proxy Pay · software subscription", rating: 5, date: "3 hours ago", text: "My annual software renewal kept declining at checkout. I submitted the official page, paid through the emailed quote, and the renewal was active later that day." },
+  { name: "Amelia C.", initial: "A", region: "Melbourne", service: "Spotify Premium Family", rating: 5, date: "14 min ago", text: "I joined with my existing account and kept every playlist. The invitation steps were short and easy to follow." },
+  { name: "Caleb T.", initial: "C", region: "Seattle", service: "VPN · Premium", rating: 5, date: "29 min ago", text: "The 200GB plan covers my laptop, phone, and streaming setup. Importing the subscription on each device was straightforward." },
+  { name: "Hannah L.", initial: "H", region: "Taipei", service: "AI Membership · GPT 5x Pro", rating: 5, date: "46 min ago", text: "The quota suits long writing and coding sessions. Activation progress and account details were easy to check from the order page." },
+  { name: "George M.", initial: "G", region: "Manchester", service: "Netflix 4K Profile", rating: 5, date: "1 hour ago", text: "The PIN-protected profile keeps viewing history separate, and 4K playback works well on both my TV and tablet." },
+  { name: "Yuna K.", initial: "Y", region: "Seoul", service: "Disney+ full account", rating: 5, date: "2 hours ago", text: "There are enough profiles for the family, with normal subtitles and picture quality. The login notes were clear." },
+  { name: "Noah B.", initial: "N", region: "Auckland", service: "HBO Max Profile", rating: 5, date: "3 hours ago", text: "The profile details arrived neatly and worked across TV and mobile. Support could continue from my order number when needed." },
+  { name: "Ella R.", initial: "E", region: "Boston", service: "Proxy Pay · app subscription", rating: 5, date: "4 hours ago", text: "My overseas app renewal kept declining. I submitted the link, reviewed the quote first, and paid only after confirming it." },
+  { name: "Marcus J.", initial: "M", region: "Vancouver", service: "Proxy Pay · ticket booking", rating: 5, date: "5 hours ago", text: "I entered the date, booking page, and listed price once. The quote arrived clearly and I could follow the status afterward." },
+  { name: "Sophie N.", initial: "S", region: "Kuala Lumpur", service: "VPN · 10GB trial", rating: 5, date: "yesterday", text: "The trial let me check my usual devices and routes before choosing an annual plan. Setup took only a few minutes." },
+  { name: "Evan W.", initial: "E", region: "Singapore", service: "Spotify Premium Individual", rating: 5, date: "yesterday", text: "The order was processed quickly and the individual plan was exactly what I needed. Follow-up details stayed available by email." },
 ];
 
 const TESTIMONIALS_PER_PAGE = 4;
@@ -187,6 +239,7 @@ const LIVE_ORDER_CITIES = [
   "佛山", "东莞", "珠海", "中山", "泉州", "南昌", "贵阳", "昆明", "南宁", "哈尔滨",
   "沈阳", "大连", "长春", "济南", "太原", "石家庄", "呼和浩特", "乌鲁木齐", "兰州", "西宁",
   "银川", "海口", "三亚", "香港", "澳门", "台北", "新北", "新加坡", "悉尼", "温哥华",
+  "温州", "常州", "徐州", "烟台", "惠州", "台中", "高雄", "东京", "墨尔本", "奥克兰",
 ];
 
 const LIVE_ORDER_NAMES = [
@@ -197,6 +250,7 @@ const LIVE_ORDER_NAMES = [
   "宋*", "郑**", "谢***", "唐**", "韩*", "曹**", "许***", "邓**", "冯*", "曾**",
   "彭***", "萧**", "蔡*", "潘**", "田***", "董**", "袁*", "于**", "余***", "叶**",
   "苏*", "魏**", "姚***", "卢**", "钟*", "严**", "Kane***", "Mia***", "Ray***", "Nina***",
+  "沈**", "戴*", "梁***", "顾**", "程*", "Yu***", "Han***", "May***", "Allen**", "Coco***",
 ];
 
 const LIVE_ORDER_PRODUCTS = [
@@ -214,11 +268,14 @@ const LIVE_ORDER_PRODUCTS = [
   "AI 会员 · GPT Plus", "AI 会员 · GPT 5x Pro", "AI 会员 · GPT 20x Pro", "AI 会员 · Claude Pro", "AI 会员 · Claude 5x Max", "AI 会员 · Claude 20x Max",
   "Spotify + Netflix", "Netflix + Disney+", "Spotify + HBO Max", "机场节点 + Netflix", "Spotify + 机场节点", "AI 会员 + Netflix",
   "全球代付 · 海外购物", "全球代付 · 订酒店机票", "全球代付 · 充值话费", "全球代付 · 虚拟会员", "全球代付 · 海外服装日用",
+  "全球代付 · 软件订阅", "全球代付 · 票务预订", "全球代付 · 应用内购", "全球代付 · 海外网站付款",
+  "Spotify + Disney+", "Spotify + AI 会员", "HBO Max + 机场节点", "Disney+ + 机场节点",
 ];
 
 const LIVE_ORDER_TIMES = [
   "刚刚", "1 分钟前", "2 分钟前", "3 分钟前", "5 分钟前", "8 分钟前", "10 分钟前", "12 分钟前",
   "15 分钟前", "18 分钟前", "22 分钟前", "26 分钟前", "31 分钟前", "36 分钟前", "45 分钟前", "52 分钟前",
+  "4 分钟前", "6 分钟前", "9 分钟前", "14 分钟前", "20 分钟前", "28 分钟前", "40 分钟前", "58 分钟前",
 ];
 
 function seededUnit(seed) {
@@ -326,6 +383,7 @@ const EN_LIVE_ORDER_CITIES = [
   "London", "Singapore", "Sydney", "Toronto", "New York", "Tokyo", "Seoul", "Bangkok",
   "Vancouver", "Melbourne", "Auckland", "Hong Kong", "Kuala Lumpur", "Manila", "Dubai",
   "Berlin", "Paris", "Amsterdam", "Madrid", "Osaka", "Taipei", "New Taipei", "Macau", "Los Angeles",
+  "Manchester", "Brisbane", "Perth", "Boston", "Seattle", "Rome", "Copenhagen", "Frankfurt", "Kaohsiung", "Taichung",
 ];
 const EN_LIVE_ORDER_NAMES = [
   "Nathan R.", "Claire T.", "Ryan H.", "Emily S.", "Kenji M.", "Sofia A.", "Oliver P.", "Iris W.",
@@ -333,6 +391,7 @@ const EN_LIVE_ORDER_NAMES = [
   "James W.", "Mia C.", "Ethan R.", "Olivia P.", "Liam H.", "Sophia L.", "Noah K.", "Ava M.",
   "Lucas B.", "Emma T.", "Daniel S.", "Grace Y.", "Henry F.", "Chloe D.", "Jack M.", "Lily Z.",
   "Owen K.", "Zoe R.", "Leo P.", "Nina S.",
+  "Amelia C.", "Caleb T.", "Hannah L.", "George M.", "Yuna K.", "Noah B.", "Ella R.", "Marcus J.", "Sophie N.", "Evan W.",
 ];
 const EN_LIVE_ORDER_PRODUCTS = [
   "Netflix full account", "Netflix 4K Dolby profile", "Disney+ dedicated profile", "Disney+ full account",
@@ -348,19 +407,71 @@ const EN_LIVE_ORDER_PRODUCTS = [
   "AI Membership · GPT Plus", "AI Membership · GPT 5x Pro", "AI Membership · GPT 20x Pro", "AI Membership · Claude Pro", "AI Membership · Claude 5x Max", "AI Membership · Claude 20x Max",
   "Spotify + Netflix", "Netflix + Disney+", "Spotify + VPN", "AI Membership + Netflix",
   "Proxy Pay · overseas shopping", "Proxy Pay · hotels & flights", "Proxy Pay · mobile top-up", "Proxy Pay · digital membership", "Proxy Pay · overseas apparel",
+  "Proxy Pay · software subscription", "Proxy Pay · ticket booking", "Proxy Pay · in-app purchase", "Proxy Pay · overseas checkout",
+  "Spotify + Disney+", "Spotify + AI Membership", "HBO Max + VPN", "Disney+ + VPN",
 ];
 const EN_LIVE_ORDER_TIMES = [
   "just now", "1 min ago", "2 min ago", "3 min ago", "5 min ago", "8 min ago", "10 min ago", "12 min ago",
   "15 min ago", "18 min ago", "22 min ago", "26 min ago", "31 min ago", "36 min ago", "45 min ago", "52 min ago",
+  "4 min ago", "6 min ago", "9 min ago", "14 min ago", "20 min ago", "28 min ago", "40 min ago", "58 min ago",
+];
+
+const FEATURED_LIVE_ORDERS = [
+  { city: "宁波", name: "顾**", product: "Spotify 家庭成员", time: "刚刚" },
+  { city: "上海", name: "邱*", product: "机场节点 · 高级套餐", time: "1 分钟前" },
+  { city: "深圳", name: "Allen***", product: "全球代付 · 海外购物", time: "2 分钟前" },
+  { city: "南京", name: "孟**", product: "AI 会员 · Claude Pro", time: "3 分钟前" },
+  { city: "佛山", name: "方*", product: "Netflix 4K 单独车位", time: "4 分钟前" },
+  { city: "澳门", name: "Tong***", product: "HBO Max 整号购买", time: "5 分钟前" },
+  { city: "青岛", name: "程*", product: "Disney+ 整号购买", time: "6 分钟前" },
+  { city: "新加坡", name: "Yu***", product: "Spotify 双人订阅", time: "8 分钟前" },
+  { city: "厦门", name: "彭**", product: "机场节点 · 5元10GB测试", time: "9 分钟前" },
+  { city: "广州", name: "罗*", product: "全球代付 · 软件订阅", time: "10 分钟前" },
+  { city: "杭州", name: "Coco***", product: "AI 会员 · GPT Plus", time: "12 分钟前" },
+  { city: "济南", name: "高**", product: "Netflix 整号购买", time: "14 分钟前" },
+  { city: "苏州", name: "施*", product: "机场节点 · 无限套餐", time: "15 分钟前" },
+  { city: "台北", name: "林***", product: "Spotify 个人订阅", time: "18 分钟前" },
+  { city: "成都", name: "曹**", product: "Disney+ 单独车位", time: "20 分钟前" },
+  { city: "温哥华", name: "Ming***", product: "全球代付 · 酒店预订", time: "22 分钟前" },
+  { city: "天津", name: "夏**", product: "HBO Max 单独车位", time: "26 分钟前" },
+  { city: "武汉", name: "赵*", product: "AI 会员 · GPT 5x Pro", time: "28 分钟前" },
+  { city: "高雄", name: "Han***", product: "Spotify 家庭套餐", time: "31 分钟前" },
+  { city: "墨尔本", name: "May***", product: "机场节点 · 豪华套餐", time: "36 分钟前" },
+];
+
+const EN_FEATURED_LIVE_ORDERS = [
+  { city: "Vancouver", name: "Lena W.", product: "Spotify Premium Family", time: "just now" },
+  { city: "Sydney", name: "Arthur C.", product: "VPN · Plus", time: "1 min ago" },
+  { city: "Singapore", name: "Maya R.", product: "Proxy Pay · overseas shopping", time: "2 min ago" },
+  { city: "London", name: "Elliot H.", product: "AI Membership · Claude Pro", time: "3 min ago" },
+  { city: "Toronto", name: "Chloe M.", product: "Netflix 4K Profile", time: "4 min ago" },
+  { city: "Macau", name: "Theo L.", product: "HBO Max full account", time: "5 min ago" },
+  { city: "Seoul", name: "Sienna K.", product: "Disney+ full account", time: "6 min ago" },
+  { city: "Auckland", name: "Jayden P.", product: "Spotify Premium Duo", time: "8 min ago" },
+  { city: "Kuala Lumpur", name: "Ruby N.", product: "VPN · 10GB trial", time: "9 min ago" },
+  { city: "Melbourne", name: "Oscar B.", product: "Proxy Pay · software subscription", time: "10 min ago" },
+  { city: "Manchester", name: "Isla D.", product: "AI Membership · GPT Plus", time: "12 min ago" },
+  { city: "Boston", name: "Logan F.", product: "Netflix full account", time: "14 min ago" },
+  { city: "Tokyo", name: "Aiden J.", product: "VPN · Unlimited", time: "15 min ago" },
+  { city: "Taipei", name: "Nora Y.", product: "Spotify Premium Individual", time: "18 min ago" },
+  { city: "Seattle", name: "Harper G.", product: "Disney+ Profile", time: "20 min ago" },
+  { city: "Vancouver", name: "Miles T.", product: "Proxy Pay · hotel booking", time: "22 min ago" },
+  { city: "New York", name: "Ava P.", product: "HBO Max Profile", time: "26 min ago" },
+  { city: "Los Angeles", name: "Lucas C.", product: "AI Membership · GPT 5x Pro", time: "28 min ago" },
+  { city: "Kaohsiung", name: "Hannah L.", product: "Spotify Premium Family", time: "31 min ago" },
+  { city: "Brisbane", name: "Sophie N.", product: "VPN · Premium", time: "36 min ago" },
 ];
 
 function liveOrderAt(index, locale) {
   const en = locale === "en";
+  const featuredOrders = en ? EN_FEATURED_LIVE_ORDERS : FEATURED_LIVE_ORDERS;
+  if (index < featuredOrders.length) return featuredOrders[index];
   const cities = en ? EN_LIVE_ORDER_CITIES : LIVE_ORDER_CITIES;
   const names = en ? EN_LIVE_ORDER_NAMES : LIVE_ORDER_NAMES;
   const products = en ? EN_LIVE_ORDER_PRODUCTS : LIVE_ORDER_PRODUCTS;
   const times = en ? EN_LIVE_ORDER_TIMES : LIVE_ORDER_TIMES;
-  const seed = 20260602 + index * 97;
+  const generatedIndex = index - featuredOrders.length;
+  const seed = 20260602 + generatedIndex * 97;
   const city = cities[Math.floor(seededUnit(seed + 11) * cities.length) % cities.length];
   const name = names[Math.floor(seededUnit(seed + 23) * names.length) % names.length];
   const product = products[Math.floor(seededUnit(seed + 37) * products.length) % products.length];
@@ -379,7 +490,7 @@ function LiveOrderTicker() {
       EN_LIVE_ORDER_CITIES.length,
       EN_LIVE_ORDER_NAMES.length,
       EN_LIVE_ORDER_PRODUCTS.length
-    ) * 5;
+    ) * 5 + Math.max(FEATURED_LIVE_ORDERS.length, EN_FEATURED_LIVE_ORDERS.length);
     const timer = setInterval(() => setIdx((i) => (i + 1) % cycleLength), 3200);
     return () => clearInterval(timer);
   }, []);
