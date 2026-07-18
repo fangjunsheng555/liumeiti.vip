@@ -1,16 +1,6 @@
 const nextConfig = {
   devIndicators: false,
   allowedDevOrigins: ["127.0.0.1", "localhost"],
-  async redirects() {
-    return [
-      {
-        source: "/:path*",
-        has: [{ type: "host", value: "liumeiti.vip" }],
-        destination: "https://www.liumeiti.vip/:path*",
-        permanent: true,
-      },
-    ];
-  },
   async headers() {
     const securityHeaders = [
       { key: "X-Content-Type-Options", value: "nosniff" },
