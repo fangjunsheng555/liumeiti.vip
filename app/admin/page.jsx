@@ -58,6 +58,7 @@ const MAIL_BATCH_LIMIT = 20;
 const MARKETING_DAILY_SCHEDULE_LIMIT = 40;
 const MARKETING_SCHEDULE_REQUEST_LIMIT = 5;
 const ABNORMAL_SEEN_STORAGE_PREFIX = "lm_admin_abnormal_seen_v1";
+const ORDER_PAGE_SIZE = 50;
 
 function initialAdminPollState() {
   return {
@@ -101,6 +102,10 @@ function normalizeEmailList(values) {
 
 function extractEmailsFromText(value) {
   return String(value || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+}
+
+function orderListCacheKey({ q = "", status = "all", from = "", to = "" } = {}) {
+  return JSON.stringify([String(q).trim(), status || "all", from || "", to || ""]);
 }
 
 function nextBeijingEveningSlots(count) {
@@ -1190,6 +1195,8 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(false);
   const [ordersLoadingMore, setOrdersLoadingMore] = useState(false);
   const [ordersMeta, setOrdersMeta] = useState({ filteredCount: 0, total: 0, hasMore: false });
+  const [ordersRefreshToken, setOrdersRefreshToken] = useState(0);
+  const [orderOpeningId, setOrderOpeningId] = useState("");
   const [assignableStaff, setAssignableStaff] = useState([]);
   const [assignmentBusy, setAssignmentBusy] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
@@ -1319,6 +1326,9 @@ export default function AdminPage() {
   const [orderDetailRefreshToken, setOrderDetailRefreshToken] = useState(0);
   const pollControllersRef = useRef({});
   const pollSequenceRef = useRef({});
+  const ordersCacheRef = useRef(new Map());
+  const orderListRevisionRef = useRef("0");
+  const orderLoadEffectSignatureRef = useRef("");
   const [seenAbnormalCount, setSeenAbnormalCount] = useState(null);
   const [usdtChecking, setUsdtChecking] = useState(false);
   const [usdtCheckMsg, setUsdtCheckMsg] = useState("");
@@ -2149,34 +2159,20 @@ export default function AdminPage() {
   }
 
   async function fetchOrderMailEmails() {
-    const emails = [];
-    let offset = 0;
-    const limit = 200;
-    while (true) {
-      const params = new URLSearchParams();
-      params.set("offset", String(offset));
-      params.set("limit", String(limit));
-      const res = await fetch("/api/admin/orders?" + params.toString(), {
-        credentials: "same-origin",
-        cache: "no-store",
-      });
-      const data = await res.json();
-      if (!data.ok) {
-        const msg = {
-          unauthorized: "登录状态已失效，请重新登录后台",
-          forbidden: "当前工作人员没有查看订单权限",
-        }[data.error] || data.error || "读取历史订单邮箱失败";
-        throw new Error(msg);
-      }
-      const orders = Array.isArray(data.orders) ? data.orders : [];
-      orders.forEach((order) => {
-        emails.push(order?.email);
-        emails.push(...extractEmailsFromText(order?.contact));
-      });
-      offset += orders.length;
-      if (!data.hasMore || orders.length === 0) break;
+    const params = new URLSearchParams({ mode: "recipient-emails" });
+    const res = await fetch("/api/admin/orders?" + params.toString(), {
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      const msg = {
+        unauthorized: "登录状态已失效，请重新登录后台",
+        forbidden: "当前工作人员没有查看订单权限",
+      }[data.error] || data.error || "读取历史订单邮箱失败";
+      throw new Error(msg);
     }
-    return normalizeEmailList(emails);
+    return normalizeEmailList(data.emails || []);
   }
 
   async function loadMarketingRecipientPool(source = "all") {
@@ -2952,7 +2948,8 @@ export default function AdminPage() {
     const silent = Boolean(options.silent);
     const append = Boolean(options.append);
     const offset = Math.max(0, Number(options.offset || 0));
-    const limit = Math.min(200, Math.max(1, Number(options.limit || 100)));
+    const limit = Math.min(200, Math.max(1, Number(options.limit || ORDER_PAGE_SIZE)));
+    const cacheKey = orderListCacheKey({ q, status, from: options.from, to: options.to });
     const { controller, sequence } = beginPollRequest("orders");
     if (!silent && !append) setLoading(true);
     if (append) setOrdersLoadingMore(true);
@@ -2976,8 +2973,18 @@ export default function AdminPage() {
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
       if (isCurrentPollRequest("orders", sequence)) {
-        setOrders((prev) => (append ? [...prev, ...(data.orders || [])] : (data.orders || [])));
-        setOrdersMeta({ filteredCount: Number(data.filteredCount || 0), total: Number(data.total || 0), hasMore: Boolean(data.hasMore) });
+        const incoming = Array.isArray(data.orders) ? data.orders : [];
+        const meta = { filteredCount: Number(data.filteredCount || 0), total: Number(data.total || 0), hasMore: Boolean(data.hasMore) };
+        const revision = String(data.listRevision || "0");
+        setOrders((previous) => {
+          const next = append
+            ? Array.from(new Map([...previous, ...incoming].map((order) => [order.orderId, order])).values())
+            : incoming;
+          ordersCacheRef.current.set(cacheKey, { orders: next, meta, revision });
+          return next;
+        });
+        setOrdersMeta(meta);
+        orderListRevisionRef.current = revision;
         if (Array.isArray(data.assignableStaff)) setAssignableStaff(data.assignableStaff);
         if (data.currentStaff) applyCurrentStaff(data.currentStaff);
         setAuthed(true);
@@ -2986,6 +2993,7 @@ export default function AdminPage() {
     } catch (e) {
       if (e?.name !== "AbortError" && isCurrentPollRequest("orders", sequence)) {
         console.error(e);
+        orderLoadEffectSignatureRef.current = "";
         markPollFailure("orders", e);
       }
     } finally {
@@ -2997,20 +3005,78 @@ export default function AdminPage() {
   }, [applyCurrentStaff, beginPollRequest, isCurrentPollRequest, markPollSuccess, markPollFailure]);
 
   useEffect(() => {
-    if (authed === true && tab !== "orders" && tab !== "abnormal") return;
-    loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { from: dateFrom, to: dateTo });
-  }, [authed, loadOrders, appliedSearch, filterStatus, tab, dateFrom, dateTo]);
+    if (authed === false) return;
+    const listVisible = tab === "orders" || tab === "abnormal";
+    if (authed === true && !listVisible) {
+      orderLoadEffectSignatureRef.current = "";
+      return;
+    }
+    const status = tab === "abnormal" ? "abnormal" : filterStatus;
+    const cacheKey = orderListCacheKey({ q: appliedSearch, status, from: dateFrom, to: dateTo });
+    const signature = `${tab}:${cacheKey}:${ordersRefreshToken}`;
+    if (orderLoadEffectSignatureRef.current === signature) return;
+    orderLoadEffectSignatureRef.current = signature;
+    const cached = ordersCacheRef.current.get(cacheKey);
+    if (cached) {
+      setOrders(cached.orders);
+      setOrdersMeta(cached.meta);
+      orderListRevisionRef.current = String(cached.revision || "0");
+      loadOrders(appliedSearch, status, {
+        silent: true,
+        limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, cached.orders.length)),
+        from: dateFrom,
+        to: dateTo,
+      });
+      return;
+    }
+    loadOrders(appliedSearch, status, { limit: ORDER_PAGE_SIZE, from: dateFrom, to: dateTo });
+  }, [authed, loadOrders, appliedSearch, filterStatus, tab, dateFrom, dateTo, ordersRefreshToken]);
+
+  const refreshOrdersIfChanged = useCallback(async () => {
+    if (!authed || (tab !== "orders" && tab !== "abnormal") || activeOrder || loading || ordersLoadingMore) return;
+    const { controller, sequence } = beginPollRequest("orderRevision");
+    try {
+      const response = await fetch("/api/admin/orders?mode=revision", {
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (response.status === 401) {
+        setAuthed(false);
+        return;
+      }
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      if (!isCurrentPollRequest("orderRevision", sequence)) return;
+      const revision = String(data.revision || "0");
+      if (revision !== orderListRevisionRef.current) {
+        await loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, {
+          silent: true,
+          limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)),
+          from: dateFrom,
+          to: dateTo,
+        });
+      } else {
+        markPollSuccess("orders");
+      }
+    } catch (error) {
+      if (error?.name !== "AbortError" && isCurrentPollRequest("orderRevision", sequence)) {
+        markPollFailure("orders", error);
+      }
+    }
+  }, [
+    authed, tab, activeOrder, loading, ordersLoadingMore, beginPollRequest, isCurrentPollRequest,
+    loadOrders, appliedSearch, filterStatus, orders.length, dateFrom, dateTo, markPollSuccess, markPollFailure,
+  ]);
 
   useEffect(() => {
     if (!authed || (tab !== "orders" && tab !== "abnormal")) return;
     const timer = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-      if (activeOrder || loading || ordersLoadingMore) return;
-      // 原位刷新当前已加载的条数(限 200),让新订单出现而不丢失已翻页内容
-      loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, offset: 0, limit: Math.min(200, Math.max(100, orders.length)), from: dateFrom, to: dateTo });
+      refreshOrdersIfChanged();
     }, 10000);
     return () => clearInterval(timer);
-  }, [authed, tab, activeOrder, loading, ordersLoadingMore, loadOrders, appliedSearch, filterStatus, dateFrom, dateTo, orders.length]);
+  }, [authed, tab, refreshOrdersIfChanged]);
 
   useEffect(() => {
     setPollState((current) => ({
@@ -3041,12 +3107,16 @@ export default function AdminPage() {
         if (disposed) return;
         if (!response.ok || !data.ok || !data.order) throw new Error(data.error || `HTTP ${response.status}`);
         markPollSuccess("orderDetail");
-        const latest = data.order;
+        const latestItems = Array.isArray(data.order.items) ? data.order.items : [];
+        const latest = {
+          ...data.order,
+          itemCount: Number(data.order.itemCount || latestItems.length || 1),
+          serviceLabel: data.order.serviceLabel || latestItems.map((item) => item.label).filter(Boolean).join(" + "),
+        };
         const revision = customerDetailsRevision(latest);
         if (revision === knownRevision) return;
         knownRevision = revision;
         setActiveOrder((current) => current?.orderId === orderId ? latest : current);
-        setOrders((current) => current.map((order) => order.orderId === orderId ? latest : order));
         setEditForm((current) => {
           if (!current) return current;
           return {
@@ -3092,13 +3162,7 @@ export default function AdminPage() {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
       loadOverview({ silent: true, watch: true });
       if ((tab === "orders" || tab === "abnormal") && !activeOrder) {
-        loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, {
-          silent: true,
-          offset: 0,
-          limit: Math.min(200, Math.max(100, orders.length)),
-          from: dateFrom,
-          to: dateTo,
-        });
+        refreshOrdersIfChanged();
       }
     };
     window.addEventListener("online", refreshVisibleData);
@@ -3107,7 +3171,7 @@ export default function AdminPage() {
       window.removeEventListener("online", refreshVisibleData);
       window.removeEventListener("focus", refreshVisibleData);
     };
-  }, [authed, tab, activeOrder, loadOverview, loadOrders, appliedSearch, filterStatus, dateFrom, dateTo, orders.length]);
+  }, [authed, tab, activeOrder, loadOverview, refreshOrdersIfChanged]);
 
   useEffect(() => () => {
     Object.values(pollControllersRef.current).forEach((controller) => controller?.abort?.());
@@ -3158,8 +3222,8 @@ export default function AdminPage() {
     setSearchInput("");
     setAppliedSearch("");
     setFilterStatus("all");
-    loadOrders("", "all", { silent: true });
-  }, [authed, tab, newOrderAlert?.orderId, loadOrders]);
+    setOrdersRefreshToken((value) => value + 1);
+  }, [authed, tab, newOrderAlert?.orderId]);
 
   // 移动端导航抽屉的无障碍管理:仅在抽屉断点(≤900px)生效——
   // 打开时把焦点移入侧栏、Tab 困在抽屉内、背景设为 inert(屏蔽读屏/抓焦点)、Esc 关闭;关闭时焦点归还汉堡按钮。
@@ -3195,7 +3259,7 @@ export default function AdminPage() {
     setAppliedSearch("");
     setFilterStatus("all");
     setNewOrderAlert(null);
-    loadOrders("", "all", { silent: true });
+    setOrdersRefreshToken((value) => value + 1);
     loadOverview({ silent: true });
     if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -3206,7 +3270,6 @@ export default function AdminPage() {
       setSearchInput("");
       setAppliedSearch("");
       setFilterStatus(target);
-      loadOrders("", target, { silent: true });
       return;
     }
     if (target === "orders") {
@@ -3214,14 +3277,12 @@ export default function AdminPage() {
       setSearchInput("");
       setAppliedSearch("");
       setFilterStatus("received");
-      loadOrders("", "received", { silent: true });
       return;
     }
     if (target === "abnormal") {
       setTab("abnormal");
       setSearchInput("");
       setAppliedSearch("");
-      loadOrders("", "abnormal", { silent: true });
       return;
     }
     if (target === "withdrawals") {
@@ -3253,7 +3314,6 @@ export default function AdminPage() {
     setSearchInput(id);
     setAppliedSearch(id);
     setFilterStatus("all");
-    loadOrders(id, "all", { silent: true });
   }
 
   async function doLogin(e) {
@@ -3274,7 +3334,6 @@ export default function AdminPage() {
         setPassword("");
         setLoginOtp("");
         setLoginNeed2fa(false);
-        loadOrders(appliedSearch, filterStatus);
       } else if (data.need2fa) {
         setLoginNeed2fa(true);
         setLoginError(data.error === "invalid_2fa" ? "动态码错误,请重试(也可输入备用恢复码)" : "");
@@ -3293,46 +3352,77 @@ export default function AdminPage() {
     setAuthed(false);
     setCurrentStaff(null);
     setOrders([]);
+    ordersCacheRef.current.clear();
+    orderListRevisionRef.current = "0";
+    orderLoadEffectSignatureRef.current = "";
     overviewRef.current = null;
     setOverview(null);
     setSeenAbnormalCount(null);
     setNewOrderAlert(null);
   }
 
-  function openOrder(order) {
+  async function openOrder(order) {
+    const orderId = String(order?.orderId || "").trim();
+    if (!orderId || orderOpeningId) return;
     setHighlightOrderIds((current) => {
-      if (!current.has(order.orderId)) return current;
+      if (!current.has(orderId)) return current;
       const next = new Set(current);
-      next.delete(order.orderId);
+      next.delete(orderId);
       return next;
     });
-    setActiveOrder(order);
-    setEditForm({
-      status: order.status,
-      quoteAmount: order.quoteAmount ? String(order.quoteAmount) : "",
-      quoteValidDays: String(order.quoteValidDays || 7),
-      staffNotes: order.staffNotes || "",
-      items: order.items.map((it) => ({
-        index: order.items.indexOf(it),
-        service: it.service,
-        label: it.label,
-        account: it.account || "",
-        password: it.password || "",
-        staffAccount: it.staffAccount || "",
-        staffPassword: it.staffPassword || "",
-        passwordCorrectionRequestedAt: it.passwordCorrectionRequestedAt || "",
-        passwordCorrectionRequestedAtBeijing: it.passwordCorrectionRequestedAtBeijing || "",
-        passwordCorrectionEmailSentAtBeijing: it.passwordCorrectionEmailSentAtBeijing || "",
-        passwordCorrectionEmailOk: Boolean(it.passwordCorrectionEmailOk),
-        passwordCorrectionStaffNote: it.passwordCorrectionStaffNote || "",
-        customerPasswordUpdatedAt: it.customerPasswordUpdatedAt || "",
-        customerPasswordUpdatedAtBeijing: it.customerPasswordUpdatedAtBeijing || "",
-        customerPasswordUpdateCount: Number(it.customerPasswordUpdateCount || 0),
-      })),
-    });
-    setSaveResult(null);
-    setConfirmDelete(false);
-    setSpotifyPasswordMail(null);
+    setOrderOpeningId(orderId);
+    const { controller, sequence } = beginPollRequest("orderOpen");
+    try {
+      const response = await fetch(`/api/admin/orders/${encodeURIComponent(orderId)}`, {
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok || !data.order) throw new Error(data.error || `HTTP ${response.status}`);
+      if (!isCurrentPollRequest("orderOpen", sequence)) return;
+      const items = Array.isArray(data.order.items) ? data.order.items : [];
+      const detail = {
+        ...data.order,
+        itemCount: Number(data.order.itemCount || items.length || 1),
+        serviceLabel: data.order.serviceLabel || items.map((item) => item.label).filter(Boolean).join(" + "),
+      };
+      setActiveOrder(detail);
+      setEditForm({
+        status: detail.status,
+        quoteAmount: detail.quoteAmount ? String(detail.quoteAmount) : "",
+        quoteValidDays: String(detail.quoteValidDays || 7),
+        staffNotes: detail.staffNotes || "",
+        items: items.map((item, index) => ({
+          index,
+          service: item.service,
+          label: item.label,
+          account: item.account || "",
+          password: item.password || "",
+          staffAccount: item.staffAccount || "",
+          staffPassword: item.staffPassword || "",
+          passwordCorrectionRequestedAt: item.passwordCorrectionRequestedAt || "",
+          passwordCorrectionRequestedAtBeijing: item.passwordCorrectionRequestedAtBeijing || "",
+          passwordCorrectionEmailSentAtBeijing: item.passwordCorrectionEmailSentAtBeijing || "",
+          passwordCorrectionEmailOk: Boolean(item.passwordCorrectionEmailOk),
+          passwordCorrectionStaffNote: item.passwordCorrectionStaffNote || "",
+          customerPasswordUpdatedAt: item.customerPasswordUpdatedAt || "",
+          customerPasswordUpdatedAtBeijing: item.customerPasswordUpdatedAtBeijing || "",
+          customerPasswordUpdateCount: Number(item.customerPasswordUpdateCount || 0),
+        })),
+      });
+      setSaveResult(null);
+      setConfirmDelete(false);
+      setSpotifyPasswordMail(null);
+      markPollSuccess("orderDetail");
+    } catch (error) {
+      if (error?.name !== "AbortError" && isCurrentPollRequest("orderOpen", sequence)) {
+        console.error(error);
+        markPollFailure("orderDetail", error);
+      }
+    } finally {
+      if (isCurrentPollRequest("orderOpen", sequence)) setOrderOpeningId("");
+    }
   }
 
   async function updateOrderAssignment(action, assignedStaffId = 0) {
@@ -3387,7 +3477,7 @@ export default function AdminPage() {
     if (!response.ok || !data.ok) throw new Error(data.error || "order_load_failed");
     const order = (data.orders || []).find((item) => String(item.orderId || "").toUpperCase() === normalizedId);
     if (!order) throw new Error("order_not_found");
-    openOrder(order);
+    await openOrder(order);
   }
 
   function toggleBatchMode() {
@@ -3447,7 +3537,7 @@ export default function AdminPage() {
         });
         setSelectedIds(new Set());
         setBatchConfirm(null);
-        loadOrders(appliedSearch, filterStatus);
+        loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
         loadOverview({ silent: true });
       } else {
         setBatchResult({ type: "error", message: data.error || "批量操作失败" });
@@ -3478,7 +3568,7 @@ export default function AdminPage() {
         setActiveOrder(null);
         setEditForm(null);
         setConfirmDelete(false);
-        loadOrders(appliedSearch, filterStatus);
+        loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
         loadOverview({ silent: true });
       } else {
         setSaveResult({ type: "error", message: data.error || "删除失败" });
@@ -3535,7 +3625,7 @@ export default function AdminPage() {
       } else {
         setSaveResult({ type: "error", message: "更新链接已生成，但邮件发送失败，请检查发信服务后重试" });
       }
-      loadOrders(appliedSearch, filterStatus);
+      loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
     } catch (sendError) {
       setSaveResult({ type: "error", message: sendError.message || "网络错误" });
     } finally {
@@ -3577,7 +3667,7 @@ export default function AdminPage() {
         const completionMessage = data.completion?.email?.ok ? " · 完成邮件已发送" : data.completion ? " · 完成邮件发送失败" : "";
         const invalidMessage = data.invalidNotice?.email?.ok ? " · 无效通知已发送" : data.invalidNotice ? " · 无效通知发送失败" : "";
         setSaveResult({ type: "success", message: "已保存" + completionMessage + invalidMessage });
-        loadOrders(appliedSearch, filterStatus);
+        loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
         loadOverview({ silent: true });
         setActiveOrder(data.order);
       } else {
@@ -3632,7 +3722,7 @@ export default function AdminPage() {
         quoteAmount: String(data.quote?.amount || amount),
         quoteValidDays: String(data.quote?.validDays || current.quoteValidDays || 7),
       }));
-      loadOrders(appliedSearch, filterStatus);
+      loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
       loadOverview({ silent: true });
     } catch (error) {
       setSaveResult({ type: "error", message: error.message || "网络错误" });
@@ -5082,6 +5172,7 @@ export default function AdminPage() {
                   onClick={() => batchMode ? toggleSelect(o.orderId) : openOrder(o)}
                   role="button"
                   tabIndex={0}
+                  aria-busy={orderOpeningId === o.orderId}
                 >
                   {batchMode && (
                     <span className={`admin-order-checkbox${isSelected ? " checked" : ""}`} aria-hidden="true">
@@ -5092,6 +5183,7 @@ export default function AdminPage() {
                     <div className="admin-order-top">
                       <span className="admin-order-id">{o.orderId}</span>
                       <span className="admin-card-badges">
+                        {orderOpeningId === o.orderId && <LoaderCircle size={12} className="spin-icon" />}
                         {o.lastStaffId && <span className="staff-mini-badge">{o.lastStaffId}</span>}
                         {o.referral?.levelOneEmail && (
                           <span className="staff-mini-badge">{referralCommissionLabel(o)}</span>
@@ -5160,7 +5252,7 @@ export default function AdminPage() {
                 type="button"
                 className="admin-loadmore-btn"
                 disabled={ordersLoadingMore}
-                onClick={() => loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { append: true, offset: orders.length, limit: 100, from: dateFrom, to: dateTo })}
+                onClick={() => loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { append: true, offset: orders.length, limit: ORDER_PAGE_SIZE, from: dateFrom, to: dateTo })}
               >{ordersLoadingMore ? <><LoaderCircle size={13} className="spin-icon" />加载中</> : "加载更多"}</button>
             )}
           </div>

@@ -1,6 +1,5 @@
 import {
-  getAllOrders, getOrdersPageFast,
-  formatBeijingTime,
+  getAllOrders, getOrderOverviewRows, getOrderSummariesPageFast, getOrderListRevision,
   adminSessionFromRequest,
   isRootAdminSession,
   adminPermissionProfile,
@@ -174,6 +173,90 @@ function normalizeOrder(order) {
   };
 }
 
+function normalizeOrderSummary(order) {
+  const status = effectiveQuoteStatus(order);
+  const items = Array.isArray(order.items) && order.items.length
+    ? order.items.map((item) => ({
+      service: item?.service || "",
+      label: item?.label || "",
+      cycle: item?.cycle || "",
+      amount: Number(item?.amount || 0),
+      plan: item?.plan || "",
+      passwordCorrectionRequestedAt: item?.passwordCorrectionRequestedAt || "",
+      customerPasswordUpdatedAt: item?.customerPasswordUpdatedAt || "",
+      customerPasswordUpdatedAtBeijing: item?.customerPasswordUpdatedAtBeijing || "",
+      customerPasswordUpdateCount: Number(item?.customerPasswordUpdateCount || 0),
+    }))
+    : [];
+  const source = { ...order, status, items };
+  const abnormal = abnormalInfo(source, status);
+  return {
+    _summaryOnly: true,
+    orderId: order.orderId || "",
+    orderType: order.orderType || "standard",
+    status,
+    createdAt: order.createdAt || "",
+    createdAtBeijing: order.createdAtBeijing || "",
+    items,
+    itemCount: items.length || 1,
+    serviceLabel: order.serviceLabel || items.map((item) => item.label).filter(Boolean).join(" + "),
+    paymentMethod: order.paymentMethod || "alipay",
+    finalAmount: Number(order.finalAmount || 0),
+    paidAmount: Number(order.paidAmount || order.finalAmount || 0),
+    paidCurrency: order.paidCurrency || (order.paymentMethod === "usdt" ? "USDT" : "CNY"),
+    quoteAmount: Number(order.quoteAmount || 0),
+    email: order.email || "",
+    usdtConfirmedAt: order.usdtConfirmedAt || "",
+    usdtTxId: order.usdtTxId || "",
+    referral: order.referral?.levelOneEmail ? { levelOneEmail: order.referral.levelOneEmail } : null,
+    referralCommissionSettledAt: order.referralCommissionSettledAt || "",
+    referralCommissionSettledAtBeijing: order.referralCommissionSettledAtBeijing || "",
+    referralCommissionEntries: Array.isArray(order.referralCommissionEntries) ? order.referralCommissionEntries : [],
+    referralCommissionReversedAt: order.referralCommissionReversedAt || "",
+    referralCommissionReversedAtBeijing: order.referralCommissionReversedAtBeijing || "",
+    referralCommissionReversedEntries: Array.isArray(order.referralCommissionReversedEntries) ? order.referralCommissionReversedEntries : [],
+    lastStaffId: Number(order.lastStaffId || 0) || null,
+    assignedStaffId: Number(order.assignedStaffId || 0),
+    assignedStaffUsername: order.assignedStaffUsername || "",
+    sla: getOrderSla(source),
+    abnormal: abnormal.abnormal,
+    abnormalReason: abnormal.reason,
+    abnormalLevel: abnormal.level,
+  };
+}
+
+function applyOrderFilters(orders, { status, from, to }) {
+  let filtered = orders;
+  if (status === "abnormal") {
+    filtered = filtered.filter((order) => order.abnormal);
+  } else if (status === "sla_overdue") {
+    filtered = filtered.filter((order) => order.sla?.overdue);
+  } else if (["awaiting_quote", "pending_payment", "quote_expired", "received", "completed", "invalid"].includes(status)) {
+    filtered = filtered.filter((order) => order.status === status);
+  }
+  if (from || to) {
+    filtered = filtered.filter((order) => {
+      const date = String(order.createdAtBeijing || "").slice(0, 10);
+      if (from && date < from) return false;
+      if (to && date > to) return false;
+      return true;
+    });
+  }
+  return filtered;
+}
+
+function orderContactEmails(orders) {
+  const emails = new Set();
+  for (const order of orders) {
+    const values = [order?.email, order?.userEmail, order?.contact];
+    for (const value of values) {
+      const matches = String(value || "").match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+      matches.forEach((email) => emails.add(email.toLowerCase()));
+    }
+  }
+  return Array.from(emails);
+}
+
 function csvCell(v) {
   const s = String(v == null ? "" : v).replace(/\r?\n/g, " ");
   return /[",]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -194,93 +277,103 @@ export async function GET(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const url = new URL(request.url);
+  const mode = String(url.searchParams.get("mode") || "").trim();
   const q = String(url.searchParams.get("q") || "").trim().toLowerCase();
   const status = String(url.searchParams.get("status") || "").trim();
-  const from = String(url.searchParams.get("from") || "").trim();   // 北京日期 起
-  const to = String(url.searchParams.get("to") || "").trim();       // 北京日期 止
+  const from = String(url.searchParams.get("from") || "").trim();
+  const to = String(url.searchParams.get("to") || "").trim();
   const format = String(url.searchParams.get("format") || "").trim();
   const offset = Math.max(0, Number(url.searchParams.get("offset") || 0));
-  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 100)));
+  const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 50)));
   const permissions = adminPermissionProfile(session);
-  const assignableStaff = permissions.canEditOrders ? await listAssignableAdminStaff() : [];
 
-  // 性能:无任何筛选/搜索/导出时,走快速分页(只 GET 当前页的完整订单),避免订单量大时全量拉取。
+  if (mode === "revision") {
+    const revision = await getOrderListRevision();
+    if (!revision) return Response.json({ ok: false, error: "order_revision_unavailable" }, { status: 503 });
+    return Response.json({ ok: true, ...revision }, { headers: { "Cache-Control": "no-store" } });
+  }
+
+  if (mode === "recipient-emails") {
+    const all = await getAllOrders();
+    return Response.json({ ok: true, emails: orderContactEmails(all) }, { headers: { "Cache-Control": "no-store" } });
+  }
+
+  const assignableStaff = permissions.canEditOrders ? await listAssignableAdminStaff() : [];
+  const currentStaff = {
+    id: Number(session.staffId || 1),
+    username: session.staffUsername || "admin",
+    root: isRootAdminSession(session),
+    role: permissions.role,
+    permissions,
+  };
+
   const noFilter = !q && !status && !from && !to && format !== "csv";
   if (noFilter) {
-    const fast = await getOrdersPageFast(offset, limit);
+    const fast = await getOrderSummariesPageFast(offset, limit);
     if (fast) {
       return Response.json({
         ok: true,
-        orders: fast.orders.map(normalizeOrder),
+        orders: fast.orders.map(normalizeOrderSummary),
         total: fast.total,
         filteredCount: fast.total,
         offset, limit,
         hasMore: fast.hasMore,
+        listRevision: fast.listRevision,
         assignableStaff,
-        currentStaff: {
-          id: Number(session.staffId || 1),
-          username: session.staffUsername || "admin",
-          root: isRootAdminSession(session),
-          role: adminPermissionProfile(session).role,
-          permissions: adminPermissionProfile(session),
-        },
-      });
+        currentStaff,
+      }, { headers: { "Cache-Control": "no-store" } });
     }
   }
 
-  const all = await getAllOrders();
-  let filtered = all.map(normalizeOrder);
-  if (status === "abnormal") {
-    filtered = filtered.filter((o) => o.abnormal);
-  } else if (status === "sla_overdue") {
-    filtered = filtered.filter((o) => o.sla?.overdue);
-  } else if (["awaiting_quote", "pending_payment", "quote_expired", "received", "completed", "invalid"].includes(status)) {
-    filtered = filtered.filter((o) => o.status === status);
-  }
-  if (from || to) {
-    filtered = filtered.filter((o) => {
-      const d = String(o.createdAtBeijing || "").slice(0, 10); // YYYY-MM-DD
-      if (from && d < from) return false;
-      if (to && d > to) return false;
-      return true;
-    });
-  }
-  if (q) {
-    filtered = filtered.filter((o) => {
-      const hay = [
-        o.orderId, o.email, o.contact, o.serviceLabel, o.staffNotes, o.remark, o.platformUrl, o.productPrice, o.assignedStaffUsername,
-        ...o.items.flatMap((i) => [i.label, i.account, i.password, i.staffAccount, i.staffPassword, i.platformUrl, i.productPrice]),
-      ].join(" ").toLowerCase();
-      return hay.includes(q);
-    });
+  let allCount = 0;
+  let filtered;
+  if (q || format === "csv") {
+    const all = await getAllOrders();
+    allCount = all.length;
+    let detailed = applyOrderFilters(all.map(normalizeOrder), { status, from, to });
+    if (q) {
+      detailed = detailed.filter((order) => {
+        const hay = [
+          order.orderId, order.email, order.contact, order.serviceLabel, order.staffNotes, order.remark,
+          order.platformUrl, order.productPrice, order.assignedStaffUsername,
+          ...order.items.flatMap((item) => [
+            item.label, item.account, item.password, item.staffAccount, item.staffPassword,
+            item.platformUrl, item.productPrice,
+          ]),
+        ].join(" ").toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
+    if (format === "csv") {
+      const stamp = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+      return new Response(ordersToCsv(detailed), {
+        headers: {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="orders-${stamp}.csv"`,
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+    filtered = detailed.map(normalizeOrderSummary);
+  } else {
+    const overviewRows = await getOrderOverviewRows();
+    allCount = overviewRows.length;
+    filtered = applyOrderFilters(overviewRows.map(normalizeOrderSummary), { status, from, to })
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   }
 
-  // CSV 导出:按当前筛选导出全部匹配(不分页),仅可看订单的角色
-  if (format === "csv") {
-    const stamp = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
-    return new Response(ordersToCsv(filtered), {
-      headers: {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="orders-${stamp}.csv"`,
-        "Cache-Control": "no-store",
-      },
-    });
-  }
+  const revision = await getOrderListRevision();
 
   return Response.json({
     ok: true,
     orders: filtered.slice(offset, offset + limit),
-    total: all.length,
+    total: allCount,
     filteredCount: filtered.length,
     offset, limit,
     hasMore: offset + limit < filtered.length,
+    listRevision: revision?.revision || "0",
     assignableStaff,
-    currentStaff: {
-      id: Number(session.staffId || 1),
-      username: session.staffUsername || "admin",
-      root: isRootAdminSession(session),
-      role: adminPermissionProfile(session).role,
-      permissions: adminPermissionProfile(session),
-    },
-  });
+    currentStaff,
+  }, { headers: { "Cache-Control": "no-store" } });
 }

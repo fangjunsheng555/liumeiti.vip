@@ -13,7 +13,9 @@ export const ORDER_EMAIL_INDEX_PREFIX = ORDERS_KEY + ":email:";
 export const USDT_PENDING_ORDER_INDEX_KEY = ORDERS_KEY + ":usdt-pending";
 export const QUOTE_EXPIRY_ORDER_INDEX_KEY = ORDERS_KEY + ":quote-expiry";
 export const ORDER_OVERVIEW_HASH_KEY = ORDERS_KEY + ":overview";
-const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v4"; // v4: 增补负责人/SLA 字段,换 key 触发一次性重建
+export const ORDER_SUMMARY_INDEX_KEY = ORDERS_KEY + ":summary-created";
+export const ORDER_LIST_REVISION_KEY = ORDERS_KEY + ":list-revision";
+const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v5";
 const ORDER_INDEX_MIGRATION_READY_KEY = ORDER_INDEX_KEY + ":legacy-ready";
 const ORDER_INDEX_MIGRATION_LOCK_KEY = ORDER_INDEX_KEY + ":legacy-lock";
 export const USERS_KEY = "liumeiti:users";
@@ -121,6 +123,10 @@ function orderOverviewSnapshot(order) {
         label: item?.label || "",
         plan: item?.plan || item?.rocketPlan || "",
         cycle: item?.cycle || "",
+        passwordCorrectionRequestedAt: item?.passwordCorrectionRequestedAt || "",
+        customerPasswordUpdatedAt: item?.customerPasswordUpdatedAt || "",
+        customerPasswordUpdatedAtBeijing: item?.customerPasswordUpdatedAtBeijing || "",
+        customerPasswordUpdateCount: Number(item?.customerPasswordUpdateCount || 0),
       }))
     : (order.service ? [{
         amount: Number(order.finalAmount || 0),
@@ -152,7 +158,32 @@ function orderOverviewSnapshot(order) {
     usdtPayAmount: Number(order.usdtPayAmount || 0),
     usdtQuoteId: order.usdtQuoteId || "",
     usdtConfirmedAt: order.usdtConfirmedAt || "",
+    usdtTxId: order.usdtTxId || "",
     passwordCorrectionPending: hasPendingSpotifyPasswordCorrection(order),
+    referral: order.referral ? {
+      levelOneEmail: order.referral.levelOneEmail || "",
+    } : null,
+    referralCommissionSettledAt: order.referralCommissionSettledAt || "",
+    referralCommissionSettledAtBeijing: order.referralCommissionSettledAtBeijing || "",
+    referralCommissionEntries: Array.isArray(order.referralCommissionEntries)
+      ? order.referralCommissionEntries.map((entry) => ({
+        email: entry?.email || "",
+        level: Number(entry?.level || 0),
+        amount: Number(entry?.amount || 0),
+      }))
+      : [],
+    referralCommissionReversedAt: order.referralCommissionReversedAt || "",
+    referralCommissionReversedAtBeijing: order.referralCommissionReversedAtBeijing || "",
+    referralCommissionReversedEntries: Array.isArray(order.referralCommissionReversedEntries)
+      ? order.referralCommissionReversedEntries.map((entry) => ({
+        email: entry?.email || "",
+        level: Number(entry?.level || 0),
+        amount: Number(entry?.amount || 0),
+      }))
+      : [],
+    lastStaffId: Array.isArray(order.staffAudit) && order.staffAudit[0]?.staffId
+      ? Number(order.staffAudit[0].staffId)
+      : null,
     renewalReminderForExpiresAt: order.renewalReminderForExpiresAt || "",
     assignedStaffId: Number(order.assignedStaffId || 0),
     assignedStaffUsername: order.assignedStaffUsername || "",
@@ -173,6 +204,12 @@ function pipelineResults(value) {
   if (Array.isArray(value)) return value;
   if (Array.isArray(value?.result)) return value.result;
   return [];
+}
+
+function pipelineResultValue(entry) {
+  return entry && typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, "result")
+    ? entry.result
+    : entry;
 }
 
 async function getOrderIdsFromIndex(key, start = "0", stop = "-1") {
@@ -230,7 +267,11 @@ export async function saveOrderRecord(order) {
     ? ["ZADD", QUOTE_EXPIRY_ORDER_INDEX_KEY, String(quoteExpiryScore), orderId]
     : ["ZREM", QUOTE_EXPIRY_ORDER_INDEX_KEY, orderId]);
   const overview = orderOverviewSnapshot(order);
-  if (overview) commands.push(["HSET", ORDER_OVERVIEW_HASH_KEY, orderId, JSON.stringify(overview)]);
+  if (overview) {
+    commands.push(["HSET", ORDER_OVERVIEW_HASH_KEY, orderId, JSON.stringify(overview)]);
+    commands.push(["ZADD", ORDER_SUMMARY_INDEX_KEY, String(orderCreatedScore(order)), orderId]);
+  }
+  commands.push(["INCR", ORDER_LIST_REVISION_KEY]);
   const buyerEmailKey = orderEmailIndexKey(order.email);
   const userEmailKey = orderEmailIndexKey(order.userEmail);
   if (buyerEmailKey) commands.push(["LPUSH", buyerEmailKey, orderId]);
@@ -351,9 +392,12 @@ export async function getOrderOverviewRows() {
   const orders = await getAllOrders();
   const snapshots = orders.map(orderOverviewSnapshot).filter(Boolean);
   let backfillOk = true;
-  for (let offset = 0; offset < snapshots.length; offset += 100) {
-    const commands = snapshots.slice(offset, offset + 100)
-      .map((row) => ["HSET", ORDER_OVERVIEW_HASH_KEY, row.orderId, JSON.stringify(row)]);
+  for (let offset = 0; offset < snapshots.length; offset += 50) {
+    const commands = snapshots.slice(offset, offset + 50)
+      .flatMap((row) => [
+        ["HSET", ORDER_OVERVIEW_HASH_KEY, row.orderId, JSON.stringify(row)],
+        ["ZADD", ORDER_SUMMARY_INDEX_KEY, String(orderCreatedScore(row)), row.orderId],
+      ]);
     const result = await redisPipeline(commands);
     const rows = pipelineResults(result);
     if (rows.length !== commands.length || rows.some((item) => item?.error)) {
@@ -361,7 +405,10 @@ export async function getOrderOverviewRows() {
       break;
     }
   }
-  if (backfillOk) await redisCmd(["SET", ORDER_OVERVIEW_READY_KEY, "1"]);
+  if (backfillOk) {
+    await redisCmd(["SET", ORDER_OVERVIEW_READY_KEY, "1"]);
+    await redisCmd(["SET", ORDER_LIST_REVISION_KEY, "1", "NX"]);
+  }
   return snapshots;
 }
 
@@ -422,9 +469,14 @@ export async function setOrderAt(index, order) {
       ? ["ZADD", QUOTE_EXPIRY_ORDER_INDEX_KEY, String(quoteExpiryScore), orderId]
       : ["ZREM", QUOTE_EXPIRY_ORDER_INDEX_KEY, orderId]);
     const overview = orderOverviewSnapshot(order);
-    commands.push(overview
-      ? ["HSET", ORDER_OVERVIEW_HASH_KEY, orderId, JSON.stringify(overview)]
-      : ["HDEL", ORDER_OVERVIEW_HASH_KEY, orderId]);
+    if (overview) {
+      commands.push(["HSET", ORDER_OVERVIEW_HASH_KEY, orderId, JSON.stringify(overview)]);
+      commands.push(["ZADD", ORDER_SUMMARY_INDEX_KEY, String(orderCreatedScore(order)), orderId]);
+    } else {
+      commands.push(["HDEL", ORDER_OVERVIEW_HASH_KEY, orderId]);
+      commands.push(["ZREM", ORDER_SUMMARY_INDEX_KEY, orderId]);
+    }
+    commands.push(["INCR", ORDER_LIST_REVISION_KEY]);
     const result = await redisPipeline(commands);
     const rows = pipelineResults(result);
     return rows.length === commands.length && rows.every((item) => !item?.error);
@@ -484,6 +536,87 @@ async function ensureLegacyOrderIndex() {
     const script = "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end";
     await redisCmd(["EVAL", script, "1", ORDER_INDEX_MIGRATION_LOCK_KEY, lockToken]);
   }
+}
+
+async function ensureOrderSummaryIndex() {
+  if (!redisConfig()) return false;
+  if (await redisCmd(["GET", ORDER_OVERVIEW_READY_KEY]) === "1") return true;
+  if (!await ensureLegacyOrderIndex()) return false;
+  await getOrderOverviewRows();
+  return await redisCmd(["GET", ORDER_OVERVIEW_READY_KEY]) === "1";
+}
+
+export async function getOrderListRevision() {
+  if (!await ensureOrderSummaryIndex()) return null;
+  const result = await redisPipeline([
+    ["GET", ORDER_LIST_REVISION_KEY],
+    ["ZCARD", ORDER_SUMMARY_INDEX_KEY],
+    ["ZREVRANGE", ORDER_SUMMARY_INDEX_KEY, "0", "0"],
+  ]);
+  const rows = pipelineResults(result);
+  if (rows.length !== 3 || rows.some((entry) => entry?.error)) return null;
+  const latest = pipelineResultValue(rows[2]);
+  return {
+    revision: String(pipelineResultValue(rows[0]) || "0"),
+    total: Number(pipelineResultValue(rows[1]) || 0),
+    latestOrderId: Array.isArray(latest) ? String(latest[0] || "") : "",
+  };
+}
+
+export async function getOrderSummariesPageFast(offset = 0, limit = 50) {
+  if (!await ensureOrderSummaryIndex()) return null;
+  const safeOffset = Math.max(0, Number(offset || 0));
+  const safeLimit = Math.min(200, Math.max(1, Number(limit || 50)));
+  const result = await redisPipeline([
+    ["ZREVRANGE", ORDER_SUMMARY_INDEX_KEY, String(safeOffset), String(safeOffset + safeLimit - 1)],
+    ["ZCARD", ORDER_SUMMARY_INDEX_KEY],
+    ["GET", ORDER_LIST_REVISION_KEY],
+  ]);
+  const rows = pipelineResults(result);
+  if (rows.length !== 3 || rows.some((entry) => entry?.error)) return null;
+  const ids = (Array.isArray(pipelineResultValue(rows[0])) ? pipelineResultValue(rows[0]) : [])
+    .map(normalizeOrderIdForStorage)
+    .filter(Boolean);
+  const total = Number(pipelineResultValue(rows[1]) || 0);
+  const revision = String(pipelineResultValue(rows[2]) || "0");
+  if (ids.length === 0) {
+    return { orders: [], total, hasMore: false, listRevision: revision };
+  }
+
+  let rawValues = await redisCmd(["HMGET", ORDER_OVERVIEW_HASH_KEY, ...ids]);
+  if (!Array.isArray(rawValues)) {
+    const detailResult = await redisPipeline(ids.map((id) => ["HGET", ORDER_OVERVIEW_HASH_KEY, id]));
+    rawValues = pipelineResults(detailResult).map(pipelineResultValue);
+  }
+  const byId = new Map();
+  ids.forEach((id, index) => {
+    const summary = parseOrderJson(rawValues?.[index]);
+    if (summary && !summary.deleted) byId.set(id, summary);
+  });
+
+  const missingIds = ids.filter((id) => !byId.has(id));
+  if (missingIds.length) {
+    const recovered = await getOrdersByIds(missingIds);
+    const commands = [];
+    for (const entry of recovered) {
+      const summary = orderOverviewSnapshot(entry.order);
+      if (!summary) continue;
+      byId.set(summary.orderId, summary);
+      commands.push(["HSET", ORDER_OVERVIEW_HASH_KEY, summary.orderId, JSON.stringify(summary)]);
+      commands.push(["ZADD", ORDER_SUMMARY_INDEX_KEY, String(orderCreatedScore(summary)), summary.orderId]);
+    }
+    if (commands.length) await redisPipeline(commands);
+    const staleIds = missingIds.filter((id) => !byId.has(id));
+    if (staleIds.length) await redisCmd(["ZREM", ORDER_SUMMARY_INDEX_KEY, ...staleIds]);
+  }
+
+  const orders = ids.map((id) => byId.get(id)).filter(Boolean);
+  return {
+    orders,
+    total,
+    hasMore: safeOffset + orders.length < total,
+    listRevision: revision,
+  };
 }
 
 // 快速分页(无筛选时用):只 GET 当前页的完整订单,不再全量拉取。
