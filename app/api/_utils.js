@@ -15,11 +15,13 @@ export const QUOTE_EXPIRY_ORDER_INDEX_KEY = ORDERS_KEY + ":quote-expiry";
 export const ORDER_OVERVIEW_HASH_KEY = ORDERS_KEY + ":overview";
 export const ORDER_SUMMARY_INDEX_KEY = ORDERS_KEY + ":summary-created";
 export const ORDER_LIST_REVISION_KEY = ORDERS_KEY + ":list-revision";
-// v6 rebuilds the summary index after paginated admin loading was introduced.
-// Historical order records remain untouched; only the derived read model is reconciled.
-const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v6";
+// v7 rebuilds the summary index after reconciling standalone order records.
+// Historical order records remain untouched; only derived indexes are replaced.
+const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v7";
 const ORDER_INDEX_MIGRATION_READY_KEY = ORDER_INDEX_KEY + ":legacy-ready";
 const ORDER_INDEX_MIGRATION_LOCK_KEY = ORDER_INDEX_KEY + ":legacy-lock";
+const ORDER_RECORD_INDEX_READY_KEY = ORDER_INDEX_KEY + ":record-ready:v1";
+const ORDER_RECORD_INDEX_LOCK_KEY = ORDER_INDEX_KEY + ":record-lock";
 export const USERS_KEY = "liumeiti:users";
 
 export function clean(value, limit = 500) {
@@ -259,6 +261,79 @@ async function getLegacyOrderEntries() {
   } catch (e) { return []; }
 }
 
+async function scanOrderRecordIds() {
+  const ids = [];
+  const seen = new Set();
+  let cursor = "0";
+  let rounds = 0;
+  do {
+    const result = await redisCmd([
+      "SCAN", cursor, "MATCH", ORDER_RECORD_PREFIX + "*", "COUNT", "500",
+    ]);
+    if (!Array.isArray(result) || !Array.isArray(result[1])) return null;
+    cursor = String(result[0] || "0");
+    for (const key of result[1]) {
+      const value = String(key || "");
+      if (!value.startsWith(ORDER_RECORD_PREFIX)) continue;
+      const id = normalizeOrderIdForStorage(value.slice(ORDER_RECORD_PREFIX.length));
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+    rounds += 1;
+    if (rounds > 100000) return null;
+  } while (cursor !== "0");
+  return ids;
+}
+
+async function ensureStandaloneOrderIndex() {
+  if (!redisConfig()) return false;
+  if (await redisCmd(["GET", ORDER_RECORD_INDEX_READY_KEY]) === "1") return true;
+  const lockToken = randomBytes(12).toString("hex");
+  const locked = await redisCmd(["SET", ORDER_RECORD_INDEX_LOCK_KEY, lockToken, "EX", "60", "NX"]);
+  if (locked !== "OK") return false;
+  try {
+    const [recordIds, indexedIds] = await Promise.all([
+      scanOrderRecordIds(),
+      getOrderIdsFromIndex(ORDER_INDEX_KEY, "0", "-1"),
+    ]);
+    if (!Array.isArray(recordIds)) return false;
+    const indexed = new Set(indexedIds);
+    const missingIds = recordIds.filter((id) => !indexed.has(id));
+    if (missingIds.length) {
+      const recovered = await getOrdersByIds(missingIds);
+      const commands = [];
+      for (const entry of recovered) {
+        const order = entry.order;
+        const orderId = normalizeOrderIdForStorage(entry.orderId || order?.orderId);
+        if (!order || !orderId) continue;
+        commands.push(["RPUSH", ORDER_INDEX_KEY, orderId]);
+        if (order.deleted) {
+          commands.push(["SADD", ORDER_DELETED_INDEX_KEY, orderId]);
+          continue;
+        }
+        const buyerEmailKey = orderEmailIndexKey(order.email);
+        const userEmailKey = orderEmailIndexKey(order.userEmail);
+        if (buyerEmailKey) commands.push(["LPUSH", buyerEmailKey, orderId]);
+        if (userEmailKey && userEmailKey !== buyerEmailKey) commands.push(["LPUSH", userEmailKey, orderId]);
+      }
+      for (let offset = 0; offset < commands.length; offset += 100) {
+        const batch = commands.slice(offset, offset + 100);
+        const result = await redisPipeline(batch);
+        const rows = pipelineResults(result);
+        if (rows.length !== batch.length || rows.some((item) => item?.error)) return false;
+      }
+    }
+    return await redisCmd(["SET", ORDER_RECORD_INDEX_READY_KEY, "1"]) === "OK";
+  } catch (e) {
+    return false;
+  } finally {
+    const script = "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end";
+    await redisCmd(["EVAL", script, "1", ORDER_RECORD_INDEX_LOCK_KEY, lockToken]);
+  }
+}
+
 export async function saveOrderRecord(order) {
   const r = redisConfig();
   if (!r || !order?.orderId) return false;
@@ -348,6 +423,8 @@ export async function getOrdersByEmail(email, limit = 50) {
 // permanent record keys; the legacy capped JSON list is still merged for old data.
 export async function getAllOrders() {
   if (!redisConfig()) return [];
+  await ensureLegacyOrderIndex();
+  await ensureStandaloneOrderIndex();
   const ids = await getOrderIdsFromIndex(ORDER_INDEX_KEY, "0", "-1");
   const indexed = await getOrdersByIds(ids);
   const legacy = await getLegacyOrderEntries();
@@ -396,11 +473,20 @@ export async function getOrderOverviewRows() {
     const values = await redisCmd(["HVALS", ORDER_OVERVIEW_HASH_KEY]);
     if (Array.isArray(values)) return values.map(parseOrderJson).filter(Boolean);
   }
+  const legacyReady = await ensureLegacyOrderIndex();
+  const recordsReady = legacyReady && await ensureStandaloneOrderIndex();
+  if (!recordsReady) return getAllOrders();
 
   const orders = await getAllOrders();
   const snapshots = orders.map(orderOverviewSnapshot).filter(Boolean);
-  let backfillOk = true;
+  const cleared = await redisPipeline([
+    ["DEL", ORDER_OVERVIEW_HASH_KEY],
+    ["DEL", ORDER_SUMMARY_INDEX_KEY],
+  ]);
+  const clearRows = pipelineResults(cleared);
+  let backfillOk = clearRows.length === 2 && clearRows.every((item) => !item?.error);
   for (let offset = 0; offset < snapshots.length; offset += 50) {
+    if (!backfillOk) break;
     const commands = snapshots.slice(offset, offset + 50)
       .flatMap((row) => [
         ["HSET", ORDER_OVERVIEW_HASH_KEY, row.orderId, JSON.stringify(row)],
@@ -550,6 +636,7 @@ async function ensureOrderSummaryIndex() {
   if (!redisConfig()) return false;
   if (await redisCmd(["GET", ORDER_OVERVIEW_READY_KEY]) === "1") return true;
   if (!await ensureLegacyOrderIndex()) return false;
+  if (!await ensureStandaloneOrderIndex()) return false;
   await getOrderOverviewRows();
   return await redisCmd(["GET", ORDER_OVERVIEW_READY_KEY]) === "1";
 }

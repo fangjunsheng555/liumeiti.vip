@@ -47,6 +47,23 @@ function execute(command) {
     values.delete(key);
     return 1;
   }
+  if (name === "SCAN") {
+    const matchIndex = args.findIndex((value) => String(value).toUpperCase() === "MATCH");
+    const pattern = matchIndex >= 0 ? String(args[matchIndex + 1] || "*") : "*";
+    const prefix = pattern.endsWith("*") ? pattern.slice(0, -1) : pattern;
+    return ["0", Array.from(values.keys()).filter((key) => key.startsWith(prefix))];
+  }
+  if (name === "DEL") {
+    let removed = 0;
+    args.forEach((key) => {
+      if (values.delete(key)) removed += 1;
+      if (lists.delete(key)) removed += 1;
+      if (hashes.delete(key)) removed += 1;
+      if (sortedSets.delete(key)) removed += 1;
+      if (sets.delete(key)) removed += 1;
+    });
+    return removed;
+  }
   if (name === "LPUSH") {
     const row = lists.get(args[0]) || [];
     row.unshift(...args.slice(1));
@@ -166,7 +183,12 @@ test("admin order list keeps every order when the store limits pipeline batches"
     values.set(`liumeiti:orders:record:${orderId}`, JSON.stringify(order));
     seededIds.unshift(orderId);
   }
-  lists.set("liumeiti:orders:index", seededIds);
+  lists.set("liumeiti:orders:index", seededIds.slice(12));
+  values.set("liumeiti:orders:record:LMDELETED001", JSON.stringify({
+    orderId: "LMDELETED001",
+    deleted: true,
+    createdAt: new Date(Date.UTC(2026, 6, 1, 0, 2, 0)).toISOString(),
+  }));
 
   const firstResponse = await ordersRoute.GET(adminRequest("/api/admin/orders?offset=0&limit=50"));
   assert.equal(firstResponse.status, 200);
@@ -176,6 +198,8 @@ test("admin order list keeps every order when the store limits pipeline batches"
   assert.equal(first.total, 155);
   assert.equal(first.hasMore, true);
   assert.equal(first.orders[0].orderId, "LMSUMMARY154");
+  assert.equal(new Set(lists.get("liumeiti:orders:index")).size, 156);
+  assert.equal(sortedSet("liumeiti:orders:summary-created").has("LMDELETED001"), false);
   assert.equal(first.orders[0]._summaryOnly, true);
   assert.equal("contact" in first.orders[0], false);
   assert.equal("staffNotes" in first.orders[0], false);
