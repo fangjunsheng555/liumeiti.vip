@@ -11,6 +11,7 @@ const hashes = new Map();
 const sortedSets = new Map();
 const sets = new Map();
 const commandNames = [];
+const pipelineSizes = [];
 const originalFetch = globalThis.fetch;
 
 function hash(key) {
@@ -108,6 +109,8 @@ globalThis.fetch = async (input, options = {}) => {
   if (url.origin !== "http://redis.order-summary.test") return originalFetch(input, options);
   if (url.pathname === "/pipeline") {
     const commands = JSON.parse(options.body || "[]");
+    pipelineSizes.push(commands.length);
+    if (commands.length > 100) return Response.json({ error: "pipeline_too_large" }, { status: 413 });
     return Response.json(commands.map((command) => ({ result: execute(command) })));
   }
   const command = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
@@ -131,11 +134,12 @@ function adminRequest(path) {
   });
 }
 
-test("admin order list is paginated summaries while revision tracks changes", async () => {
-  for (let index = 0; index < 55; index += 1) {
+test("admin order list keeps every order when the store limits pipeline batches", async () => {
+  const seededIds = [];
+  for (let index = 0; index < 155; index += 1) {
     const createdAt = new Date(Date.UTC(2026, 6, 1, 0, 0, index)).toISOString();
     const orderId = `LMSUMMARY${String(index).padStart(3, "0")}`;
-    const saved = await utils.saveOrderRecord({
+    const order = {
       orderId,
       status: "received",
       createdAt,
@@ -158,18 +162,20 @@ test("admin order list is paginated summaries while revision tracks changes", as
         staffAccount: `staff-${index}`,
         staffPassword: `staff-secret-${index}`,
       }],
-    });
-    assert.equal(saved, true);
+    };
+    values.set(`liumeiti:orders:record:${orderId}`, JSON.stringify(order));
+    seededIds.unshift(orderId);
   }
+  lists.set("liumeiti:orders:index", seededIds);
 
   const firstResponse = await ordersRoute.GET(adminRequest("/api/admin/orders?offset=0&limit=50"));
   assert.equal(firstResponse.status, 200);
   const first = await firstResponse.json();
   assert.equal(first.ok, true);
   assert.equal(first.orders.length, 50);
-  assert.equal(first.total, 55);
+  assert.equal(first.total, 155);
   assert.equal(first.hasMore, true);
-  assert.equal(first.orders[0].orderId, "LMSUMMARY054");
+  assert.equal(first.orders[0].orderId, "LMSUMMARY154");
   assert.equal(first.orders[0]._summaryOnly, true);
   assert.equal("contact" in first.orders[0], false);
   assert.equal("staffNotes" in first.orders[0], false);
@@ -179,29 +185,36 @@ test("admin order list is paginated summaries while revision tracks changes", as
   assert.equal("staffAccount" in first.orders[0].items[0], false);
   assert.equal("staffPassword" in first.orders[0].items[0], false);
 
-  const searchResponse = await ordersRoute.GET(adminRequest("/api/admin/orders?q=secret-54&limit=50"));
+  assert.equal(Math.max(...pipelineSizes), 100);
+
+  const searchResponse = await ordersRoute.GET(adminRequest("/api/admin/orders?q=secret-154&limit=50"));
   const search = await searchResponse.json();
   assert.equal(search.orders.length, 1);
-  assert.equal(search.orders[0].orderId, "LMSUMMARY054");
+  assert.equal(search.orders[0].orderId, "LMSUMMARY154");
   assert.equal("password" in search.orders[0].items[0], false);
 
   const detailResponse = await orderDetailRoute.GET(
-    adminRequest("/api/admin/orders/LMSUMMARY054"),
-    { params: Promise.resolve({ orderId: "LMSUMMARY054" }) },
+    adminRequest("/api/admin/orders/LMSUMMARY154"),
+    { params: Promise.resolve({ orderId: "LMSUMMARY154" }) },
   );
   const detail = await detailResponse.json();
-  assert.equal(detail.order.items[0].account, "spotify54@example.com");
-  assert.equal(detail.order.items[0].password, "secret-54");
+  assert.equal(detail.order.items[0].account, "spotify154@example.com");
+  assert.equal(detail.order.items[0].password, "secret-154");
 
   const secondResponse = await ordersRoute.GET(adminRequest("/api/admin/orders?offset=50&limit=50"));
   const second = await secondResponse.json();
-  assert.equal(second.orders.length, 5);
-  assert.equal(second.hasMore, false);
+  assert.equal(second.orders.length, 50);
+  assert.equal(second.hasMore, true);
+
+  const lastResponse = await ordersRoute.GET(adminRequest("/api/admin/orders?offset=150&limit=50"));
+  const last = await lastResponse.json();
+  assert.equal(last.orders.length, 5);
+  assert.equal(last.hasMore, false);
 
   const revisionBeforeResponse = await ordersRoute.GET(adminRequest("/api/admin/orders?mode=revision"));
   const revisionBefore = await revisionBeforeResponse.json();
-  assert.equal(revisionBefore.latestOrderId, "LMSUMMARY054");
-  assert.equal(revisionBefore.total, 55);
+  assert.equal(revisionBefore.latestOrderId, "LMSUMMARY154");
+  assert.equal(revisionBefore.total, 155);
   commandNames.length = 0;
   const unchangedRevision = await (await ordersRoute.GET(adminRequest("/api/admin/orders?mode=revision"))).json();
   assert.equal(unchangedRevision.revision, revisionBefore.revision);
@@ -209,7 +222,7 @@ test("admin order list is paginated summaries while revision tracks changes", as
   assert.equal(commandNames.includes("HMGET"), false);
   assert.equal(commandNames.includes("LRANGE"), false);
 
-  const entry = await utils.getOrderEntryById("LMSUMMARY054");
+  const entry = await utils.getOrderEntryById("LMSUMMARY154");
   assert.ok(entry?.order);
   assert.equal(await utils.setOrderAt(entry.index, { ...entry.order, status: "completed" }), true);
 
@@ -219,8 +232,8 @@ test("admin order list is paginated summaries while revision tracks changes", as
 
   const recipientResponse = await ordersRoute.GET(adminRequest("/api/admin/orders?mode=recipient-emails"));
   const recipients = await recipientResponse.json();
-  assert.ok(recipients.emails.includes("buyer54@example.com"));
-  assert.ok(recipients.emails.includes("backup54@example.com"));
+  assert.ok(recipients.emails.includes("buyer154@example.com"));
+  assert.ok(recipients.emails.includes("backup154@example.com"));
 });
 
 test.after(() => {

@@ -15,7 +15,9 @@ export const QUOTE_EXPIRY_ORDER_INDEX_KEY = ORDERS_KEY + ":quote-expiry";
 export const ORDER_OVERVIEW_HASH_KEY = ORDERS_KEY + ":overview";
 export const ORDER_SUMMARY_INDEX_KEY = ORDERS_KEY + ":summary-created";
 export const ORDER_LIST_REVISION_KEY = ORDERS_KEY + ":list-revision";
-const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v5";
+// v6 rebuilds the summary index after paginated admin loading was introduced.
+// Historical order records remain untouched; only the derived read model is reconciled.
+const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v6";
 const ORDER_INDEX_MIGRATION_READY_KEY = ORDER_INDEX_KEY + ":legacy-ready";
 const ORDER_INDEX_MIGRATION_LOCK_KEY = ORDER_INDEX_KEY + ":legacy-lock";
 export const USERS_KEY = "liumeiti:users";
@@ -228,17 +230,23 @@ async function getOrdersByIds(orderIds) {
     .map(normalizeOrderIdForStorage)
     .filter(Boolean);
   if (ids.length === 0) return [];
-  const response = await redisPipeline(ids.map((id) => ["GET", orderRecordKey(id)]));
-  const rows = pipelineResults(response);
-  return rows
-    .map((entry, index) => {
+  const entries = [];
+  for (let offset = 0; offset < ids.length; offset += 100) {
+    const batchIds = ids.slice(offset, offset + 100);
+    const response = await redisPipeline(batchIds.map((id) => ["GET", orderRecordKey(id)]));
+    const rows = pipelineResults(response);
+    if (rows.length !== batchIds.length) {
+      throw new Error("order_record_batch_unavailable");
+    }
+    rows.forEach((entry, index) => {
       const raw = entry && typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, "result")
         ? entry.result
         : entry;
       const order = parseOrderJson(raw);
-      return order ? { orderId: ids[index], order } : null;
-    })
-    .filter(Boolean);
+      if (order) entries.push({ orderId: batchIds[index], order });
+    });
+  }
+  return entries;
 }
 
 async function getLegacyOrderEntries() {
