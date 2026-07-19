@@ -3230,11 +3230,33 @@ export default function AdminPage() {
   // 打开时把焦点移入侧栏、Tab 困在抽屉内、背景设为 inert(屏蔽读屏/抓焦点)、Esc 关闭;关闭时焦点归还汉堡按钮。
   useEffect(() => {
     if (!navOpen || typeof window === "undefined") return;
-    if (!window.matchMedia("(max-width: 900px)").matches) return; // 桌面侧栏常驻,无需抽屉焦点管理
+    const mobileNavQuery = window.matchMedia("(max-width: 900px)");
+    if (!mobileNavQuery.matches) return; // 桌面侧栏常驻,无需抽屉焦点管理
     const sidebar = document.querySelector(".admin-sidebar");
     const toggle = document.querySelector(".admin-nav-toggle");
     const content = document.querySelector(".admin-content");
+    const root = document.documentElement;
+    const body = document.body;
+    const scrollY = window.scrollY;
+    const previousScrollStyles = {
+      rootOverflow: root.style.overflow,
+      rootOverscrollBehavior: root.style.overscrollBehavior,
+      bodyPosition: body.style.position,
+      bodyTop: body.style.top,
+      bodyLeft: body.style.left,
+      bodyRight: body.style.right,
+      bodyWidth: body.style.width,
+      bodyOverflow: body.style.overflow,
+    };
     const focusables = sidebar ? Array.from(sidebar.querySelectorAll("button:not([disabled])")) : [];
+    root.style.overflow = "hidden";
+    root.style.overscrollBehavior = "none";
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.left = "0";
+    body.style.right = "0";
+    body.style.width = "100%";
+    body.style.overflow = "hidden";
     if (content) { content.setAttribute("inert", ""); content.setAttribute("aria-hidden", "true"); }
     if (focusables.length) focusables[0].focus();
     function onKey(e) {
@@ -3246,10 +3268,24 @@ export default function AdminPage() {
         else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
       }
     }
+    function onBreakpointChange(e) {
+      if (!e.matches) setNavOpen(false);
+    }
     document.addEventListener("keydown", onKey);
+    mobileNavQuery.addEventListener("change", onBreakpointChange);
     return () => {
       document.removeEventListener("keydown", onKey);
+      mobileNavQuery.removeEventListener("change", onBreakpointChange);
       if (content) { content.removeAttribute("inert"); content.removeAttribute("aria-hidden"); }
+      root.style.overflow = previousScrollStyles.rootOverflow;
+      root.style.overscrollBehavior = previousScrollStyles.rootOverscrollBehavior;
+      body.style.position = previousScrollStyles.bodyPosition;
+      body.style.top = previousScrollStyles.bodyTop;
+      body.style.left = previousScrollStyles.bodyLeft;
+      body.style.right = previousScrollStyles.bodyRight;
+      body.style.width = previousScrollStyles.bodyWidth;
+      body.style.overflow = previousScrollStyles.bodyOverflow;
+      window.scrollTo({ top: scrollY, left: 0, behavior: "auto" });
       if (toggle && typeof toggle.focus === "function") toggle.focus();
     };
   }, [navOpen]);

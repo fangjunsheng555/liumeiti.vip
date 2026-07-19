@@ -6841,7 +6841,13 @@ summary:focus-visible {
     z-index: 120;
     width: 258px;
     max-width: 84vw;
-    max-height: none;
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
     border-radius: 0 20px 20px 0;
     padding: 18px 12px;
     transform: translateX(-104%);
@@ -6856,6 +6862,7 @@ summary:focus-visible {
     z-index: 115;
     background: rgba(15, 23, 42, 0.46);
     backdrop-filter: blur(2px);
+    touch-action: none;
     -webkit-tap-highlight-color: transparent;
     animation: adminScrimIn 0.2s ease;
   }
