@@ -13,6 +13,10 @@ const QUOTE_EXPIRY_TICK_LOCK = "lm:keeper:quote-expiry-tick";
 const QUOTE_EXPIRY_TICK_INTERVAL_SEC = 60;
 const ORDER_SLA_TICK_LOCK = "lm:keeper:order-sla-tick";
 const ORDER_SLA_TICK_INTERVAL_SEC = 5 * 60;
+const MARKETING_TICK_LOCK = "lm:keeper:marketing-tick";
+const MARKETING_TICK_INTERVAL_SEC = 120;
+const WEEKLY_BACKUP_TICK_LOCK = "lm:keeper:weekly-backup-tick";
+const WEEKLY_BACKUP_TICK_INTERVAL_SEC = 60 * 60;
 
 async function quoteExpiryTick() {
   const acquired = await redisCmd(["SET", QUOTE_EXPIRY_TICK_LOCK, "1", "NX", "EX", String(QUOTE_EXPIRY_TICK_INTERVAL_SEC)]);
@@ -53,6 +57,9 @@ async function renewalTick() {
 }
 
 async function weeklyBackupTick() {
+  // 周备份内部有 done/lock 周键;此节流只为省掉每信标 1 次 GET 探测。
+  const acquired = await redisCmd(["SET", WEEKLY_BACKUP_TICK_LOCK, "1", "NX", "EX", String(WEEKLY_BACKUP_TICK_INTERVAL_SEC)]);
+  if (acquired !== "OK") return;
   const { runWeeklyTelegramBackup } = await import("./_backup.js");
   await runWeeklyTelegramBackup();
 }
@@ -65,6 +72,10 @@ async function orderSlaTick() {
 }
 
 async function marketingCampaignTick() {
+  // dispatch 内部的 DISPATCH_LOCK 是并发互斥锁(finally 即释放),不是节流;
+  // 没有这层 SET NX 节流的话,每个页面信标都会跑一次完整 dispatch 检查(4-5 条 Redis 命令/PV)。
+  const acquired = await redisCmd(["SET", MARKETING_TICK_LOCK, "1", "NX", "EX", String(MARKETING_TICK_INTERVAL_SEC)]);
+  if (acquired !== "OK") return;
   const { dispatchDueMarketingCampaigns } = await import("./_marketing-campaign-queue.js");
   await dispatchDueMarketingCampaigns({ limit: 40 });
 }
