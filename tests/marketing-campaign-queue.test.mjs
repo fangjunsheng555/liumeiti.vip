@@ -9,6 +9,7 @@ process.env.RESEND_FROM = "info@liumeiti.vip";
 
 const store = new Map();
 const resendRequests = [];
+let resendBehavior = "ok"; // "ok" | "fail"(400 硬失败) | "quota"(429 配额)
 const originalFetch = globalThis.fetch;
 
 function ensureZset(key) {
@@ -104,6 +105,8 @@ globalThis.fetch = async (input, options = {}) => {
   }
   if (url.origin === "https://api.resend.com") {
     const body = JSON.parse(options.body || "{}");
+    if (resendBehavior === "fail") return Response.json({ message: "invalid_recipient" }, { status: 400 });
+    if (resendBehavior === "quota") return Response.json({ message: "daily_quota_exceeded" }, { status: 429 });
     resendRequests.push(body);
     return Response.json({ id: `resend-${resendRequests.length}` }, { status: 200 });
   }
@@ -147,6 +150,57 @@ test("campaign recipients stay internal until their Beijing evening is due", asy
   const repeated = await queue.dispatchDueMarketingCampaigns({ now: Date.parse(scheduledAt) + 60_000 });
   assert.equal(repeated.submitted, 0);
   assert.equal(resendRequests.length, 2);
+});
+
+test("permanent failures stop after MAX_SEND_ATTEMPTS while quota failures don't count", async () => {
+  const internals = queue.marketingCampaignQueueInternals;
+  const scheduledAt = "2026-08-01T10:30:00.000Z"; // 北京 18:30
+  const enqueued = await queue.enqueueMarketingCampaign({
+    campaignId: "campaign-dead-address",
+    recipients: ["dead@example.com"],
+    scheduledAt,
+    subject: "服务精选",
+    html: "<p>hi</p>",
+    text: "hi",
+    preview: "preview",
+    brandName: "冒央会社",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+  assert.equal(enqueued.ok, true);
+  const jobId = internals.makeJobId("campaign-dead-address", "dead@example.com", new Date(scheduledAt).toISOString());
+  const readJob = () => JSON.parse(store.get(`lm:mail:marketing:job:${jobId}`)?.value || "null");
+
+  // 1) 配额失败:重排到下个北京晚间,不计入永久失败次数
+  resendBehavior = "quota";
+  const quotaRun = await queue.dispatchDueMarketingCampaigns({ now: Date.parse(scheduledAt) });
+  assert.equal(quotaRun.failed, 1);
+  let job = readJob();
+  assert.equal(job.status, "queued");
+  assert.equal(Number(job.failedAttempts || 0), 0);
+
+  // 2) 连续真实失败:第 MAX_SEND_ATTEMPTS 次后 job 永久置 failed 并移出队列
+  resendBehavior = "fail";
+  let lastRun = null;
+  for (let attempt = 1; attempt <= internals.MAX_SEND_ATTEMPTS; attempt += 1) {
+    // 每次推进一整天,越过配额毒化的当日计数与 15 分钟重试间隔
+    const now = Date.parse(scheduledAt) + attempt * 24 * 60 * 60 * 1000;
+    lastRun = await queue.dispatchDueMarketingCampaigns({ now });
+    job = readJob();
+    if (attempt < internals.MAX_SEND_ATTEMPTS) {
+      assert.equal(job.status, "queued", `第 ${attempt} 次失败后应重排`);
+      assert.equal(job.failedAttempts, attempt);
+    }
+  }
+  assert.equal(job.status, "failed");
+  assert.equal(job.failedAttempts, internals.MAX_SEND_ATTEMPTS);
+  assert.equal(lastRun.results[0].permanent, true);
+  assert.equal(store.get("lm:mail:marketing:queue").value.has(jobId), false, "永久失败后应移出队列");
+
+  // 3) 之后不再有 due job
+  resendBehavior = "ok";
+  const after = await queue.dispatchDueMarketingCampaigns({ now: Date.parse(scheduledAt) + 30 * 24 * 60 * 60 * 1000 });
+  assert.equal(after.reason, "nothing_due");
 });
 
 test("queue calculations use Beijing dates and move quota retries to the next evening", () => {

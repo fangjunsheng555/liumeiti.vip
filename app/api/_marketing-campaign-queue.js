@@ -19,6 +19,9 @@ const DAILY_COUNT_PREFIX = "lm:mail:marketing:daily:";
 const RECORD_TTL_SECONDS = 45 * 24 * 60 * 60;
 const DAILY_LIMIT = 40;
 const RETRY_DELAY_MS = 15 * 60 * 1000;
+// 真实发送失败(非配额)累计到此上限后 job 永久置为 failed,不再无限重排
+// (此前只有 45 天 TTL 兜底,永久无效地址会重试一个半月)。配额失败不计数。
+const MAX_SEND_ATTEMPTS = 5;
 
 function parseJson(value) {
   if (!value) return null;
@@ -328,23 +331,43 @@ export async function dispatchDueMarketingCampaigns({ now = Date.now(), limit = 
         submitted += 1;
         results.push({ id, to: job.to, ok: true, messageId: result.messageId || "" });
       } else {
-        const nextAttemptMs = retryTimestamp(result, now);
-        const retryJob = {
-          ...sendingJob,
-          status: "queued",
-          lastError: clean(result?.reason || result?.error || result?.code || "send_failed", 200),
-          nextAttemptAt: new Date(nextAttemptMs).toISOString(),
-          updatedAt: new Date(now).toISOString(),
-        };
-        await updateJob(retryJob, [
-          ["ZADD", QUEUE_KEY, String(nextAttemptMs), id],
-          ["DEL", claimKey(id)],
-        ]);
-        failed += 1;
-        results.push({ id, to: job.to, ok: false, reason: retryJob.lastError });
-        if (isQuotaFailure(result)) {
-          await redisCmd(["SET", dailyKey, String(DAILY_LIMIT), "EX", String(3 * 24 * 60 * 60)]);
-          break;
+        const quotaFailure = isQuotaFailure(result);
+        const lastError = clean(result?.reason || result?.error || result?.code || "send_failed", 200);
+        // 配额失败是系统性原因(顺延到下个发送窗口),不计入永久失败次数。
+        const failedAttempts = Number(sendingJob.failedAttempts || 0) + (quotaFailure ? 0 : 1);
+        if (!quotaFailure && failedAttempts >= MAX_SEND_ATTEMPTS) {
+          const deadJob = {
+            ...sendingJob,
+            status: "failed",
+            failedAttempts,
+            lastError,
+            failedAt: new Date(now).toISOString(),
+            failedAtBeijing: formatBeijingTime(now),
+            updatedAt: new Date(now).toISOString(),
+          };
+          await updateJob(deadJob, [["ZREM", QUEUE_KEY, id], ["DEL", claimKey(id)]]);
+          failed += 1;
+          results.push({ id, to: job.to, ok: false, reason: lastError, permanent: true });
+        } else {
+          const nextAttemptMs = retryTimestamp(result, now);
+          const retryJob = {
+            ...sendingJob,
+            status: "queued",
+            failedAttempts,
+            lastError,
+            nextAttemptAt: new Date(nextAttemptMs).toISOString(),
+            updatedAt: new Date(now).toISOString(),
+          };
+          await updateJob(retryJob, [
+            ["ZADD", QUEUE_KEY, String(nextAttemptMs), id],
+            ["DEL", claimKey(id)],
+          ]);
+          failed += 1;
+          results.push({ id, to: job.to, ok: false, reason: lastError });
+          if (quotaFailure) {
+            await redisCmd(["SET", dailyKey, String(DAILY_LIMIT), "EX", String(3 * 24 * 60 * 60)]);
+            break;
+          }
         }
       }
       await new Promise((resolve) => setTimeout(resolve, 550));
@@ -357,6 +380,7 @@ export async function dispatchDueMarketingCampaigns({ now = Date.now(), limit = 
 
 export const marketingCampaignQueueInternals = {
   DAILY_LIMIT,
+  MAX_SEND_ATTEMPTS,
   QUEUE_KEY,
   beijingDayKey,
   deliveryMessageId,
