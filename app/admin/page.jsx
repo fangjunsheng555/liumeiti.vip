@@ -18,6 +18,13 @@ import SecurityPanel from "./SecurityPanel";
 import AfterSalesPanel from "./AfterSalesPanel";
 import MailDeliveryPanel from "./MailDeliveryPanel";
 import SystemHealthPanel from "./SystemHealthPanel";
+import DeliveryWorkbench from "./DeliveryWorkbench";
+import {
+  applyThirdPartyNotice,
+  buildDeliveryMessage,
+  hasThirdPartyNotice,
+  normalizeFulfillment,
+} from "../lib/order-fulfillment";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff, ExternalLink,
   LoaderCircle, LogOut, Search, ShieldCheck,
@@ -3430,14 +3437,26 @@ export default function AdminPage() {
         quoteAmount: detail.quoteAmount ? String(detail.quoteAmount) : "",
         quoteValidDays: String(detail.quoteValidDays || 7),
         staffNotes: detail.staffNotes || "",
+        internalNotes: detail.internalNotes || "",
+        thirdPartyPlatformNotice: Boolean(
+          detail.thirdPartyPlatformNotice || hasThirdPartyNotice(detail.staffNotes),
+        ),
+        deliveryMessageMode: detail.deliveryMessageMode === "auto" ? "auto" : "custom",
         items: items.map((item, index) => ({
           index,
           service: item.service,
           label: item.label,
+          cycle: item.cycle || "",
+          plan: item.plan || "",
+          planLabel: item.planLabel || "",
+          rocketPlan: item.rocketPlan || "",
+          rocketPlanLabel: item.rocketPlanLabel || "",
+          subscriptionLinks: item.subscriptionLinks || null,
           account: item.account || "",
           password: item.password || "",
           staffAccount: item.staffAccount || "",
           staffPassword: item.staffPassword || "",
+          fulfillment: normalizeFulfillment(item.service, item.fulfillment, item),
           passwordCorrectionRequestedAt: item.passwordCorrectionRequestedAt || "",
           passwordCorrectionRequestedAtBeijing: item.passwordCorrectionRequestedAtBeijing || "",
           passwordCorrectionEmailSentAtBeijing: item.passwordCorrectionEmailSentAtBeijing || "",
@@ -3624,6 +3643,61 @@ export default function AdminPage() {
     }));
   }
 
+  function deliveryPreviewOrder(items) {
+    return {
+      ...activeOrder,
+      items,
+      status: activeOrder?.status || "received",
+    };
+  }
+
+  function updateFulfillment(idx, patch) {
+    setEditForm((current) => {
+      const items = current.items.map((item, itemIndex) => {
+        if (itemIndex !== idx) return item;
+        const fulfillment = normalizeFulfillment(
+          item.service,
+          { ...(item.fulfillment || {}), ...patch },
+          item,
+        );
+        return { ...item, fulfillment };
+      });
+      const next = { ...current, items };
+      if (current.deliveryMessageMode === "auto") {
+        next.staffNotes = buildDeliveryMessage(
+          deliveryPreviewOrder(items),
+          items,
+          current.thirdPartyPlatformNotice,
+        );
+      }
+      return next;
+    });
+  }
+
+  function generateDeliveryMessage() {
+    setEditForm((current) => ({
+      ...current,
+      deliveryMessageMode: "auto",
+      staffNotes: buildDeliveryMessage(
+        deliveryPreviewOrder(current.items),
+        current.items,
+        current.thirdPartyPlatformNotice,
+      ),
+    }));
+  }
+
+  function updateThirdPartyPlatformNotice(enabled) {
+    setEditForm((current) => ({
+      ...current,
+      thirdPartyPlatformNotice: enabled,
+      staffNotes: applyThirdPartyNotice(
+        current.staffNotes,
+        enabled,
+        activeOrder?.locale === "en" ? "en" : "zh",
+      ),
+    }));
+  }
+
   async function sendSpotifyPasswordError(itemPosition) {
     if (!activeOrder || !editForm || spotifyPasswordMailBusy) return;
     const item = editForm.items[itemPosition];
@@ -3683,19 +3757,28 @@ export default function AdminPage() {
     setSaving(true);
     setSaveResult(null);
     try {
+      const customerMessage = applyThirdPartyNotice(
+        editForm.staffNotes,
+        editForm.thirdPartyPlatformNotice,
+        activeOrder.locale === "en" ? "en" : "zh",
+      );
       const res = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
         body: JSON.stringify({
           status: editForm.status,
-          staffNotes: editForm.staffNotes,
+          staffNotes: customerMessage,
+          internalNotes: editForm.internalNotes,
+          thirdPartyPlatformNotice: editForm.thirdPartyPlatformNotice,
+          deliveryMessageMode: editForm.deliveryMessageMode,
           items: editForm.items.map((it) => ({
             index: it.index,
             account: it.account,
             password: it.password,
             staffAccount: it.staffAccount,
             staffPassword: it.staffPassword,
+            fulfillment: it.fulfillment,
           })),
         }),
       });
@@ -3707,6 +3790,27 @@ export default function AdminPage() {
         loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
         loadOverview({ silent: true });
         setActiveOrder(data.order);
+        setEditForm((current) => ({
+          ...current,
+          status: data.order.status,
+          staffNotes: data.order.staffNotes || "",
+          internalNotes: data.order.internalNotes || "",
+          thirdPartyPlatformNotice: Boolean(data.order.thirdPartyPlatformNotice),
+          deliveryMessageMode: data.order.deliveryMessageMode === "auto" ? "auto" : "custom",
+          items: current.items.map((item, index) => {
+            const savedItem = data.order.items?.[index] || item;
+            return {
+              ...item,
+              ...savedItem,
+              index: item.index,
+              fulfillment: normalizeFulfillment(
+                savedItem.service || item.service,
+                savedItem.fulfillment || item.fulfillment,
+                savedItem,
+              ),
+            };
+          }),
+        }));
       } else {
         const message = {
           quote_required: "请先填写报价并发送付款邮件",
@@ -5647,16 +5751,26 @@ export default function AdminPage() {
                 })}
               </section>
 
-              <section className="admin-modal-section">
-                <h3>客服备注(发到买家邮件)</h3>
-                <textarea
-                  className="admin-notes"
-                  value={editForm.staffNotes}
-                  onChange={(e) => setEditForm({ ...editForm, staffNotes: e.target.value })}
-                  rows={3}
-                  placeholder="例如:位置 3,初始密码已修改;如需切换地区请联系客服。"
-                />
-              </section>
+              <DeliveryWorkbench
+                order={activeOrder}
+                items={editForm.items}
+                customerMessage={editForm.staffNotes}
+                internalNotes={editForm.internalNotes}
+                thirdPartyPlatformNotice={editForm.thirdPartyPlatformNotice}
+                deliveryMessageMode={editForm.deliveryMessageMode}
+                onFulfillmentChange={updateFulfillment}
+                onGenerate={generateDeliveryMessage}
+                onCustomerMessageChange={(value) => setEditForm((current) => ({
+                  ...current,
+                  staffNotes: value,
+                  deliveryMessageMode: "custom",
+                }))}
+                onInternalNotesChange={(value) => setEditForm((current) => ({
+                  ...current,
+                  internalNotes: value,
+                }))}
+                onThirdPartyChange={updateThirdPartyPlatformNotice}
+              />
 
               {saveResult && <div className={`admin-alert ${saveResult.type}`}>{saveResult.message}</div>}
 

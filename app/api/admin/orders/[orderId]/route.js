@@ -15,6 +15,11 @@ import { supportText } from "../../../../lib/settings-defaults.js";
 import { buildSpotifyPasswordErrorEmail } from "../../../order-password-update/email.js";
 import { effectiveQuoteStatus, normalizeQuoteValidDays } from "../../../_quote-expiry.js";
 import { getOrderSla } from "../../../../lib/order-sla.js";
+import {
+  applyThirdPartyNotice,
+  buildDeliveryMessage,
+  normalizeFulfillment,
+} from "../../../../lib/order-fulfillment.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
@@ -145,7 +150,8 @@ export async function GET(request, { params }) {
 }
 
 // PATCH /api/admin/orders/:orderId
-// body: { status, staffNotes, items: [{index, account, password, staffAccount, staffPassword}] }
+// body: { status, staffNotes, internalNotes, deliveryMessageMode,
+//   thirdPartyPlatformNotice, items: [{index, account, password, staffAccount, staffPassword, fulfillment}] }
 export async function PATCH(request, { params }) {
   const session = adminSession(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
@@ -250,6 +256,10 @@ export async function PATCH(request, { params }) {
   let newStatus = ALLOWED_STATUS.includes(body.status) ? body.status : null;
   const quoteRequested = Object.prototype.hasOwnProperty.call(body, "quoteAmount");
   const staffNotes = clean(body.staffNotes, 1500);
+  const internalNotes = clean(body.internalNotes, 2000);
+  const deliveryMessageMode = ["auto", "custom"].includes(body.deliveryMessageMode)
+    ? body.deliveryMessageMode
+    : null;
   const itemUpdates = Array.isArray(body.items) ? body.items : [];
 
   // Read all orders with raw indexes (so we update the correct slot, not a
@@ -410,6 +420,9 @@ export async function PATCH(request, { params }) {
         if (typeof upd.password === "string") it.password = clean(upd.password, 120);
         if (typeof upd.staffAccount === "string") it.staffAccount = clean(upd.staffAccount, 80);
         if (typeof upd.staffPassword === "string") it.staffPassword = clean(upd.staffPassword, 120);
+        if (upd.fulfillment && typeof upd.fulfillment === "object") {
+          it.fulfillment = normalizeFulfillment(it.service, upd.fulfillment, it);
+        }
         if (it.service === "spotify") {
           // Spotify uses the buyer credential fields in the admin editor. Old
           // staff overrides would otherwise hide a newer account or password.
@@ -426,6 +439,11 @@ export async function PATCH(request, { params }) {
   }
 
   if (typeof body.staffNotes === "string") order.staffNotes = staffNotes;
+  if (typeof body.internalNotes === "string") order.internalNotes = internalNotes;
+  if (typeof body.thirdPartyPlatformNotice === "boolean") {
+    order.thirdPartyPlatformNotice = body.thirdPartyPlatformNotice;
+  }
+  if (deliveryMessageMode) order.deliveryMessageMode = deliveryMessageMode;
 
   // Status transition
   const wasCompleted = order.status === "completed";
@@ -469,6 +487,20 @@ export async function PATCH(request, { params }) {
         if (res.ok && !res.unlimited) it.stockReserved = true;
       }
     }
+  }
+
+  if (deliveryMessageMode === "auto") {
+    order.staffNotes = clean(buildDeliveryMessage(
+      order,
+      order.items,
+      Boolean(order.thirdPartyPlatformNotice),
+    ), 1500);
+  } else if (deliveryMessageMode === "custom" && typeof body.staffNotes === "string") {
+    order.staffNotes = clean(applyThirdPartyNotice(
+      order.staffNotes,
+      Boolean(order.thirdPartyPlatformNotice),
+      order.locale === "en" ? "en" : "zh",
+    ), 1500);
   }
 
   order.staffAudit = Array.isArray(order.staffAudit) ? order.staffAudit : [];

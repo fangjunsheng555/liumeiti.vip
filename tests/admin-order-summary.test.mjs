@@ -173,6 +173,8 @@ test("admin order list keeps every order when the store limits pipeline batches"
       items: [{
         service: "spotify",
         label: "Spotify - Family member",
+        cycle: "1年",
+        plan: "member",
         amount: 128,
         account: `spotify${index}@example.com`,
         password: `secret-${index}`,
@@ -248,11 +250,51 @@ test("admin order list keeps every order when the store limits pipeline batches"
 
   const entry = await utils.getOrderEntryById("LMSUMMARY154");
   assert.ok(entry?.order);
-  assert.equal(await utils.setOrderAt(entry.index, { ...entry.order, status: "completed" }), true);
+  assert.equal(await utils.setOrderAt(entry.index, {
+    ...entry.order,
+    status: "completed",
+    completedAt: "2026-07-27T10:00:00.000Z",
+  }), true);
 
   const revisionAfterResponse = await ordersRoute.GET(adminRequest("/api/admin/orders?mode=revision"));
   const revisionAfter = await revisionAfterResponse.json();
   assert.ok(Number(revisionAfter.revision) > Number(revisionBefore.revision));
+
+  const deliveryResponse = await orderDetailRoute.PATCH(
+    new Request("https://www.liumeiti.vip/api/admin/orders/LMSUMMARY154", {
+      method: "PATCH",
+      headers: {
+        cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        status: "completed",
+        staffNotes: "",
+        internalNotes: "渠道 A / 家庭组 17",
+        thirdPartyPlatformNotice: true,
+        deliveryMessageMode: "auto",
+        items: [{
+          index: 0,
+          fulfillment: {
+            region: "europe",
+            outcome: "family_joined",
+            emailConfirmation: false,
+            unexpectedField: "discard",
+          },
+        }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: "LMSUMMARY154" }) },
+  );
+  assert.equal(deliveryResponse.status, 200);
+  const delivery = await deliveryResponse.json();
+  assert.equal(delivery.order.internalNotes, "渠道 A / 家庭组 17");
+  assert.equal(delivery.order.items[0].fulfillment.unexpectedField, undefined);
+  assert.match(delivery.order.staffNotes, /有效期至 2027-07-27/);
+  assert.equal(
+    delivery.order.staffNotes.match(/核查您的订单来自于第三方平台/g)?.length,
+    1,
+  );
 
   const recipientResponse = await ordersRoute.GET(adminRequest("/api/admin/orders?mode=recipient-emails"));
   const recipients = await recipientResponse.json();

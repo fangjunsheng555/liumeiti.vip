@@ -7156,6 +7156,198 @@ summary:focus-visible {
 .admin-item-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .admin-item-head strong { font-size: 13px; font-weight: 800; color: var(--primary); }
 .admin-item-head-actions { min-width: 0; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 5px; }
+.admin-delivery-workbench {
+  padding-top: 2px;
+  border-top: 1px solid var(--line);
+}
+.admin-delivery-heading,
+.admin-delivery-item-head,
+.admin-delivery-message-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.admin-delivery-heading { margin-bottom: 6px; }
+.admin-delivery-heading h3 { margin: 0; }
+.admin-delivery-heading p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+.admin-delivery-generate {
+  flex: none;
+  height: 29px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 9px;
+  border: 1px solid var(--accent-border);
+  border-radius: 7px;
+  background: #fff;
+  color: #0f766e;
+  font-size: 10.5px;
+  font-weight: 850;
+  cursor: pointer;
+}
+.admin-delivery-generate:hover { background: var(--accent-soft); }
+.admin-delivery-list {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.admin-delivery-item { padding: 9px 0; }
+.admin-delivery-item + .admin-delivery-item { border-top: 1px solid var(--line); }
+.admin-delivery-item-head { margin-bottom: 7px; }
+.admin-delivery-item-head b { color: var(--primary); font-size: 11.5px; font-weight: 850; }
+.admin-delivery-item-head > span {
+  flex: none;
+  color: #0f766e;
+  font-size: 9.5px;
+  font-weight: 800;
+}
+.admin-delivery-fields {
+  display: grid;
+  align-items: end;
+  gap: 7px;
+}
+.admin-delivery-fields.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.admin-delivery-fields.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.admin-delivery-fields > label {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.admin-delivery-fields > label > span,
+.admin-delivery-readonly > span {
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 800;
+}
+.admin-delivery-fields select,
+.admin-delivery-fields input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid #d7e0e7;
+  border-radius: 7px;
+  outline: 0;
+  background: #fff;
+  color: var(--primary);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.admin-delivery-fields select:focus,
+.admin-delivery-fields input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(20, 184, 166, .08);
+}
+.admin-delivery-readonly {
+  min-height: 34px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  padding: 3px 9px;
+  border: 1px solid #d7e0e7;
+  border-radius: 7px;
+  background: #f8fafc;
+}
+.admin-delivery-readonly b { color: #b45309; font-size: 10.5px; }
+.admin-delivery-readonly.ok b { color: #0f766e; }
+.admin-delivery-switch-row {
+  min-width: 0;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.admin-compact-switch {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #cbd5e1;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.admin-compact-switch > span {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .2);
+  transition: transform .15s ease;
+}
+.admin-compact-switch.active { background: #0f766e; }
+.admin-compact-switch.active > span { transform: translateX(16px); }
+.admin-delivery-switch-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  text-align: left;
+  cursor: pointer;
+}
+.admin-delivery-switch-copy b { font-size: 10px; font-weight: 850; line-height: 1.25; }
+.admin-delivery-switch-copy small { color: var(--muted); font-size: 8.5px; line-height: 1.25; }
+.admin-delivery-generic { margin: 0; color: var(--muted); font-size: 10.5px; }
+.admin-delivery-message-head {
+  margin: 10px 0 6px;
+  align-items: flex-start;
+}
+.admin-delivery-message-head > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-top: 3px;
+  color: var(--primary);
+}
+.admin-delivery-message-head > div:first-child svg { color: #0f766e; }
+.admin-delivery-message-head b { font-size: 11.5px; font-weight: 850; }
+.admin-delivery-message-head em {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: #0f766e;
+  font-size: 8.5px;
+  font-style: normal;
+  font-weight: 850;
+}
+.admin-delivery-message-head > .admin-delivery-switch-row {
+  min-height: 0;
+  justify-content: flex-end;
+}
+.admin-delivery-customer-note { min-height: 78px; }
+.admin-delivery-internal {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #d7e0e7;
+}
+.admin-delivery-internal > span { color: var(--primary); font-size: 10.5px; font-weight: 850; }
+.admin-delivery-internal > span em {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+}
 .admin-item-tag {
   padding: 2px 7px; border-radius: 999px;
   background: var(--accent-soft); color: #0f766e;
@@ -8613,6 +8805,11 @@ summary:focus-visible {
 @media (max-width: 620px) {
   .admin-item-head { align-items: flex-start; }
   .admin-item-head-actions { max-width: 72%; }
+  .admin-delivery-fields.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-delivery-fields select,
+  .admin-delivery-fields input { font-size: 16px; }
+  .admin-delivery-message-head { flex-direction: column; gap: 7px; }
+  .admin-delivery-message-head > .admin-delivery-switch-row { justify-content: flex-start; }
   .admin-spotify-password-mail-row { grid-template-columns: minmax(0, 1fr) auto auto; }
   .admin-spotify-password-mail-row input { grid-column: 1 / -1; font-size: 16px; }
   .spotify-update-page { padding: 10px 7px 28px; }
