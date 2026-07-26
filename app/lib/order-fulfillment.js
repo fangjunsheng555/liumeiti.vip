@@ -131,6 +131,16 @@ function validitySentence(order, item, locale) {
   return locale === "en" ? `${label}.` : `${label}。`;
 }
 
+function credentialSentence(locale) {
+  return locale === "en"
+    ? "The login email and password are included with the order and can be viewed in the completion email or order details."
+    : "账号与密码已随订单交付，可在完成邮件或订单详情中查看。";
+}
+
+function joinSentences(parts, locale) {
+  return parts.filter(Boolean).join(locale === "en" ? " " : "");
+}
+
 function spotifyMessage(order, item, fulfillment, locale) {
   const en = locale === "en";
   const outcome = SPOTIFY_OUTCOMES[fulfillment.outcome] || SPOTIFY_OUTCOMES.activated;
@@ -142,21 +152,23 @@ function spotifyMessage(order, item, fulfillment, locale) {
   parts[0] += en ? "." : "。";
   const validity = validitySentence(order, item, locale);
   if (validity) parts.push(validity);
+  parts.push(credentialSentence(locale));
   if (fulfillment.emailConfirmation) {
     parts.push(en
       ? "Spotify has sent a confirmation email to your inbox. Follow the instructions in that email to finish confirmation."
       : "Spotify 已向您的邮箱发送确认邮件，请按邮件提示完成确认。");
   }
-  parts.push(en
-    ? "View the login details in your order."
-    : "登录资料请在订单详情中查看。");
-  return parts.join("");
+  return joinSentences(parts, locale);
 }
 
 function profileServiceMessage(order, item, fulfillment, locale) {
   const en = locale === "en";
   const name = item.service === "max" ? "HBO Max" : item.service === "disney" ? "Disney+" : "Netflix";
-  const parts = [en ? `${name} is active.` : `${name} 已开通。`];
+  const fullAccount = item.plan === "full";
+  const parts = [
+    en ? `${name} is active.` : `${name} 已开通。`,
+    credentialSentence(locale),
+  ];
   if (fulfillment.profileNumber) {
     parts.push(en
       ? `Use profile ${fulfillment.profileNumber}.`
@@ -167,20 +179,28 @@ function profileServiceMessage(order, item, fulfillment, locale) {
   }
   if (fulfillment.loginHelp) {
     parts.push(en
-      ? "If you need help signing in, select “Get Help” and enter the password shown in the order details."
-      : "如需登录帮助，请点击“获取帮助”并输入订单详情中的密码。");
+      ? "If you cannot sign in, verify the account and password first. You can request after-sales support from the order details if the issue continues."
+      : "如无法登录，请先核对账号与密码；仍有异常可从订单详情申请售后。");
   }
-  parts.push(en ? "Do not change the primary account details." : "请勿修改主账号资料。");
+  if (fullAccount) {
+    parts.push(en
+      ? "This is a full-account plan, so you can manage its profiles as needed."
+      : "本订单为整号规格，可按需管理账号内的用户档案。");
+  } else {
+    parts.push(en
+      ? "Use only the assigned profile. Do not change the account details, password, or other profiles."
+      : "请仅使用分配的用户档案，不要修改账号资料、密码或其他用户档案。");
+  }
   const validity = validitySentence(order, item, locale);
   if (validity) parts.push(validity);
-  return parts.join("");
+  return joinSentences(parts, locale);
 }
 
 function rocketMessage(order, item, fulfillment, locale) {
   const en = locale === "en";
   const parts = [en
-    ? "Your VPN subscription link is ready and can be copied from the order details."
-    : "机场节点订阅链接已生成，可在订单详情中复制。"];
+    ? "The VPN subscription links are included with the order and can be copied from the completion email or order details."
+    : "机场节点订阅链接已随订单交付，可在完成邮件或订单详情中复制。"];
   if (fulfillment.clientGuide) {
     parts.push(en
       ? "It supports Shadowrocket, Clash Meta and Clash Verge. Follow the VPN setup guide to import the subscription."
@@ -188,7 +208,7 @@ function rocketMessage(order, item, fulfillment, locale) {
   }
   const validity = validitySentence(order, item, locale);
   if (validity) parts.push(validity);
-  return parts.join("");
+  return joinSentences(parts, locale);
 }
 
 function aiMessage(order, item, fulfillment, locale) {
@@ -197,10 +217,11 @@ function aiMessage(order, item, fulfillment, locale) {
   const parts = [en
     ? `${plan || "AI membership"} is active.`
     : `${plan || "AI 会员"}已开通。`];
+  parts.push(credentialSentence(locale));
   if (fulfillment.loginMethod === "google") {
-    parts.push(en ? "Sign in with Google." : "请使用 Google 登录。");
-  } else {
-    parts.push(en ? "View the login details in your order." : "登录资料请在订单详情中查看。");
+    parts.push(en ? "Select Google when signing in." : "登录时请选择 Google 登录。");
+  } else if (fulfillment.loginMethod === "email") {
+    parts.push(en ? "Select email when signing in." : "登录时请选择邮箱登录。");
   }
   if (fulfillment.twoFactorInstruction) {
     parts.push(en
@@ -209,7 +230,7 @@ function aiMessage(order, item, fulfillment, locale) {
   }
   const validity = validitySentence(order, item, locale);
   if (validity) parts.push(validity);
-  return parts.join("");
+  return joinSentences(parts, locale);
 }
 
 function genericMessage(order, item, locale) {

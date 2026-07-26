@@ -32,6 +32,8 @@ test("Spotify delivery message uses the existing order expiry calculation", () =
   const message = buildDeliveryMessage(order);
   assert.match(message, /欧洲区/);
   assert.match(message, /有效期至 2027-07-27/);
+  assert.match(message, /账号与密码已随订单交付/);
+  assert.doesNotMatch(message, /登录资料请在订单详情中查看/);
 });
 
 test("unfinished orders show their purchased cycle instead of inventing an expiry date", () => {
@@ -87,7 +89,28 @@ test("English orders receive an English generated message", () => {
     }],
   };
   const message = buildDeliveryMessage(order, order.items, true);
+  assert.match(message, /Netflix is active\. The login/);
   assert.match(message, /Use profile 2/);
   assert.match(message, /Valid until 2027-07-27/);
+  assert.match(message, /login email and password are included with the order/i);
+  assert.match(message, /Use only the assigned profile/);
   assert.match(message, /third-party platform/);
+});
+
+test("full-account delivery copy does not apply shared-profile restrictions", () => {
+  const order = {
+    status: "completed",
+    locale: "zh",
+    completedAt: "2026-07-27T10:00:00.000Z",
+    items: [{
+      service: "disney",
+      label: "Disney+ · 整号购买",
+      cycle: "1年",
+      plan: "full",
+      fulfillment: { profileNumber: "", pin: "", loginHelp: true },
+    }],
+  };
+  const message = buildDeliveryMessage(order);
+  assert.match(message, /本订单为整号规格/);
+  assert.doesNotMatch(message, /请仅使用分配的用户档案/);
 });
