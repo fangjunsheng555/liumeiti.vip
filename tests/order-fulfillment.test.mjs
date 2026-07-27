@@ -17,6 +17,7 @@ test("Spotify delivery message uses the existing order expiry calculation", () =
     cycle: "1年",
     plan: "member",
     fulfillment: {
+      username: "Mia",
       region: "europe",
       outcome: "family_joined",
       emailConfirmation: false,
@@ -30,9 +31,11 @@ test("Spotify delivery message uses the existing order expiry calculation", () =
   };
   assert.equal(itemValidityLabel(order, item), "有效期至 2027-07-27");
   const message = buildDeliveryMessage(order);
+  assert.equal(message.startsWith("Spotify 用户名：Mia。"), true);
   assert.match(message, /欧洲区/);
   assert.match(message, /有效期至 2027-07-27/);
   assert.match(message, /账号与密码已随订单交付/);
+  assert.match(message, /支持无损音质、播客及其他会员功能/);
   assert.doesNotMatch(message, /登录资料请在订单详情中查看/);
 });
 
@@ -73,6 +76,18 @@ test("fulfillment input is restricted to service-specific fields", () => {
     pin: "1234",
     loginHelp: false,
   });
+  assert.deepEqual(normalizeFulfillment("spotify", {
+    username: "User123",
+    region: "europe",
+    outcome: "family_joined",
+    emailConfirmation: true,
+    internalSecret: "discard",
+  }, { plan: "member" }), {
+    username: "User123",
+    region: "europe",
+    outcome: "family_joined",
+    emailConfirmation: true,
+  });
 });
 
 test("English orders receive an English generated message", () => {
@@ -90,11 +105,32 @@ test("English orders receive an English generated message", () => {
   };
   const message = buildDeliveryMessage(order, order.items, true);
   assert.match(message, /Netflix is active\. The login/);
-  assert.match(message, /Use profile 2/);
+  assert.match(message, /Use profile number 2/);
+  assert.match(message, /select “Get Help,” then enter the password/);
+  assert.match(message, /Do not change the account subscription/);
   assert.match(message, /Valid until 2027-07-27/);
   assert.match(message, /login email and password are included with the order/i);
-  assert.match(message, /Use only the assigned profile/);
   assert.match(message, /third-party platform/);
+});
+
+test("Netflix delivery copy gives concise password sign-in steps", () => {
+  const order = {
+    status: "completed",
+    locale: "zh",
+    completedAt: "2026-07-27T10:00:00.000Z",
+    items: [{
+      service: "netflix",
+      label: "Netflix · 单独车位",
+      cycle: "1年",
+      plan: "seat",
+      fulfillment: { profileNumber: "3", pin: "", loginHelp: true },
+    }],
+  };
+  const message = buildDeliveryMessage(order);
+  assert.match(message, /请使用数字 3 号用户档案/);
+  assert.match(message, /输入邮箱，再点击“获取帮助 \/ Get Help”，然后输入订单中的密码/);
+  assert.match(message, /不要修改账号订阅、密码或其他用户档案/);
+  assert.doesNotMatch(message, /不要修改账号资料/);
 });
 
 test("full-account delivery copy does not apply shared-profile restrictions", () => {

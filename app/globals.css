@@ -7214,6 +7214,7 @@ summary:focus-visible {
 }
 .admin-delivery-fields.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .admin-delivery-fields.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.admin-delivery-fields.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .admin-delivery-fields > label {
   min-width: 0;
   display: grid;
@@ -8805,7 +8806,8 @@ summary:focus-visible {
 @media (max-width: 620px) {
   .admin-item-head { align-items: flex-start; }
   .admin-item-head-actions { max-width: 72%; }
-  .admin-delivery-fields.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .admin-delivery-fields.three,
+  .admin-delivery-fields.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .admin-delivery-fields select,
   .admin-delivery-fields input { font-size: 16px; }
   .admin-delivery-message-head { flex-direction: column; gap: 7px; }

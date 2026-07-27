@@ -44,7 +44,16 @@ function CompactSwitch({ checked, onChange, label, hint }) {
 function SpotifyFields({ item, onChange }) {
   const fulfillment = item.fulfillment || {};
   return (
-    <div className="admin-delivery-fields three">
+    <div className="admin-delivery-fields four">
+      <label>
+        <span>用户名</span>
+        <input
+          value={fulfillment.username || ""}
+          onChange={(event) => onChange({ username: event.target.value })}
+          placeholder="例如 User123"
+          maxLength={60}
+        />
+      </label>
       <label>
         <span>开通地区</span>
         <select value={fulfillment.region || ""} onChange={(event) => onChange({ region: event.target.value })}>

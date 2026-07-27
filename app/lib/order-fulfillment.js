@@ -44,6 +44,7 @@ export function normalizeFulfillment(service, input = {}, item = {}) {
       ? source.outcome
       : defaultSpotifyOutcome(item);
     return {
+      username: text(source.username, 60),
       region: Object.prototype.hasOwnProperty.call(REGION_LABELS, source.region) ? source.region : "",
       outcome,
       emailConfirmation: boolean(source.emailConfirmation),
@@ -145,7 +146,13 @@ function spotifyMessage(order, item, fulfillment, locale) {
   const en = locale === "en";
   const outcome = SPOTIFY_OUTCOMES[fulfillment.outcome] || SPOTIFY_OUTCOMES.activated;
   const region = REGION_LABELS[fulfillment.region];
-  const parts = [en ? outcome[1] : outcome[0]];
+  const parts = [];
+  if (fulfillment.username) {
+    parts.push(en
+      ? `Spotify username: ${fulfillment.username}.`
+      : `Spotify 用户名：${fulfillment.username}。`);
+  }
+  parts.push(en ? outcome[1] : outcome[0]);
   if (region) {
     parts[0] += en ? ` for ${region[1]}` : `，所属地区为${region[0]}`;
   }
@@ -153,6 +160,9 @@ function spotifyMessage(order, item, fulfillment, locale) {
   const validity = validitySentence(order, item, locale);
   if (validity) parts.push(validity);
   parts.push(credentialSentence(locale));
+  parts.push(en
+    ? "Supports lossless audio, podcasts, and other Premium features."
+    : "支持无损音质、播客及其他会员功能。");
   if (fulfillment.emailConfirmation) {
     parts.push(en
       ? "Spotify has sent a confirmation email to your inbox. Follow the instructions in that email to finish confirmation."
@@ -171,16 +181,22 @@ function profileServiceMessage(order, item, fulfillment, locale) {
   ];
   if (fulfillment.profileNumber) {
     parts.push(en
-      ? `Use profile ${fulfillment.profileNumber}.`
-      : `请使用 ${fulfillment.profileNumber} 号用户档案。`);
+      ? `Use profile number ${fulfillment.profileNumber}.`
+      : `请使用数字 ${fulfillment.profileNumber} 号用户档案。`);
   }
   if (fulfillment.pin) {
     parts.push(en ? `Profile PIN: ${fulfillment.pin}.` : `用户档案 PIN：${fulfillment.pin}。`);
   }
   if (fulfillment.loginHelp) {
-    parts.push(en
-      ? "If you cannot sign in, verify the account and password first. You can request after-sales support from the order details if the issue continues."
-      : "如无法登录，请先核对账号与密码；仍有异常可从订单详情申请售后。");
+    if (item.service === "netflix") {
+      parts.push(en
+        ? "To sign in with the password, enter the email address, select “Get Help,” then enter the password shown in the order. If you still cannot sign in, request after-sales support from the order details."
+        : "使用密码登录时，请先输入邮箱，再点击“获取帮助 / Get Help”，然后输入订单中的密码；如仍无法登录，可从订单详情申请售后。");
+    } else {
+      parts.push(en
+        ? "If you cannot sign in, verify the account and password first. You can request after-sales support from the order details if the issue continues."
+        : "如无法登录，请先核对账号与密码；仍有异常可从订单详情申请售后。");
+    }
   }
   if (fullAccount) {
     parts.push(en
@@ -188,8 +204,8 @@ function profileServiceMessage(order, item, fulfillment, locale) {
       : "本订单为整号规格，可按需管理账号内的用户档案。");
   } else {
     parts.push(en
-      ? "Use only the assigned profile. Do not change the account details, password, or other profiles."
-      : "请仅使用分配的用户档案，不要修改账号资料、密码或其他用户档案。");
+      ? "Use only the assigned profile. Do not change the account subscription, password, or other profiles."
+      : "请仅使用分配的用户档案，不要修改账号订阅、密码或其他用户档案。");
   }
   const validity = validitySentence(order, item, locale);
   if (validity) parts.push(validity);
