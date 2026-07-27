@@ -292,7 +292,8 @@ test("admin order list keeps every order when the store limits pipeline batches"
   assert.equal(delivery.order.internalNotes, "渠道 A / 家庭组 17");
   assert.equal(delivery.order.items[0].fulfillment.username, "User154");
   assert.equal(delivery.order.items[0].fulfillment.unexpectedField, undefined);
-  assert.match(delivery.order.staffNotes, /^Spotify 用户名：User154。/);
+  assert.match(delivery.order.staffNotes, /^Spotify 用户名：User154，所属地区为欧洲区。/);
+  assert.doesNotMatch(delivery.order.staffNotes, /。，/);
   assert.match(delivery.order.staffNotes, /有效期至 2027-07-27/);
   assert.equal(
     delivery.order.staffNotes.match(/核查您的订单来自于第三方平台/g)?.length,

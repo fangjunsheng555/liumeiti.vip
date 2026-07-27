@@ -31,7 +31,8 @@ test("Spotify delivery message uses the existing order expiry calculation", () =
   };
   assert.equal(itemValidityLabel(order, item), "有效期至 2027-07-27");
   const message = buildDeliveryMessage(order);
-  assert.equal(message.startsWith("Spotify 用户名：Mia。"), true);
+  assert.equal(message.startsWith("Spotify 用户名：Mia，所属地区为欧洲区。"), true);
+  assert.doesNotMatch(message, /。，/);
   assert.match(message, /欧洲区/);
   assert.match(message, /有效期至 2027-07-27/);
   assert.match(message, /账号与密码已随订单交付/);

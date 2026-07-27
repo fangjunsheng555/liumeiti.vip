@@ -149,12 +149,12 @@ function spotifyMessage(order, item, fulfillment, locale) {
   const parts = [];
   if (fulfillment.username) {
     parts.push(en
-      ? `Spotify username: ${fulfillment.username}.`
-      : `Spotify 用户名：${fulfillment.username}。`);
+      ? `Spotify username: ${fulfillment.username}`
+      : `Spotify 用户名：${fulfillment.username}`);
   }
   parts.push(en ? outcome[1] : outcome[0]);
   if (region) {
-    parts[0] += en ? ` for ${region[1]}` : `，所属地区为${region[0]}`;
+    parts[0] += en ? `, region: ${region[1]}` : `，所属地区为${region[0]}`;
   }
   parts[0] += en ? "." : "。";
   const validity = validitySentence(order, item, locale);
