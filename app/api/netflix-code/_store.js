@@ -126,7 +126,10 @@ export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "
 
 export async function findLatestNetflixResult(email, { since = 0 } = {}) {
   const hash = netflixAccountHash(email);
-  const minScore = Math.max(Date.now() - 20 * 60 * 1000, Number(since || 0) - 60 * 1000);
+  // The customer normally returns after Netflix has already sent the message.
+  // Keep a short lookback so a valid code received just before authorization is
+  // still available, while the expiry check below rejects stale messages.
+  const minScore = Math.max(Date.now() - 20 * 60 * 1000, Number(since || 0) - 5 * 60 * 1000);
   const ids = await redisCmd(["ZREVRANGEBYSCORE", accountIndexKey(hash), "+inf", String(minScore), "LIMIT", "0", "20"]);
   for (const eventId of (Array.isArray(ids) ? ids : [])) {
     const record = parseJson(await redisCmd(["GET", eventKey(eventId)]));

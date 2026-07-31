@@ -154,3 +154,27 @@ test("matches the real Outlook Netflix template and original-recipient header", 
   assert.ok(parsed.accountEmails.includes(account));
   assert.ok(!parsed.accountEmails.includes("netflix@codes.liumeiti.vip"));
 });
+
+test("does not mistake the Netflix SRC reference for a six-digit security code", async () => {
+  const account = "juandavidsandoval1@outlook.es";
+  const parsed = await parseNetflixEmail(mime({
+    to: "netflix@codes.liumeiti.vip",
+    subject: "Netflix: Your sign-in code",
+    text: [
+      "Enter this code to sign in",
+      "3322",
+      "Enter the code above on your device to sign in to Netflix.",
+      "This code will expire in 15 minutes.",
+      `This message was mailed to ${account} by Netflix as part of your Netflix membership.`,
+      "SRC: 653956AC_aebc4b04-b480-42f1-b3a0-37bbe5d7ba6e_en_ES_EVO",
+    ].join("\n"),
+  }), {
+    from: "info@account.netflix.com",
+    to: "netflix@codes.liumeiti.vip",
+  });
+
+  assert.equal(parsed.accepted, true);
+  assert.equal(parsed.kind, "code");
+  assert.equal(parsed.value, "3322");
+  assert.ok(parsed.accountEmails.includes(account));
+});

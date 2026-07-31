@@ -20,8 +20,9 @@ import MobileNav from "../components/MobileNav";
 import { useLocale } from "../components/LocaleProvider";
 import styles from "./netflix-code.module.css";
 
-const RESULT_POLL_MS = 6500;
-const RESULT_POLL_LIMIT = 8;
+const RESULT_POLL_MS = 7000;
+const RESULT_POLL_LIMIT = 26;
+const RESULT_DELAY_NOTICE_AT = 8;
 
 function hasNetflix(order) {
   return (Array.isArray(order?.items) ? order.items : []).some((item) => item?.service === "netflix");
@@ -193,7 +194,12 @@ export default function NetflixCodePage() {
         setStatus({ type: "info", text: L("暂未收到邮件。请确认 Netflix 已显示发送成功，稍后再试。", "No email yet. Make sure Netflix confirmed it was sent, then try again.") });
         return;
       }
-      setStatus({ type: "info", text: L("正在接收 Netflix 邮件…", "Waiting for your Netflix email…") });
+      setStatus({
+        type: "info",
+        text: pollCount.current >= RESULT_DELAY_NOTICE_AT
+          ? L("邮件仍在转发中，请保持此页面打开。", "Your email is still being forwarded. Keep this page open.")
+          : L("正在接收 Netflix 邮件…", "Waiting for your Netflix email…"),
+      });
       pollTimer.current = window.setTimeout(retrieveResult, RESULT_POLL_MS);
     } catch (error) {
       stopPolling();

@@ -129,7 +129,7 @@ function hasNearbyPhrase(text, index, phrases, distance = 190) {
 function codeCandidates(text) {
   const values = [];
   const normalized = normalizeDigits(text);
-  for (const match of normalized.matchAll(/(?<!\d)(\d{4})(?!\d)/g)) {
+  for (const match of normalized.matchAll(/(?<![A-Za-z0-9])(\d{4})(?![A-Za-z0-9])/g)) {
     if (Number(match[1]) >= 1900 && Number(match[1]) <= 2100) continue;
     values.push({ value: match[1], index: match.index || 0 });
   }
@@ -137,7 +137,7 @@ function codeCandidates(text) {
 }
 
 function containsSixDigitToken(text) {
-  return /(?<!\d)\d{6}(?!\d)/.test(normalizeDigits(text));
+  return /(?<![A-Za-z0-9])\d{6}(?![A-Za-z0-9])/.test(normalizeDigits(text));
 }
 
 function withoutUrls(text) {
