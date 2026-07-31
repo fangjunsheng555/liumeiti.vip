@@ -5,7 +5,11 @@ const EVENT_PREFIX = "liumeiti:netflix-mail:event:";
 const EVENT_INDEX = "liumeiti:netflix-mail:received";
 const ACCOUNT_INDEX_PREFIX = "liumeiti:netflix-mail:account:";
 const ACCESS_PREFIX = "liumeiti:netflix-code:access:";
-const ACCESS_INDEX = "liumeiti:netflix-code:access-index";
+// Only successful deliveries belong in the operational history. The former
+// index also contained authorization and polling noise, so keep a clean index
+// instead of migrating those rows into the new view.
+const ACCESS_INDEX = "liumeiti:netflix-code:access-success-index:v1";
+const ACCESS_DEDUPE_PREFIX = "liumeiti:netflix-code:access-success-dedupe:";
 // v2 drops locks created by the former per-poll counter. Automatic polling
 // must never lock a customer who only clicked the retrieve button once.
 const LOCK_PREFIX = "liumeiti:netflix-code:lock:v2:";
@@ -146,17 +150,34 @@ export async function findLatestNetflixResult(email, { since = 0 } = {}) {
 }
 
 export async function recordNetflixCodeAccess(entry) {
+  const outcome = clean(entry?.outcome, 80);
+  if (!["code_returned", "travel_link_returned"].includes(outcome)) return true;
+  const orderId = clean(entry?.orderId, 80).toUpperCase();
+  const eventId = clean(entry?.eventId, 80);
+  if (!orderId || !eventId) return false;
+
+  const dedupeId = createHash("sha256")
+    .update(`${orderId}|${eventId}|${outcome}`)
+    .digest("hex");
+  const first = await redisCmd([
+    "SET",
+    ACCESS_DEDUPE_PREFIX + dedupeId,
+    "1",
+    "NX",
+    "EX",
+    String(ACCESS_TTL_SECONDS),
+  ]);
+  if (first !== "OK") return true;
+
   const now = new Date();
   const id = "NA" + randomBytes(8).toString("hex").toUpperCase();
   const record = {
     id,
-    orderId: clean(entry?.orderId, 80).toUpperCase(),
-    accountHint: clean(entry?.accountHint, 200),
-    action: clean(entry?.action, 40),
-    outcome: clean(entry?.outcome, 80),
-    actorType: entry?.actorType === "guest" ? "guest" : entry?.actorType === "admin" ? "admin" : "user",
-    identityHash: clean(entry?.identityHash, 80),
-    eventId: clean(entry?.eventId, 80),
+    orderId,
+    userEmail: clean(entry?.userEmail, 200).toLowerCase(),
+    accountEmail: clean(entry?.accountEmail, 200).toLowerCase(),
+    outcome,
+    eventId,
     createdAt: now.toISOString(),
     createdAtBeijing: formatBeijingTime(now),
   };
@@ -166,8 +187,10 @@ export async function recordNetflixCodeAccess(entry) {
     ["ZADD", ACCESS_INDEX, String(score), id],
   ];
   const rows = pipelineRows(await redisPipeline(commands));
+  const ok = rows.length === commands.length && rows.every((entryRow) => !entryRow?.error);
+  if (!ok) await redisCmd(["DEL", ACCESS_DEDUPE_PREFIX + dedupeId]);
   await redisCmd(["ZREMRANGEBYSCORE", ACCESS_INDEX, "-inf", String(Date.now() - ACCESS_TTL_SECONDS * 1000)]);
-  return rows.length === commands.length && rows.every((entryRow) => !entryRow?.error);
+  return ok;
 }
 
 async function recordsFromIndex(indexKey, offset, limit, prefix) {

@@ -2,12 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseNetflixEmail, netflixParserInternals } from "../app/api/netflix-code/_parser.js";
 
-function mime({ from = "Netflix <info@account.netflix.com>", to = "member@codes.liumeiti.vip", subject = "Netflix", text = "", html = "" }) {
+function mime({ from = "Netflix <info@account.netflix.com>", to = "member@codes.liumeiti.vip", subject = "Netflix", text = "", html = "", extraHeaders = [] }) {
   const boundary = "----maoyang-netflix-test";
   return [
     `From: ${from}`,
     `To: ${to}`,
     `Subject: ${subject}`,
+    ...extraHeaders,
     "MIME-Version: 1.0",
     `Content-Type: multipart/alternative; boundary=${boundary}`,
     "",
@@ -126,6 +127,30 @@ test("indexes the original Netflix account from an Outlook-forwarded membership 
   assert.equal(parsed.accepted, true);
   assert.equal(parsed.kind, "code");
   assert.equal(parsed.value, "8653");
+  assert.ok(parsed.accountEmails.includes(account));
+  assert.ok(!parsed.accountEmails.includes("netflix@codes.liumeiti.vip"));
+});
+
+test("matches the real Outlook Netflix template and original-recipient header", async () => {
+  const account = "juandavidsandoval1@outlook.es";
+  const parsed = await parseNetflixEmail(mime({
+    to: "netflix@codes.liumeiti.vip",
+    subject: "Netflix: Your sign-in code",
+    extraHeaders: [`X-Original-To: ${account}`],
+    text: [
+      "Enter this code to sign in",
+      "3322",
+      "Enter the code above on your device to sign in to Netflix.",
+      "This code will expire in 15 minutes.",
+    ].join("\n"),
+  }), {
+    from: "info@account.netflix.com",
+    to: "netflix@codes.liumeiti.vip",
+  });
+
+  assert.equal(parsed.accepted, true);
+  assert.equal(parsed.kind, "code");
+  assert.equal(parsed.value, "3322");
   assert.ok(parsed.accountEmails.includes(account));
   assert.ok(!parsed.accountEmails.includes("netflix@codes.liumeiti.vip"));
 });

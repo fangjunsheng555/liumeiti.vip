@@ -40,13 +40,6 @@ function effectiveNetflixAccount(order) {
   return normalizeEmail(item?.staffAccount || item?.account || order?.staffAccount || order?.account);
 }
 
-function identityHash(request, suffix = "") {
-  const raw = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-    || request.headers.get("cf-connecting-ip")
-    || "unknown";
-  return createHash("sha256").update(`${raw}|${suffix}`).digest("hex");
-}
-
 async function accessForOrder(request, order, providedToken = "") {
   const userSession = verifySession(getCookieFromRequest(request, "lm_user"));
   const orderEmail = normalizeEmail(order?.email);
@@ -92,14 +85,12 @@ function safeTravelLink(value) {
   } catch { return ""; }
 }
 
-async function logAccess(request, order, account, action, outcome, actorType, eventId = "") {
+async function logSuccessfulAccess(order, account, claim, outcome, eventId) {
   await recordNetflixCodeAccess({
     orderId: order?.orderId,
-    accountHint: maskNetflixEmail(account),
-    action,
+    userEmail: normalizeEmail(claim?.accessEmail || order?.userEmail || order?.email),
+    accountEmail: normalizeEmail(account),
     outcome,
-    actorType,
-    identityHash: identityHash(request, order?.orderId),
     eventId,
   });
 }
@@ -114,15 +105,9 @@ export async function POST(request) {
     const order = await getOrderById(orderId);
     if (!order) return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
     const access = await accessForOrder(request, order, body.token);
-    if (!access.ok) {
-      await logAccess(request, order, "", action, "verification_required", "guest");
-      return Response.json({ ok: false, error: "verification_required" }, { status: 401 });
-    }
+    if (!access.ok) return Response.json({ ok: false, error: "verification_required" }, { status: 401 });
     const eligible = await eligibility(order);
-    if (!eligible.ok) {
-      await logAccess(request, order, eligible.account || "", action, eligible.error, access.actorType);
-      return Response.json({ ok: false, error: eligible.error }, { status: 409 });
-    }
+    if (!eligible.ok) return Response.json({ ok: false, error: eligible.error }, { status: 409 });
     const guard = await checkRateLimit(request, {
       namespace: "netflix-code:authorize",
       limit: 12,
@@ -136,10 +121,10 @@ export async function POST(request) {
       orderId,
       accountHash: netflixAccountHash(eligible.account),
       actorType: access.actorType,
+      accessEmail: access.email,
       startedAt,
       exp: startedAt + 15 * 60 * 1000,
     });
-    await logAccess(request, order, eligible.account, action, "authorized", access.actorType);
     return Response.json({
       ok: true,
       sessionToken,
@@ -157,15 +142,9 @@ export async function POST(request) {
   const order = await getOrderById(claim.orderId);
   if (!order) return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
   const eligible = await eligibility(order);
-  if (!eligible.ok || netflixAccountHash(eligible.account) !== claim.accountHash) {
-    await logAccess(request, order, eligible.account || "", action, eligible.error || "account_changed", claim.actorType);
-    return Response.json({ ok: false, error: eligible.error || "account_changed" }, { status: 409 });
-  }
+  if (!eligible.ok || netflixAccountHash(eligible.account) !== claim.accountHash) return Response.json({ ok: false, error: eligible.error || "account_changed" }, { status: 409 });
   const lockKey = netflixCodeLockKey(order.orderId);
-  if (await redisCmd(["GET", lockKey]) === "blocked") {
-    await logAccess(request, order, eligible.account, action, "temporarily_locked", claim.actorType);
-    return Response.json({ ok: false, error: "temporarily_locked" }, { status: 429 });
-  }
+  if (await redisCmd(["GET", lockKey]) === "blocked") return Response.json({ ok: false, error: "temporarily_locked" }, { status: 429 });
   const cycleId = createHash("sha256")
     .update(`${claim.orderId}|${claim.accountHash}|${claim.startedAt || "legacy"}`)
     .digest("hex")
@@ -189,28 +168,23 @@ export async function POST(request) {
     if (attempts === 1) await redisCmd(["EXPIRE", attemptsKey, "900"]);
     if (attempts > 12) {
       await redisCmd(["SET", lockKey, "blocked", "EX", "900"]);
-      await logAccess(request, order, eligible.account, action, "temporarily_locked", claim.actorType);
       return Response.json({ ok: false, error: "temporarily_locked" }, { status: 429 });
     }
   }
 
   const result = await findLatestNetflixResult(eligible.account, { since: Number(claim.startedAt || 0) });
-  if (!result) {
-    if (firstPollInCycle) await logAccess(request, order, eligible.account, action, "waiting", claim.actorType);
-    return Response.json({ ok: true, pending: true, retryAfter: 8 }, { headers: { "Cache-Control": "no-store" } });
-  }
+  if (!result) return Response.json({ ok: true, pending: true, retryAfter: 8 }, { headers: { "Cache-Control": "no-store" } });
   if (result.kind === "code" && /^\d{4}$/.test(result.value)) {
     await redisCmd(["DEL", attemptsKey]);
-    await logAccess(request, order, eligible.account, action, "code_returned", claim.actorType, result.eventId);
+    await logSuccessfulAccess(order, eligible.account, claim, "code_returned", result.eventId);
     return Response.json({ ok: true, kind: "code", code: result.value, expiresAt: result.expiresAt, receivedAtBeijing: result.receivedAtBeijing }, { headers: { "Cache-Control": "no-store" } });
   }
   const link = result.kind === "link" ? safeTravelLink(result.value) : "";
   if (link) {
     await redisCmd(["DEL", attemptsKey]);
-    await logAccess(request, order, eligible.account, action, "travel_link_returned", claim.actorType, result.eventId);
+    await logSuccessfulAccess(order, eligible.account, claim, "travel_link_returned", result.eventId);
     return Response.json({ ok: true, kind: "link", url: link, expiresAt: result.expiresAt, receivedAtBeijing: result.receivedAtBeijing }, { headers: { "Cache-Control": "no-store" } });
   }
-  if (firstPollInCycle) await logAccess(request, order, eligible.account, action, "unsafe_result_rejected", claim.actorType, result.eventId);
   return Response.json({ ok: true, pending: true, retryAfter: 8 }, { headers: { "Cache-Control": "no-store" } });
 }
 

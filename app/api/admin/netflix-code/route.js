@@ -83,7 +83,15 @@ export async function GET(request) {
       .map((orderId) => orderControls.get(orderId))
       .filter(Boolean),
   }));
-  const access = await listNetflixCodeAccess({ limit: 120 });
+  const access = (await listNetflixCodeAccess({ limit: 120 })).map((entry) => ({
+    id: entry.id,
+    orderId: entry.orderId,
+    userEmail: entry.userEmail || "",
+    accountEmail: entry.accountEmail || entry.accountHint || "",
+    outcome: entry.outcome,
+    eventId: entry.eventId,
+    createdAtBeijing: entry.createdAtBeijing,
+  }));
   return Response.json({
     ok: true,
     configured: netflixCodeStoreConfigured() && String(process.env.NETFLIX_EMAIL_INGEST_SECRET || "").length >= 32,

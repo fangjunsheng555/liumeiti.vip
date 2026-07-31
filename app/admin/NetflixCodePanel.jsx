@@ -15,18 +15,6 @@ import {
 } from "lucide-react";
 import styles from "./NetflixCodePanel.module.css";
 
-const OUTCOME_LABELS = {
-  authorized: "身份核验通过",
-  waiting: "等待邮件",
-  code_returned: "已返回 4 位验证码",
-  travel_link_returned: "已返回官方临时代码链接",
-  temporarily_locked: "频率限制",
-  verification_required: "身份未核验",
-  account_changed: "订单账号已变更",
-  unsafe_result_rejected: "不安全内容已拒绝",
-  self_service_disabled: "自助接码已停用",
-};
-
 const REASON_LABELS = {
   supported_content_not_found: "未识别到支持的验证码或链接",
   six_digit_rejected: "已拒绝 6 位验证码",
@@ -91,7 +79,7 @@ export default function NetflixCodePanel({ canEdit = false }) {
   return (
     <section className={styles.panel}>
       <header className={styles.header}>
-        <div><span><KeyRound size={14} />Netflix 自助接码</span><h1>收件与访问记录</h1><p>核对邮件解析、订单匹配与用户读取记录；后台不会显示验证码或链接令牌。</p></div>
+        <div><span><KeyRound size={14} />Netflix 自助接码</span><h1>收件与接码记录</h1><p>核对邮件解析、订单匹配与成功接码记录；后台不会显示验证码或链接内容。</p></div>
         <button type="button" onClick={() => load()} disabled={loading}><RefreshCw size={14} />刷新</button>
       </header>
 
@@ -104,7 +92,7 @@ export default function NetflixCodePanel({ canEdit = false }) {
 
       <div className={styles.tabs} role="tablist" aria-label="Netflix 接码记录">
         <button type="button" className={tab === "mail" ? styles.active : ""} onClick={() => setTab("mail")}><Mail size={14} />收件记录</button>
-        <button type="button" className={tab === "access" ? styles.active : ""} onClick={() => setTab("access")}><LockKeyhole size={14} />用户访问</button>
+        <button type="button" className={tab === "access" ? styles.active : ""} onClick={() => setTab("access")}><LockKeyhole size={14} />成功记录</button>
       </div>
 
       {notice && <div className={styles.notice}><ShieldAlert size={14} />{notice}</div>}
@@ -138,15 +126,15 @@ export default function NetflixCodePanel({ canEdit = false }) {
 
       {tab === "access" && data && (
         <div className={styles.table}>
-          <div className={`${styles.tableHead} ${styles.accessGrid}`}><span>时间</span><span>订单 / 账号</span><span>操作</span><span>结果</span></div>
+          <div className={`${styles.tableHead} ${styles.accessGrid}`}><span>时间</span><span>用户邮箱</span><span>订单号</span><span>Netflix 账号</span></div>
           {(data.access || []).length ? data.access.map((entry) => (
             <article key={entry.id} className={`${styles.row} ${styles.accessGrid}`}>
-              <div className={styles.when}><b><Clock3 size={13} />{time(entry.createdAtBeijing)}</b><small>{entry.actorType === "guest" ? "订单邮箱核验" : entry.actorType === "admin" ? "后台" : "登录用户"}</small></div>
-              <div><b className={styles.orderId}>{entry.orderId || "--"}</b><small className={styles.block}>{entry.accountHint || "--"}</small></div>
-              <div className={styles.muted}>{entry.action === "authorize" ? "核验订单" : "读取邮件"}</div>
-              <div className={entry.outcome === "code_returned" || entry.outcome === "travel_link_returned" || entry.outcome === "authorized" ? styles.ok : styles.outcome}>{OUTCOME_LABELS[entry.outcome] || entry.outcome || "--"}</div>
+              <div className={styles.when}><b><Clock3 size={13} />{time(entry.createdAtBeijing)}</b></div>
+              <div className={styles.email}>{entry.userEmail || "--"}</div>
+              <div><b className={styles.orderId}>{entry.orderId || "--"}</b></div>
+              <div className={styles.email}>{entry.accountEmail || "--"}</div>
             </article>
-          )) : <div className={styles.empty}>暂无用户访问记录</div>}
+          )) : <div className={styles.empty}>暂无成功接码记录</div>}
         </div>
       )}
 

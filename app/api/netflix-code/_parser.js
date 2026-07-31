@@ -204,6 +204,19 @@ function forwardedHeaderAddresses(text) {
   return lines.filter((line) => labels.test(line.trim())).flatMap(emailsIn);
 }
 
+function originalRecipientHeaders(raw) {
+  let source = "";
+  try {
+    source = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf8");
+  } catch { return []; }
+  const headerBlock = source.split(/\r?\n\r?\n/, 1)[0]
+    .replace(/\r?\n[ \t]+/g, " ");
+  const labels = /^(to|cc|bcc|delivered-to|x-original-to|x-originally-to|x-forwarded-to|x-envelope-to|resent-to|original-recipient|x-ms-exchange-organization-originalto)\s*:/i;
+  return headerBlock.split(/\r?\n/)
+    .filter((line) => labels.test(line.trim()))
+    .flatMap(emailsIn);
+}
+
 export async function parseNetflixEmail(raw, envelope = {}) {
   const bytes = typeof raw === "string" ? Buffer.byteLength(raw) : Number(raw?.byteLength || raw?.length || 0);
   if (!bytes || bytes > MAX_RAW_BYTES) return { accepted: false, reason: "invalid_size" };
@@ -221,6 +234,7 @@ export async function parseNetflixEmail(raw, envelope = {}) {
     ...addressValues(message.to), ...addressValues(message.cc), ...addressValues(message.bcc), ...addressValues(message.replyTo),
   ]);
   const forwarded = forwardedHeaderAddresses(plain);
+  const originalRecipients = originalRecipientHeaders(raw);
   // Outlook and other providers may flatten an automatically forwarded email
   // and leave the original Netflix account only in the membership footer.
   const bodyAddresses = [...emailsIn(plain), ...emailsIn(htmlToText(html))];
@@ -230,6 +244,7 @@ export async function parseNetflixEmail(raw, envelope = {}) {
     ...structuredFrom,
     ...structuredRecipients,
     ...forwarded,
+    ...originalRecipients,
     ...bodyAddresses,
     ...envelopeAddresses,
   ]);
