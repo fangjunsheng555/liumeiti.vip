@@ -8,7 +8,7 @@ export default function ReferenceNoticeDialog({ open, onClose, onSent }) {
   const [reference, setReference] = useState("");
   const [preview, setPreview] = useState(null);
   const [selected, setSelected] = useState(new Set());
-  const [subject, setSubject] = useState("客服通知");
+  const [subject, setSubject] = useState("订单服务更新");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState(null);
@@ -18,6 +18,7 @@ export default function ReferenceNoticeDialog({ open, onClose, onSent }) {
     setPreview(null);
     setSelected(new Set());
     setNotice(null);
+    setSubject("订单服务更新");
     setMessage("");
   }, [open]);
 
@@ -81,7 +82,7 @@ export default function ReferenceNoticeDialog({ open, onClose, onSent }) {
     <div className={styles.mask} onClick={() => !busy && onClose()}>
       <section className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby="reference-notice-title" onClick={(event) => event.stopPropagation()}>
         <header className={styles.header}>
-          <div><span><Mail size={13} />按内部编号通知</span><h2 id="reference-notice-title">发送客服通知</h2></div>
+          <div><span><Mail size={13} />按内部编号发信</span><h2 id="reference-notice-title">发送订单通知</h2></div>
           <button type="button" onClick={onClose} disabled={busy} aria-label="关闭"><X size={18} /></button>
         </header>
 
@@ -104,7 +105,7 @@ export default function ReferenceNoticeDialog({ open, onClose, onSent }) {
                 ))}
               </div>
               <label className={styles.field}><span>邮件标题</span><input value={subject} onChange={(event) => setSubject(event.target.value)} maxLength={160} /></label>
-              <label className={styles.field}><span>客服通知</span><textarea value={message} onChange={(event) => setMessage(event.target.value)} maxLength={2000} rows={5} placeholder="填写需要告知用户的内容；最新账号资料与订单备注会自动附在邮件中。" /></label>
+              <label className={styles.field}><span>通知内容</span><textarea value={message} onChange={(event) => setMessage(event.target.value)} maxLength={2000} rows={5} placeholder="填写需要告知用户的内容。最新账号资料和订单备注会自动附上。" /></label>
             </>
           )}
           {notice && <div className={`${styles.notice} ${styles[notice.type]}`}>{notice.type === "success" && <CheckCircle2 size={14} />}{notice.text}</div>}

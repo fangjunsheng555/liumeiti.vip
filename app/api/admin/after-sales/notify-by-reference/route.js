@@ -109,8 +109,8 @@ export async function POST(request) {
         await appendOrderTimeline(order.orderId, {
           type: "customer_notice_sent",
           visibility: "public",
-          summaryZh: "客服通知已发送",
-          summaryEn: "Customer service notice sent",
+          summaryZh: "订单通知已发送",
+          summaryEn: "Order update sent",
           actor: actor.staffUsername,
         });
       }

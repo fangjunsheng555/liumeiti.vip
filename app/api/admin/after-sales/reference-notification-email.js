@@ -64,7 +64,7 @@ function noteSection(label, value) {
 export function buildReferenceNotificationEmail({ orders, subject, message, brandName, siteDomain, locale = "zh" }) {
   const en = locale === "en";
   const L = (zh, english) => en ? english : zh;
-  const safeSubject = subject || L("客服通知", "Customer service notice");
+  const safeSubject = subject || L("订单服务更新", "Order service update");
   const logoUrl = `https://${String(siteDomain || "www.liumeiti.vip").replace(/^https?:\/\//, "").replace(/\/$/, "")}/email-logo.png`;
   const orderRows = orders.map((order) => {
     const detailsUrl = `https://${siteDomain}/service-center?order=${encodeURIComponent(order.orderId)}#order-query`;
@@ -103,12 +103,11 @@ export function buildReferenceNotificationEmail({ orders, subject, message, bran
         <tr><td bgcolor="#ffffff" style="padding:8px 0 18px;border-bottom:1px solid #dbe4ea;background:#ffffff!important;">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
             <td><img src="${esc(logoUrl)}" width="178" height="40" alt="${esc(brandName)}" style="display:block;width:178px;height:40px;border:0;outline:none;"></td>
-            <td align="right" style="color:#0f766e!important;font-size:11px;font-weight:800;">${L("客服通知", "CUSTOMER SERVICE")}</td>
+            <td align="right" style="color:#64748b!important;font-size:11px;font-weight:800;">${L("订单服务", "ORDER SERVICE")}</td>
           </tr></table>
         </td></tr>
         <tr><td class="email-content" bgcolor="#ffffff" style="padding:26px 0 24px;background:#ffffff!important;">
-          <div style="color:#64748b!important;font-size:11px;font-weight:800;letter-spacing:.08em;">${L("本次客服通知", "CUSTOMER SERVICE NOTICE")}</div>
-          <h1 style="margin:7px 0 10px;color:#0f172a!important;font-size:23px;line-height:1.35;">${esc(safeSubject)}</h1>
+          <h1 style="margin:0 0 10px;color:#0f172a!important;font-size:23px;line-height:1.35;">${esc(safeSubject)}</h1>
           <div style="padding-left:13px;border-left:3px solid #14b8a6;color:#334155!important;font-size:14px;line-height:1.8;white-space:pre-wrap;">${esc(message)}</div>
         </td></tr>
         <tr><td class="email-content" bgcolor="#ffffff" style="padding:0 0 12px;background:#ffffff!important;">${orderRows}</td></tr>
@@ -119,7 +118,7 @@ export function buildReferenceNotificationEmail({ orders, subject, message, bran
     </td></tr></table>
   </body></html>`;
 
-  const text = [safeSubject, "", L("本次客服通知", "Customer service notice"), message, ""];
+  const text = [safeSubject, "", message, ""];
   for (const order of orders) {
     text.push(`${L("关联订单", "Related order")}: ${order.orderId}`);
     for (const item of latestItems(order)) {

@@ -39,6 +39,22 @@ test("reference notice contains current credentials and customer-facing notes wi
   assert.doesNotMatch(result.html, /old@example\.com|old-password/);
   assert.doesNotMatch(result.html, /不得发送的内部备注/);
   assert.doesNotMatch(result.html, /订单进度|Order timeline/);
+  assert.doesNotMatch(result.html, /客服通知|本次客服通知/);
+  assert.doesNotMatch(result.text, /客服通知|本次客服通知/);
   assert.match(result.html, /name="color-scheme" content="light"/);
   assert.match(result.html, /bgcolor="#ffffff"/);
+});
+
+test("reference notice uses a concise customer-facing default subject", () => {
+  const result = buildReferenceNotificationEmail({
+    orders: [order],
+    subject: "",
+    message: "请查看最新订单资料。",
+    brandName: "冒央会社",
+    siteDomain: "www.liumeiti.vip",
+    locale: "zh",
+  });
+
+  assert.equal(result.subject, "订单服务更新");
+  assert.doesNotMatch(result.html, /客服通知/);
 });
