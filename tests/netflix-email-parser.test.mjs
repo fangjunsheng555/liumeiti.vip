@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseNetflixEmail, netflixParserInternals } from "../app/api/netflix-code/_parser.js";
 
-function mime({ from = "Netflix <info@account.netflix.com>", to = "member@codes.liumeiti.vip", subject = "Netflix", text = "", html = "", extraHeaders = [] }) {
+function mime({ from = "Netflix <info@account.netflix.com>", to = "member@example.com", subject = "Netflix", text = "", html = "", extraHeaders = [] }) {
   const boundary = "----maoyang-netflix-test";
   return [
     `From: ${from}`,
@@ -27,7 +27,7 @@ function mime({ from = "Netflix <info@account.netflix.com>", to = "member@codes.
   ].join("\r\n");
 }
 
-test("parses a direct four-digit Netflix sign-in code for a subdomain account", async () => {
+test("parses a direct four-digit Netflix sign-in code for an external account", async () => {
   const parsed = await parseNetflixEmail(mime({
     subject: "Your Netflix sign-in code",
     text: "Use this login code to sign in to Netflix: 4827. It expires in 15 minutes.",
@@ -35,7 +35,7 @@ test("parses a direct four-digit Netflix sign-in code for a subdomain account", 
   assert.equal(parsed.accepted, true);
   assert.equal(parsed.kind, "code");
   assert.equal(parsed.value, "4827");
-  assert.deepEqual(parsed.accountEmails, ["member@codes.liumeiti.vip"]);
+  assert.deepEqual(parsed.accountEmails, ["member@example.com"]);
 });
 
 test("preserves the complete Netflix travel verify URL from the Traditional Chinese template", async () => {
@@ -177,4 +177,53 @@ test("does not mistake the Netflix SRC reference for a six-digit security code",
   assert.equal(parsed.kind, "code");
   assert.equal(parsed.value, "3322");
   assert.ok(parsed.accountEmails.includes(account));
+});
+
+test("matches Outlook forwarding headers and ignores unrelated six-digit tracking values", async () => {
+  const account = "juandavidsandoval1@outlook.es";
+  const parsed = await parseNetflixEmail(mime({
+    to: "netflix@codes.liumeiti.vip",
+    subject: "Netflix: Your sign-in code",
+    extraHeaders: [
+      `X-To: ${account}`,
+      `X-MS-Exchange-Inbox-Rules-Loop: ${account}`,
+      `Resent-From: <${account}>`,
+    ],
+    text: [
+      "Enter this code to sign in",
+      "3322",
+      "Enter the code above on your device to sign in to Netflix.",
+      "This code will expire in 15 minutes.",
+      "Internal forwarding reference 653956",
+    ].join("\n"),
+  }), {
+    from: "info@account.netflix.com",
+    to: "netflix@codes.liumeiti.vip",
+    inboxAddress: "netflix@codes.liumeiti.vip",
+  });
+
+  assert.equal(parsed.accepted, true);
+  assert.equal(parsed.kind, "code");
+  assert.equal(parsed.value, "3322");
+  assert.ok(parsed.accountEmails.includes(account));
+  assert.ok(!parsed.accountEmails.some((email) => email.endsWith("@codes.liumeiti.vip")));
+});
+
+test("retains the original account when rejecting a six-digit message", async () => {
+  const account = "member@gmail.com";
+  const parsed = await parseNetflixEmail(mime({
+    to: "netflix@codes.liumeiti.vip",
+    subject: "Netflix verification code",
+    extraHeaders: [`X-Original-To: ${account}`],
+    text: "Your verification code is 123456.",
+  }), {
+    from: "info@account.netflix.com",
+    to: "netflix@codes.liumeiti.vip",
+    inboxAddress: "netflix@codes.liumeiti.vip",
+  });
+
+  assert.equal(parsed.accepted, false);
+  assert.equal(parsed.reason, "six_digit_rejected");
+  assert.ok(parsed.accountEmails.includes(account));
+  assert.ok(parsed.receivedAt);
 });

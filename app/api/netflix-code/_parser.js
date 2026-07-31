@@ -211,7 +211,7 @@ function originalRecipientHeaders(raw) {
   } catch { return []; }
   const headerBlock = source.split(/\r?\n\r?\n/, 1)[0]
     .replace(/\r?\n[ \t]+/g, " ");
-  const labels = /^(to|cc|bcc|delivered-to|x-original-to|x-originally-to|x-forwarded-to|x-envelope-to|resent-to|original-recipient|x-ms-exchange-organization-originalto)\s*:/i;
+  const labels = /^(to|cc|bcc|delivered-to|x-to|x-original-to|x-originally-to|x-original-recipient|x-forwarded-to|x-envelope-to|resent-to|resent-from|original-recipient|x-ms-exchange-inbox-rules-loop|x-ms-exchange-organization-originalto)\s*:/i;
   return headerBlock.split(/\r?\n/)
     .filter((line) => labels.test(line.trim()))
     .flatMap(emailsIn);
@@ -238,8 +238,8 @@ export async function parseNetflixEmail(raw, envelope = {}) {
   // Outlook and other providers may flatten an automatically forwarded email
   // and leave the original Netflix account only in the membership footer.
   const bodyAddresses = [...emailsIn(plain), ...emailsIn(htmlToText(html))];
-  const envelopeAddresses = [...emailsIn(envelope.from), ...emailsIn(envelope.to)];
-  const routingRecipients = new Set(emailsIn(envelope.to));
+  const envelopeAddresses = [...emailsIn(envelope.from), ...emailsIn(envelope.to), ...emailsIn(envelope.inboxAddress)];
+  const routingRecipients = new Set([...emailsIn(envelope.to), ...emailsIn(envelope.inboxAddress)]);
   const allAddresses = unique([
     ...structuredFrom,
     ...structuredRecipients,
@@ -251,20 +251,18 @@ export async function parseNetflixEmail(raw, envelope = {}) {
   const netflixSender = unique([...structuredFrom, ...forwarded, ...emailsIn(plain.slice(0, 3000))]).find(isNetflixAddress) || "";
   if (!netflixSender) return { accepted: false, reason: "untrusted_sender" };
 
-  // Netflix accounts may intentionally use a liumeiti.vip subdomain. Keep every
-  // non-Netflix address and let the verified order account hash select the
-  // matching event later; extra forwarding addresses cannot grant access.
-  const accountEmails = allAddresses.filter((email) => !isNetflixAddress(email) && !routingRecipients.has(email));
+  // The dedicated codes subdomain is only an inbound route. Never index one of
+  // its aliases as a Netflix account when a forwarding provider omits the SMTP
+  // envelope recipient from the webhook headers.
+  const accountEmails = allAddresses.filter((email) => {
+    const domain = String(email || "").split("@")[1] || "";
+    return !isNetflixAddress(email)
+      && !routingRecipients.has(email)
+      && domain !== "codes.liumeiti.vip"
+      && !domain.endsWith(".codes.liumeiti.vip");
+  });
   if (!accountEmails.length) return { accepted: false, reason: "account_email_missing" };
   const codeSearchText = withoutUrls(text);
-  if (SENSITIVE_CONTEXT.some((phrase) => lower.includes(phrase.toLowerCase())) && containsSixDigitToken(codeSearchText)) {
-    return { accepted: false, reason: "sensitive_six_digit" };
-  }
-  if (containsSixDigitToken(codeSearchText)) return { accepted: false, reason: "six_digit_rejected" };
-
-  const phrases = LANGUAGE_RULES.flatMap((rule) => rule.hints);
-  const candidates = codeCandidates(codeSearchText).filter((candidate) => hasNearbyPhrase(codeSearchText, candidate.index, phrases));
-  const codes = unique(candidates.map((candidate) => candidate.value));
   const language = detectLanguage(text, html);
   const receivedAt = new Date(envelope.receivedAt || Date.now()).toISOString();
   const expiresAt = new Date(new Date(receivedAt).getTime() + 15 * 60 * 1000).toISOString();
@@ -278,11 +276,25 @@ export async function parseNetflixEmail(raw, envelope = {}) {
     expiresAt,
     preview: plain.replace(/\s+/g, " ").trim().slice(0, 240),
   };
+
+  // A flattened Outlook forward can contain unrelated six-digit tracking
+  // references in the footer. Prefer one unambiguous four-digit value that is
+  // adjacent to Netflix sign-in wording; six-digit values are never returned.
+  const phrases = LANGUAGE_RULES.flatMap((rule) => rule.hints);
+  const candidates = codeCandidates(codeSearchText).filter((candidate) => hasNearbyPhrase(codeSearchText, candidate.index, phrases));
+  const codes = unique(candidates.map((candidate) => candidate.value));
   if (codes.length === 1) return { ...base, kind: "code", value: codes[0], template: `${language}:login-code` };
   if (codes.length > 1) return { ...base, accepted: false, reason: "ambiguous_code", value: undefined };
 
   const link = safeConfirmationLink(html, plain);
   if (link) return { ...base, kind: "link", value: link, template: `${language}:temporary-code-link` };
+
+  if (SENSITIVE_CONTEXT.some((phrase) => lower.includes(phrase.toLowerCase())) && containsSixDigitToken(codeSearchText)) {
+    return { ...base, accepted: false, reason: "sensitive_six_digit", value: undefined };
+  }
+  if (containsSixDigitToken(codeSearchText)) {
+    return { ...base, accepted: false, reason: "six_digit_rejected", value: undefined };
+  }
   return { ...base, accepted: false, reason: "supported_content_not_found", value: undefined };
 }
 

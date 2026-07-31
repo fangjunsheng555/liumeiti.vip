@@ -12,7 +12,7 @@ import {
 } from "../_utils.js";
 import { orderExpirySummary } from "../../lib/order-expiry.js";
 import {
-  findLatestNetflixResult,
+  findLatestNetflixMailState,
   maskNetflixEmail,
   netflixAccountHash,
   netflixCodeLockKey,
@@ -172,8 +172,12 @@ export async function POST(request) {
     }
   }
 
-  const result = await findLatestNetflixResult(eligible.account, { since: Number(claim.startedAt || 0) });
-  if (!result) return Response.json({ ok: true, pending: true, retryAfter: 8 }, { headers: { "Cache-Control": "no-store" } });
+  const mailState = await findLatestNetflixMailState(eligible.account, { since: Number(claim.startedAt || 0) });
+  if (mailState.state === "rejected") {
+    return Response.json({ ok: false, error: "mail_unrecognized" }, { status: 422, headers: { "Cache-Control": "no-store" } });
+  }
+  const result = mailState.state === "result" ? mailState.result : null;
+  if (!result) return Response.json({ ok: true, pending: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
   if (result.kind === "code" && /^\d{4}$/.test(result.value)) {
     await redisCmd(["DEL", attemptsKey]);
     await logSuccessfulAccess(order, eligible.account, claim, "code_returned", result.eventId);
@@ -185,7 +189,7 @@ export async function POST(request) {
     await logSuccessfulAccess(order, eligible.account, claim, "travel_link_returned", result.eventId);
     return Response.json({ ok: true, kind: "link", url: link, expiresAt: result.expiresAt, receivedAtBeijing: result.receivedAtBeijing }, { headers: { "Cache-Control": "no-store" } });
   }
-  return Response.json({ ok: true, pending: true, retryAfter: 8 }, { headers: { "Cache-Control": "no-store" } });
+  return Response.json({ ok: true, pending: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function GET() {

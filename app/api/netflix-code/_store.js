@@ -124,32 +124,53 @@ export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "
   return { ok, eventId, accepted: record.accepted, kind: record.kind, reason: record.reason };
 }
 
-export async function findLatestNetflixResult(email, { since = 0 } = {}) {
+export async function findLatestNetflixMailState(email, { since = 0 } = {}) {
   const hash = netflixAccountHash(email);
   // The customer normally returns after Netflix has already sent the message.
   // Keep a short lookback so a valid code received just before authorization is
   // still available, while the expiry check below rejects stale messages.
-  const minScore = Math.max(Date.now() - 20 * 60 * 1000, Number(since || 0) - 5 * 60 * 1000);
+  const startedAt = Number(since || 0);
+  const minScore = Math.max(Date.now() - 20 * 60 * 1000, startedAt - 5 * 60 * 1000);
+  const rejectedMinScore = Math.max(Date.now() - 20 * 60 * 1000, startedAt);
   const ids = await redisCmd(["ZREVRANGEBYSCORE", accountIndexKey(hash), "+inf", String(minScore), "LIMIT", "0", "20"]);
+  let rejected = null;
   for (const eventId of (Array.isArray(ids) ? ids : [])) {
     const record = parseJson(await redisCmd(["GET", eventKey(eventId)]));
-    if (!record?.accepted || !record.accountHashes?.includes(hash)) continue;
+    if (!record?.accountHashes?.includes(hash)) continue;
     const receivedAt = new Date(record.receivedAt || 0).getTime();
     const expiresAt = new Date(record.expiresAt || 0).getTime();
     if (!receivedAt || receivedAt < minScore || !expiresAt || expiresAt <= Date.now()) continue;
+    if (!record.accepted && receivedAt >= rejectedMinScore) {
+      rejected ||= {
+        state: "rejected",
+        eventId: record.eventId,
+        reason: record.reason || "supported_content_not_found",
+        receivedAt: record.receivedAt,
+        receivedAtBeijing: record.receivedAtBeijing,
+      };
+      continue;
+    }
     const value = decryptPayload(record.payload);
     if (!value) continue;
     return {
-      eventId: record.eventId,
-      kind: record.kind,
-      value,
-      language: record.language,
-      receivedAt: record.receivedAt,
-      receivedAtBeijing: record.receivedAtBeijing,
-      expiresAt: record.expiresAt,
+      state: "result",
+      result: {
+        eventId: record.eventId,
+        kind: record.kind,
+        value,
+        language: record.language,
+        receivedAt: record.receivedAt,
+        receivedAtBeijing: record.receivedAtBeijing,
+        expiresAt: record.expiresAt,
+      },
     };
   }
-  return null;
+  return rejected || { state: "pending" };
+}
+
+export async function findLatestNetflixResult(email, options = {}) {
+  const state = await findLatestNetflixMailState(email, options);
+  return state.state === "result" ? state.result : null;
 }
 
 export async function recordNetflixCodeAccess(entry) {

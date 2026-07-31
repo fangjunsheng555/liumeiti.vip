@@ -43,6 +43,7 @@ export async function POST(request) {
   const parsed = await parseNetflixEmail(raw, {
     from: request.headers.get("x-email-envelope-from") || "",
     to: request.headers.get("x-email-envelope-to") || "",
+    inboxAddress: process.env.NETFLIX_INBOX_ADDRESS || "netflix@codes.liumeiti.vip",
     receivedAt: new Date(timestampNumber).toISOString(),
   });
   // The catch-all address may receive unrelated mail. Ignore untrusted traffic

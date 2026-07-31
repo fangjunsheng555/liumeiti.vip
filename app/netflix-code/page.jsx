@@ -20,9 +20,9 @@ import MobileNav from "../components/MobileNav";
 import { useLocale } from "../components/LocaleProvider";
 import styles from "./netflix-code.module.css";
 
-const RESULT_POLL_MS = 7000;
-const RESULT_POLL_LIMIT = 26;
-const RESULT_DELAY_NOTICE_AT = 8;
+const RESULT_POLL_MS = 6000;
+const RESULT_POLL_LIMIT = 15;
+const RESULT_DELAY_NOTICE_AT = 5;
 
 function hasNetflix(order) {
   return (Array.isArray(order?.items) ? order.items : []).some((item) => item?.service === "netflix");
@@ -99,6 +99,7 @@ export default function NetflixCodePage() {
       session_expired: L("本次核验已过期，请重新选择订单", "This verification has expired; select the order again"),
       temporarily_locked: L("操作较频繁，请 15 分钟后再试", "Too many attempts; try again in 15 minutes"),
       service_not_configured: L("登录码服务暂时不可用，请稍后再试", "The sign-in code service is temporarily unavailable; try again later"),
+      mail_unrecognized: L("已收到邮件，但未识别到可用的 4 位登录码。请在 Netflix 重新发送后再试", "The email arrived, but no valid 4-digit sign-in code was found. Request a new email from Netflix and try again"),
     })[error] || L("暂时无法完成，请稍后再试", "Unable to complete this request right now");
   }
 
@@ -197,7 +198,7 @@ export default function NetflixCodePage() {
       setStatus({
         type: "info",
         text: pollCount.current >= RESULT_DELAY_NOTICE_AT
-          ? L("邮件仍在转发中，请保持此页面打开。", "Your email is still being forwarded. Keep this page open.")
+          ? L("邮件可能仍在转发中，请稍候。", "Your email may still be forwarding. Please wait.")
           : L("正在接收 Netflix 邮件…", "Waiting for your Netflix email…"),
       });
       pollTimer.current = window.setTimeout(retrieveResult, RESULT_POLL_MS);
