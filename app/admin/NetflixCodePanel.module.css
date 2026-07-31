@@ -55,7 +55,7 @@
   .meta > div { border-bottom: 1px solid #e2e8f0; }
   .meta > div:nth-child(2n) { border-right: 0; }
   .tableHead { display: none; }
-  .row, .row.accessGrid { grid-template-columns: 1fr; gap: 8px; padding: 12px 13px; }
+  .row, .row.accessGrid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 12px; min-height: 0; padding: 10px 13px; align-items: start; }
   .orders > div { align-items: flex-start; flex-direction: column; }
   .actionMenu { align-self: flex-start; }
   .actions { right: auto; left: 0; }
