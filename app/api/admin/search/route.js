@@ -18,13 +18,13 @@ export async function GET(request) {
   // 订单(所有可看订单的角色)
   const allOrders = await getAllOrders();
   const orders = allOrders
-    .filter((o) => [o.orderId, o.email, o.contact, o.serviceLabel, o.platformUrl, o.productPrice].join(" ").toLowerCase().includes(q))
+    .filter((o) => [o.orderId, o.internalReference, o.email, o.contact, o.serviceLabel, o.platformUrl, o.productPrice].join(" ").toLowerCase().includes(q))
     .slice(0, 6)
     .map((o) => ({
       orderId: o.orderId || "", email: o.email || "",
       serviceLabel: o.serviceLabel || (Array.isArray(o.items) ? o.items.map((i) => i.label).join(" + ") : ""),
       status: o.status || "received", statusLabel: statusLabel[o.status] || o.status || "",
-      createdAtBeijing: o.createdAtBeijing || "",
+      createdAtBeijing: o.createdAtBeijing || "", internalReference: o.internalReference || "",
     }));
 
   // 用户(需 canViewUsers)

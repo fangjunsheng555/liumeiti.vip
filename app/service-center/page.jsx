@@ -14,6 +14,7 @@ import {
   Gift,
   Headphones,
   HelpCircle,
+  KeyRound,
   LifeBuoy,
   LoaderCircle,
   Lock,
@@ -633,14 +634,20 @@ export default function ServiceCenterPage() {
                   <div className="section-kicker">{L("订单查询/申请售后", "Order lookup / after-sales")}</div>
                   <h1 className="section-title">{L("订单查询/申请售后", "Order lookup / after-sales")}</h1>
                 </div>
-                <Link
-                  href="/guides/how-to-request-after-sales-support"
-                  className="after-sales-guide-link"
-                  aria-label={L("如何申请售后帮助", "After-sales help")}
-                >
-                  <HelpCircle size={15} aria-hidden="true" />
-                  {L("帮助", "Help")}
-                </Link>
+                <div className="service-head-links">
+                  <Link href="/netflix-code" className="after-sales-guide-link" aria-label={L("获取 Netflix 登录码", "Get a Netflix sign-in code")}>
+                    <KeyRound size={15} aria-hidden="true" />
+                    {L("Netflix 登录码", "Netflix code")}
+                  </Link>
+                  <Link
+                    href="/guides/how-to-request-after-sales-support"
+                    className="after-sales-guide-link"
+                    aria-label={L("如何申请售后帮助", "After-sales help")}
+                  >
+                    <HelpCircle size={15} aria-hidden="true" />
+                    {L("帮助", "Help")}
+                  </Link>
+                </div>
               </div>
               <div className="order-query-panel">
                 <form className={`order-query-form ${queryVerification ? "is-verifying" : ""}`} onSubmit={submitQuery}>

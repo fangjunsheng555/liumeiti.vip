@@ -7341,6 +7341,35 @@ summary:focus-visible {
   padding-top: 8px;
   border-top: 1px dashed #d7e0e7;
 }
+.admin-delivery-internal-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, .55fr);
+  align-items: end;
+  gap: 10px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+.admin-delivery-internal-tools > label { min-width: 0; display: grid; gap: 5px; }
+.admin-delivery-internal-tools > label > span { color: var(--primary); font-size: 10.5px; font-weight: 850; }
+.admin-delivery-internal-tools > label > span em { color: var(--muted); font-size: 9px; font-style: normal; font-weight: 650; }
+.admin-delivery-internal-tools input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--primary);
+  font-size: 12px;
+  outline: 0;
+}
+.admin-delivery-internal-tools input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(15, 118, 110, .08); }
+.admin-order-reference { margin-left: 6px; color: #0f766e; font-family: inherit; font-size: 9px; font-style: normal; font-weight: 800; }
+@media (max-width: 640px) {
+  .admin-delivery-internal-tools { grid-template-columns: 1fr; }
+}
 .admin-delivery-internal > span { color: var(--primary); font-size: 10.5px; font-weight: 850; }
 .admin-delivery-internal > span em {
   margin-left: 4px;
@@ -13751,6 +13780,7 @@ summary:focus-visible {
 .admin-after-sales-kicker { display: inline-flex; align-items: center; gap: 6px; color: #0f766e; font-size: 11px; font-weight: 850; }
 .admin-after-sales-header h1 { margin: 5px 0 4px; color: #0f172a; font-size: 23px; line-height: 1.2; font-weight: 900; letter-spacing: 0; }
 .admin-after-sales-header p { margin: 0; color: #64748b; font-size: 12px; line-height: 1.6; }
+.admin-after-sales-head-actions { display: flex; align-items: center; gap: 7px; }
 .admin-after-sales-refresh { height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none; padding: 0 12px; border: 1px solid #cbd5e1; border-radius: 9px; background: #fff; color: #334155; font-size: 11px; font-weight: 800; cursor: pointer; }
 .admin-after-sales-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .admin-after-sales-stats > div { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 10px; padding: 14px 16px; border: 1px solid #dbe4ef; border-radius: 12px; background: #fff; }
@@ -16253,6 +16283,17 @@ body:has(.account-modal-mask) .floating-wrap {
   gap: 10px;
   margin-top: 18px;
   max-width: 360px;
+}
+.service-seo-actions .netflix-code-entry {
+  grid-column: 1 / -1;
+  min-height: 38px;
+}
+.service-head-links {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 7px;
 }
 /* 服务详情面包屑导航 */
 .service-breadcrumb {

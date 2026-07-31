@@ -10,6 +10,7 @@ export const ORDER_INDEX_KEY = ORDERS_KEY + ":index";
 export const ORDER_DELETED_INDEX_KEY = ORDERS_KEY + ":deleted-index"; // SET of soft-deleted order ids(供快速分页精确排除)
 export const ORDER_RECORD_PREFIX = ORDERS_KEY + ":record:";
 export const ORDER_EMAIL_INDEX_PREFIX = ORDERS_KEY + ":email:";
+export const ORDER_REFERENCE_INDEX_PREFIX = ORDERS_KEY + ":reference:";
 export const USDT_PENDING_ORDER_INDEX_KEY = ORDERS_KEY + ":usdt-pending";
 export const QUOTE_EXPIRY_ORDER_INDEX_KEY = ORDERS_KEY + ":quote-expiry";
 export const ORDER_OVERVIEW_HASH_KEY = ORDERS_KEY + ":overview";
@@ -85,6 +86,13 @@ function normalizeEmailForStorage(value) {
   return clean(value, 200).toLowerCase().trim();
 }
 
+export function normalizeInternalReference(value) {
+  return clean(value, 32)
+    .toUpperCase()
+    .replace(/[^A-Z0-9_-]/g, "")
+    .slice(0, 32);
+}
+
 function orderRecordKey(orderId) {
   const id = normalizeOrderIdForStorage(orderId);
   return id ? ORDER_RECORD_PREFIX + id : "";
@@ -93,6 +101,11 @@ function orderRecordKey(orderId) {
 function orderEmailIndexKey(email) {
   const lower = normalizeEmailForStorage(email);
   return lower ? ORDER_EMAIL_INDEX_PREFIX + lower : "";
+}
+
+function orderReferenceIndexKey(reference) {
+  const normalized = normalizeInternalReference(reference);
+  return normalized ? ORDER_REFERENCE_INDEX_PREFIX + normalized : "";
 }
 
 function isPendingUsdtOrder(order) {
@@ -193,6 +206,8 @@ function orderOverviewSnapshot(order) {
     assignedStaffUsername: order.assignedStaffUsername || "",
     assignedAt: order.assignedAt || "",
     assignedAtBeijing: order.assignedAtBeijing || "",
+    internalReference: normalizeInternalReference(order.internalReference),
+    netflixSelfServiceEnabled: order.netflixSelfServiceEnabled !== false,
     slaReminderKey: order.slaReminderKey || "",
     slaReminderSentAt: order.slaReminderSentAt || "",
   };
@@ -338,6 +353,7 @@ export async function saveOrderRecord(order) {
   const r = redisConfig();
   if (!r || !order?.orderId) return false;
   const orderId = normalizeOrderIdForStorage(order.orderId);
+  const previous = parseOrderJson(await redisCmd(["GET", orderRecordKey(orderId)]));
   const commands = [
     ["SET", orderRecordKey(orderId), JSON.stringify(order)],
     ["LPUSH", ORDER_INDEX_KEY, orderId],
@@ -359,6 +375,10 @@ export async function saveOrderRecord(order) {
   const userEmailKey = orderEmailIndexKey(order.userEmail);
   if (buyerEmailKey) commands.push(["LPUSH", buyerEmailKey, orderId]);
   if (userEmailKey && userEmailKey !== buyerEmailKey) commands.push(["LPUSH", userEmailKey, orderId]);
+  const previousReferenceKey = orderReferenceIndexKey(previous?.internalReference);
+  const referenceKey = orderReferenceIndexKey(order.internalReference);
+  if (previousReferenceKey && previousReferenceKey !== referenceKey) commands.push(["SREM", previousReferenceKey, orderId]);
+  if (referenceKey) commands.push(["SADD", referenceKey, orderId]);
   try {
     const result = await redisPipeline(commands);
     const rows = pipelineResults(result);
@@ -417,6 +437,30 @@ export async function getOrdersByEmail(email, limit = 50) {
       return true;
     })
     .slice(0, Number(limit || 50));
+}
+
+export async function getOrdersByInternalReference(reference, limit = 200) {
+  const normalized = normalizeInternalReference(reference);
+  if (!normalized) return [];
+  const key = orderReferenceIndexKey(normalized);
+  const ids = await redisCmd(["SMEMBERS", key]);
+  const indexed = (await getOrdersByIds(Array.isArray(ids) ? ids : []))
+    .map((entry) => entry.order)
+    .filter((order) => !order?.deleted && normalizeInternalReference(order?.internalReference) === normalized);
+  if (indexed.length) {
+    return indexed
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+      .slice(0, Math.max(1, Math.min(500, Number(limit || 200))));
+  }
+
+  // Historical references are indexed lazily the first time staff search them.
+  const matched = (await getAllOrders())
+    .filter((order) => normalizeInternalReference(order?.internalReference) === normalized)
+    .slice(0, Math.max(1, Math.min(500, Number(limit || 200))));
+  if (matched.length) {
+    await redisCmd(["SADD", key, ...matched.map((order) => normalizeOrderIdForStorage(order.orderId))]);
+  }
+  return matched;
 }
 
 // Read all stored orders, filtering tombstoned/deleted entries. New orders use
@@ -548,6 +592,7 @@ export async function setOrderAt(index, order) {
   const handle = typeof index === "object" && index !== null ? index : { legacyIndex: index, orderId: order?.orderId };
   const orderId = normalizeOrderIdForStorage(handle.orderId || order?.orderId);
   if (orderId) {
+    const previous = parseOrderJson(await redisCmd(["GET", orderRecordKey(orderId)]));
     const commands = [["SET", orderRecordKey(orderId), JSON.stringify(order)]];
     // Promoted legacy records must enter the primary index before their old list copy can go stale.
     const indexPosition = await redisCmd(["LPOS", ORDER_INDEX_KEY, orderId]);
@@ -571,6 +616,10 @@ export async function setOrderAt(index, order) {
       commands.push(["ZREM", ORDER_SUMMARY_INDEX_KEY, orderId]);
     }
     commands.push(["INCR", ORDER_LIST_REVISION_KEY]);
+    const previousReferenceKey = orderReferenceIndexKey(previous?.internalReference);
+    const referenceKey = orderReferenceIndexKey(order.internalReference);
+    if (previousReferenceKey && previousReferenceKey !== referenceKey) commands.push(["SREM", previousReferenceKey, orderId]);
+    if (referenceKey) commands.push(["SADD", referenceKey, orderId]);
     const result = await redisPipeline(commands);
     const rows = pipelineResults(result);
     return rows.length === commands.length && rows.every((item) => !item?.error);

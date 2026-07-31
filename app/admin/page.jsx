@@ -18,6 +18,7 @@ import SecurityPanel from "./SecurityPanel";
 import AfterSalesPanel from "./AfterSalesPanel";
 import MailDeliveryPanel from "./MailDeliveryPanel";
 import SystemHealthPanel from "./SystemHealthPanel";
+import NetflixCodePanel from "./NetflixCodePanel";
 import DeliveryWorkbench from "./DeliveryWorkbench";
 import {
   applyThirdPartyNotice,
@@ -32,7 +33,7 @@ import {
   Gift, CreditCard, Plus, UserPlus, Mail, BellRing, BarChart3, Download, FileText,
   LayoutDashboard, ClipboardList, ShoppingCart, Users, Wallet, Coins,
   Megaphone, Footprints, Menu, Newspaper, Gauge, Package, SlidersHorizontal,
-  LifeBuoy, MailCheck, Activity,
+  LifeBuoy, MailCheck, Activity, KeyRound,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -3438,6 +3439,8 @@ export default function AdminPage() {
         quoteValidDays: String(detail.quoteValidDays || 7),
         staffNotes: detail.staffNotes || "",
         internalNotes: detail.internalNotes || "",
+        internalReference: detail.internalReference || "",
+        netflixSelfServiceEnabled: detail.netflixSelfServiceEnabled !== false,
         thirdPartyPlatformNotice: Boolean(
           detail.thirdPartyPlatformNotice || hasThirdPartyNotice(detail.staffNotes),
         ),
@@ -3770,6 +3773,8 @@ export default function AdminPage() {
           status: editForm.status,
           staffNotes: customerMessage,
           internalNotes: editForm.internalNotes,
+          internalReference: editForm.internalReference,
+          netflixSelfServiceEnabled: editForm.netflixSelfServiceEnabled,
           thirdPartyPlatformNotice: editForm.thirdPartyPlatformNotice,
           deliveryMessageMode: editForm.deliveryMessageMode,
           items: editForm.items.map((it) => ({
@@ -3795,6 +3800,8 @@ export default function AdminPage() {
           status: data.order.status,
           staffNotes: data.order.staffNotes || "",
           internalNotes: data.order.internalNotes || "",
+          internalReference: data.order.internalReference || "",
+          netflixSelfServiceEnabled: data.order.netflixSelfServiceEnabled !== false,
           thirdPartyPlatformNotice: Boolean(data.order.thirdPartyPlatformNotice),
           deliveryMessageMode: data.order.deliveryMessageMode === "auto" ? "auto" : "custom",
           items: current.items.map((item, index) => {
@@ -4007,6 +4014,7 @@ export default function AdminPage() {
       items: [
         { key: "orders", label: "订单管理", icon: ClipboardList, show: true, badge: Number(overview?.pendingOrders || 0) },
         { key: "after-sales", label: "售后工单", icon: LifeBuoy, show: true, badge: Number(overview?.pendingAfterSales || 0), warn: true },
+        { key: "netflix-code", label: "Netflix 接码", icon: KeyRound, show: true },
         { key: "abnormal", label: "异常订单", icon: AlertTriangle, show: true, badge: abnormalBadgeCount, warn: true },
         { key: "abandoned", label: "弃单召回", icon: ShoppingCart, show: isRootStaff, badge: Number(overview?.abandonedTotal || 0) },
       ],
@@ -4273,9 +4281,12 @@ export default function AdminPage() {
         ) : tab === "after-sales" ? (
           <AfterSalesPanel
             canEdit={canEditOrders}
+            canSendMail={canSendMail}
             onChanged={() => loadOverview({ silent: true })}
             onOpenOrder={openRelatedOrder}
           />
+        ) : tab === "netflix-code" ? (
+          <NetflixCodePanel canEdit={canEditOrders} />
         ) : tab === "users" ? (
           <div className="admin-users-pane">
             {/* All registered users */}
@@ -5322,7 +5333,7 @@ export default function AdminPage() {
                   )}
                   <div className="admin-order-content">
                     <div className="admin-order-top">
-                      <span className="admin-order-id">{o.orderId}</span>
+                      <span className="admin-order-id">{o.orderId}{o.internalReference && <em className="admin-order-reference">#{o.internalReference}</em>}</span>
                       <span className="admin-card-badges">
                         {orderOpeningId === o.orderId && <LoaderCircle size={12} className="spin-icon" />}
                         {o.lastStaffId && <span className="staff-mini-badge">{o.lastStaffId}</span>}
@@ -5756,6 +5767,8 @@ export default function AdminPage() {
                 items={editForm.items}
                 customerMessage={editForm.staffNotes}
                 internalNotes={editForm.internalNotes}
+                internalReference={editForm.internalReference}
+                netflixSelfServiceEnabled={editForm.netflixSelfServiceEnabled}
                 thirdPartyPlatformNotice={editForm.thirdPartyPlatformNotice}
                 deliveryMessageMode={editForm.deliveryMessageMode}
                 onFulfillmentChange={updateFulfillment}
@@ -5768,6 +5781,14 @@ export default function AdminPage() {
                 onInternalNotesChange={(value) => setEditForm((current) => ({
                   ...current,
                   internalNotes: value,
+                }))}
+                onInternalReferenceChange={(value) => setEditForm((current) => ({
+                  ...current,
+                  internalReference: value,
+                }))}
+                onNetflixSelfServiceChange={(value) => setEditForm((current) => ({
+                  ...current,
+                  netflixSelfServiceEnabled: value,
                 }))}
                 onThirdPartyChange={updateThirdPartyPlatformNotice}
               />

@@ -17,13 +17,14 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
+import ReferenceNoticeDialog from "./ReferenceNoticeDialog";
 
 function compactTime(value) {
   const match = String(value || "").match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/);
   return match ? `${match[1]} ${match[2]}` : value || "未记录";
 }
 
-export default function AfterSalesPanel({ canEdit = false, onChanged, onOpenOrder }) {
+export default function AfterSalesPanel({ canEdit = false, canSendMail = false, onChanged, onOpenOrder }) {
   const [status, setStatus] = useState("pending");
   const [search, setSearch] = useState("");
   const [appliedSearch, setAppliedSearch] = useState("");
@@ -39,6 +40,7 @@ export default function AfterSalesPanel({ canEdit = false, onChanged, onOpenOrde
   const [completing, setCompleting] = useState(false);
   const [relatedOrderLoading, setRelatedOrderLoading] = useState(false);
   const [result, setResult] = useState(null);
+  const [referenceNoticeOpen, setReferenceNoticeOpen] = useState(false);
 
   const loadTickets = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -163,7 +165,10 @@ export default function AfterSalesPanel({ canEdit = false, onChanged, onOpenOrde
           <h1>售后工单</h1>
           <p>处理用户从订单详情提交的售后申请，完成后系统自动发送结果邮件。</p>
         </div>
-        <button type="button" className="admin-after-sales-refresh" onClick={() => loadTickets()} disabled={loading}><RefreshCw size={14} />刷新</button>
+        <div className="admin-after-sales-head-actions">
+          {canSendMail && <button type="button" className="admin-after-sales-refresh" onClick={() => setReferenceNoticeOpen(true)}><Mail size={14} />按编号通知</button>}
+          <button type="button" className="admin-after-sales-refresh" onClick={() => loadTickets()} disabled={loading}><RefreshCw size={14} />刷新</button>
+        </div>
       </header>
 
       <div className="admin-after-sales-stats">
@@ -321,6 +326,11 @@ export default function AfterSalesPanel({ canEdit = false, onChanged, onOpenOrde
           </article>
         </div>
       )}
+      <ReferenceNoticeDialog
+        open={referenceNoticeOpen}
+        onClose={() => setReferenceNoticeOpen(false)}
+        onSent={() => loadTickets({ silent: true })}
+      />
     </section>
   );
 }

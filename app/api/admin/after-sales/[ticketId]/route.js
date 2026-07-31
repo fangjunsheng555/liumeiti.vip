@@ -11,6 +11,7 @@ import {
   hydrateAfterSalesTicketCredentials,
 } from "../../../after-sales/_store.js";
 import { sendAfterSalesEmail } from "../../../after-sales/_email.js";
+import { appendOrderTimeline } from "../../../_order-timeline.js";
 
 export async function GET(request, { params }) {
   const session = adminSessionFromRequest(request);
@@ -50,6 +51,14 @@ export async function PATCH(request, { params }) {
   let notice = null;
   if (result.changed) {
     notice = await sendAfterSalesEmail(result.ticket, "completed").catch(() => ({ ok: false }));
+    await appendOrderTimeline(result.ticket.orderId, {
+      type: "after_sales_completed",
+      visibility: "public",
+      summaryZh: "售后工单已完成",
+      summaryEn: "After-sales ticket completed",
+      actor: actor.staffUsername,
+      meta: { ticketId: result.ticket.ticketId },
+    });
     await pushAdminActionLog({
       action: "after_sales_complete",
       actor,

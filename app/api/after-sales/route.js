@@ -12,6 +12,7 @@ import {
 import { getMergedCatalog } from "../_catalog.js";
 import { createAfterSalesTicket, publicAfterSalesSummary } from "./_store.js";
 import { sendAfterSalesEmail } from "./_email.js";
+import { appendOrderTimeline } from "../_order-timeline.js";
 
 function normalizeOrderId(value) {
   return clean(value, 80).replace(/\s+/g, "").toUpperCase();
@@ -141,6 +142,14 @@ export async function POST(request) {
   }
 
   const mailResult = await sendAfterSalesEmail(created.ticket, "received").catch(() => ({ ok: false }));
+  await appendOrderTimeline(orderId, {
+    type: "after_sales_created",
+    visibility: "public",
+    summaryZh: "售后工单已提交",
+    summaryEn: "After-sales ticket submitted",
+    actor: "customer",
+    meta: { ticketId: created.ticket.ticketId },
+  });
   return Response.json({
     ok: true,
     ticket: publicAfterSalesSummary(created.ticket),

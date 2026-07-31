@@ -6,7 +6,9 @@ import {
   settleOrderReferralCommission, reverseOrderReferralCommission, sendSimpleEmail, adminPermissionProfile,
   restoreStock, reserveStock, refundVoidedOrder, reclaimRefundOnReactivate, validEmail,
   listAssignableAdminStaff, redisCmd,
+  normalizeInternalReference,
 } from "../../../_utils.js";
+import { appendOrderTimeline, getOrderTimeline } from "../../../_order-timeline.js";
 import { buildCompletionEmailHtml, buildCompletionEmailText } from "../../../order/completion-email.js";
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
 import { buildProxyOrderEmail } from "../../../quote-orders/_email.js";
@@ -143,8 +145,9 @@ export async function GET(request, { params }) {
   const { orderId } = await params;
   const order = await getOrderById(orderId);
   if (!order) return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
+  const timeline = await getOrderTimeline(order);
   return Response.json(
-    { ok: true, order: orderForAdminResponse(order) },
+    { ok: true, order: orderForAdminResponse(order), timeline },
     { headers: { "Cache-Control": "no-store" } },
   );
 }
@@ -226,6 +229,13 @@ export async function PATCH(request, { params }) {
 
       const saved = await setOrderAt(entry.index, order);
       if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
+      await appendOrderTimeline(order.orderId, {
+        type: target ? "assigned" : "unassigned",
+        visibility: "internal",
+        summaryZh: target ? `负责人已更新为 ${target.username}` : "已取消订单负责人",
+        summaryEn: target ? `Assigned to ${target.username}` : "Order unassigned",
+        actor: actor.staffUsername,
+      });
       await pushAdminActionLog({
         action: target ? (body.action === "claim" ? "order_claim" : "order_assign") : "order_unassign",
         actor,
@@ -257,6 +267,7 @@ export async function PATCH(request, { params }) {
   const quoteRequested = Object.prototype.hasOwnProperty.call(body, "quoteAmount");
   const staffNotes = clean(body.staffNotes, 1500);
   const internalNotes = clean(body.internalNotes, 2000);
+  const internalReference = normalizeInternalReference(body.internalReference);
   const deliveryMessageMode = ["auto", "custom"].includes(body.deliveryMessageMode)
     ? body.deliveryMessageMode
     : null;
@@ -275,6 +286,14 @@ export async function PATCH(request, { params }) {
     }
   }
   if (!order) return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
+  const previousStatus = order.status;
+  const previousReference = normalizeInternalReference(order.internalReference);
+  const previousCredentials = JSON.stringify((order.items || []).map((item) => ({
+    account: item?.account || "",
+    password: item?.password || "",
+    staffAccount: item?.staffAccount || "",
+    staffPassword: item?.staffPassword || "",
+  })));
 
   if (body.action === "spotify_password_error") {
     if (order.status === "invalid") {
@@ -440,6 +459,10 @@ export async function PATCH(request, { params }) {
 
   if (typeof body.staffNotes === "string") order.staffNotes = staffNotes;
   if (typeof body.internalNotes === "string") order.internalNotes = internalNotes;
+  if (Object.prototype.hasOwnProperty.call(body, "internalReference")) order.internalReference = internalReference;
+  if (typeof body.netflixSelfServiceEnabled === "boolean") {
+    order.netflixSelfServiceEnabled = body.netflixSelfServiceEnabled;
+  }
   if (typeof body.thirdPartyPlatformNotice === "boolean") {
     order.thirdPartyPlatformNotice = body.thirdPartyPlatformNotice;
   }
@@ -527,6 +550,48 @@ export async function PATCH(request, { params }) {
   // Save back
   const saved = await setOrderAt(index, order);
   if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
+  if (previousReference !== normalizeInternalReference(order.internalReference)) {
+    await appendOrderTimeline(order.orderId, {
+      type: "reference_changed",
+      visibility: "internal",
+      summaryZh: order.internalReference ? `内部编号已设为 ${order.internalReference}` : "内部编号已清除",
+      summaryEn: order.internalReference ? `Internal reference set to ${order.internalReference}` : "Internal reference cleared",
+      actor: actor.staffUsername,
+    });
+  }
+  const nextCredentials = JSON.stringify((order.items || []).map((item) => ({
+    account: item?.account || "",
+    password: item?.password || "",
+    staffAccount: item?.staffAccount || "",
+    staffPassword: item?.staffPassword || "",
+  })));
+  if (previousCredentials !== nextCredentials) {
+    await appendOrderTimeline(order.orderId, {
+      type: "credentials_updated",
+      visibility: "public",
+      summaryZh: "服务登录资料已更新",
+      summaryEn: "Service login details updated",
+      actor: actor.staffUsername,
+    });
+  }
+  if (newStatus && previousStatus !== order.status) {
+    const statusCopy = {
+      awaiting_quote: ["订单等待报价", "Order awaiting quote"],
+      pending_payment: ["订单等待付款", "Order awaiting payment"],
+      quote_expired: ["报价已失效", "Quote expired"],
+      received: ["订单已收到", "Order received"],
+      completed: ["订单已完成", "Order completed"],
+      invalid: ["订单已标记无效", "Order marked invalid"],
+    }[order.status] || ["订单状态已更新", "Order status updated"];
+    await appendOrderTimeline(order.orderId, {
+      type: `status_${order.status}`,
+      visibility: "public",
+      summaryZh: statusCopy[0],
+      summaryEn: statusCopy[1],
+      actor: actor.staffUsername,
+      meta: { status: order.status },
+    });
+  }
   await pushAdminActionLog({
     action: "order_update",
     actor,

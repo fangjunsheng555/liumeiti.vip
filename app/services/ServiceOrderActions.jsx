@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
-import { BookOpen, ShoppingBag, X } from "lucide-react";
+import { BookOpen, KeyRound, ShoppingBag, X } from "lucide-react";
 import { getDefaultProductPlan, getProductPlan, getProductPlanOptions, localizePlan, useCatalogSync } from "../lib/store";
 import { useLocale } from "../components/LocaleProvider";
 
@@ -131,6 +131,12 @@ export default function ServiceOrderActions({ service, soldOut = {} }) {
             <BookOpen size={16} />
             {locale === "en" ? "Buying guide" : "购买指南"}
           </Link>
+          {productKey === "netflix" && (
+            <Link href="/netflix-code" className="secondary-btn netflix-code-entry">
+              <KeyRound size={16} />
+              {locale === "en" ? "Get sign-in code" : "获取 Netflix 登录码"}
+            </Link>
+          )}
         </div>
       </div>
     </div>
@@ -145,6 +151,11 @@ export default function ServiceOrderActions({ service, soldOut = {} }) {
         <Link href={guideHref} className="secondary-btn">
           <BookOpen size={16} />{locale === "en" ? "Buying guide" : "购买指南"}
         </Link>
+        {productKey === "netflix" && (
+          <Link href="/netflix-code" className="secondary-btn netflix-code-entry">
+            <KeyRound size={16} />{locale === "en" ? "Get sign-in code" : "获取 Netflix 登录码"}
+          </Link>
+        )}
       </div>
 
       {pickerOpen && mounted ? createPortal(pickerModal, document.body) : null}

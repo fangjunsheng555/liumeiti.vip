@@ -160,6 +160,8 @@ function normalizeOrder(order) {
     userAgent: order.userAgent || "",
     remark: order.remark || "",
     staffNotes: order.staffNotes || "",
+    internalReference: order.internalReference || "",
+    netflixSelfServiceEnabled: order.netflixSelfServiceEnabled !== false,
     staffAudit: Array.isArray(order.staffAudit) ? order.staffAudit : [],
     lastStaffId: Array.isArray(order.staffAudit) && order.staffAudit[0]?.staffId ? Number(order.staffAudit[0].staffId) : null,
     assignedStaffId: Number(order.assignedStaffId || 0),
@@ -218,6 +220,8 @@ function normalizeOrderSummary(order) {
     lastStaffId: Number(order.lastStaffId || 0) || null,
     assignedStaffId: Number(order.assignedStaffId || 0),
     assignedStaffUsername: order.assignedStaffUsername || "",
+    internalReference: order.internalReference || "",
+    netflixSelfServiceEnabled: order.netflixSelfServiceEnabled !== false,
     sla: getOrderSla(source),
     abnormal: abnormal.abnormal,
     abnormalReason: abnormal.reason,
@@ -335,7 +339,7 @@ export async function GET(request) {
       detailed = detailed.filter((order) => {
         const hay = [
           order.orderId, order.email, order.contact, order.serviceLabel, order.staffNotes, order.remark,
-          order.platformUrl, order.productPrice, order.assignedStaffUsername,
+          order.platformUrl, order.productPrice, order.assignedStaffUsername, order.internalReference,
           ...order.items.flatMap((item) => [
             item.label, item.account, item.password, item.staffAccount, item.staffPassword,
             item.platformUrl, item.productPrice,

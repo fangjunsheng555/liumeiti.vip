@@ -2,6 +2,7 @@ import {
   clean,
   formatBeijingTime,
   getOrderById,
+  getOrdersByInternalReference,
   redisCmd,
   redisPipeline,
   redisConfig,
@@ -390,7 +391,11 @@ export async function listAfterSalesTickets({ status = "all", query = "", offset
   for (let start = 0; start < (Array.isArray(ids) ? ids.length : 0); start += 100) {
     records.push(...await getTicketsByIds(ids.slice(start, start + 100)));
   }
-  const matched = records.filter((ticket) => [
+  const referenceOrders = q.length <= 32 && /^[a-z0-9_-]+$/i.test(q)
+    ? await getOrdersByInternalReference(q, 500)
+    : [];
+  const referenceOrderIds = new Set(referenceOrders.map((order) => normalizeId(order.orderId, 80)));
+  const matched = records.filter((ticket) => referenceOrderIds.has(normalizeId(ticket.orderId, 80)) || [
     ticket.ticketId, ticket.orderId, ticket.email, ticket.contact, ticket.serviceLabel, ticket.issue,
   ].join(" ").toLowerCase().includes(q));
   return {
