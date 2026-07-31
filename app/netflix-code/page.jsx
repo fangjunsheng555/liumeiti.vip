@@ -23,9 +23,21 @@ import styles from "./netflix-code.module.css";
 const RESULT_POLL_MS = 6000;
 const RESULT_POLL_LIMIT = 15;
 const RESULT_DELAY_NOTICE_AT = 5;
+const REQUEST_TIMEOUT_MS = 15 * 1000;
+
+async function fetchWithTimeout(input, init = {}) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
 
 function hasNetflix(order) {
-  return (Array.isArray(order?.items) ? order.items : []).some((item) => item?.service === "netflix");
+  return (Array.isArray(order?.items) ? order.items : []).some((item) => item?.service === "netflix")
+    || String(order?.service || "").toLowerCase() === "netflix";
 }
 
 function eligibleOrder(order) {
@@ -70,7 +82,7 @@ export default function NetflixCodePage() {
 
   useEffect(() => {
     let alive = true;
-    fetch("/api/auth/me", { credentials: "same-origin", cache: "no-store" })
+    fetchWithTimeout("/api/auth/me", { credentials: "same-origin", cache: "no-store" })
       .then(async (response) => ({ response, data: await response.json() }))
       .then(({ response, data }) => {
         if (!alive) return;
@@ -109,7 +121,7 @@ export default function NetflixCodePage() {
     setQueryBusy(true);
     setStatus(null);
     try {
-      const response = await fetch("/api/order-query", {
+      const response = await fetchWithTimeout("/api/order-query", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
@@ -149,7 +161,7 @@ export default function NetflixCodePage() {
     setResult(null);
     setStatus(null);
     try {
-      const response = await fetch("/api/netflix-code", {
+      const response = await fetchWithTimeout("/api/netflix-code", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
@@ -175,7 +187,7 @@ export default function NetflixCodePage() {
     const token = sessionRef.current;
     if (!token) return;
     try {
-      const response = await fetch("/api/netflix-code", {
+      const response = await fetchWithTimeout("/api/netflix-code", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
@@ -197,7 +209,9 @@ export default function NetflixCodePage() {
       }
       setStatus({
         type: "info",
-        text: pollCount.current >= RESULT_DELAY_NOTICE_AT
+        text: data.mailReceived
+          ? L("邮件已到达，正在读取登录码…", "Your email arrived. Reading the sign-in code…")
+          : pollCount.current >= RESULT_DELAY_NOTICE_AT
           ? L("邮件可能仍在转发中，请稍候。", "Your email may still be forwarding. Please wait.")
           : L("正在接收 Netflix 邮件…", "Waiting for your Netflix email…"),
       });

@@ -21,7 +21,8 @@ import {
 export const runtime = "nodejs";
 
 function netflixItem(order) {
-  return (Array.isArray(order?.items) ? order.items : []).find((item) => item?.service === "netflix") || null;
+  return (Array.isArray(order?.items) ? order.items : []).find((item) => item?.service === "netflix")
+    || (String(order?.service || "").toLowerCase() === "netflix" ? order : null);
 }
 
 function accountFor(order) {
@@ -52,7 +53,7 @@ function compactMailEvents(rows) {
   const compacted = [];
   for (const row of rows) {
     const stamp = new Date(row.receivedAt || 0).getTime();
-    const accountKey = row.accountHints[0] || `unmatched:${row.reason || row.subject || "mail"}`;
+    const accountKey = row.accountKey || row.accountHints[0] || `unmatched:${row.reason || row.subject || "mail"}`;
     const duplicate = compacted.find((entry) => entry.accountKey === accountKey
       && Math.abs(entry.stamp - stamp) <= 12 * 1000);
     if (!duplicate) {
@@ -143,7 +144,7 @@ export async function GET(request) {
       expiresAt: event.expiresAt,
       sender: event.sender,
       subject: event.subject,
-      preview: event.preview,
+      accountKey: Array.from(event.accountHashes || []).sort().join("|"),
       accountHints: operationalAccountHints(event.accountHints),
       matchedOrderCount: matchedOrders.length,
       orders: exactOrders.length ? exactOrders : matchedOrders.length === 1 ? matchedOrders : [],

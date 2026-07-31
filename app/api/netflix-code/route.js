@@ -11,6 +11,7 @@ import {
   verifySession,
 } from "../_utils.js";
 import { orderExpirySummary } from "../../lib/order-expiry.js";
+import { shouldAwaitAcceptedSibling } from "./_policy.js";
 import {
   findLatestNetflixMailState,
   maskNetflixEmail,
@@ -32,7 +33,8 @@ function normalizeEmail(value) {
 
 function netflixItem(order) {
   const items = Array.isArray(order?.items) ? order.items : [];
-  return items.find((item) => String(item?.service || "").toLowerCase() === "netflix") || null;
+  return items.find((item) => String(item?.service || "").toLowerCase() === "netflix")
+    || (String(order?.service || "").toLowerCase() === "netflix" ? order : null);
 }
 
 function effectiveNetflixAccount(order) {
@@ -63,8 +65,9 @@ async function eligibility(order) {
   if (!account || !account.includes("@")) return { ok: false, error: "netflix_account_missing" };
   const expiry = orderExpirySummary(order);
   if (expiry?.expired) return { ok: false, error: "service_expired" };
-  const user = await getUser(order.email);
-  if (user?.netflixSelfServiceDisabled) return { ok: false, error: "self_service_disabled" };
+  const ownerEmails = Array.from(new Set([order.email, order.userEmail].map(normalizeEmail).filter(Boolean)));
+  const owners = await Promise.all(ownerEmails.map((email) => getUser(email)));
+  if (owners.some((user) => user?.netflixSelfServiceDisabled)) return { ok: false, error: "self_service_disabled" };
   return { ok: true, account };
 }
 
@@ -174,6 +177,9 @@ export async function POST(request) {
 
   const mailState = await findLatestNetflixMailState(eligible.account, { since: Number(claim.startedAt || 0) });
   if (mailState.state === "rejected") {
+    if (shouldAwaitAcceptedSibling(mailState)) {
+      return Response.json({ ok: true, pending: true, mailReceived: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
+    }
     return Response.json({ ok: false, error: "mail_unrecognized" }, { status: 422, headers: { "Cache-Control": "no-store" } });
   }
   const result = mailState.state === "result" ? mailState.result : null;

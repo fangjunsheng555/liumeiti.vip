@@ -38,7 +38,11 @@ export async function POST(request) {
 
   const replayKey = `liumeiti:netflix-mail:ingest:${digest}`;
   const first = await redisCmd(["SET", replayKey, "1", "NX", "EX", "86400"]);
-  if (first !== "OK") return Response.json({ ok: true, duplicate: true }, { status: 202 });
+  if (first !== "OK") {
+    const existing = await redisCmd(["GET", replayKey]);
+    if (existing === "1") return Response.json({ ok: true, duplicate: true }, { status: 202 });
+    return Response.json({ ok: false, error: "storage_unavailable" }, { status: 503 });
+  }
 
   const parsed = await parseNetflixEmail(raw, {
     from: request.headers.get("x-email-envelope-from") || "",

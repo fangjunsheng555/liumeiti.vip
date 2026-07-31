@@ -21,6 +21,7 @@ const LANGUAGE_RULES = [
   { code: "ar", hints: ["رمز تسجيل الدخول", "الرمز المؤقت", "رمز التحقق"], link: ["الحصول على الرمز", "عرض الرمز"] },
   { code: "ru", hints: ["код для входа", "временный код", "код подтверждения"], link: ["получить код", "показать код"] },
   { code: "vi", hints: ["mã đăng nhập", "mã tạm thời", "mã xác minh"], link: ["nhận mã", "xem mã"] },
+  { code: "hu", hints: ["bejelentkezési kód", "ideiglenes kód", "ellenőrző kód"], link: ["kód lekérése", "kód megtekintése"] },
   { code: "en", hints: ["login code", "sign-in code", "sign in code", "access code", "temporary code", "verification code", "enter this code to sign in", "enter the code above"], link: ["get code", "get your code", "view code", "receive code", "get temporary code"] },
 ];
 
@@ -45,6 +46,7 @@ function normalizeDigits(value) {
 function decodeEntities(value) {
   return String(value || "")
     .replace(/&nbsp;/gi, " ")
+    .replace(/&(zwnj|zwj|shy|thinsp|ensp|emsp|hairsp|zerowidthspace);/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&quot;/gi, '"')
     .replace(/&#39;|&apos;/gi, "'")
@@ -58,6 +60,17 @@ function decodeEntities(value) {
       const code = Number.parseInt(value, 10);
       return Number.isInteger(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : " ";
     });
+}
+
+function normalizeSearchText(value) {
+  return normalizeDigits(decodeEntities(value))
+    .normalize("NFKC")
+    .replace(/[\u00ad\u200b-\u200d\u2060\ufeff]/g, "")
+    .replace(/[\u2010-\u2015\u2212]/g, "-")
+    .replace(/\s*-\s*/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 function htmlToText(value) {
@@ -122,56 +135,66 @@ async function parseMessages(raw) {
 }
 
 function detectLanguage(text, html) {
-  const lang = String(html || "").match(/<html[^>]+lang=["']?([^"'\s>]+)/i)?.[1]?.toLowerCase() || "";
-  if (lang.startsWith("zh-tw") || lang.startsWith("zh-hk") || lang.startsWith("zh-hant")) return "zh-TW";
-  if (lang.startsWith("zh")) return "zh-CN";
-  const languageMatch = LANGUAGE_RULES.find((rule) => lang.startsWith(rule.code.toLowerCase().split("-")[0]));
-  if (languageMatch) return languageMatch.code;
-  const lower = text.toLowerCase();
+  const lower = normalizeSearchText(text);
   let best = { code: "en", score: 0 };
   for (const rule of LANGUAGE_RULES) {
-    const score = [...rule.hints, ...rule.link].reduce((sum, phrase) => sum + (lower.includes(phrase.toLowerCase()) ? 1 : 0), 0);
+    const score = [...rule.hints, ...rule.link].reduce((sum, phrase) => sum + (lower.includes(normalizeSearchText(phrase)) ? 1 : 0), 0);
     if (score > best.score) best = { code: rule.code, score };
   }
-  return best.code;
+  if (best.score > 0) return best.code;
+
+  const langs = Array.from(String(html || "").matchAll(/<html[^>]+lang=["']?([^"'\s>]+)/gi))
+    .map((match) => String(match[1] || "").toLowerCase())
+    .reverse();
+  for (const lang of langs) {
+    if (lang.startsWith("zh-tw") || lang.startsWith("zh-hk") || lang.startsWith("zh-hant")) return "zh-TW";
+    if (lang.startsWith("zh")) return "zh-CN";
+    const languageMatch = LANGUAGE_RULES.find((rule) => lang.startsWith(rule.code.toLowerCase().split("-")[0]));
+    if (languageMatch) return languageMatch.code;
+  }
+  return "en";
 }
 
 function hasNearbyPhrase(text, index, phrases, distance = 190) {
   const start = Math.max(0, index - distance);
   const end = Math.min(text.length, index + distance);
-  const window = text.slice(start, end).toLowerCase();
-  return phrases.some((phrase) => window.includes(phrase.toLowerCase()));
+  const window = normalizeSearchText(text.slice(start, end));
+  return phrases.some((phrase) => window.includes(normalizeSearchText(phrase)));
+}
+
+const VISUAL_DIGIT_SEPARATOR = "[\\s\\u00a0\\u00ad\\u2000-\\u200f\\u2028\\u2029\\u2060\\ufeff]";
+const EXPIRY_UNIT_PATTERN = /^(?:minutes?|mins?|minutos?|minuti|minuten|minut(?:y|a)?|分钟|分鐘|分|분|dakika|menit|phút|минут|perc|นาที|دقيقة)/iu;
+
+function visualDigitRuns(text) {
+  const runs = [];
+  const normalized = normalizeDigits(decodeEntities(text)).normalize("NFKC");
+  const pattern = new RegExp(`(?<![A-Za-z0-9])\\d(?:${VISUAL_DIGIT_SEPARATOR}{0,8}\\d){3,11}(?![A-Za-z0-9])`, "g");
+  for (const match of normalized.matchAll(pattern)) {
+    const start = match.index || 0;
+    const end = start + match[0].length;
+    const previousDigit = new RegExp(`\\d${VISUAL_DIGIT_SEPARATOR}{0,8}$`).test(normalized.slice(Math.max(0, start - 9), start));
+    const nextDigit = new RegExp(`^${VISUAL_DIGIT_SEPARATOR}{0,8}\\d`).test(normalized.slice(end, end + 9));
+    if (previousDigit || nextDigit) continue;
+    const digits = match[0].replace(/\D/g, "");
+    const after = normalizeSearchText(normalized.slice(end, end + 48));
+    // Some HTML-only templates place the 15-minute expiry in the next block.
+    // After tag removal it can look like one six-digit run ("31 46 15").
+    // Keep the first four digits only when the trailing 15 is immediately
+    // followed by a localized minute unit; ordinary six-digit codes stay six.
+    const value = digits.length === 6 && digits.endsWith("15") && EXPIRY_UNIT_PATTERN.test(after)
+      ? digits.slice(0, 4)
+      : digits;
+    runs.push({ value, index: start });
+  }
+  return runs;
 }
 
 function codeCandidates(text) {
-  const values = [];
-  const normalized = normalizeDigits(text);
-  for (const match of normalized.matchAll(/(?<![A-Za-z0-9])(\d{4})(?![A-Za-z0-9])/g)) {
-    if (Number(match[1]) >= 1900 && Number(match[1]) <= 2100) continue;
-    values.push({ value: match[1], index: match.index || 0 });
-  }
-  // Some Outlook forwards flatten the four visual digits into separate spans,
-  // leaving spaces or zero-width characters between every digit.
-  const separator = "[\\s\\u00a0\\u2000-\\u200f\\u2028\\u2029\\u2060\\ufeff]{1,6}";
-  const spaced = new RegExp(`(?<![A-Za-z0-9])(\\d)${separator}(\\d)${separator}(\\d)${separator}(\\d)(?![A-Za-z0-9])`, "g");
-  for (const match of normalized.matchAll(spaced)) {
-    const start = match.index || 0;
-    const end = start + match[0].length;
-    const previousDigit = /\d[\s\u00a0\u2000-\u200f\u2028\u2029\u2060\ufeff]{1,6}$/.test(normalized.slice(Math.max(0, start - 7), start));
-    const nextDigit = /^[\s\u00a0\u2000-\u200f\u2028\u2029\u2060\ufeff]{1,6}\d/.test(normalized.slice(end, end + 7));
-    if (previousDigit || nextDigit) continue;
-    const value = `${match[1]}${match[2]}${match[3]}${match[4]}`;
-    if (Number(value) >= 1900 && Number(value) <= 2100) continue;
-    values.push({ value, index: start });
-  }
-  return values;
+  return visualDigitRuns(text).filter((run) => run.value.length === 4);
 }
 
 function containsSixDigitToken(text) {
-  const normalized = normalizeDigits(text);
-  if (/(?<![A-Za-z0-9])\d{6}(?![A-Za-z0-9])/.test(normalized)) return true;
-  const separator = "[\\s\\u00a0\\u2000-\\u200f\\u2028\\u2029\\u2060\\ufeff]{1,6}";
-  return new RegExp(`(?<![A-Za-z0-9])\\d${separator}\\d${separator}\\d${separator}\\d${separator}\\d${separator}\\d(?![A-Za-z0-9])`).test(normalized);
+  return visualDigitRuns(text).some((run) => run.value.length === 6);
 }
 
 function withoutUrls(text) {
@@ -205,10 +228,16 @@ function textLinks(text) {
 
 function trustedNetflixUrl(value) {
   try {
-    const raw = String(value || "").trim();
-    const url = raw.startsWith("/")
+    let raw = decodeEntities(value).trim();
+    let url = raw.startsWith("/")
       ? new URL(raw, "https://www.netflix.com")
       : new URL(raw);
+    const redirectHost = url.hostname.toLowerCase();
+    if (redirectHost === "safelinks.protection.outlook.com" || redirectHost.endsWith(".safelinks.protection.outlook.com")) {
+      raw = String(url.searchParams.get("url") || "").trim();
+      if (!raw) return null;
+      url = new URL(raw);
+    }
     const host = url.hostname.toLowerCase();
     if (url.protocol !== "https:" || !(host === "netflix.com" || host.endsWith(".netflix.com"))) return null;
     if (url.username || url.password || SENSITIVE_PATH.test(url.pathname)) return null;
@@ -283,7 +312,8 @@ export async function parseNetflixEmail(raw, envelope = {}) {
   // Outlook and other providers may flatten an automatically forwarded email
   // and leave the original Netflix account only in the membership footer.
   const bodyAddresses = [...emailsIn(plain), ...emailsIn(htmlToText(html))];
-  const envelopeAddresses = [...emailsIn(envelope.from), ...emailsIn(envelope.to), ...emailsIn(envelope.inboxAddress)];
+  const envelopeFromAddresses = emailsIn(envelope.from);
+  const envelopeAddresses = [...envelopeFromAddresses, ...emailsIn(envelope.to), ...emailsIn(envelope.inboxAddress)];
   const routingRecipients = new Set([...emailsIn(envelope.to), ...emailsIn(envelope.inboxAddress)]);
   const allAddresses = unique([
     ...structuredFrom,
@@ -299,7 +329,7 @@ export async function parseNetflixEmail(raw, envelope = {}) {
   // The dedicated codes subdomain is only an inbound route. Never index one of
   // its aliases as a Netflix account when a forwarding provider omits the SMTP
   // envelope recipient from the webhook headers.
-  const accountEmails = allAddresses.filter((email) => {
+  let accountEmails = allAddresses.filter((email) => {
     const domain = String(email || "").split("@")[1] || "";
     return !isNetflixAddress(email)
       && !isInfrastructureAddress(email)
@@ -307,6 +337,10 @@ export async function parseNetflixEmail(raw, envelope = {}) {
       && domain !== "codes.liumeiti.vip"
       && !domain.endsWith(".codes.liumeiti.vip");
   });
+  const forwardingAccount = envelopeFromAddresses.find((email) => !isNetflixAddress(email) && !isInfrastructureAddress(email));
+  if (!envelopeFromAddresses.some(isNetflixAddress) && forwardingAccount) {
+    accountEmails = accountEmails.includes(forwardingAccount) ? [forwardingAccount] : [];
+  }
   if (!accountEmails.length) return { accepted: false, reason: "account_email_missing" };
   const codeSearchText = withoutUrls(text);
   const language = detectLanguage(text, html);
@@ -320,7 +354,6 @@ export async function parseNetflixEmail(raw, envelope = {}) {
     language,
     receivedAt,
     expiresAt,
-    preview: plain.replace(/\s+/g, " ").trim().slice(0, 240),
   };
 
   // A flattened Outlook forward can contain unrelated six-digit tracking
@@ -335,8 +368,8 @@ export async function parseNetflixEmail(raw, envelope = {}) {
 
   // A trusted Netflix sign-in subject plus one unique four-digit value is a
   // safe fallback for forwarded HTML whose layout inserts large spacer blocks.
-  const subjectText = normalizeDigits(subjects.join(" ")).toLowerCase();
-  const subjectIsLoginCode = phrases.some((phrase) => subjectText.includes(phrase.toLowerCase()));
+  const subjectText = normalizeSearchText(subjects.join(" "));
+  const subjectIsLoginCode = phrases.some((phrase) => subjectText.includes(normalizeSearchText(phrase)));
   const subjectCodes = unique(allCandidates.map((candidate) => candidate.value));
   if (subjectIsLoginCode && subjectCodes.length === 1) {
     return { ...base, kind: "code", value: subjectCodes[0], template: `${language}:login-code` };

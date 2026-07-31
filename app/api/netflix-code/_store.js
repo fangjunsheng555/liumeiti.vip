@@ -15,6 +15,17 @@ const ACCESS_DEDUPE_PREFIX = "liumeiti:netflix-code:access-success-dedupe:";
 const LOCK_PREFIX = "liumeiti:netflix-code:lock:v2:";
 const EVENT_TTL_SECONDS = 7 * 24 * 60 * 60;
 const ACCESS_TTL_SECONDS = 90 * 24 * 60 * 60;
+const SIBLING_EVENT_WINDOW_MS = 15 * 1000;
+
+export function latestNetflixSiblingCluster(records) {
+  const sorted = [...(Array.isArray(records) ? records : [])]
+    .filter((entry) => Number.isFinite(Number(entry?.receivedAt)))
+    .sort((left, right) => Number(right.receivedAt) - Number(left.receivedAt));
+  const newestReceivedAt = Number(sorted[0]?.receivedAt || 0);
+  return newestReceivedAt
+    ? sorted.filter((entry) => newestReceivedAt - Number(entry.receivedAt) <= SIBLING_EVENT_WINDOW_MS)
+    : [];
+}
 
 function parseJson(value) {
   if (!value) return null;
@@ -103,7 +114,6 @@ export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "
     expiresAt: parsed?.expiresAt || "",
     sender: maskNetflixEmail(parsed?.sender),
     subject: clean(parsed?.subject, 240),
-    preview: clean(parsed?.preview, 240),
     accountHashes,
     accountHints: accountEmails.map(maskNetflixEmail).filter(Boolean),
     payload: encrypted,
@@ -133,23 +143,18 @@ export async function findLatestNetflixMailState(email, { since = 0 } = {}) {
   const minScore = Math.max(Date.now() - 20 * 60 * 1000, startedAt - 5 * 60 * 1000);
   const rejectedMinScore = Math.max(Date.now() - 20 * 60 * 1000, startedAt);
   const ids = await redisCmd(["ZREVRANGEBYSCORE", accountIndexKey(hash), "+inf", String(minScore), "LIMIT", "0", "20"]);
-  let rejected = null;
+  const records = [];
   for (const eventId of (Array.isArray(ids) ? ids : [])) {
     const record = parseJson(await redisCmd(["GET", eventKey(eventId)]));
     if (!record?.accountHashes?.includes(hash)) continue;
     const receivedAt = new Date(record.receivedAt || 0).getTime();
     const expiresAt = new Date(record.expiresAt || 0).getTime();
     if (!receivedAt || receivedAt < minScore || !expiresAt || expiresAt <= Date.now()) continue;
-    if (!record.accepted && receivedAt >= rejectedMinScore) {
-      rejected ||= {
-        state: "rejected",
-        eventId: record.eventId,
-        reason: record.reason || "supported_content_not_found",
-        receivedAt: record.receivedAt,
-        receivedAtBeijing: record.receivedAtBeijing,
-      };
-      continue;
-    }
+    records.push({ record, receivedAt });
+  }
+  const siblingCluster = latestNetflixSiblingCluster(records);
+  for (const { record } of siblingCluster) {
+    if (!record.accepted) continue;
     const value = decryptPayload(record.payload);
     if (!value) continue;
     return {
@@ -165,7 +170,14 @@ export async function findLatestNetflixMailState(email, { since = 0 } = {}) {
       },
     };
   }
-  return rejected || { state: "pending" };
+  const rejected = siblingCluster.find(({ record, receivedAt }) => !record.accepted && receivedAt >= rejectedMinScore)?.record;
+  return rejected ? {
+    state: "rejected",
+    eventId: rejected.eventId,
+    reason: rejected.reason || "supported_content_not_found",
+    receivedAt: rejected.receivedAt,
+    receivedAtBeijing: rejected.receivedAtBeijing,
+  } : { state: "pending" };
 }
 
 export async function findLatestNetflixResult(email, options = {}) {
