@@ -37,6 +37,45 @@ function requireAdmin(request, permission) {
   return { session, permissions };
 }
 
+function operationalAccountHints(values) {
+  return Array.from(new Set((Array.isArray(values) ? values : []).filter((value) => {
+    const domain = String(value || "").split("@")[1]?.toLowerCase() || "";
+    return domain
+      && domain !== "codes.liumeiti.vip"
+      && !domain.endsWith(".codes.liumeiti.vip")
+      && domain !== "amazonses.com"
+      && !domain.endsWith(".amazonses.com");
+  })));
+}
+
+function compactMailEvents(rows) {
+  const compacted = [];
+  for (const row of rows) {
+    const stamp = new Date(row.receivedAt || 0).getTime();
+    const accountKey = row.accountHints[0] || `unmatched:${row.reason || row.subject || "mail"}`;
+    const duplicate = compacted.find((entry) => entry.accountKey === accountKey
+      && Math.abs(entry.stamp - stamp) <= 12 * 1000);
+    if (!duplicate) {
+      compacted.push({ ...row, accountKey, stamp, duplicateCount: 1 });
+      continue;
+    }
+    const preferred = row.accepted && !duplicate.accepted ? row : duplicate;
+    const mergedOrders = Array.from(new Map([
+      ...(duplicate.orders || []),
+      ...(row.orders || []),
+    ].map((order) => [order.orderId, order])).values());
+    Object.assign(duplicate, preferred, {
+      accountKey,
+      stamp: preferred === row ? stamp : duplicate.stamp,
+      duplicateCount: duplicate.duplicateCount + 1,
+      accountHints: Array.from(new Set([...(duplicate.accountHints || []), ...(row.accountHints || [])])),
+      orders: mergedOrders,
+      matchedOrderCount: Math.max(duplicate.matchedOrderCount || 0, row.matchedOrderCount || 0),
+    });
+  }
+  return compacted.map(({ accountKey, stamp, ...event }) => event);
+}
+
 export async function GET(request) {
   const auth = requireAdmin(request, "canViewOrders");
   if (auth.response) return auth.response;
@@ -66,24 +105,8 @@ export async function GET(request) {
     byHash.get(hash).push(control);
     orderControls.set(order.orderId, control);
   }
-  const events = (await listNetflixMailEvents({ limit: 80 })).map((event) => ({
-    eventId: event.eventId,
-    accepted: event.accepted,
-    kind: event.kind,
-    reason: event.reason,
-    template: event.template,
-    language: event.language,
-    receivedAtBeijing: event.receivedAtBeijing,
-    expiresAt: event.expiresAt,
-    sender: event.sender,
-    subject: event.subject,
-    preview: event.preview,
-    accountHints: event.accountHints || [],
-    orders: Array.from(new Set((event.accountHashes || []).flatMap((hash) => byHash.get(hash) || []).map((order) => order.orderId)))
-      .map((orderId) => orderControls.get(orderId))
-      .filter(Boolean),
-  }));
-  const access = (await listNetflixCodeAccess({ limit: 120 })).map((entry) => ({
+  const accessRows = await listNetflixCodeAccess({ limit: 120 });
+  const access = accessRows.map((entry) => ({
     id: entry.id,
     orderId: entry.orderId,
     userEmail: entry.userEmail || "",
@@ -92,6 +115,41 @@ export async function GET(request) {
     eventId: entry.eventId,
     createdAtBeijing: entry.createdAtBeijing,
   }));
+  const accessedOrdersByEvent = new Map();
+  for (const entry of accessRows) {
+    if (!entry.eventId || !entry.orderId) continue;
+    if (!accessedOrdersByEvent.has(entry.eventId)) accessedOrdersByEvent.set(entry.eventId, new Set());
+    accessedOrdersByEvent.get(entry.eventId).add(entry.orderId);
+  }
+  const eventRows = (await listNetflixMailEvents({ limit: 80 })).map((event) => {
+    const matchedOrders = Array.from(new Set((event.accountHashes || [])
+      .flatMap((hash) => byHash.get(hash) || [])
+      .map((order) => order.orderId)))
+      .map((orderId) => orderControls.get(orderId))
+      .filter(Boolean);
+    const accessedOrderIds = accessedOrdersByEvent.get(event.eventId) || new Set();
+    const exactOrders = Array.from(accessedOrderIds)
+      .map((orderId) => orderControls.get(orderId))
+      .filter(Boolean);
+    return {
+      eventId: event.eventId,
+      accepted: event.accepted,
+      kind: event.kind,
+      reason: event.reason,
+      template: event.template,
+      language: event.language,
+      receivedAt: event.receivedAt,
+      receivedAtBeijing: event.receivedAtBeijing,
+      expiresAt: event.expiresAt,
+      sender: event.sender,
+      subject: event.subject,
+      preview: event.preview,
+      accountHints: operationalAccountHints(event.accountHints),
+      matchedOrderCount: matchedOrders.length,
+      orders: exactOrders.length ? exactOrders : matchedOrders.length === 1 ? matchedOrders : [],
+    };
+  });
+  const events = compactMailEvents(eventRows).slice(0, 40);
   return Response.json({
     ok: true,
     configured: netflixCodeStoreConfigured() && String(process.env.NETFLIX_EMAIL_INGEST_SECRET || "").length >= 32,

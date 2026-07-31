@@ -100,25 +100,28 @@ export default function NetflixCodePanel({ canEdit = false }) {
 
       {tab === "mail" && data && (
         <div className={styles.table}>
-          <div className={styles.tableHead}><span>时间 / 类型</span><span>匹配账号</span><span>关联订单</span><span>状态</span></div>
+          <div className={styles.tableHead}><span>收件时间</span><span>Netflix 账号</span><span>使用订单</span><span>解析结果</span></div>
           {(data.events || []).length ? data.events.map((event) => (
             <article key={event.eventId} className={styles.row}>
               <div className={styles.when}>
-                <b>{event.kind === "code" ? <KeyRound size={13} /> : event.kind === "link" ? <Link2 size={13} /> : <ShieldAlert size={13} />}{event.kind === "code" ? "4 位验证码" : event.kind === "link" ? "官方临时代码链接" : "未采用"}</b>
-                <small>{time(event.receivedAtBeijing)} · {event.language || "--"}</small>
+                <b>{event.kind === "code" ? <KeyRound size={13} /> : event.kind === "link" ? <Link2 size={13} /> : <ShieldAlert size={13} />}{time(event.receivedAtBeijing)}</b>
+                <small>{event.language || "--"}</small>
               </div>
-              <div className={styles.accounts}>{(event.accountHints || []).length ? event.accountHints.map((hint) => <span key={hint}>{hint}</span>) : <span>未匹配</span>}</div>
+              <div className={styles.accounts}>{(event.accountHints || []).length ? <><span>{event.accountHints[0]}</span>{event.accountHints.length > 1 && <small>另 {event.accountHints.length - 1} 个地址</small>}</> : <span>未匹配</span>}</div>
               <div className={styles.orders}>{(event.orders || []).length ? event.orders.map((order) => (
                 <div key={order.orderId}>
                   <span><b>{order.orderId}</b><small>{order.email}</small></span>
-                  {canEdit && <div className={styles.actions}>
-                    <button type="button" onClick={() => update("toggle_order", order, !order.enabled)} disabled={Boolean(busyKey)}>{order.enabled ? "停用订单" : "启用订单"}</button>
-                    {order.userRegistered && <button type="button" onClick={() => update("toggle_user", order, !order.userEnabled)} disabled={Boolean(busyKey)}>{order.userEnabled ? "停用用户" : "启用用户"}</button>}
-                    <button type="button" onClick={() => update("clear_lock", order, true)} disabled={Boolean(busyKey)}>解除限制</button>
-                  </div>}
+                  {canEdit && <details className={styles.actionMenu}>
+                    <summary>管理</summary>
+                    <div className={styles.actions}>
+                      <button type="button" onClick={() => update("toggle_order", order, !order.enabled)} disabled={Boolean(busyKey)}>{order.enabled ? "停用订单" : "启用订单"}</button>
+                      {order.userRegistered && <button type="button" onClick={() => update("toggle_user", order, !order.userEnabled)} disabled={Boolean(busyKey)}>{order.userEnabled ? "停用用户" : "启用用户"}</button>}
+                      <button type="button" onClick={() => update("clear_lock", order, true)} disabled={Boolean(busyKey)}>解除限制</button>
+                    </div>
+                  </details>}
                 </div>
-              )) : <span className={styles.muted}>暂无关联订单</span>}</div>
-              <div className={event.accepted ? styles.ok : styles.rejected}>{event.accepted ? <CheckCircle2 size={13} /> : <ShieldAlert size={13} />}{event.accepted ? "已安全解析" : (REASON_LABELS[event.reason] || "已拒绝")}</div>
+              )) : <span className={styles.muted}>{event.matchedOrderCount > 1 ? `${event.matchedOrderCount} 个订单使用此账号` : "暂无关联订单"}</span>}</div>
+              <div className={event.accepted ? styles.ok : styles.rejected}>{event.accepted ? <CheckCircle2 size={13} /> : <ShieldAlert size={13} />}{event.accepted ? (event.kind === "link" ? "官方链接已解析" : "验证码已解析") : (REASON_LABELS[event.reason] || "未采用")}</div>
             </article>
           )) : <div className={styles.empty}>暂无收件记录</div>}
         </div>

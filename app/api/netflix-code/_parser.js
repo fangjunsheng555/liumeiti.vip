@@ -1,7 +1,7 @@
 import PostalMime from "postal-mime";
 
 const MAX_RAW_BYTES = 5 * 1024 * 1024;
-const MAX_NESTED_MESSAGES = 3;
+const MAX_NESTED_MESSAGES = 6;
 
 const LANGUAGE_RULES = [
   { code: "zh-CN", hints: ["登录代码", "登录验证码", "临时代码", "临时访问代码", "验证码", "获取代码", "获取验证码"], link: ["获取代码", "获取验证码", "获取访问代码", "查看代码", "取得登录代码"] },
@@ -21,7 +21,7 @@ const LANGUAGE_RULES = [
   { code: "ar", hints: ["رمز تسجيل الدخول", "الرمز المؤقت", "رمز التحقق"], link: ["الحصول على الرمز", "عرض الرمز"] },
   { code: "ru", hints: ["код для входа", "временный код", "код подтверждения"], link: ["получить код", "показать код"] },
   { code: "vi", hints: ["mã đăng nhập", "mã tạm thời", "mã xác minh"], link: ["nhận mã", "xem mã"] },
-  { code: "en", hints: ["login code", "sign-in code", "sign in code", "access code", "temporary code", "verification code"], link: ["get code", "get your code", "view code", "receive code", "get temporary code"] },
+  { code: "en", hints: ["login code", "sign-in code", "sign in code", "access code", "temporary code", "verification code", "enter this code to sign in", "enter the code above"], link: ["get code", "get your code", "view code", "receive code", "get temporary code"] },
 ];
 
 const SENSITIVE_CONTEXT = [
@@ -49,16 +49,24 @@ function decodeEntities(value) {
     .replace(/&quot;/gi, '"')
     .replace(/&#39;|&apos;/gi, "'")
     .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">");
+    .replace(/&gt;/gi, ">")
+    .replace(/&#x([0-9a-f]+);/gi, (_, value) => {
+      const code = Number.parseInt(value, 16);
+      return Number.isInteger(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : " ";
+    })
+    .replace(/&#(\d+);/g, (_, value) => {
+      const code = Number.parseInt(value, 10);
+      return Number.isInteger(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : " ";
+    });
 }
 
 function htmlToText(value) {
-  return decodeEntities(String(value || "")
+  return decodeEntities(value)
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
     .replace(/<br\s*\/?\s*>/gi, "\n")
     .replace(/<\/p\s*>/gi, "\n")
-    .replace(/<[^>]+>/g, " "))
+    .replace(/<[^>]+>/g, " ")
     .replace(/[ \t]+/g, " ")
     .replace(/\n\s+/g, "\n")
     .trim();
@@ -94,9 +102,18 @@ async function parseMessages(raw) {
   const queue = [...(root.attachments || [])];
   while (queue.length && messages.length < MAX_NESTED_MESSAGES) {
     const attachment = queue.shift();
-    if (!/^message\/rfc822/i.test(attachment?.mimeType || "") || !attachment?.content) continue;
+    if (!attachment?.content) continue;
+    const mimeType = String(attachment.mimeType || "").toLowerCase();
+    const filename = String(attachment.filename || "").toLowerCase();
+    const bytes = Buffer.from(attachment.content);
+    const headerPreview = bytes.subarray(0, Math.min(bytes.length, 16 * 1024)).toString("utf8");
+    const looksLikeMessage = /^message\/(rfc822|global)/i.test(mimeType)
+      || filename.endsWith(".eml")
+      || (/^(?:from|to|subject|mime-version|content-type):/im.test(headerPreview)
+        && /\r?\n\r?\n/.test(headerPreview));
+    if (!looksLikeMessage) continue;
     try {
-      const nested = await PostalMime.parse(attachment.content, { attachmentEncoding: "arrayBuffer" });
+      const nested = await PostalMime.parse(bytes, { attachmentEncoding: "arrayBuffer" });
       messages.push(nested);
       queue.push(...(nested.attachments || []));
     } catch {}
@@ -133,11 +150,28 @@ function codeCandidates(text) {
     if (Number(match[1]) >= 1900 && Number(match[1]) <= 2100) continue;
     values.push({ value: match[1], index: match.index || 0 });
   }
+  // Some Outlook forwards flatten the four visual digits into separate spans,
+  // leaving spaces or zero-width characters between every digit.
+  const separator = "[\\s\\u00a0\\u2000-\\u200f\\u2028\\u2029\\u2060\\ufeff]{1,6}";
+  const spaced = new RegExp(`(?<![A-Za-z0-9])(\\d)${separator}(\\d)${separator}(\\d)${separator}(\\d)(?![A-Za-z0-9])`, "g");
+  for (const match of normalized.matchAll(spaced)) {
+    const start = match.index || 0;
+    const end = start + match[0].length;
+    const previousDigit = /\d[\s\u00a0\u2000-\u200f\u2028\u2029\u2060\ufeff]{1,6}$/.test(normalized.slice(Math.max(0, start - 7), start));
+    const nextDigit = /^[\s\u00a0\u2000-\u200f\u2028\u2029\u2060\ufeff]{1,6}\d/.test(normalized.slice(end, end + 7));
+    if (previousDigit || nextDigit) continue;
+    const value = `${match[1]}${match[2]}${match[3]}${match[4]}`;
+    if (Number(value) >= 1900 && Number(value) <= 2100) continue;
+    values.push({ value, index: start });
+  }
   return values;
 }
 
 function containsSixDigitToken(text) {
-  return /(?<![A-Za-z0-9])\d{6}(?![A-Za-z0-9])/.test(normalizeDigits(text));
+  const normalized = normalizeDigits(text);
+  if (/(?<![A-Za-z0-9])\d{6}(?![A-Za-z0-9])/.test(normalized)) return true;
+  const separator = "[\\s\\u00a0\\u2000-\\u200f\\u2028\\u2029\\u2060\\ufeff]{1,6}";
+  return new RegExp(`(?<![A-Za-z0-9])\\d${separator}\\d${separator}\\d${separator}\\d${separator}\\d${separator}\\d(?![A-Za-z0-9])`).test(normalized);
 }
 
 function withoutUrls(text) {
@@ -217,6 +251,17 @@ function originalRecipientHeaders(raw) {
     .flatMap(emailsIn);
 }
 
+function isInfrastructureAddress(email) {
+  const value = String(email || "").toLowerCase();
+  const [local, domain = ""] = value.split("@");
+  return !local || !domain
+    || domain === "amazonses.com"
+    || domain.endsWith(".amazonses.com")
+    || domain === "cloudflare.net"
+    || domain.endsWith(".cloudflare.net")
+    || ["mailer-daemon", "postmaster", "no-reply", "noreply"].includes(local);
+}
+
 export async function parseNetflixEmail(raw, envelope = {}) {
   const bytes = typeof raw === "string" ? Buffer.byteLength(raw) : Number(raw?.byteLength || raw?.length || 0);
   if (!bytes || bytes > MAX_RAW_BYTES) return { accepted: false, reason: "invalid_size" };
@@ -257,6 +302,7 @@ export async function parseNetflixEmail(raw, envelope = {}) {
   const accountEmails = allAddresses.filter((email) => {
     const domain = String(email || "").split("@")[1] || "";
     return !isNetflixAddress(email)
+      && !isInfrastructureAddress(email)
       && !routingRecipients.has(email)
       && domain !== "codes.liumeiti.vip"
       && !domain.endsWith(".codes.liumeiti.vip");
@@ -281,10 +327,20 @@ export async function parseNetflixEmail(raw, envelope = {}) {
   // references in the footer. Prefer one unambiguous four-digit value that is
   // adjacent to Netflix sign-in wording; six-digit values are never returned.
   const phrases = LANGUAGE_RULES.flatMap((rule) => rule.hints);
-  const candidates = codeCandidates(codeSearchText).filter((candidate) => hasNearbyPhrase(codeSearchText, candidate.index, phrases));
+  const allCandidates = codeCandidates(codeSearchText);
+  const candidates = allCandidates.filter((candidate) => hasNearbyPhrase(codeSearchText, candidate.index, phrases, 420));
   const codes = unique(candidates.map((candidate) => candidate.value));
   if (codes.length === 1) return { ...base, kind: "code", value: codes[0], template: `${language}:login-code` };
   if (codes.length > 1) return { ...base, accepted: false, reason: "ambiguous_code", value: undefined };
+
+  // A trusted Netflix sign-in subject plus one unique four-digit value is a
+  // safe fallback for forwarded HTML whose layout inserts large spacer blocks.
+  const subjectText = normalizeDigits(subjects.join(" ")).toLowerCase();
+  const subjectIsLoginCode = phrases.some((phrase) => subjectText.includes(phrase.toLowerCase()));
+  const subjectCodes = unique(allCandidates.map((candidate) => candidate.value));
+  if (subjectIsLoginCode && subjectCodes.length === 1) {
+    return { ...base, kind: "code", value: subjectCodes[0], template: `${language}:login-code` };
+  }
 
   const link = safeConfirmationLink(html, plain);
   if (link) return { ...base, kind: "link", value: link, template: `${language}:temporary-code-link` };

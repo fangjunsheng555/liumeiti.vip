@@ -27,6 +27,42 @@ function mime({ from = "Netflix <info@account.netflix.com>", to = "member@exampl
   ].join("\r\n");
 }
 
+function outlookForwardedEml({ account, code }) {
+  const digits = String(code).split("").map((digit) => `<span>${digit}</span>`).join("<span>&nbsp;</span>");
+  const original = [
+    "From: Netflix <info@account.netflix.com>",
+    `To: ${account}`,
+    "Subject: Netflix: Your sign-in code",
+    "MIME-Version: 1.0",
+    "Content-Type: text/html; charset=utf-8",
+    "",
+    `<html lang="en"><body><h1>Enter this code to sign in</h1><p>${digits}</p><p>Enter the code above on your device to sign in to Netflix.</p></body></html>`,
+  ].join("\r\n");
+  const encoded = Buffer.from(original).toString("base64").match(/.{1,76}/g).join("\r\n");
+  const boundary = "----outlook-forwarded-message";
+  return [
+    `From: ${account}`,
+    "To: netflix@codes.liumeiti.vip",
+    "Subject: Fwd: Netflix: Your sign-in code",
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/mixed; boundary=${boundary}`,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=utf-8",
+    "",
+    "Forwarded message",
+    "Return-Path: <010101abcdef@us-west-2.amazonses.com>",
+    `--${boundary}`,
+    'Content-Type: application/octet-stream; name="Netflix message.eml"',
+    'Content-Disposition: attachment; filename="Netflix message.eml"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    encoded,
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
+}
+
 test("parses a direct four-digit Netflix sign-in code for an external account", async () => {
   const parsed = await parseNetflixEmail(mime({
     subject: "Your Netflix sign-in code",
@@ -226,4 +262,28 @@ test("retains the original account when rejecting a six-digit message", async ()
   assert.equal(parsed.reason, "six_digit_rejected");
   assert.ok(parsed.accountEmails.includes(account));
   assert.ok(parsed.receivedAt);
+});
+
+test("parses an Outlook forwarded EML attachment with visually separated digits", async () => {
+  const account = "juandavidsandoval1@outlook.es";
+  const parsed = await parseNetflixEmail(outlookForwardedEml({ account, code: "8653" }), {
+    from: account,
+    to: "netflix@codes.liumeiti.vip",
+    inboxAddress: "netflix@codes.liumeiti.vip",
+  });
+
+  assert.equal(parsed.accepted, true);
+  assert.equal(parsed.kind, "code");
+  assert.equal(parsed.value, "8653");
+  assert.deepEqual(parsed.accountEmails, [account]);
+});
+
+test("does not truncate a visually separated six-digit code into four digits", async () => {
+  const parsed = await parseNetflixEmail(mime({
+    subject: "Netflix verification code",
+    text: "Enter this code to sign in: 1 2 3 4 5 6",
+  }));
+
+  assert.equal(parsed.accepted, false);
+  assert.equal(parsed.reason, "six_digit_rejected");
 });
