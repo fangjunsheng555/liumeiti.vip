@@ -166,38 +166,51 @@ export async function POST(request) {
     await logAccess(request, order, eligible.account, action, "temporarily_locked", claim.actorType);
     return Response.json({ ok: false, error: "temporarily_locked" }, { status: 429 });
   }
-  const guard = await checkRateLimit(request, {
-    namespace: "netflix-code:retrieve",
-    limit: 24,
-    windowSec: 60 * 60,
-    identity: `${order.orderId}|${claim.accountHash}`,
-  });
-  if (!guard.ok) return rateLimitResponse(guard, "获取次数过多，请稍后再试");
-
+  const cycleId = createHash("sha256")
+    .update(`${claim.orderId}|${claim.accountHash}|${claim.startedAt || "legacy"}`)
+    .digest("hex")
+    .slice(0, 24);
+  const cycleKey = `${lockKey}:cycle:${cycleId}`;
+  const firstPollInCycle = await redisCmd(["SET", cycleKey, "1", "NX", "EX", "900"]) === "OK";
   const attemptsKey = lockKey + ":attempts";
-  const attempts = Number(await redisCmd(["INCR", attemptsKey]) || 0);
-  if (attempts === 1) await redisCmd(["EXPIRE", attemptsKey, "900"]);
-  if (attempts > 12) {
-    await redisCmd(["SET", lockKey, "blocked", "EX", "900"]);
-    await logAccess(request, order, eligible.account, action, "temporarily_locked", claim.actorType);
-    return Response.json({ ok: false, error: "temporarily_locked" }, { status: 429 });
+  if (firstPollInCycle) {
+    const guard = await checkRateLimit(request, {
+      namespace: "netflix-code:retrieve-cycle:v2",
+      limit: 12,
+      windowSec: 60 * 60,
+      identity: `${order.orderId}|${claim.accountHash}`,
+    });
+    if (!guard.ok) {
+      await redisCmd(["DEL", cycleKey]);
+      return rateLimitResponse(guard, "获取次数过多，请稍后再试");
+    }
+
+    const attempts = Number(await redisCmd(["INCR", attemptsKey]) || 0);
+    if (attempts === 1) await redisCmd(["EXPIRE", attemptsKey, "900"]);
+    if (attempts > 12) {
+      await redisCmd(["SET", lockKey, "blocked", "EX", "900"]);
+      await logAccess(request, order, eligible.account, action, "temporarily_locked", claim.actorType);
+      return Response.json({ ok: false, error: "temporarily_locked" }, { status: 429 });
+    }
   }
 
   const result = await findLatestNetflixResult(eligible.account, { since: Number(claim.startedAt || 0) });
   if (!result) {
-    await logAccess(request, order, eligible.account, action, "waiting", claim.actorType);
+    if (firstPollInCycle) await logAccess(request, order, eligible.account, action, "waiting", claim.actorType);
     return Response.json({ ok: true, pending: true, retryAfter: 8 }, { headers: { "Cache-Control": "no-store" } });
   }
   if (result.kind === "code" && /^\d{4}$/.test(result.value)) {
+    await redisCmd(["DEL", attemptsKey]);
     await logAccess(request, order, eligible.account, action, "code_returned", claim.actorType, result.eventId);
     return Response.json({ ok: true, kind: "code", code: result.value, expiresAt: result.expiresAt, receivedAtBeijing: result.receivedAtBeijing }, { headers: { "Cache-Control": "no-store" } });
   }
   const link = result.kind === "link" ? safeTravelLink(result.value) : "";
   if (link) {
+    await redisCmd(["DEL", attemptsKey]);
     await logAccess(request, order, eligible.account, action, "travel_link_returned", claim.actorType, result.eventId);
     return Response.json({ ok: true, kind: "link", url: link, expiresAt: result.expiresAt, receivedAtBeijing: result.receivedAtBeijing }, { headers: { "Cache-Control": "no-store" } });
   }
-  await logAccess(request, order, eligible.account, action, "unsafe_result_rejected", claim.actorType, result.eventId);
+  if (firstPollInCycle) await logAccess(request, order, eligible.account, action, "unsafe_result_rejected", claim.actorType, result.eventId);
   return Response.json({ ok: true, pending: true, retryAfter: 8 }, { headers: { "Cache-Control": "no-store" } });
 }
 

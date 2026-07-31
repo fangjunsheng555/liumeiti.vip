@@ -105,3 +105,27 @@ test("recognizes a forwarded multilingual Netflix message", async () => {
   assert.equal(parsed.value, "7314");
   assert.ok(parsed.accountEmails.includes("cuenta.netflix@example.es"));
 });
+
+test("indexes the original Netflix account from an Outlook-forwarded membership footer", async () => {
+  const account = "customer@example.es";
+  const parsed = await parseNetflixEmail(mime({
+    from: "Netflix <info@account.netflix.com>",
+    to: "netflix@codes.liumeiti.vip",
+    subject: "Netflix: Your sign-in code",
+    text: [
+      "Enter this code to sign in",
+      "8653",
+      "Enter the code above on your device to sign in to Netflix. This code will expire in 15 minutes.",
+      `This message was mailed to ${account} by Netflix as part of your Netflix membership.`,
+    ].join("\n"),
+  }), {
+    from: "info@account.netflix.com",
+    to: "netflix@codes.liumeiti.vip",
+  });
+
+  assert.equal(parsed.accepted, true);
+  assert.equal(parsed.kind, "code");
+  assert.equal(parsed.value, "8653");
+  assert.ok(parsed.accountEmails.includes(account));
+  assert.ok(!parsed.accountEmails.includes("netflix@codes.liumeiti.vip"));
+});

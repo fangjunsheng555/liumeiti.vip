@@ -221,15 +221,25 @@ export async function parseNetflixEmail(raw, envelope = {}) {
     ...addressValues(message.to), ...addressValues(message.cc), ...addressValues(message.bcc), ...addressValues(message.replyTo),
   ]);
   const forwarded = forwardedHeaderAddresses(plain);
+  // Outlook and other providers may flatten an automatically forwarded email
+  // and leave the original Netflix account only in the membership footer.
+  const bodyAddresses = [...emailsIn(plain), ...emailsIn(htmlToText(html))];
   const envelopeAddresses = [...emailsIn(envelope.from), ...emailsIn(envelope.to)];
-  const allAddresses = unique([...structuredFrom, ...structuredRecipients, ...forwarded, ...envelopeAddresses]);
+  const routingRecipients = new Set(emailsIn(envelope.to));
+  const allAddresses = unique([
+    ...structuredFrom,
+    ...structuredRecipients,
+    ...forwarded,
+    ...bodyAddresses,
+    ...envelopeAddresses,
+  ]);
   const netflixSender = unique([...structuredFrom, ...forwarded, ...emailsIn(plain.slice(0, 3000))]).find(isNetflixAddress) || "";
   if (!netflixSender) return { accepted: false, reason: "untrusted_sender" };
 
   // Netflix accounts may intentionally use a liumeiti.vip subdomain. Keep every
   // non-Netflix address and let the verified order account hash select the
   // matching event later; extra forwarding addresses cannot grant access.
-  const accountEmails = allAddresses.filter((email) => !isNetflixAddress(email));
+  const accountEmails = allAddresses.filter((email) => !isNetflixAddress(email) && !routingRecipients.has(email));
   if (!accountEmails.length) return { accepted: false, reason: "account_email_missing" };
   const codeSearchText = withoutUrls(text);
   if (SENSITIVE_CONTEXT.some((phrase) => lower.includes(phrase.toLowerCase())) && containsSixDigitToken(codeSearchText)) {

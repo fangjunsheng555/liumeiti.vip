@@ -6,7 +6,9 @@ const EVENT_INDEX = "liumeiti:netflix-mail:received";
 const ACCOUNT_INDEX_PREFIX = "liumeiti:netflix-mail:account:";
 const ACCESS_PREFIX = "liumeiti:netflix-code:access:";
 const ACCESS_INDEX = "liumeiti:netflix-code:access-index";
-const LOCK_PREFIX = "liumeiti:netflix-code:lock:";
+// v2 drops locks created by the former per-poll counter. Automatic polling
+// must never lock a customer who only clicked the retrieve button once.
+const LOCK_PREFIX = "liumeiti:netflix-code:lock:v2:";
 const EVENT_TTL_SECONDS = 7 * 24 * 60 * 60;
 const ACCESS_TTL_SECONDS = 90 * 24 * 60 * 60;
 
