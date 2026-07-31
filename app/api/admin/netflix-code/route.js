@@ -55,7 +55,7 @@ function compactMailEvents(rows) {
     const stamp = new Date(row.receivedAt || 0).getTime();
     const accountKey = row.accountKey || row.accountHints[0] || `unmatched:${row.reason || row.subject || "mail"}`;
     const duplicate = compacted.find((entry) => entry.accountKey === accountKey
-      && Math.abs(entry.stamp - stamp) <= 12 * 1000);
+      && Math.abs(entry.stamp - stamp) <= 15 * 1000);
     if (!duplicate) {
       compacted.push({ ...row, accountKey, stamp, duplicateCount: 1 });
       continue;
@@ -123,6 +123,9 @@ export async function GET(request) {
     accessedOrdersByEvent.get(entry.eventId).add(entry.orderId);
   }
   const eventRows = (await listNetflixMailEvents({ limit: 80 })).map((event) => {
+    const matchedAccountHashes = Array.from(event.accountHashes || [])
+      .filter((hash) => byHash.has(hash))
+      .sort();
     const matchedOrders = Array.from(new Set((event.accountHashes || [])
       .flatMap((hash) => byHash.get(hash) || [])
       .map((order) => order.orderId)))
@@ -144,7 +147,9 @@ export async function GET(request) {
       expiresAt: event.expiresAt,
       sender: event.sender,
       subject: event.subject,
-      accountKey: Array.from(event.accountHashes || []).sort().join("|"),
+      accountKey: matchedAccountHashes.length
+        ? `matched:${matchedAccountHashes.join("|")}`
+        : `unmatched:${Array.from(event.accountHashes || []).sort().join("|")}`,
       accountHints: operationalAccountHints(event.accountHints),
       matchedOrderCount: matchedOrders.length,
       orders: exactOrders.length ? exactOrders : matchedOrders.length === 1 ? matchedOrders : [],
