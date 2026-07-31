@@ -10,7 +10,7 @@ import {
   validEmail,
 } from "../../../_utils.js";
 import { getSettings } from "../../../_settings.js";
-import { appendOrderTimeline, getOrderTimeline } from "../../../_order-timeline.js";
+import { appendOrderTimeline } from "../../../_order-timeline.js";
 import { buildReferenceNotificationEmail } from "../reference-notification-email.js";
 
 export const runtime = "nodejs";
@@ -86,11 +86,8 @@ export async function POST(request) {
   const results = [];
   for (const [email, recipientOrders] of grouped) {
     const locale = recipientOrders.some((order) => order.locale === "en") ? "en" : "zh";
-    const timelines = {};
-    for (const order of recipientOrders) timelines[order.orderId] = await getOrderTimeline(order, { publicOnly: true });
     const content = buildReferenceNotificationEmail({
       orders: recipientOrders,
-      timelines,
       subject,
       message,
       brandName: locale === "en" ? (settings.brand.nameEn || settings.brand.name) : settings.brand.name,

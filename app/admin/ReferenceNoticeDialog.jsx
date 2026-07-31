@@ -104,7 +104,7 @@ export default function ReferenceNoticeDialog({ open, onClose, onSent }) {
                 ))}
               </div>
               <label className={styles.field}><span>邮件标题</span><input value={subject} onChange={(event) => setSubject(event.target.value)} maxLength={160} /></label>
-              <label className={styles.field}><span>通知内容</span><textarea value={message} onChange={(event) => setMessage(event.target.value)} maxLength={2000} rows={5} placeholder="填写需要告知用户的内容；订单信息和进度会自动附在下方。" /></label>
+              <label className={styles.field}><span>客服通知</span><textarea value={message} onChange={(event) => setMessage(event.target.value)} maxLength={2000} rows={5} placeholder="填写需要告知用户的内容；最新账号资料与订单备注会自动附在邮件中。" /></label>
             </>
           )}
           {notice && <div className={`${styles.notice} ${styles[notice.type]}`}>{notice.type === "success" && <CheckCircle2 size={14} />}{notice.text}</div>}
