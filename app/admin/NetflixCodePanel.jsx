@@ -130,6 +130,7 @@ export default function NetflixCodePanel({ canEdit = false }) {
         <div className={styles.tabs} role="tablist" aria-label="Netflix 接码记录">
           <button type="button" className={tab === "mail" ? styles.active : ""} onClick={() => setTab("mail")}><Mail size={14} />收件记录</button>
           <button type="button" className={tab === "access" ? styles.active : ""} onClick={() => setTab("access")}><LockKeyhole size={14} />成功记录</button>
+          <button type="button" className={tab === "accounts" ? styles.active : ""} onClick={() => setTab("accounts")}><Clock3 size={14} />账号状态</button>
         </div>
         <div className={styles.searchBox}>
           <Search size={14} />
@@ -187,7 +188,30 @@ export default function NetflixCodePanel({ canEdit = false }) {
         </div>
       )}
 
-      <footer className={styles.footer}><a href="/netflix-code" target="_blank" rel="noopener noreferrer">查看用户页面<ExternalLink size={13} /></a><span>直接验证码与官方链接均按 15 分钟有效期处理</span></footer>
+      {tab === "accounts" && data && (
+        <div className={styles.table}>
+          <div className={`${styles.tableHead} ${styles.accessGrid}`}><span>Netflix 账号</span><span>最近收信</span><span>关联订单</span><span>转发状态</span></div>
+          {(data.accounts || []).length ? data.accounts.map((row) => {
+            const ageHours = row.lastMailAt ? (Date.now() - Date.parse(row.lastMailAt)) / 3600000 : null;
+            return (
+              <article key={row.account} className={`${styles.row} ${styles.accessGrid}`}>
+                <div className={styles.email}>{row.account}</div>
+                <div className={styles.when}><b><Clock3 size={13} />{time(row.lastMailAtBeijing)}</b></div>
+                <div><b className={styles.orderId}>{row.orderCount}</b></div>
+                <div>
+                  {ageHours === null
+                    ? <span className={styles.rejected}><ShieldAlert size={13} />7 天内无收信，建议检查邮箱转发</span>
+                    : ageHours <= 72
+                      ? <span className={styles.ok}><CheckCircle2 size={13} />收信正常</span>
+                      : <span className={styles.muted}>{Math.floor(ageHours / 24)} 天未收信（可能只是无人取码）</span>}
+                </div>
+              </article>
+            );
+          }) : <div className={styles.empty}>{query ? "没有符合条件的账号" : "暂无绑定 Netflix 账号的订单"}</div>}
+        </div>
+      )}
+
+      <footer className={styles.footer}><a href="/netflix-code" target="_blank" rel="noopener noreferrer">查看用户页面<ExternalLink size={13} /></a><span>直接验证码与官方链接均按 15 分钟有效期处理；「账号状态」无收信 = 邮件未到达系统（多为邮箱转发失效），有收件记录但解析失败会显示在收件记录页</span></footer>
     </section>
   );
 }

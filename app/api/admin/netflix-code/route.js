@@ -3,6 +3,7 @@ import {
   adminPermissionProfile,
   adminSessionFromRequest,
   clean,
+  formatBeijingTime,
   getAllOrders,
   getOrderEntryById,
   getUser,
@@ -14,6 +15,7 @@ import {
   clearNetflixCodeLock,
   deleteNetflixCodeAccessRecords,
   deleteNetflixMailEvents,
+  latestNetflixMailReceipts,
   listNetflixCodeAccess,
   listNetflixMailEvents,
   netflixAccountHash,
@@ -90,6 +92,28 @@ export async function GET(request) {
     orderControls.set(order.orderId, control);
     accountByOrderId.set(order.orderId, account);
   }
+  const receipts = await latestNetflixMailReceipts(Array.from(byHash.keys()));
+  const accountRows = [];
+  const seenAccounts = new Set();
+  for (const account of accountByOrderId.values()) {
+    if (seenAccounts.has(account)) continue;
+    seenAccounts.add(account);
+    const hash = netflixAccountHash(account);
+    const controls = byHash.get(hash) || [];
+    if (query && !(
+      account.includes(query)
+      || controls.some((control) => control.orderId.toLowerCase().includes(query) || control.email.includes(query))
+    )) continue;
+    const lastMailAt = Number(receipts[hash] || 0);
+    accountRows.push({
+      account,
+      orderCount: controls.length,
+      lastMailAt: lastMailAt ? new Date(lastMailAt).toISOString() : "",
+      lastMailAtBeijing: lastMailAt ? formatBeijingTime(new Date(lastMailAt)) : "",
+    });
+  }
+  accountRows.sort((left, right) => (Date.parse(left.lastMailAt) || 0) - (Date.parse(right.lastMailAt) || 0));
+
   const accessRows = await listNetflixCodeAccess({ limit: 200 });
   const access = filterNetflixAccessRecords(accessRows.map((entry) => ({
     id: entry.id,
@@ -156,6 +180,7 @@ export async function GET(request) {
     inboxAddress: process.env.NETFLIX_INBOX_ADDRESS || "netflix@codes.liumeiti.vip",
     events,
     access,
+    accounts: accountRows.slice(0, 100),
     recentAcceptedCount,
     searchQuery: query,
     orders: Array.from(orderControls.values()),

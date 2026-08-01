@@ -280,6 +280,22 @@ async function recordsFromIndex(indexKey, offset, limit, prefix) {
   return rows.map((entry) => parseJson(pipelineValue(entry))).filter(Boolean);
 }
 
+// Latest mail arrival per account hash, straight from the account indexes.
+// Lets the admin panel distinguish "mail never arrived" (forwarding broken)
+// from "mail arrived but was not parsed" (visible as a mail event).
+export async function latestNetflixMailReceipts(hashes) {
+  const uniqueHashes = Array.from(new Set((Array.isArray(hashes) ? hashes : []).filter(Boolean)));
+  if (!uniqueHashes.length) return {};
+  const rows = pipelineRows(await redisPipeline(uniqueHashes.map((hash) => ["ZREVRANGE", accountIndexKey(hash), "0", "0", "WITHSCORES"])));
+  const receipts = {};
+  uniqueHashes.forEach((hash, index) => {
+    const value = pipelineValue(rows[index]);
+    const score = Array.isArray(value) ? Number(value[1] || 0) : 0;
+    if (Number.isFinite(score) && score > 0) receipts[hash] = score;
+  });
+  return receipts;
+}
+
 export async function listNetflixMailEvents({ offset = 0, limit = 60 } = {}) {
   return recordsFromIndex(EVENT_INDEX, Math.max(0, Number(offset || 0)), Math.max(1, Math.min(100, Number(limit || 60))), EVENT_PREFIX);
 }
