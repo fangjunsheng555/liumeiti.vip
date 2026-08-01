@@ -165,6 +165,69 @@ test("does not treat a numeric Netflix SRC UUID block as a second sign-in code",
   }
 });
 
+test("parses the real multipart English source with duplicate body parts and numeric UUID metadata", async () => {
+  const account = "juandavidsandoval1@outlook.es";
+  const sourceId = "f73ec386-ca05-4d35-9317-dce0338b88c3";
+  const boundary = "----=_Part_613408_1143521369.1785561133335";
+  const plain = [
+    "Enter this code to sign in",
+    "",
+    "0707",
+    "",
+    "Enter the code above on your device to sign in to Netflix.",
+    "This code will expire in 15 minutes.",
+    "",
+    `This message was mailed to [${account}] by Netflix as part of your Netflix membership.`,
+    `SRC: 653956AC_${sourceId}_en_ES_EVO`,
+  ].join("\r\n");
+  const html = [
+    '<html lang="en"><body>',
+    "<h1>Enter this code to sign in</h1>",
+    "<p>0707</p>",
+    "<p>Enter the code above on your device to sign in to Netflix. This code will expire in 15 minutes.</p>",
+    `<p>This message was mailed to <a href="https://www.netflix.com/browse?g=${sourceId}&amp;lkid=URL_EMAIL&amp;lnktrk=EVO">${account}</a> by Netflix as part of your Netflix membership.</p>`,
+    `<p>SRC: <a href="https://www.netflix.com/browse?g=${sourceId}&amp;lkid=URL_SRC&amp;lnktrk=EVO">653956AC_${sourceId}_en_ES_EVO</a></p>`,
+    "</body></html>",
+  ].join("");
+  const raw = [
+    "From: Netflix <info@account.netflix.com>",
+    `To: ${account}`,
+    "Message-ID: <0102019fbbbcb11d-a6db4421-4b05-47b1-9922-db44ee4f225f-000000@eu-west-1.amazonses.com>",
+    "Subject: Netflix: Your sign-in code",
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    `X-TrackingUuid: ${sourceId}`,
+    `X-MessageGuid: ${sourceId}`,
+    "X-localeCountry: en-ES::ES",
+    "MIME-Version: 1.0",
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: quoted-printable",
+    "",
+    quotedPrintable(plain),
+    `--${boundary}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: quoted-printable",
+    "",
+    quotedPrintable(html),
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
+
+  const parsed = await parseNetflixEmail(raw, {
+    from: "info@account.netflix.com",
+    to: INBOX,
+    inboxAddress: INBOX,
+    receivedAt: "2026-08-01T05:12:13.000Z",
+  });
+
+  assert.equal(parsed.accepted, true, JSON.stringify(parsed));
+  assert.equal(parsed.kind, "code");
+  assert.equal(parsed.value, "0707");
+  assert.equal(parsed.language, "en");
+  assert.deepEqual(parsed.accountEmails, [account]);
+});
+
 test("parses a quoted-printable Polish plain-text delivery", async () => {
   const parsed = await parseNetflixEmail(textMime({
     subject: "Netflix: Twój kod logowania",
