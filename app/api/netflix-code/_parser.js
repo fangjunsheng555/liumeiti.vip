@@ -256,6 +256,17 @@ function withoutUrls(text) {
     .replace(/\/account\/travel\/verify\?[^\s<>"']+/gi, " ");
 }
 
+// Netflix repeats its delivery UUID in visible footer metadata (for example
+// `SRC: ..._f73ec386-ca05-4d35-9317-dce0338b88c3_...`). A numeric UUID block
+// such as `9317` is not a sign-in code, even when the footer is close to the
+// localized "code" copy in a compact or forwarded message.
+function withoutTrackingIdentifiers(text) {
+  return String(text || "").replace(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+    " ",
+  );
+}
+
 function anchorLinks(html) {
   const links = [];
   const source = String(html || "");
@@ -440,9 +451,9 @@ export async function parseNetflixEmail(raw, envelope = {}) {
 
   // Line-structured text for digit extraction. Sections are separated by a
   // blank line, which breaks digit-run merging across message parts.
-  const codeText = normalizeDigits(withoutUrls(decodeEntities([subjects.join("\n"), plain, htmlToText(html)]
+  const codeText = normalizeDigits(withoutTrackingIdentifiers(withoutUrls(decodeEntities([subjects.join("\n"), plain, htmlToText(html)]
     .filter(Boolean)
-    .join("\n\n"))))
+    .join("\n\n")))))
     .normalize("NFKC");
   const language = detectLanguage(text, html);
   const receivedAt = new Date(envelope.receivedAt || Date.now()).toISOString();

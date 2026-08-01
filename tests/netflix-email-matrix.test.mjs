@@ -133,6 +133,38 @@ test("parses the real English layout when HTML splits the code into two groups",
   assert.deepEqual(parsed.accountEmails, [account]);
 });
 
+test("does not treat a numeric Netflix SRC UUID block as a second sign-in code", async () => {
+  const account = "juandavidsandoval1@outlook.es";
+  const sourceId = "f73ec386-ca05-4d35-9317-dce0338b88c3";
+  const body = [
+    "<h1>Enter this code to sign in</h1>",
+    "<p>0707</p>",
+    "<p>Enter the code above on your device to sign in to Netflix. This code will expire in 15 minutes.</p>",
+    `<p>This message was mailed to <a href="https://www.netflix.com/browse?g=${sourceId}&amp;lkid=URL_EMAIL&amp;lnktrk=EVO">${account}</a> by Netflix as part of your Netflix membership.</p>`,
+    `<p>SRC: <a href="https://www.netflix.com/browse?g=${sourceId}&amp;lkid=URL_SRC&amp;lnktrk=EVO">653956AC_${sourceId}_en_ES_EVO</a></p>`,
+  ].join("");
+
+  const direct = await parseNetflixEmail(htmlMime({
+    account,
+    subject: "Netflix: Your sign-in code",
+    lang: "en",
+    body,
+  }), { from: "info@account.netflix.com", to: INBOX, inboxAddress: INBOX });
+  const forwarded = await parseNetflixEmail(outlookForward({
+    account,
+    subject: "Netflix: Your sign-in code",
+    lang: "en",
+    body,
+  }), { from: account, to: INBOX, inboxAddress: INBOX });
+
+  for (const parsed of [direct, forwarded]) {
+    assert.equal(parsed.accepted, true, JSON.stringify(parsed));
+    assert.equal(parsed.kind, "code");
+    assert.equal(parsed.value, "0707");
+    assert.deepEqual(parsed.accountEmails, [account]);
+  }
+});
+
 test("parses a quoted-printable Polish plain-text delivery", async () => {
   const parsed = await parseNetflixEmail(textMime({
     subject: "Netflix: Twój kod logowania",
