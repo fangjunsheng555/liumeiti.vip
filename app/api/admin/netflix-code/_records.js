@@ -33,6 +33,7 @@ export function compactNetflixMailEvents(rows) {
       stamp: preferred === row ? stamp : duplicate.stamp,
       duplicateCount: duplicate.duplicateCount + 1,
       eventIds: unique([...(duplicate.eventIds || []), ...(row.eventIds || [])]),
+      accountEmails: unique([...(duplicate.accountEmails || []), ...(row.accountEmails || [])]),
       accountHints: unique([...(duplicate.accountHints || []), ...(row.accountHints || [])]),
       searchValues: unique([...(duplicate.searchValues || []), ...(row.searchValues || [])]),
       searchHashes: unique([...(duplicate.searchHashes || []), ...(row.searchHashes || [])]),
@@ -49,6 +50,7 @@ export function filterNetflixMailEvents(rows, query, queryHash = "") {
   return (Array.isArray(rows) ? rows : []).filter((event) => (
     (queryHash && (event.searchHashes || []).includes(queryHash))
     || (event.searchValues || []).some((value) => normalizeNetflixRecordQuery(value).includes(normalized))
+    || (event.accountEmails || []).some((value) => normalizeNetflixRecordQuery(value).includes(normalized))
     || (event.accountHints || []).some((value) => normalizeNetflixRecordQuery(value).includes(normalized))
   ));
 }

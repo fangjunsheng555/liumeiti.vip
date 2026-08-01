@@ -33,7 +33,7 @@
 .when b { display: flex; align-items: center; gap: 5px; font-size: 10.5px; }
 .when small, .block { color: #64748b; font-size: 9px; }
 .accounts { min-width: 0; display: grid; gap: 2px; }
-.accounts span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.accounts span { min-width: 0; overflow-wrap: anywhere; line-height: 1.35; white-space: normal; }
 .accounts small { color: #94a3b8; font-size: 8.5px; }
 .orders { min-width: 0; display: grid; gap: 7px; }
 .orders > div { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; }

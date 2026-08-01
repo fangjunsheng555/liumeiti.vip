@@ -13,6 +13,7 @@ test("compacts forwarded siblings and keeps every underlying event id", () => {
       accountKey: "matched:account-hash",
       accepted: false,
       receivedAt: "2026-08-01T05:20:01.000Z",
+      accountEmails: ["juandavidsandoval1@outlook.es"],
       accountHints: ["ju******@outlook.es"],
       searchHashes: ["account-hash"],
       searchValues: ["LMMS9CRJODAFEF36D4", "buyer@example.com"],
@@ -24,6 +25,7 @@ test("compacts forwarded siblings and keeps every underlying event id", () => {
       accepted: true,
       kind: "code",
       receivedAt: "2026-08-01T05:20:03.000Z",
+      accountEmails: ["juandavidsandoval1@outlook.es"],
       accountHints: ["ju******@outlook.es"],
       searchHashes: ["account-hash"],
       searchValues: ["LMMS9CRJODAFEF36D4", "buyer@example.com"],
@@ -33,6 +35,7 @@ test("compacts forwarded siblings and keeps every underlying event id", () => {
   assert.equal(rows.length, 1);
   assert.equal(rows[0].accepted, true);
   assert.deepEqual(new Set(rows[0].eventIds), new Set(["NMREJECTED", "NMACCEPTED"]));
+  assert.deepEqual(rows[0].accountEmails, ["juandavidsandoval1@outlook.es"]);
 });
 
 test("mail search matches contact email, order number and exact account hash", () => {
@@ -40,6 +43,7 @@ test("mail search matches contact email, order number and exact account hash", (
     eventId: "NMEVENT",
     searchValues: ["LMMS9CRJODAFEF36D4", "buyer@example.com"],
     searchHashes: ["netflix-account-hash"],
+    accountEmails: ["full.netflix@outlook.es"],
     accountHints: ["ju******@outlook.es"],
   }];
   assert.equal(filterNetflixMailEvents(rows, "buyer@example.com").length, 1);

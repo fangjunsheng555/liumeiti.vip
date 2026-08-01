@@ -20,6 +20,7 @@ import {
   listNetflixMailEvents,
   netflixAccountHash,
   netflixCodeStoreConfigured,
+  revealNetflixMailAccountEmails,
 } from "../../netflix-code/_store.js";
 import {
   compactNetflixMailEvents,
@@ -70,12 +71,14 @@ export async function GET(request) {
   const users = await Promise.all(uniqueEmails.map(async (email) => [email, await getUser(email)]));
   for (const [email, user] of users) userByEmail.set(email, user);
   const byHash = new Map();
+  const accountByHash = new Map();
   const orderControls = new Map();
   const accountByOrderId = new Map();
   for (const order of orders) {
     const account = accountFor(order);
     if (!account) continue;
     const hash = netflixAccountHash(account);
+    if (!accountByHash.has(hash)) accountByHash.set(hash, account);
     if (!byHash.has(hash)) byHash.set(hash, []);
     const buyerEmail = String(order.email || "").trim().toLowerCase();
     const user = userByEmail.get(buyerEmail) || null;
@@ -134,6 +137,13 @@ export async function GET(request) {
     const matchedAccountHashes = Array.from(event.accountHashes || [])
       .filter((hash) => byHash.has(hash))
       .sort();
+    const fullAccountEmails = operationalAccountHints([
+      ...revealNetflixMailAccountEmails(event),
+      ...matchedAccountHashes.map((hash) => accountByHash.get(hash)),
+    ]);
+    const accountEmails = fullAccountEmails.length
+      ? fullAccountEmails
+      : operationalAccountHints(event.accountHints);
     const matchedOrders = Array.from(new Set((event.accountHashes || [])
       .flatMap((hash) => byHash.get(hash) || [])
       .map((order) => order.orderId)))
@@ -158,13 +168,14 @@ export async function GET(request) {
       accountKey: matchedAccountHashes.length
         ? `matched:${matchedAccountHashes.join("|")}`
         : `unmatched:${Array.from(event.accountHashes || []).sort().join("|")}`,
+      accountEmails,
       accountHints: operationalAccountHints(event.accountHints),
       searchHashes: Array.from(event.accountHashes || []),
       searchValues: matchedOrders.flatMap((order) => [
         order.orderId,
         order.email,
         accountByOrderId.get(order.orderId),
-      ]),
+      ]).concat(fullAccountEmails),
       matchedOrderCount: matchedOrders.length,
       orders: exactOrders.length ? exactOrders : matchedOrders.length === 1 ? matchedOrders : [],
     };

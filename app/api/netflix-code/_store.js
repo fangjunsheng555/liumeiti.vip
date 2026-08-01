@@ -99,6 +99,23 @@ export function maskNetflixEmail(email) {
   return `${local.slice(0, 2)}${"*".repeat(Math.max(3, Math.min(8, local.length - 2)))}@${domain}`;
 }
 
+function normalizeNetflixAccountEmails(values) {
+  return Array.from(new Set((Array.isArray(values) ? values : [])
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter((value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))));
+}
+
+export function protectNetflixMailAccountEmails(values) {
+  const emails = normalizeNetflixAccountEmails(values);
+  return emails.length ? encryptPayload(JSON.stringify(emails)) : null;
+}
+
+export function revealNetflixMailAccountEmails(record) {
+  const raw = decryptPayload(record?.accountEmailPayload);
+  if (!raw) return [];
+  try { return normalizeNetflixAccountEmails(JSON.parse(raw)); } catch { return []; }
+}
+
 function eventIdFor(messageId, digest) {
   return "NM" + createHash("sha256").update(`${messageId || ""}|${digest || ""}`).digest("hex").slice(0, 24).toUpperCase();
 }
@@ -136,9 +153,10 @@ function pipelineSucceeded(value, expected) {
 
 export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "" } = {}) {
   const eventId = eventIdFor(messageId, digest);
-  const accountEmails = Array.isArray(parsed?.accountEmails) ? parsed.accountEmails : [];
+  const accountEmails = normalizeNetflixAccountEmails(parsed?.accountEmails);
   const accountHashes = Array.from(new Set(accountEmails.map(netflixAccountHash).filter(Boolean)));
   const encrypted = parsed?.accepted && parsed?.value ? encryptPayload(parsed.value) : null;
+  const accountEmailPayload = protectNetflixMailAccountEmails(accountEmails);
   if (parsed?.accepted && !encrypted) return { ok: false, error: "encryption_not_configured" };
   const score = new Date(parsed?.receivedAt || Date.now()).getTime();
   const record = {
@@ -155,6 +173,7 @@ export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "
     subject: clean(parsed?.subject, 240),
     accountHashes,
     accountHints: accountEmails.map(maskNetflixEmail).filter(Boolean),
+    accountEmailPayload,
     payload: encrypted,
     messageIdHash: createHash("sha256").update(String(messageId || digest || eventId)).digest("hex"),
   };
