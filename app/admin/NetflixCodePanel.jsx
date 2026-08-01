@@ -147,7 +147,7 @@ export default function NetflixCodePanel({ canEdit = false }) {
           {(data.events || []).length ? data.events.map((event) => (
             <article key={event.eventId} className={styles.row}>
               <div className={styles.when}>
-                <b>{event.kind === "code" ? <KeyRound size={13} /> : event.kind === "link" ? <Link2 size={13} /> : <ShieldAlert size={13} />}{time(event.receivedAtBeijing)}</b>
+                <b>{event.kind === "code" ? <KeyRound size={13} /> : (event.kind === "link" || event.kind === "household") ? <Link2 size={13} /> : <ShieldAlert size={13} />}{time(event.receivedAtBeijing)}</b>
                 <small>{event.language || "--"}</small>
               </div>
               <div className={styles.accounts}>{(event.accountHints || []).length ? <><span>{event.accountHints[0]}</span>{event.accountHints.length > 1 && <small>另 {event.accountHints.length - 1} 个地址</small>}</> : <span>未匹配</span>}</div>
@@ -165,7 +165,7 @@ export default function NetflixCodePanel({ canEdit = false }) {
                 </div>
               )) : <span className={styles.muted}>{event.matchedOrderCount > 1 ? `${event.matchedOrderCount} 个订单使用此账号` : "暂无关联订单"}</span>}</div>
               <div className={styles.resultCell}>
-                <span className={event.accepted ? styles.ok : styles.rejected}>{event.accepted ? <CheckCircle2 size={13} /> : <ShieldAlert size={13} />}{event.accepted ? (event.kind === "link" ? "官方链接已解析" : "验证码已解析") : (REASON_LABELS[event.reason] || "未采用")}</span>
+                <span className={event.accepted ? styles.ok : styles.rejected}>{event.accepted ? <CheckCircle2 size={13} /> : <ShieldAlert size={13} />}{event.accepted ? (event.kind === "household" ? "同户确认链接已解析" : event.kind === "link" ? "官方链接已解析" : "验证码已解析") : (REASON_LABELS[event.reason] || "未采用")}</span>
                 {canEdit && <button type="button" className={styles.deleteButton} onClick={() => removeRecords("delete_mail_records", event.eventIds?.length ? event.eventIds : [event.eventId], "收件记录")} disabled={Boolean(busyKey)} aria-label="删除收件记录" title="删除收件记录"><Trash2 size={13} /></button>}
               </div>
             </article>

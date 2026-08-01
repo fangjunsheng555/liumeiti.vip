@@ -25,6 +25,30 @@ const LANGUAGE_RULES = [
   { code: "en", hints: ["login code", "sign-in code", "sign in code", "access code", "temporary code", "verification code", "enter this code to sign in", "enter the code above"], link: ["get code", "get your code", "view code", "receive code", "get temporary code"] },
 ];
 
+// Netflix localizes templates into more languages than the phrase list above.
+// A short "code" word stem close to the digits is language-agnostic evidence
+// that the digits are the sign-in code and not a reference number.
+const CODE_WORD_STEMS = [
+  "code", "código", "codigo", "codice", "kod", "kode", "kód", "koodi",
+  "код", "κωδικ", "קוד", "رمز", "कोड",
+  "コード", "코드", "验证码", "登录代码", "代码", "驗證碼", "登入碼", "代碼",
+  "mã", "รหัส",
+];
+
+// Display-only hints so household-update emails keep a useful language label.
+const HOUSEHOLD_HINTS = {
+  "zh-CN": ["同户设备", "是的，是我本人"],
+  "zh-TW": ["同戶裝置", "是的，是我"],
+  en: ["netflix household", "yes, this was me", "update your netflix household"],
+  es: ["hogar con netflix", "sí, la envié yo"],
+  pt: ["residência netflix", "sim, fui eu"],
+  fr: ["foyer netflix", "oui, c'était moi"],
+  de: ["netflix-haushalt", "ja, ich war das"],
+  it: ["nucleo domestico", "sì, sono stato io"],
+  ja: ["netflix世帯", "はい、私です"],
+  ko: ["넷플릭스 이용 가구", "네, 본인이 맞습니다"],
+};
+
 const SENSITIVE_CONTEXT = [
   "password reset", "reset password", "change password", "email change", "change email",
   "payment method", "billing", "subscription change", "cancel membership", "profile transfer",
@@ -73,15 +97,19 @@ function normalizeSearchText(value) {
     .toLowerCase();
 }
 
+// Keep newlines only at real block boundaries so digits from neighbouring
+// blocks (the code and the "15 minutes" expiry, footer years, dates) can never
+// merge into one run. Source-formatting newlines inside the HTML are noise.
 function htmlToText(value) {
   return decodeEntities(value)
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/[\r\n]+/g, " ")
     .replace(/<br\s*\/?\s*>/gi, "\n")
-    .replace(/<\/p\s*>/gi, "\n")
+    .replace(/<\/(p|div|td|th|tr|table|thead|tbody|tfoot|li|ul|ol|h[1-6]|blockquote|section|article|header|footer|main)\s*>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
     .replace(/[ \t]+/g, " ")
-    .replace(/\n\s+/g, "\n")
+    .replace(/\s*\n\s*/g, "\n")
     .trim();
 }
 
@@ -138,7 +166,8 @@ function detectLanguage(text, html) {
   const lower = normalizeSearchText(text);
   let best = { code: "en", score: 0 };
   for (const rule of LANGUAGE_RULES) {
-    const score = [...rule.hints, ...rule.link].reduce((sum, phrase) => sum + (lower.includes(normalizeSearchText(phrase)) ? 1 : 0), 0);
+    const phrases = [...rule.hints, ...rule.link, ...(HOUSEHOLD_HINTS[rule.code] || [])];
+    const score = phrases.reduce((sum, phrase) => sum + (lower.includes(normalizeSearchText(phrase)) ? 1 : 0), 0);
     if (score > best.score) best = { code: rule.code, score };
   }
   if (best.score > 0) return best.code;
@@ -162,39 +191,63 @@ function hasNearbyPhrase(text, index, phrases, distance = 190) {
   return phrases.some((phrase) => window.includes(normalizeSearchText(phrase)));
 }
 
-const VISUAL_DIGIT_SEPARATOR = "[\\s\\u00a0\\u00ad\\u2000-\\u200f\\u2028\\u2029\\u2060\\ufeff]";
-const EXPIRY_UNIT_PATTERN = /^(?:minutes?|mins?|minutos?|minuti|minuten|minut(?:y|a)?|分钟|分鐘|分|분|dakika|menit|phút|минут|perc|นาที|دقيقة)/iu;
+// Separators Netflix templates place between visually spaced code digits.
+const INLINE_SEPARATOR = "[ \\t\\u00a0\\u00ad\\u2000-\\u200f\\u202f\\u205f\\u2060\\u3000\\ufeff]";
+const DIGIT_GROUP_PATTERN = new RegExp(`\\d(?:${INLINE_SEPARATOR}{0,4}\\d)*`, "g");
+const DIGIT_ONLY_LINE_PATTERN = new RegExp(`^(?:\\d|${INLINE_SEPARATOR})+$`);
 
-function visualDigitRuns(text) {
-  const runs = [];
-  const normalized = normalizeDigits(decodeEntities(text)).normalize("NFKC");
-  const pattern = new RegExp(`(?<![A-Za-z0-9])\\d(?:${VISUAL_DIGIT_SEPARATOR}{0,8}\\d){3,11}(?![A-Za-z0-9])`, "g");
-  for (const match of normalized.matchAll(pattern)) {
-    const start = match.index || 0;
-    const end = start + match[0].length;
-    const previousDigit = new RegExp(`\\d${VISUAL_DIGIT_SEPARATOR}{0,8}$`).test(normalized.slice(Math.max(0, start - 9), start));
-    const nextDigit = new RegExp(`^${VISUAL_DIGIT_SEPARATOR}{0,8}\\d`).test(normalized.slice(end, end + 9));
-    if (previousDigit || nextDigit) continue;
-    const digits = match[0].replace(/\D/g, "");
-    const after = normalizeSearchText(normalized.slice(end, end + 48));
-    // Some HTML-only templates place the 15-minute expiry in the next block.
-    // After tag removal it can look like one six-digit run ("31 46 15").
-    // Keep the first four digits only when the trailing 15 is immediately
-    // followed by a localized minute unit; ordinary six-digit codes stay six.
-    const value = digits.length === 6 && digits.endsWith("15") && EXPIRY_UNIT_PATTERN.test(after)
-      ? digits.slice(0, 4)
-      : digits;
-    runs.push({ value, index: start });
+// Lines that are forwarded/quoted mail headers (From/Sent/Date/Subject in the
+// languages of common mail clients). Digits on these lines are dates or ids,
+// never the sign-in code.
+const FORWARD_HEADER_LINE = new RegExp(
+  "^\\s*(?:"
+  + "(?:from|to|cc|bcc|date|sent|subject|reply-to|de|da|para|an|von|gesendet|datum|betreff|enviado|enviada|fecha|asunto|envoyé|envoye|objet|inviato|oggetto|data|verzonden|aan|onderwerp|od|do|wysłano|wyslano|temat|от|кому|отправлено|дата|тема|보낸 사람|받는 사람|날짜|제목)\\b[^:：\\n]{0,16}"
+  + "|(?:发件人|收件人|抄送|日期|发送时间|主题|寄件者|收件者|寄件日期|主旨|差出人|宛先|送信日時|件名)[^:：\\n]{0,4}"
+  + ")\\s*[:：]", "i");
+
+// Date/time wording immediately around a digit run. Used only to break ties
+// between multiple candidates, so an approximate month list is safe.
+const DATE_CONTEXT_PATTERN = new RegExp(
+  "[年月日]|\\bgmt\\b|\\butc\\b|\\d{1,2}[:]\\d{2}|\\d{1,2}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{2,4}"
+  + "|\\b(?:jan|feb|mar|apr|may|jun|jul|aug|sept?|oct|nov|dec|ene|abr|ago|dic|janv|févr|avr|mai|juin|juil|août|déc|mär|okt|dez|gen|mag|giu|lug|set|ott|mrt|mei|sty|lut|kwi|maj|cze|lip|sie|wrz|paź|lis|gru|oca|şub|nis|haz|tem|ağu|eyl|eki|kas|ara|янв|фев|мар|апр|мая|июн|июл|авг|сен|окт|ноя|дек)[a-zà-ÿ]*\\.?\\b",
+  "i");
+
+function boundedLineGroups(line, lineStart) {
+  const groups = [];
+  for (const match of line.matchAll(DIGIT_GROUP_PATTERN)) {
+    const previous = line[match.index - 1] || "";
+    const next = line[match.index + match[0].length] || "";
+    if (/[A-Za-z0-9]/.test(previous) || /[A-Za-z0-9]/.test(next)) continue;
+    groups.push({ value: match[0].replace(/\D/g, ""), index: lineStart + match.index, line });
   }
+  return groups;
+}
+
+// Digit runs, extracted per line. Consecutive lines that contain nothing but
+// digits are joined so flattened forwards with one digit (or digit pair) per
+// line still form one code. Runs never cross a line with any other content.
+function extractDigitRuns(text) {
+  const runs = [];
+  let pending = null;
+  let offset = 0;
+  const flush = () => {
+    if (pending) runs.push(pending);
+    pending = null;
+  };
+  for (const line of String(text || "").split("\n")) {
+    const trimmed = line.trim();
+    const groups = boundedLineGroups(line, offset);
+    if (trimmed && DIGIT_ONLY_LINE_PATTERN.test(trimmed) && groups.length === 1) {
+      if (pending) pending.value += groups[0].value;
+      else pending = { ...groups[0] };
+    } else {
+      flush();
+      runs.push(...groups);
+    }
+    offset += line.length + 1;
+  }
+  flush();
   return runs;
-}
-
-function codeCandidates(text) {
-  return visualDigitRuns(text).filter((run) => run.value.length === 4);
-}
-
-function containsSixDigitToken(text) {
-  return visualDigitRuns(text).some((run) => run.value.length === 6);
 }
 
 function withoutUrls(text) {
@@ -245,20 +298,49 @@ function trustedNetflixUrl(value) {
   } catch { return null; }
 }
 
-function safeConfirmationLink(html, text) {
+function collectNetflixLinks(html, text) {
   const links = unique([...anchorLinks(html), ...textLinks(text)].map((item) => JSON.stringify(item))).map((item) => JSON.parse(item));
-  const matches = [];
+  const out = [];
   for (const link of links) {
     const url = trustedNetflixUrl(link.url);
     if (!url) continue;
-    const path = new URL(url).pathname.replace(/\/+$/, "").toLowerCase();
-    if (path !== "/account/travel/verify") continue;
-    const context = `${link.anchor} ${link.context}`.toLowerCase();
-    const phraseMatch = LANGUAGE_RULES.some((rule) => rule.link.some((phrase) => context.includes(phrase.toLowerCase())));
-    const sensitive = SENSITIVE_CONTEXT.some((phrase) => context.includes(phrase.toLowerCase()));
-    if (phraseMatch && !sensitive) matches.push(url);
+    const parsed = new URL(url);
+    out.push({
+      ...link,
+      url,
+      path: parsed.pathname.replace(/\/+$/, "").toLowerCase(),
+      params: parsed.searchParams,
+    });
   }
-  return unique(matches).length === 1 ? unique(matches)[0] : "";
+  return out;
+}
+
+// The travel-verify link is identified by its exact path plus either a signed
+// token or localized "get code" wording, so unlisted languages still work.
+function travelVerifyLink(links) {
+  const matches = [];
+  for (const link of links) {
+    if (link.path !== "/account/travel/verify") continue;
+    const context = normalizeSearchText(`${link.anchor} ${link.context}`);
+    if (SENSITIVE_CONTEXT.some((phrase) => context.includes(normalizeSearchText(phrase)))) continue;
+    const phraseMatch = LANGUAGE_RULES.some((rule) => rule.link.some((phrase) => context.includes(normalizeSearchText(phrase))));
+    const hasToken = link.params.has("token") || link.params.has("nftoken");
+    if (phraseMatch || hasToken) matches.push(link.url);
+  }
+  const distinct = unique(matches);
+  return distinct.length === 1 ? distinct[0] : "";
+}
+
+// Household-update ("update primary location") confirmation emails carry one
+// signed CTA link. The path plus nftoken identify it in every language, so no
+// anchor-text matching is needed.
+function householdUpdateLink(links) {
+  const matches = links.filter((link) => link.path === "/account/update-primary-location" && link.params.has("nftoken"));
+  if (!matches.length) return "";
+  const preferred = matches.find((link) => String(link.params.get("lkid") || "").toUpperCase().includes("UPDATE_HOUSEHOLD"))
+    || matches.find((link) => String(link.params.get("operation") || "").toLowerCase() === "update")
+    || matches[0];
+  return preferred.url;
 }
 
 function forwardedHeaderAddresses(text) {
@@ -289,6 +371,19 @@ function isInfrastructureAddress(email) {
     || domain === "cloudflare.net"
     || domain.endsWith(".cloudflare.net")
     || ["mailer-daemon", "postmaster", "no-reply", "noreply"].includes(local);
+}
+
+function isYearLike(value) {
+  const number = Number(value);
+  return number >= 1990 && number <= 2099;
+}
+
+function dateLikeRun(codeText, run) {
+  const start = Math.max(0, run.index - 26);
+  const end = Math.min(codeText.length, run.index + run.value.length + 30);
+  const before = codeText.slice(start, run.index);
+  const after = codeText.slice(run.index + run.value.length, end);
+  return DATE_CONTEXT_PATTERN.test(before) || DATE_CONTEXT_PATTERN.test(after);
 }
 
 export async function parseNetflixEmail(raw, envelope = {}) {
@@ -342,7 +437,13 @@ export async function parseNetflixEmail(raw, envelope = {}) {
     accountEmails = accountEmails.includes(forwardingAccount) ? [forwardingAccount] : [];
   }
   if (!accountEmails.length) return { accepted: false, reason: "account_email_missing" };
-  const codeSearchText = withoutUrls(text);
+
+  // Line-structured text for digit extraction. Sections are separated by a
+  // blank line, which breaks digit-run merging across message parts.
+  const codeText = normalizeDigits(withoutUrls(decodeEntities([subjects.join("\n"), plain, htmlToText(html)]
+    .filter(Boolean)
+    .join("\n\n"))))
+    .normalize("NFKC");
   const language = detectLanguage(text, html);
   const receivedAt = new Date(envelope.receivedAt || Date.now()).toISOString();
   const expiresAt = new Date(new Date(receivedAt).getTime() + 15 * 60 * 1000).toISOString();
@@ -356,39 +457,61 @@ export async function parseNetflixEmail(raw, envelope = {}) {
     expiresAt,
   };
 
-  // A flattened Outlook forward can contain unrelated six-digit tracking
-  // references in the footer. Prefer one unambiguous four-digit value that is
-  // adjacent to Netflix sign-in wording; six-digit values are never returned.
-  const phrases = LANGUAGE_RULES.flatMap((rule) => rule.hints);
-  const allCandidates = codeCandidates(codeSearchText);
-  const candidates = allCandidates.filter((candidate) => hasNearbyPhrase(codeSearchText, candidate.index, phrases, 420));
-  const codes = unique(candidates.map((candidate) => candidate.value));
-  if (codes.length === 1) return { ...base, kind: "code", value: codes[0], template: `${language}:login-code` };
-  if (codes.length > 1) return { ...base, accepted: false, reason: "ambiguous_code", value: undefined };
+  const runs = extractDigitRuns(codeText).filter((run) => !FORWARD_HEADER_LINE.test(run.line || ""));
+  const fourDigitRuns = runs.filter((run) => run.value.length === 4);
+  const hasSixDigitToken = runs.some((run) => run.value.length === 6);
+  const hintPhrases = LANGUAGE_RULES.flatMap((rule) => rule.hints);
+  const candidates = fourDigitRuns.filter((run) => hasNearbyPhrase(codeText, run.index, CODE_WORD_STEMS, 300)
+    || hasNearbyPhrase(codeText, run.index, hintPhrases, 420));
+
+  let values = unique(candidates.map((run) => run.value));
+  if (values.length > 1) {
+    // Deterministic tie-breaks for real-world noise: forwarded dates and
+    // copyright years also sit near "code" wording. Never drop every value.
+    const runsFor = (value) => candidates.filter((run) => run.value === value);
+    const nonDate = values.filter((value) => !runsFor(value).every((run) => dateLikeRun(codeText, run)));
+    if (nonDate.length) values = nonDate;
+    if (values.length > 1) {
+      const nonYear = values.filter((value) => !isYearLike(value));
+      if (nonYear.length) values = nonYear;
+    }
+  }
+  if (values.length === 1) return { ...base, kind: "code", value: values[0], template: `${language}:login-code` };
+  if (values.length > 1) return { ...base, accepted: false, reason: "ambiguous_code", value: undefined };
 
   // A trusted Netflix sign-in subject plus one unique four-digit value is a
   // safe fallback for forwarded HTML whose layout inserts large spacer blocks.
   const subjectText = normalizeSearchText(subjects.join(" "));
-  const subjectIsLoginCode = phrases.some((phrase) => subjectText.includes(normalizeSearchText(phrase)));
-  const subjectCodes = unique(allCandidates.map((candidate) => candidate.value));
+  const subjectIsLoginCode = hintPhrases.some((phrase) => subjectText.includes(normalizeSearchText(phrase)));
+  const subjectCodes = unique(fourDigitRuns.map((run) => run.value));
   if (subjectIsLoginCode && subjectCodes.length === 1) {
     return { ...base, kind: "code", value: subjectCodes[0], template: `${language}:login-code` };
   }
 
-  const link = safeConfirmationLink(html, plain);
-  if (link) return { ...base, kind: "link", value: link, template: `${language}:temporary-code-link` };
+  const links = collectNetflixLinks(html, plain);
+  const travelLink = travelVerifyLink(links);
+  if (travelLink) return { ...base, kind: "link", value: travelLink, template: `${language}:temporary-code-link` };
 
-  if (SENSITIVE_CONTEXT.some((phrase) => lower.includes(phrase.toLowerCase())) && containsSixDigitToken(codeSearchText)) {
+  const householdLink = householdUpdateLink(links);
+  if (householdLink) return { ...base, kind: "household", value: householdLink, template: `${language}:update-primary-location` };
+
+  if (SENSITIVE_CONTEXT.some((phrase) => lower.includes(phrase.toLowerCase())) && hasSixDigitToken) {
     return { ...base, accepted: false, reason: "sensitive_six_digit", value: undefined };
   }
-  if (containsSixDigitToken(codeSearchText)) {
+  if (hasSixDigitToken) {
     return { ...base, accepted: false, reason: "six_digit_rejected", value: undefined };
   }
   return { ...base, accepted: false, reason: "supported_content_not_found", value: undefined };
+}
+
+function containsSixDigitToken(text) {
+  const normalized = normalizeDigits(decodeEntities(String(text || ""))).normalize("NFKC");
+  return extractDigitRuns(normalized).some((run) => run.value.length === 6);
 }
 
 export const netflixParserInternals = {
   normalizeDigits,
   trustedNetflixUrl,
   containsSixDigitToken,
+  extractDigitRuns,
 };

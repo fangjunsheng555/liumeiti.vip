@@ -56,6 +56,9 @@ export default function NetflixCodePage() {
   const pollTimer = useRef(null);
   const pollCount = useRef(0);
   const sessionRef = useRef("");
+  // Rejected mail events already shown to the user. Sending them back lets the
+  // server wait for a fresh email instead of replaying the same failure.
+  const seenRejectedRef = useRef([]);
 
   const [loadingAccount, setLoadingAccount] = useState(true);
   const [loggedIn, setLoggedIn] = useState(false);
@@ -111,7 +114,7 @@ export default function NetflixCodePage() {
       session_expired: L("本次核验已过期，请重新选择订单", "This verification has expired; select the order again"),
       temporarily_locked: L("操作较频繁，请 15 分钟后再试", "Too many attempts; try again in 15 minutes"),
       service_not_configured: L("登录码服务暂时不可用，请稍后再试", "The sign-in code service is temporarily unavailable; try again later"),
-      mail_unrecognized: L("已收到邮件，但未识别到可用的 4 位登录码。请在 Netflix 重新发送后再试", "The email arrived, but no valid 4-digit sign-in code was found. Request a new email from Netflix and try again"),
+      mail_unrecognized: L("已收到邮件，但未识别到可用的登录码或确认链接。请在 Netflix 重新发送后，再点击一次读取", "The email arrived, but no usable sign-in code or confirmation link was found. Request a new email from Netflix, then tap retrieve again"),
     })[error] || L("暂时无法完成，请稍后再试", "Unable to complete this request right now");
   }
 
@@ -191,11 +194,16 @@ export default function NetflixCodePage() {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "retrieve", sessionToken: token }),
+        body: JSON.stringify({ action: "retrieve", sessionToken: token, seenEventIds: seenRejectedRef.current }),
       });
       const data = await response.json();
-      if (!response.ok || !data?.ok) throw new Error(errorCopy(data?.error));
-      if (data.kind === "code" || data.kind === "link") {
+      if (!response.ok || !data?.ok) {
+        if (data?.error === "mail_unrecognized" && data?.eventId) {
+          seenRejectedRef.current = Array.from(new Set([...seenRejectedRef.current, data.eventId])).slice(-12);
+        }
+        throw new Error(errorCopy(data?.error));
+      }
+      if (data.kind === "code" || data.kind === "link" || data.kind === "household") {
         stopPolling();
         setResult(data);
         setStatus(null);
@@ -243,6 +251,7 @@ export default function NetflixCodePage() {
   function resetSession() {
     stopPolling();
     sessionRef.current = "";
+    seenRejectedRef.current = [];
     setSession(null);
     setResult(null);
     setStatus(null);
@@ -346,6 +355,15 @@ export default function NetflixCodePage() {
                 <p>{L("这封邮件没有直接显示验证码。点击下方按钮，在 Netflix 官方页面获取临时代码。", "This email does not show a code directly. Use the official Netflix page below to get your temporary code.")}</p>
                 <a href={result.url} target="_blank" rel="noopener noreferrer">{L("前往 Netflix 获取临时代码", "Get the temporary code on Netflix")}<ExternalLink size={15} /></a>
                 <small><Clock3 size={13} />{L("链接仅用于本次登录，请勿转发。", "This link is for this sign-in only. Do not share it.")}</small>
+              </div>
+            )}
+
+            {result?.kind === "household" && (
+              <div className={styles.linkResult}>
+                <span>{L("请在 Netflix 确认同户设备更新", "Confirm the household update on Netflix")}</span>
+                <p>{L("已收到「更新 Netflix 同户设备」确认邮件。点击下方按钮打开 Netflix 官方页面，即等同于邮件中的「是的，是我本人」。", "The Netflix household update email has arrived. The button below opens the official Netflix page — the same as choosing “Yes, This Was Me” in the email.")}</p>
+                <a href={result.url} target="_blank" rel="noopener noreferrer">{L("前往 Netflix 确认本次请求", "Confirm this request on Netflix")}<ExternalLink size={15} /></a>
+                <small><Clock3 size={13} />{L("链接约 15 分钟内有效，请勿转发。", "The link expires in about 15 minutes. Do not share it.")}</small>
               </div>
             )}
 

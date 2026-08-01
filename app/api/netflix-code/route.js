@@ -75,17 +75,31 @@ async function readBody(request) {
   try { return await request.json(); } catch { return {}; }
 }
 
-function safeTravelLink(value) {
+const RESULT_LINK_PATHS = {
+  link: "/account/travel/verify",
+  household: "/account/update-primary-location",
+};
+
+function safeResultLink(kind, value) {
   try {
+    const expectedPath = RESULT_LINK_PATHS[kind];
+    if (!expectedPath) return "";
     const url = new URL(String(value || ""));
     const host = url.hostname.toLowerCase();
     const path = url.pathname.replace(/\/+$/, "").toLowerCase();
     return url.protocol === "https:"
       && (host === "netflix.com" || host.endsWith(".netflix.com"))
-      && path === "/account/travel/verify"
+      && path === expectedPath
       ? url.toString()
       : "";
   } catch { return ""; }
+}
+
+function seenEventIdsFrom(body) {
+  return Array.from(new Set((Array.isArray(body?.seenEventIds) ? body.seenEventIds : [])
+    .map((value) => clean(value, 80).toUpperCase())
+    .filter((value) => /^NM[A-F0-9]{24}$/.test(value))))
+    .slice(0, 12);
 }
 
 async function logSuccessfulAccess(order, account, claim, outcome, eventId) {
@@ -175,12 +189,15 @@ export async function POST(request) {
     }
   }
 
-  const mailState = await findLatestNetflixMailState(eligible.account, { since: Number(claim.startedAt || 0) });
+  const mailState = await findLatestNetflixMailState(eligible.account, {
+    since: Number(claim.startedAt || 0),
+    excludeEventIds: seenEventIdsFrom(body),
+  });
   if (mailState.state === "rejected") {
     if (shouldAwaitAcceptedSibling(mailState)) {
       return Response.json({ ok: true, pending: true, mailReceived: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
     }
-    return Response.json({ ok: false, error: "mail_unrecognized" }, { status: 422, headers: { "Cache-Control": "no-store" } });
+    return Response.json({ ok: false, error: "mail_unrecognized", eventId: mailState.eventId || "" }, { status: 422, headers: { "Cache-Control": "no-store" } });
   }
   const result = mailState.state === "result" ? mailState.result : null;
   if (!result) return Response.json({ ok: true, pending: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
@@ -189,11 +206,14 @@ export async function POST(request) {
     await logSuccessfulAccess(order, eligible.account, claim, "code_returned", result.eventId);
     return Response.json({ ok: true, kind: "code", code: result.value, expiresAt: result.expiresAt, receivedAtBeijing: result.receivedAtBeijing }, { headers: { "Cache-Control": "no-store" } });
   }
-  const link = result.kind === "link" ? safeTravelLink(result.value) : "";
-  if (link) {
-    await redisCmd(["DEL", attemptsKey]);
-    await logSuccessfulAccess(order, eligible.account, claim, "travel_link_returned", result.eventId);
-    return Response.json({ ok: true, kind: "link", url: link, expiresAt: result.expiresAt, receivedAtBeijing: result.receivedAtBeijing }, { headers: { "Cache-Control": "no-store" } });
+  if (result.kind === "link" || result.kind === "household") {
+    const link = safeResultLink(result.kind, result.value);
+    if (link) {
+      await redisCmd(["DEL", attemptsKey]);
+      const outcome = result.kind === "household" ? "household_link_returned" : "travel_link_returned";
+      await logSuccessfulAccess(order, eligible.account, claim, outcome, result.eventId);
+      return Response.json({ ok: true, kind: result.kind, url: link, expiresAt: result.expiresAt, receivedAtBeijing: result.receivedAtBeijing }, { headers: { "Cache-Control": "no-store" } });
+    }
   }
   return Response.json({ ok: true, pending: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
 }

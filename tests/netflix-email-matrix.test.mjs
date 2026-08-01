@@ -286,6 +286,109 @@ test("rejects visually grouped six-digit account-security codes", async () => {
   assert.ok(["sensitive_six_digit", "six_digit_rejected"].includes(parsed.reason));
 });
 
+test("ignores forwarded header dates when extracting the sign-in code", async () => {
+  const parsed = await parseNetflixEmail(textMime({
+    account: INBOX,
+    subject: "Fwd: Netflix: Tu código de inicio de sesión",
+    body: [
+      "---------- Forwarded message ---------",
+      "De: Netflix <info@account.netflix.com>",
+      "Fecha: 01/08/2026",
+      "Para: cliente@example.es",
+      "Asunto: Netflix: Tu código de inicio de sesión",
+      "",
+      "Introduce este código de inicio de sesión",
+      "8653",
+      "Este código caduca en 15 minutos.",
+    ].join("\r\n"),
+  }), { from: "cliente@example.es", to: INBOX, inboxAddress: INBOX });
+  assert.equal(parsed.accepted, true, JSON.stringify(parsed));
+  assert.equal(parsed.kind, "code");
+  assert.equal(parsed.value, "8653");
+});
+
+test("ignores a Gmail-style inline date line next to the code", async () => {
+  const parsed = await parseNetflixEmail(textMime({
+    account: INBOX,
+    subject: "Fwd: Netflix 登录验证码",
+    body: [
+      "Netflix <info@account.netflix.com> 于2026年8月1日周五 上午11:04写道：",
+      "输入此登录验证码",
+      "7 3 1 4",
+      "验证码将在 15 分钟后失效。",
+      "此消息由 Netflix 发送至 member@example.com。",
+    ].join("\r\n"),
+  }), { from: "member@example.com", to: INBOX, inboxAddress: INBOX });
+  assert.equal(parsed.accepted, true, JSON.stringify(parsed));
+  assert.equal(parsed.kind, "code");
+  assert.equal(parsed.value, "7314");
+});
+
+test("parses a template in a language without dedicated phrase rules", async () => {
+  const parsed = await parseNetflixEmail(textMime({
+    subject: "Netflix: přihlašovací kód",
+    body: "Zadejte tento přihlašovací kód\r\n4827\r\nPlatnost kódu vyprší za 15 minut.",
+  }), { from: "info@account.netflix.com", to: INBOX });
+  assert.equal(parsed.accepted, true, JSON.stringify(parsed));
+  assert.equal(parsed.kind, "code");
+  assert.equal(parsed.value, "4827");
+});
+
+const householdUrl = "https://www.netflix.com/account/update-primary-location?nftoken=Bgi8u-vcAxLDAaSVJcQO&g=ed904980-22a5-42c4-bc09-1964cb91bbdd&lnktrk=EVO&operation=update&lkid=UPDATE_HOUSEHOLD_REQUESTED_OTP_CTA";
+
+function householdBody(cta, heading, footer) {
+  return [
+    `<h1>${heading}</h1>`,
+    "<p>polly 于7月12日，上午11:25 GMT+2在 Apple TV 上发出请求</p>",
+    '<p><a href="https://www.netflix.com/password?g=ed904980&lkid=URL_PASSWORD&nftoken=zz">更改密码</a></p>',
+    `<p><a href="${householdUrl.replaceAll("&", "&amp;")}">${cta}</a></p>`,
+    "<p>*链接将于 15 分钟后失效。</p>",
+    '<p><a href="https://www.netflix.com/ManageAccountAccess?g=ed904980&nftoken=yy">注销您无法识别的所有设备</a></p>',
+    `<p>${footer}</p>`,
+    "<p>SRC: 6317B35C_ed904980-22a5-42c4-bc09-1964cb91bbdd_zh-CN_ES_EVO</p>",
+  ].join("");
+}
+
+test("recognizes the Chinese household-update email and returns only the signed CTA link", async () => {
+  const parsed = await parseNetflixEmail(htmlMime({
+    account: "spotifytokyo@hotmail.com",
+    subject: "重要提示：如何更新 Netflix 同户设备",
+    lang: "zh-CN",
+    body: householdBody("是的，是我本人", "是您请求更新 Netflix 同户设备吗？", "此消息由 Netflix 发送至 spotifytokyo@hotmail.com。"),
+  }), { from: "info@account.netflix.com", to: INBOX, inboxAddress: INBOX });
+  assert.equal(parsed.accepted, true, JSON.stringify(parsed));
+  assert.equal(parsed.kind, "household");
+  assert.equal(new URL(parsed.value).pathname, "/account/update-primary-location");
+  assert.ok(new URL(parsed.value).searchParams.get("nftoken"));
+  assert.equal(parsed.language, "zh-CN");
+  assert.ok(parsed.accountEmails.includes("spotifytokyo@hotmail.com"));
+});
+
+test("recognizes a forwarded household-update email in an unlisted language", async () => {
+  const account = "member.forwarder@outlook.es";
+  const parsed = await parseNetflixEmail(outlookForward({
+    account,
+    subject: "Vigtigt: Sådan opdaterer du din Netflix-husstand",
+    lang: "da",
+    body: householdBody("Ja, det var mig", "Har du anmodet om at opdatere din Netflix-husstand?", `Denne meddelelse blev sendt til ${account}.`),
+  }), { from: account, to: INBOX, inboxAddress: INBOX });
+  assert.equal(parsed.accepted, true, JSON.stringify(parsed));
+  assert.equal(parsed.kind, "household");
+  assert.equal(new URL(parsed.value).pathname, "/account/update-primary-location");
+  assert.deepEqual(parsed.accountEmails, [account]);
+});
+
+test("does not treat a household email as a travel-verify link or a code", async () => {
+  const parsed = await parseNetflixEmail(htmlMime({
+    subject: "Update your Netflix Household",
+    lang: "en",
+    body: householdBody("Yes, This Was Me", "Did you request to update your Netflix Household?", "This message was mailed to member@example.com."),
+  }), { from: "info@account.netflix.com", to: INBOX });
+  assert.equal(parsed.accepted, true, JSON.stringify(parsed));
+  assert.equal(parsed.kind, "household");
+  assert.notEqual(parsed.kind, "code");
+});
+
 test("rejects an ambiguous Netflix message containing two different four-digit codes", async () => {
   const parsed = await parseNetflixEmail(htmlMime({
     subject: "Netflix: Your sign-in code",

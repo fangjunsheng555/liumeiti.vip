@@ -157,7 +157,7 @@ export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "
   return { ok, eventId, accepted: record.accepted, kind: record.kind, reason: record.reason };
 }
 
-export async function findLatestNetflixMailState(email, { since = 0 } = {}) {
+export async function findLatestNetflixMailState(email, { since = 0, excludeEventIds = [] } = {}) {
   const hash = netflixAccountHash(email);
   // The customer normally returns after Netflix has already sent the message.
   // Keep a short lookback so a valid code received just before authorization is
@@ -193,7 +193,12 @@ export async function findLatestNetflixMailState(email, { since = 0 } = {}) {
       },
     };
   }
-  const rejected = siblingCluster.find(({ record, receivedAt }) => !record.accepted && receivedAt >= rejectedMinScore)?.record;
+  // Rejected records the customer has already been shown are skipped so a new
+  // retrieve attempt waits for the next email instead of replaying the error.
+  const seenEventIds = new Set(validEventIds(excludeEventIds));
+  const rejected = siblingCluster.find(({ record, receivedAt }) => !record.accepted
+    && receivedAt >= rejectedMinScore
+    && !seenEventIds.has(record.eventId))?.record;
   return rejected ? {
     state: "rejected",
     eventId: rejected.eventId,
@@ -210,7 +215,7 @@ export async function findLatestNetflixResult(email, options = {}) {
 
 export async function recordNetflixCodeAccess(entry) {
   const outcome = clean(entry?.outcome, 80);
-  if (!["code_returned", "travel_link_returned"].includes(outcome)) return true;
+  if (!["code_returned", "travel_link_returned", "household_link_returned"].includes(outcome)) return true;
   const orderId = clean(entry?.orderId, 80).toUpperCase();
   const eventId = clean(entry?.eventId, 80);
   if (!orderId || !eventId) return false;
