@@ -12,9 +12,16 @@
 .meta b { overflow: hidden; color: #0f172a; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .meta .ready b { color: #047857; }
 .meta .warning b { color: #c2410c; }
-.tabs { display: flex; gap: 4px; padding: 10px 12px; border-bottom: 1px solid #e2e8f0; }
+.recordTools { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border-bottom: 1px solid #e2e8f0; }
+.tabs { display: flex; gap: 4px; }
 .tabs button { height: 31px; display: inline-flex; align-items: center; gap: 6px; padding: 0 11px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #64748b; font-size: 10px; font-weight: 800; cursor: pointer; }
 .tabs button.active { border-color: #99f6e4; background: #f0fdfa; color: #0f766e; }
+.searchBox { width: min(330px, 42vw); height: 32px; display: flex; align-items: center; gap: 7px; padding: 0 8px 0 10px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; color: #64748b; }
+.searchBox:focus-within { border-color: #14b8a6; box-shadow: 0 0 0 2px rgba(20, 184, 166, .1); }
+.searchBox input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: #0f172a; font-size: 11px; }
+.searchBox input::placeholder { color: #94a3b8; }
+.searchBox button, .deleteButton { width: 25px; height: 25px; flex: 0 0 auto; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #94a3b8; cursor: pointer; }
+.searchBox button:hover { background: #f1f5f9; color: #475569; }
 .notice { display: flex; align-items: center; gap: 7px; margin: 10px 12px 0; padding: 9px 10px; border-left: 3px solid #f97316; background: #fff7ed; color: #c2410c; font-size: 10px; }
 .loading, .empty { min-height: 100px; display: flex; align-items: center; justify-content: center; gap: 7px; color: #64748b; font-size: 11px; }
 .table { min-width: 0; }
@@ -42,10 +49,16 @@
 .ok, .rejected, .outcome { display: flex; align-items: center; gap: 5px; font-size: 9.5px; font-weight: 800; }
 .ok { color: #047857; }
 .rejected { color: #c2410c; }
+.resultCell { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.resultCell > span { min-width: 0; }
+.deleteButton:hover { background: #fff1f2; color: #dc2626; }
+.deleteButton:disabled { opacity: .35; cursor: not-allowed; }
 .outcome { color: #475569; }
 .muted { color: #94a3b8; font-size: 9.5px; }
 .accessGrid { grid-template-columns: minmax(145px, .85fr) minmax(190px, 1.2fr) minmax(190px, 1.15fr) minmax(210px, 1.3fr); }
 .email { min-width: 0; overflow: hidden; color: #334155; text-overflow: ellipsis; white-space: nowrap; }
+.accessAccount { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.accessAccount > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .footer { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 9px 14px; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 9px; }
 .footer a { display: inline-flex; align-items: center; gap: 5px; color: #0f766e; font-weight: 800; text-decoration: none; }
 @media (max-width: 760px) {
@@ -54,6 +67,9 @@
   .meta { grid-template-columns: 1fr 1fr; }
   .meta > div { border-bottom: 1px solid #e2e8f0; }
   .meta > div:nth-child(2n) { border-right: 0; }
+  .recordTools { align-items: stretch; flex-direction: column; gap: 7px; }
+  .searchBox { width: 100%; }
+  .searchBox input { font-size: 16px; }
   .tableHead { display: none; }
   .row, .row.accessGrid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 12px; min-height: 0; padding: 10px 13px; align-items: start; }
   .orders > div { align-items: flex-start; flex-direction: column; }

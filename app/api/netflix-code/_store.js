@@ -95,6 +95,29 @@ function accountIndexKey(hash) {
   return ACCOUNT_INDEX_PREFIX + clean(hash, 80).toLowerCase();
 }
 
+function validEventIds(values) {
+  return Array.from(new Set((Array.isArray(values) ? values : [values])
+    .map((value) => clean(value, 80).toUpperCase())
+    .filter((value) => /^NM[A-F0-9]{24}$/.test(value))));
+}
+
+function validAccessIds(values) {
+  return Array.from(new Set((Array.isArray(values) ? values : [values])
+    .map((value) => clean(value, 80).toUpperCase())
+    .filter((value) => /^NA[A-F0-9]{16}$/.test(value))));
+}
+
+function accessDedupeId(record) {
+  return createHash("sha256")
+    .update(`${record?.orderId || ""}|${record?.eventId || ""}|${record?.outcome || ""}`)
+    .digest("hex");
+}
+
+function pipelineSucceeded(value, expected) {
+  const rows = pipelineRows(value);
+  return rows.length === expected && rows.every((entry) => !entry?.error);
+}
+
 export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "" } = {}) {
   const eventId = eventIdFor(messageId, digest);
   const accountEmails = Array.isArray(parsed?.accountEmails) ? parsed.accountEmails : [];
@@ -192,9 +215,7 @@ export async function recordNetflixCodeAccess(entry) {
   const eventId = clean(entry?.eventId, 80);
   if (!orderId || !eventId) return false;
 
-  const dedupeId = createHash("sha256")
-    .update(`${orderId}|${eventId}|${outcome}`)
-    .digest("hex");
+  const dedupeId = accessDedupeId({ orderId, eventId, outcome });
   const first = await redisCmd([
     "SET",
     ACCESS_DEDUPE_PREFIX + dedupeId,
@@ -242,6 +263,36 @@ export async function listNetflixMailEvents({ offset = 0, limit = 60 } = {}) {
 
 export async function listNetflixCodeAccess({ offset = 0, limit = 100 } = {}) {
   return recordsFromIndex(ACCESS_INDEX, Math.max(0, Number(offset || 0)), Math.max(1, Math.min(200, Number(limit || 100))), ACCESS_PREFIX);
+}
+
+export async function deleteNetflixMailEvents(values) {
+  const eventIds = validEventIds(values).slice(0, 40);
+  if (!eventIds.length) return { ok: false, deleted: 0 };
+  const rows = pipelineRows(await redisPipeline(eventIds.map((eventId) => ["GET", eventKey(eventId)])));
+  const commands = [];
+  eventIds.forEach((eventId, index) => {
+    const record = parseJson(pipelineValue(rows[index]));
+    commands.push(["ZREM", EVENT_INDEX, eventId], ["DEL", eventKey(eventId)]);
+    for (const hash of (record?.accountHashes || [])) commands.push(["ZREM", accountIndexKey(hash), eventId]);
+  });
+  const ok = pipelineSucceeded(await redisPipeline(commands), commands.length);
+  return { ok, deleted: ok ? eventIds.length : 0 };
+}
+
+export async function deleteNetflixCodeAccessRecords(values) {
+  const accessIds = validAccessIds(values).slice(0, 40);
+  if (!accessIds.length) return { ok: false, deleted: 0 };
+  const rows = pipelineRows(await redisPipeline(accessIds.map((id) => ["GET", ACCESS_PREFIX + id])));
+  const commands = [];
+  accessIds.forEach((id, index) => {
+    const record = parseJson(pipelineValue(rows[index]));
+    commands.push(["ZREM", ACCESS_INDEX, id], ["DEL", ACCESS_PREFIX + id]);
+    if (record?.orderId && record?.eventId && record?.outcome) {
+      commands.push(["DEL", ACCESS_DEDUPE_PREFIX + accessDedupeId(record)]);
+    }
+  });
+  const ok = pipelineSucceeded(await redisPipeline(commands), commands.length);
+  return { ok, deleted: ok ? accessIds.length : 0 };
 }
 
 export function netflixCodeLockKey(orderId) {

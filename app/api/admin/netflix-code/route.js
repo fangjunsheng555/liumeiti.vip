@@ -12,11 +12,19 @@ import {
 } from "../../_utils.js";
 import {
   clearNetflixCodeLock,
+  deleteNetflixCodeAccessRecords,
+  deleteNetflixMailEvents,
   listNetflixCodeAccess,
   listNetflixMailEvents,
   netflixAccountHash,
   netflixCodeStoreConfigured,
 } from "../../netflix-code/_store.js";
+import {
+  compactNetflixMailEvents,
+  filterNetflixAccessRecords,
+  filterNetflixMailEvents,
+  normalizeNetflixRecordQuery,
+} from "./_records.js";
 
 export const runtime = "nodejs";
 
@@ -49,37 +57,11 @@ function operationalAccountHints(values) {
   })));
 }
 
-function compactMailEvents(rows) {
-  const compacted = [];
-  for (const row of rows) {
-    const stamp = new Date(row.receivedAt || 0).getTime();
-    const accountKey = row.accountKey || row.accountHints[0] || `unmatched:${row.reason || row.subject || "mail"}`;
-    const duplicate = compacted.find((entry) => entry.accountKey === accountKey
-      && Math.abs(entry.stamp - stamp) <= 15 * 1000);
-    if (!duplicate) {
-      compacted.push({ ...row, accountKey, stamp, duplicateCount: 1 });
-      continue;
-    }
-    const preferred = row.accepted && !duplicate.accepted ? row : duplicate;
-    const mergedOrders = Array.from(new Map([
-      ...(duplicate.orders || []),
-      ...(row.orders || []),
-    ].map((order) => [order.orderId, order])).values());
-    Object.assign(duplicate, preferred, {
-      accountKey,
-      stamp: preferred === row ? stamp : duplicate.stamp,
-      duplicateCount: duplicate.duplicateCount + 1,
-      accountHints: Array.from(new Set([...(duplicate.accountHints || []), ...(row.accountHints || [])])),
-      orders: mergedOrders,
-      matchedOrderCount: Math.max(duplicate.matchedOrderCount || 0, row.matchedOrderCount || 0),
-    });
-  }
-  return compacted.map(({ accountKey, stamp, ...event }) => event);
-}
-
 export async function GET(request) {
   const auth = requireAdmin(request, "canViewOrders");
   if (auth.response) return auth.response;
+  const query = normalizeNetflixRecordQuery(new URL(request.url).searchParams.get("q"));
+  const queryHash = query.includes("@") ? netflixAccountHash(query) : "";
   const orders = (await getAllOrders()).filter((order) => netflixItem(order));
   const userByEmail = new Map();
   const uniqueEmails = Array.from(new Set(orders.map((order) => String(order.email || "").trim().toLowerCase()).filter(Boolean)));
@@ -87,6 +69,7 @@ export async function GET(request) {
   for (const [email, user] of users) userByEmail.set(email, user);
   const byHash = new Map();
   const orderControls = new Map();
+  const accountByOrderId = new Map();
   for (const order of orders) {
     const account = accountFor(order);
     if (!account) continue;
@@ -105,9 +88,10 @@ export async function GET(request) {
     };
     byHash.get(hash).push(control);
     orderControls.set(order.orderId, control);
+    accountByOrderId.set(order.orderId, account);
   }
-  const accessRows = await listNetflixCodeAccess({ limit: 120 });
-  const access = accessRows.map((entry) => ({
+  const accessRows = await listNetflixCodeAccess({ limit: 200 });
+  const access = filterNetflixAccessRecords(accessRows.map((entry) => ({
     id: entry.id,
     orderId: entry.orderId,
     userEmail: entry.userEmail || "",
@@ -115,14 +99,14 @@ export async function GET(request) {
     outcome: entry.outcome,
     eventId: entry.eventId,
     createdAtBeijing: entry.createdAtBeijing,
-  }));
+  })), query);
   const accessedOrdersByEvent = new Map();
   for (const entry of accessRows) {
     if (!entry.eventId || !entry.orderId) continue;
     if (!accessedOrdersByEvent.has(entry.eventId)) accessedOrdersByEvent.set(entry.eventId, new Set());
     accessedOrdersByEvent.get(entry.eventId).add(entry.orderId);
   }
-  const eventRows = (await listNetflixMailEvents({ limit: 80 })).map((event) => {
+  const eventRows = (await listNetflixMailEvents({ limit: 100 })).map((event) => {
     const matchedAccountHashes = Array.from(event.accountHashes || [])
       .filter((hash) => byHash.has(hash))
       .sort();
@@ -151,17 +135,29 @@ export async function GET(request) {
         ? `matched:${matchedAccountHashes.join("|")}`
         : `unmatched:${Array.from(event.accountHashes || []).sort().join("|")}`,
       accountHints: operationalAccountHints(event.accountHints),
+      searchHashes: Array.from(event.accountHashes || []),
+      searchValues: matchedOrders.flatMap((order) => [
+        order.orderId,
+        order.email,
+        accountByOrderId.get(order.orderId),
+      ]),
       matchedOrderCount: matchedOrders.length,
       orders: exactOrders.length ? exactOrders : matchedOrders.length === 1 ? matchedOrders : [],
     };
   });
-  const events = compactMailEvents(eventRows).slice(0, 40);
+  const compactedEvents = compactNetflixMailEvents(eventRows);
+  const recentAcceptedCount = compactedEvents.filter((event) => event.accepted).length;
+  const events = filterNetflixMailEvents(compactedEvents, query, queryHash)
+    .slice(0, 40)
+    .map(({ accountKey, stamp, searchHashes, searchValues, ...event }) => event);
   return Response.json({
     ok: true,
     configured: netflixCodeStoreConfigured() && String(process.env.NETFLIX_EMAIL_INGEST_SECRET || "").length >= 32,
     inboxAddress: process.env.NETFLIX_INBOX_ADDRESS || "netflix@codes.liumeiti.vip",
     events,
     access,
+    recentAcceptedCount,
+    searchQuery: query,
     orders: Array.from(orderControls.values()),
     orderCount: orders.length,
   }, { headers: { "Cache-Control": "no-store" } });
@@ -179,6 +175,30 @@ export async function PATCH(request) {
     return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
   }
   const actor = adminActorFromSession(auth.session);
+
+  if (action === "delete_mail_records") {
+    const result = await deleteNetflixMailEvents(body.recordIds);
+    if (!result.ok) return Response.json({ ok: false, error: "delete_failed" }, { status: 500 });
+    await pushAdminActionLog({
+      action: "netflix_mail_records_delete",
+      actor,
+      target: `netflix-mail:${clean(body.recordIds?.[0], 80)}`,
+      detail: { deleted: result.deleted },
+    });
+    return Response.json({ ok: true, deleted: result.deleted });
+  }
+
+  if (action === "delete_access_records") {
+    const result = await deleteNetflixCodeAccessRecords(body.recordIds);
+    if (!result.ok) return Response.json({ ok: false, error: "delete_failed" }, { status: 500 });
+    await pushAdminActionLog({
+      action: "netflix_access_records_delete",
+      actor,
+      target: `netflix-access:${clean(body.recordIds?.[0], 80)}`,
+      detail: { deleted: result.deleted },
+    });
+    return Response.json({ ok: true, deleted: result.deleted });
+  }
 
   if (action === "toggle_order") {
     if (!netflixItem(entry.order)) return Response.json({ ok: false, error: "netflix_order_required" }, { status: 400 });

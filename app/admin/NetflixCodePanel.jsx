@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
   Clock3,
@@ -11,7 +11,10 @@ import {
   LockKeyhole,
   Mail,
   RefreshCw,
+  Search,
   ShieldAlert,
+  Trash2,
+  X,
 } from "lucide-react";
 import styles from "./NetflixCodePanel.module.css";
 
@@ -34,25 +37,35 @@ export default function NetflixCodePanel({ canEdit = false }) {
   const [tab, setTab] = useState("mail");
   const [busyKey, setBusyKey] = useState("");
   const [notice, setNotice] = useState("");
+  const [query, setQuery] = useState("");
+  const requestRef = useRef(0);
 
-  const load = useCallback(async ({ silent = false } = {}) => {
+  const load = useCallback(async ({ silent = false, query: nextQuery = "" } = {}) => {
+    const requestId = ++requestRef.current;
     if (!silent) setLoading(true);
     try {
-      const response = await fetch("/api/admin/netflix-code", { credentials: "same-origin", cache: "no-store" });
+      const params = new URLSearchParams();
+      if (nextQuery.trim()) params.set("q", nextQuery.trim());
+      const response = await fetch(`/api/admin/netflix-code${params.size ? `?${params}` : ""}`, { credentials: "same-origin", cache: "no-store" });
       const next = await response.json();
       if (!response.ok || !next?.ok) throw new Error(next?.error || "load_failed");
+      if (requestId !== requestRef.current) return;
       setData(next);
       setNotice("");
     } catch {
+      if (requestId !== requestRef.current) return;
       setNotice("接码记录读取失败，请稍后重试");
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => load({ silent: true, query }), query ? 260 : 0);
+    return () => window.clearTimeout(timer);
+  }, [load, query]);
 
-  const acceptedCount = useMemo(() => (data?.events || []).filter((event) => event.accepted).length, [data]);
+  const acceptedCount = useMemo(() => Number(data?.recentAcceptedCount ?? (data?.events || []).filter((event) => event.accepted).length), [data]);
 
   async function update(action, order, enabled) {
     if (!canEdit || !order?.orderId || busyKey) return;
@@ -68,9 +81,32 @@ export default function NetflixCodePanel({ canEdit = false }) {
       });
       const result = await response.json();
       if (!response.ok || !result?.ok) throw new Error(result?.error || "save_failed");
-      await load({ silent: true });
+      await load({ silent: true, query });
     } catch {
       setNotice("操作未保存，请稍后重试");
+    } finally {
+      setBusyKey("");
+    }
+  }
+
+  async function removeRecords(action, recordIds, label) {
+    if (!canEdit || !recordIds?.length || busyKey) return;
+    if (!window.confirm(`删除这条${label}？此操作不可撤销。`)) return;
+    const key = `${action}:${recordIds[0]}`;
+    setBusyKey(key);
+    setNotice("");
+    try {
+      const response = await fetch("/api/admin/netflix-code", {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, recordIds }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result?.ok) throw new Error(result?.error || "delete_failed");
+      await load({ silent: true, query });
+    } catch {
+      setNotice("记录未删除，请稍后重试");
     } finally {
       setBusyKey("");
     }
@@ -80,7 +116,7 @@ export default function NetflixCodePanel({ canEdit = false }) {
     <section className={styles.panel}>
       <header className={styles.header}>
         <div><span><KeyRound size={14} />Netflix 自助接码</span><h1>收件与接码记录</h1><p>核对邮件解析、订单匹配与成功接码记录；后台不会显示验证码或链接内容。</p></div>
-        <button type="button" onClick={() => load()} disabled={loading}><RefreshCw size={14} />刷新</button>
+        <button type="button" onClick={() => load({ query })} disabled={loading}><RefreshCw size={14} />刷新</button>
       </header>
 
       <div className={styles.meta}>
@@ -90,9 +126,16 @@ export default function NetflixCodePanel({ canEdit = false }) {
         <div className={data?.configured ? styles.ready : styles.warning}><span>服务状态</span><b>{data?.configured ? "可用" : "待配置"}</b></div>
       </div>
 
-      <div className={styles.tabs} role="tablist" aria-label="Netflix 接码记录">
-        <button type="button" className={tab === "mail" ? styles.active : ""} onClick={() => setTab("mail")}><Mail size={14} />收件记录</button>
-        <button type="button" className={tab === "access" ? styles.active : ""} onClick={() => setTab("access")}><LockKeyhole size={14} />成功记录</button>
+      <div className={styles.recordTools}>
+        <div className={styles.tabs} role="tablist" aria-label="Netflix 接码记录">
+          <button type="button" className={tab === "mail" ? styles.active : ""} onClick={() => setTab("mail")}><Mail size={14} />收件记录</button>
+          <button type="button" className={tab === "access" ? styles.active : ""} onClick={() => setTab("access")}><LockKeyhole size={14} />成功记录</button>
+        </div>
+        <div className={styles.searchBox}>
+          <Search size={14} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索邮箱、Netflix 账号或订单号" aria-label="搜索接码记录" />
+          {query && <button type="button" onClick={() => setQuery("")} aria-label="清除搜索" title="清除搜索"><X size={13} /></button>}
+        </div>
       </div>
 
       {notice && <div className={styles.notice}><ShieldAlert size={14} />{notice}</div>}
@@ -121,9 +164,12 @@ export default function NetflixCodePanel({ canEdit = false }) {
                   </details>}
                 </div>
               )) : <span className={styles.muted}>{event.matchedOrderCount > 1 ? `${event.matchedOrderCount} 个订单使用此账号` : "暂无关联订单"}</span>}</div>
-              <div className={event.accepted ? styles.ok : styles.rejected}>{event.accepted ? <CheckCircle2 size={13} /> : <ShieldAlert size={13} />}{event.accepted ? (event.kind === "link" ? "官方链接已解析" : "验证码已解析") : (REASON_LABELS[event.reason] || "未采用")}</div>
+              <div className={styles.resultCell}>
+                <span className={event.accepted ? styles.ok : styles.rejected}>{event.accepted ? <CheckCircle2 size={13} /> : <ShieldAlert size={13} />}{event.accepted ? (event.kind === "link" ? "官方链接已解析" : "验证码已解析") : (REASON_LABELS[event.reason] || "未采用")}</span>
+                {canEdit && <button type="button" className={styles.deleteButton} onClick={() => removeRecords("delete_mail_records", event.eventIds?.length ? event.eventIds : [event.eventId], "收件记录")} disabled={Boolean(busyKey)} aria-label="删除收件记录" title="删除收件记录"><Trash2 size={13} /></button>}
+              </div>
             </article>
-          )) : <div className={styles.empty}>暂无收件记录</div>}
+          )) : <div className={styles.empty}>{query ? "没有符合条件的收件记录" : "暂无收件记录"}</div>}
         </div>
       )}
 
@@ -135,9 +181,9 @@ export default function NetflixCodePanel({ canEdit = false }) {
               <div className={styles.when}><b><Clock3 size={13} />{time(entry.createdAtBeijing)}</b></div>
               <div className={styles.email}>{entry.userEmail || "--"}</div>
               <div><b className={styles.orderId}>{entry.orderId || "--"}</b></div>
-              <div className={styles.email}>{entry.accountEmail || "--"}</div>
+              <div className={`${styles.email} ${styles.accessAccount}`}><span>{entry.accountEmail || "--"}</span>{canEdit && <button type="button" className={styles.deleteButton} onClick={() => removeRecords("delete_access_records", [entry.id], "成功记录")} disabled={Boolean(busyKey)} aria-label="删除成功接码记录" title="删除成功接码记录"><Trash2 size={13} /></button>}</div>
             </article>
-          )) : <div className={styles.empty}>暂无成功接码记录</div>}
+          )) : <div className={styles.empty}>{query ? "没有符合条件的成功记录" : "暂无成功接码记录"}</div>}
         </div>
       )}
 
