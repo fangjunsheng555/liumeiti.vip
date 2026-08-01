@@ -358,7 +358,7 @@ test("recognizes the Chinese household-update email and returns only the signed 
   }), { from: "info@account.netflix.com", to: INBOX, inboxAddress: INBOX });
   assert.equal(parsed.accepted, true, JSON.stringify(parsed));
   assert.equal(parsed.kind, "household");
-  assert.equal(new URL(parsed.value).pathname, "/account/update-primary-location");
+  assert.equal(parsed.value, householdUrl);
   assert.ok(new URL(parsed.value).searchParams.get("nftoken"));
   assert.equal(parsed.language, "zh-CN");
   assert.ok(parsed.accountEmails.includes("spotifytokyo@hotmail.com"));

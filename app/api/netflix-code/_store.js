@@ -27,6 +27,22 @@ export function latestNetflixSiblingCluster(records) {
     : [];
 }
 
+// A customer mailbox often delivers the same Netflix email twice: an automatic
+// forward plus an inbox rule. The copies can arrive minutes apart and one may
+// be flattened beyond recognition, so any accepted record close enough to the
+// newest delivery outranks a rejected copy.
+export const NETFLIX_DUAL_DELIVERY_WINDOW_MS = 120 * 1000;
+
+export function latestAcceptedNetflixRecords(records, windowMs = NETFLIX_DUAL_DELIVERY_WINDOW_MS) {
+  const sorted = [...(Array.isArray(records) ? records : [])]
+    .filter((entry) => Number.isFinite(Number(entry?.receivedAt)))
+    .sort((left, right) => Number(right.receivedAt) - Number(left.receivedAt));
+  const newestReceivedAt = Number(sorted[0]?.receivedAt || 0);
+  if (!newestReceivedAt) return [];
+  return sorted.filter((entry) => entry.record?.accepted
+    && newestReceivedAt - Number(entry.receivedAt) <= windowMs);
+}
+
 function parseJson(value) {
   if (!value) return null;
   if (typeof value === "object") return value;
@@ -176,8 +192,7 @@ export async function findLatestNetflixMailState(email, { since = 0, excludeEven
     records.push({ record, receivedAt });
   }
   const siblingCluster = latestNetflixSiblingCluster(records);
-  for (const { record } of siblingCluster) {
-    if (!record.accepted) continue;
+  for (const { record } of latestAcceptedNetflixRecords(records)) {
     const value = decryptPayload(record.payload);
     if (!value) continue;
     return {
@@ -195,13 +210,16 @@ export async function findLatestNetflixMailState(email, { since = 0, excludeEven
   }
   // Rejected records the customer has already been shown are skipped so a new
   // retrieve attempt waits for the next email instead of replaying the error.
+  // All sibling rejected ids are reported so one acknowledgement covers every
+  // copy of a dual-delivered email.
   const seenEventIds = new Set(validEventIds(excludeEventIds));
-  const rejected = siblingCluster.find(({ record, receivedAt }) => !record.accepted
-    && receivedAt >= rejectedMinScore
-    && !seenEventIds.has(record.eventId))?.record;
+  const rejectedEntries = siblingCluster.filter(({ record, receivedAt }) => !record.accepted
+    && receivedAt >= rejectedMinScore);
+  const rejected = rejectedEntries.find(({ record }) => !seenEventIds.has(record.eventId))?.record;
   return rejected ? {
     state: "rejected",
     eventId: rejected.eventId,
+    eventIds: rejectedEntries.map(({ record }) => record.eventId),
     reason: rejected.reason || "supported_content_not_found",
     receivedAt: rejected.receivedAt,
     receivedAtBeijing: rejected.receivedAtBeijing,

@@ -198,8 +198,10 @@ export default function NetflixCodePage() {
       });
       const data = await response.json();
       if (!response.ok || !data?.ok) {
-        if (data?.error === "mail_unrecognized" && data?.eventId) {
-          seenRejectedRef.current = Array.from(new Set([...seenRejectedRef.current, data.eventId])).slice(-12);
+        if (data?.error === "mail_unrecognized") {
+          const rejectedIds = [...(Array.isArray(data.eventIds) ? data.eventIds : []), data.eventId]
+            .filter((value) => typeof value === "string" && value);
+          seenRejectedRef.current = Array.from(new Set([...seenRejectedRef.current, ...rejectedIds])).slice(-12);
         }
         throw new Error(errorCopy(data?.error));
       }
@@ -361,7 +363,7 @@ export default function NetflixCodePage() {
             {result?.kind === "household" && (
               <div className={styles.linkResult}>
                 <span>{L("请在 Netflix 确认同户设备更新", "Confirm the household update on Netflix")}</span>
-                <p>{L("已收到「更新 Netflix 同户设备」确认邮件。点击下方按钮打开 Netflix 官方页面，即等同于邮件中的「是的，是我本人」。", "The Netflix household update email has arrived. The button below opens the official Netflix page — the same as choosing “Yes, This Was Me” in the email.")}</p>
+                <p>{L("已收到「更新 Netflix 同户设备」确认邮件。点击下方按钮打开 Netflix 官方确认页（即邮件中的「是的，是我本人」），按页面提示完成确认并获取验证码。", "The Netflix household update email has arrived. The button below opens the official Netflix confirmation page (the “Yes, This Was Me” step). Follow the page to confirm and get your verification code.")}</p>
                 <a href={result.url} target="_blank" rel="noopener noreferrer">{L("前往 Netflix 确认本次请求", "Confirm this request on Netflix")}<ExternalLink size={15} /></a>
                 <small><Clock3 size={13} />{L("链接约 15 分钟内有效，请勿转发。", "The link expires in about 15 minutes. Do not share it.")}</small>
               </div>

@@ -197,7 +197,12 @@ export async function POST(request) {
     if (shouldAwaitAcceptedSibling(mailState)) {
       return Response.json({ ok: true, pending: true, mailReceived: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
     }
-    return Response.json({ ok: false, error: "mail_unrecognized", eventId: mailState.eventId || "" }, { status: 422, headers: { "Cache-Control": "no-store" } });
+    return Response.json({
+      ok: false,
+      error: "mail_unrecognized",
+      eventId: mailState.eventId || "",
+      eventIds: Array.isArray(mailState.eventIds) ? mailState.eventIds : [],
+    }, { status: 422, headers: { "Cache-Control": "no-store" } });
   }
   const result = mailState.state === "result" ? mailState.result : null;
   if (!result) return Response.json({ ok: true, pending: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
