@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
   Clock3,
+  Copy,
   ExternalLink,
   KeyRound,
   Link2,
@@ -38,6 +39,7 @@ export default function NetflixCodePanel({ canEdit = false }) {
   const [busyKey, setBusyKey] = useState("");
   const [notice, setNotice] = useState("");
   const [query, setQuery] = useState("");
+  const [copiedResult, setCopiedResult] = useState("");
   const requestRef = useRef(0);
 
   const load = useCallback(async ({ silent = false, query: nextQuery = "" } = {}) => {
@@ -112,10 +114,21 @@ export default function NetflixCodePanel({ canEdit = false }) {
     }
   }
 
+  async function copyParsedResult(value, eventId) {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedResult(eventId);
+      window.setTimeout(() => setCopiedResult(""), 1500);
+    } catch {
+      setNotice("复制失败，请手动打开结果");
+    }
+  }
+
   return (
     <section className={styles.panel}>
       <header className={styles.header}>
-        <div><span><KeyRound size={14} />Netflix 自助接码</span><h1>收件与接码记录</h1><p>核对邮件解析、订单匹配与成功接码记录；后台不会显示验证码或链接内容。</p></div>
+        <div><span><KeyRound size={14} />Netflix 自助接码</span><h1>收件与接码记录</h1><p>核对邮件解析、账号匹配与成功接码记录。</p></div>
         <button type="button" onClick={() => load({ query })} disabled={loading}><RefreshCw size={14} />刷新</button>
       </header>
 
@@ -167,7 +180,11 @@ export default function NetflixCodePanel({ canEdit = false }) {
                 </div>
               )) : <span className={styles.muted}>{event.matchedOrderCount > 1 ? `${event.matchedOrderCount} 个订单使用此账号` : "暂无关联订单"}</span>}</div>
               <div className={styles.resultCell}>
-                <span className={event.accepted ? styles.ok : styles.rejected}>{event.accepted ? <CheckCircle2 size={13} /> : <ShieldAlert size={13} />}{event.accepted ? (event.kind === "household" ? "同户确认链接已解析" : event.kind === "link" ? "官方链接已解析" : "验证码已解析") : (REASON_LABELS[event.reason] || "未采用")}</span>
+                <div className={styles.resultValue}>
+                  <span className={event.accepted ? styles.ok : styles.rejected}>{event.accepted ? <CheckCircle2 size={13} /> : <ShieldAlert size={13} />}{event.accepted ? (event.kind === "household" ? "同户确认链接已解析" : event.kind === "link" ? "官方链接已解析" : "验证码已解析") : (REASON_LABELS[event.reason] || "未采用")}</span>
+                  {event.accepted && event.kind === "code" && event.result && <div className={styles.parsedCode}><code>{event.result}</code><button type="button" onClick={() => copyParsedResult(event.result, event.eventId)}><Copy size={11} />{copiedResult === event.eventId ? "已复制" : "复制"}</button></div>}
+                  {event.accepted && (event.kind === "link" || event.kind === "household") && event.result && <div className={styles.parsedActions}><a href={event.result} target="_blank" rel="noopener noreferrer"><ExternalLink size={11} />打开链接</a><button type="button" onClick={() => copyParsedResult(event.result, event.eventId)}><Copy size={11} />{copiedResult === event.eventId ? "已复制" : "复制链接"}</button></div>}
+                </div>
                 {canEdit && <button type="button" className={styles.deleteButton} onClick={() => removeRecords("delete_mail_records", event.eventIds?.length ? event.eventIds : [event.eventId], "收件记录")} disabled={Boolean(busyKey)} aria-label="删除收件记录" title="删除收件记录"><Trash2 size={13} /></button>}
               </div>
             </article>;

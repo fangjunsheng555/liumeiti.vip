@@ -21,6 +21,7 @@ import {
   netflixAccountHash,
   netflixCodeStoreConfigured,
   revealNetflixMailAccountEmails,
+  revealNetflixMailResult,
 } from "../../netflix-code/_store.js";
 import {
   compactNetflixMailEvents,
@@ -157,6 +158,7 @@ export async function GET(request) {
       eventId: event.eventId,
       accepted: event.accepted,
       kind: event.kind,
+      result: revealNetflixMailResult(event),
       reason: event.reason,
       template: event.template,
       language: event.language,

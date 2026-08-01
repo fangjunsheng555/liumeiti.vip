@@ -312,7 +312,7 @@ export default function NetflixCodePage() {
                   {queryBusy ? <LoaderCircle className="spin-icon" size={16} /> : <MailCheck size={16} />}
                   {verification ? L("确认订单", "Verify order") : L("继续", "Continue")}
                 </button>
-                {!loggedIn && <p className={styles.loginHint}>{L("已有账号？", "Have an account?")} <Link href="/account">{L("登录后直接选择订单", "Sign in to select your order")}</Link></p>}
+                {!loggedIn && <p className={styles.loginHint}>{L("已有账号？", "Have an account?")} <Link href="/account?auth=login&returnTo=%2Fnetflix-code">{L("登录后直接选择订单", "Sign in to select your order")}</Link></p>}
               </form>
             )}
           </section>

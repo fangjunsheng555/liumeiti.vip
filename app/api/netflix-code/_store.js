@@ -110,10 +110,37 @@ export function protectNetflixMailAccountEmails(values) {
   return emails.length ? encryptPayload(JSON.stringify(emails)) : null;
 }
 
+export function protectNetflixMailResult(value) {
+  return value ? encryptPayload(value) : null;
+}
+
 export function revealNetflixMailAccountEmails(record) {
   const raw = decryptPayload(record?.accountEmailPayload);
   if (!raw) return [];
   try { return normalizeNetflixAccountEmails(JSON.parse(raw)); } catch { return []; }
+}
+
+export function revealNetflixMailResult(record) {
+  if (!record?.accepted) return "";
+  const value = decryptPayload(record?.payload);
+  if (record.kind === "code") return /^\d{4}$/.test(value) ? value : "";
+  if (record.kind !== "link" && record.kind !== "household") return "";
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    if (url.protocol !== "https:" || !(host === "netflix.com" || host.endsWith(".netflix.com"))) return "";
+    const path = url.pathname.replace(/\/+$/, "").toLowerCase();
+    if (record.kind === "link") {
+      return path === "/account/travel/verify" && (url.searchParams.has("token") || url.searchParams.has("nftoken"))
+        ? url.toString()
+        : "";
+    }
+    return path === "/account/update-primary-location" && url.searchParams.has("nftoken")
+      ? url.toString()
+      : "";
+  } catch {
+    return "";
+  }
 }
 
 function eventIdFor(messageId, digest) {
@@ -155,7 +182,7 @@ export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "
   const eventId = eventIdFor(messageId, digest);
   const accountEmails = normalizeNetflixAccountEmails(parsed?.accountEmails);
   const accountHashes = Array.from(new Set(accountEmails.map(netflixAccountHash).filter(Boolean)));
-  const encrypted = parsed?.accepted && parsed?.value ? encryptPayload(parsed.value) : null;
+  const encrypted = parsed?.accepted ? protectNetflixMailResult(parsed?.value) : null;
   const accountEmailPayload = protectNetflixMailAccountEmails(accountEmails);
   if (parsed?.accepted && !encrypted) return { ok: false, error: "encryption_not_configured" };
   const score = new Date(parsed?.receivedAt || Date.now()).getTime();

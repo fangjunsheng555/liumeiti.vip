@@ -48,13 +48,26 @@ function getStoredInviteCode() {
   }
 }
 
-function googleOAuthStartUrl(inviteCode) {
-  const code = String(inviteCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 24);
-  return code ? `${GOOGLE_OAUTH_START}?invite=${encodeURIComponent(code)}` : GOOGLE_OAUTH_START;
+function currentAccountReturnTo() {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get("returnTo") === "/netflix-code"
+    ? "/netflix-code"
+    : "";
 }
 
-function handleGoogleOAuthStart(event) {
-  const href = googleOAuthStartUrl(getStoredInviteCode());
+function googleOAuthStartUrl(inviteCode, returnTo = "") {
+  const code = String(inviteCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 24);
+  const params = new URLSearchParams();
+  if (code) params.set("invite", code);
+  if (returnTo === "/netflix-code" && typeof window !== "undefined") {
+    params.set("returnTo", `${window.location.origin}${returnTo}`);
+  }
+  const query = params.toString();
+  return query ? `${GOOGLE_OAUTH_START}?${query}` : GOOGLE_OAUTH_START;
+}
+
+function handleGoogleOAuthStart(event, returnTo = "") {
+  const href = googleOAuthStartUrl(getStoredInviteCode(), returnTo);
   if (href === GOOGLE_OAUTH_START) return;
   event.preventDefault();
   window.location.href = href;
@@ -146,6 +159,7 @@ export default function AccountPage() {
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authNotice, setAuthNotice] = useState("");
+  const [authReturnTo, setAuthReturnTo] = useState("");
 
   async function load() {
     setState((s) => ({ ...s, loading: true }));
@@ -300,6 +314,7 @@ export default function AccountPage() {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
     const status = params.get("auth");
+    setAuthReturnTo(currentAccountReturnTo());
     if (status === "register") setAuthMode("register");
     if (status === "oauth_new") setAuthNotice(L("注册成功,新用户 ¥8.88 优惠券已发放,结算时自动抵扣", "Signed up! A ¥8.88 new-user coupon has been issued and applies automatically at checkout."));
     if (status === "oauth_ok") setAuthNotice(L("Google 登录成功", "Signed in with Google"));
@@ -372,6 +387,11 @@ export default function AccountPage() {
         return;
       }
       if (data.ok) {
+        const returnTo = authReturnTo || currentAccountReturnTo();
+        if (returnTo) {
+          window.location.replace(returnTo);
+          return;
+        }
         await load();
         return;
       }
@@ -646,7 +666,7 @@ export default function AccountPage() {
                 <>
                   <div className="auth-divider"><span>{L("或使用", "or")}</span></div>
                   <div className="oauth-login-grid bottom">
-                    <a href={GOOGLE_OAUTH_START} className="oauth-login-btn" onClick={handleGoogleOAuthStart}><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
+                    <a href={GOOGLE_OAUTH_START} className="oauth-login-btn" onClick={(event) => handleGoogleOAuthStart(event, authReturnTo || currentAccountReturnTo())}><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
                   </div>
                 </>
               )}

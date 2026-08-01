@@ -24,6 +24,7 @@ test("compacts forwarded siblings and keeps every underlying event id", () => {
       accountKey: "matched:account-hash",
       accepted: true,
       kind: "code",
+      result: "0707",
       receivedAt: "2026-08-01T05:20:03.000Z",
       accountEmails: ["juandavidsandoval1@outlook.es"],
       accountHints: ["ju******@outlook.es"],
@@ -34,6 +35,7 @@ test("compacts forwarded siblings and keeps every underlying event id", () => {
   ]);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].accepted, true);
+  assert.equal(rows[0].result, "0707");
   assert.deepEqual(new Set(rows[0].eventIds), new Set(["NMREJECTED", "NMACCEPTED"]));
   assert.deepEqual(rows[0].accountEmails, ["juandavidsandoval1@outlook.es"]);
 });
