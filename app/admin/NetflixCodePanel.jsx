@@ -18,6 +18,12 @@ import {
   X,
 } from "lucide-react";
 import styles from "./NetflixCodePanel.module.css";
+import {
+  recordDeleteBatches,
+  selectedMailDeletionIds,
+  toggleRecordSelection,
+  toggleVisibleRecordSelection,
+} from "./netflix-code-batch.js";
 
 const REASON_LABELS = {
   supported_content_not_found: "未识别到支持的验证码或链接",
@@ -40,6 +46,8 @@ export default function NetflixCodePanel({ canEdit = false }) {
   const [notice, setNotice] = useState("");
   const [query, setQuery] = useState("");
   const [copiedResult, setCopiedResult] = useState("");
+  const [selectedMailIds, setSelectedMailIds] = useState([]);
+  const [selectedAccessIds, setSelectedAccessIds] = useState([]);
   const requestRef = useRef(0);
 
   const load = useCallback(async ({ silent = false, query: nextQuery = "" } = {}) => {
@@ -68,6 +76,43 @@ export default function NetflixCodePanel({ canEdit = false }) {
   }, [load, query]);
 
   const acceptedCount = useMemo(() => Number(data?.recentAcceptedCount ?? (data?.events || []).filter((event) => event.accepted).length), [data]);
+  const mailRows = useMemo(() => data?.events || [], [data]);
+  const accessRows = useMemo(() => data?.access || [], [data]);
+  const mailRowIds = useMemo(() => mailRows.map((event) => event.eventId).filter(Boolean), [mailRows]);
+  const accessRowIds = useMemo(() => accessRows.map((entry) => entry.id).filter(Boolean), [accessRows]);
+  const batchVisibleIds = tab === "mail" ? mailRowIds : tab === "access" ? accessRowIds : [];
+  const batchSelectedIds = tab === "mail" ? selectedMailIds : tab === "access" ? selectedAccessIds : [];
+  const allBatchSelected = batchVisibleIds.length > 0 && batchVisibleIds.every((recordId) => batchSelectedIds.includes(recordId));
+
+  useEffect(() => {
+    const visibleMail = new Set(mailRowIds);
+    const visibleAccess = new Set(accessRowIds);
+    setSelectedMailIds((current) => current.filter((recordId) => visibleMail.has(recordId)));
+    setSelectedAccessIds((current) => current.filter((recordId) => visibleAccess.has(recordId)));
+  }, [mailRowIds, accessRowIds]);
+
+  useEffect(() => {
+    setSelectedMailIds([]);
+    setSelectedAccessIds([]);
+  }, [tab, query]);
+
+  function toggleAllVisibleRecords() {
+    if (tab === "mail") {
+      setSelectedMailIds((current) => toggleVisibleRecordSelection(current, mailRowIds));
+    } else if (tab === "access") {
+      setSelectedAccessIds((current) => toggleVisibleRecordSelection(current, accessRowIds));
+    }
+  }
+
+  function removeSelectedRecords() {
+    if (tab === "mail") {
+      const recordIds = selectedMailDeletionIds(mailRows, selectedMailIds);
+      return removeRecords("delete_mail_records", recordIds, "收件记录", selectedMailIds.length);
+    }
+    if (tab === "access") {
+      return removeRecords("delete_access_records", selectedAccessIds, "成功记录", selectedAccessIds.length);
+    }
+  }
 
   async function update(action, order, enabled) {
     if (!canEdit || !order?.orderId || busyKey) return;
@@ -91,25 +136,36 @@ export default function NetflixCodePanel({ canEdit = false }) {
     }
   }
 
-  async function removeRecords(action, recordIds, label) {
+  async function removeRecords(action, recordIds, label, displayCount = 1) {
     if (!canEdit || !recordIds?.length || busyKey) return;
-    if (!window.confirm(`删除这条${label}？此操作不可撤销。`)) return;
+    const batches = recordDeleteBatches(recordIds);
+    if (!batches.length) return;
+    const prompt = displayCount > 1
+      ? `删除选中的 ${displayCount} 条${label}？此操作不可撤销。`
+      : `删除这条${label}？此操作不可撤销。`;
+    if (!window.confirm(prompt)) return;
     const key = `${action}:${recordIds[0]}`;
     setBusyKey(key);
     setNotice("");
+    let errorMessage = "";
     try {
-      const response = await fetch("/api/admin/netflix-code", {
-        method: "PATCH",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, recordIds }),
-      });
-      const result = await response.json();
-      if (!response.ok || !result?.ok) throw new Error(result?.error || "delete_failed");
-      await load({ silent: true, query });
+      for (const batch of batches) {
+        const response = await fetch("/api/admin/netflix-code", {
+          method: "PATCH",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, recordIds: batch }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result?.ok) throw new Error(result?.error || "delete_failed");
+      }
+      setSelectedMailIds([]);
+      setSelectedAccessIds([]);
     } catch {
-      setNotice("记录未删除，请稍后重试");
+      errorMessage = displayCount > 1 ? "部分记录可能未删除，请刷新后重试" : "记录未删除，请稍后重试";
     } finally {
+      await load({ silent: true, query });
+      if (errorMessage) setNotice(errorMessage);
       setBusyKey("");
     }
   }
@@ -152,17 +208,33 @@ export default function NetflixCodePanel({ canEdit = false }) {
         </div>
       </div>
 
+      {canEdit && (tab === "mail" || tab === "access") && batchVisibleIds.length > 0 && (
+        <div className={styles.batchBar}>
+          <label className={styles.batchSelect}>
+            <input type="checkbox" checked={allBatchSelected} onChange={toggleAllVisibleRecords} />
+            <span>全选当前列表</span>
+          </label>
+          <div className={styles.batchActions}>
+            <span>已选 {batchSelectedIds.length} 条</span>
+            <button type="button" onClick={removeSelectedRecords} disabled={!batchSelectedIds.length || Boolean(busyKey)}><Trash2 size={13} />删除所选</button>
+          </div>
+        </div>
+      )}
+
       {notice && <div className={styles.notice}><ShieldAlert size={14} />{notice}</div>}
       {loading && !data ? <div className={styles.loading}><LoaderCircle size={18} className="spin-icon" />正在读取…</div> : null}
 
       {tab === "mail" && data && (
         <div className={styles.table}>
           <div className={styles.tableHead}><span>收件时间</span><span>Netflix 账号</span><span>使用订单</span><span>解析结果</span></div>
-          {(data.events || []).length ? data.events.map((event) => {
+          {mailRows.length ? mailRows.map((event) => {
             const accountEmails = event.accountEmails || event.accountHints || [];
             return <article key={event.eventId} className={styles.row}>
               <div className={styles.when}>
-                <b>{event.kind === "code" ? <KeyRound size={13} /> : (event.kind === "link" || event.kind === "household") ? <Link2 size={13} /> : <ShieldAlert size={13} />}{time(event.receivedAtBeijing)}</b>
+                <div className={styles.whenLine}>
+                  {canEdit && <input type="checkbox" checked={selectedMailIds.includes(event.eventId)} onChange={() => setSelectedMailIds((current) => toggleRecordSelection(current, event.eventId))} aria-label={`选择收件记录 ${time(event.receivedAtBeijing)}`} />}
+                  <b>{event.kind === "code" ? <KeyRound size={13} /> : (event.kind === "link" || event.kind === "household") ? <Link2 size={13} /> : <ShieldAlert size={13} />}{time(event.receivedAtBeijing)}</b>
+                </div>
                 <small>{event.language || "--"}</small>
               </div>
               <div className={styles.accounts}>{accountEmails.length ? accountEmails.map((email) => <span key={email} title={email}>{email}</span>) : <span>未匹配</span>}</div>
@@ -195,9 +267,14 @@ export default function NetflixCodePanel({ canEdit = false }) {
       {tab === "access" && data && (
         <div className={styles.table}>
           <div className={`${styles.tableHead} ${styles.accessGrid}`}><span>时间</span><span>用户邮箱</span><span>订单号</span><span>Netflix 账号</span></div>
-          {(data.access || []).length ? data.access.map((entry) => (
+          {accessRows.length ? accessRows.map((entry) => (
             <article key={entry.id} className={`${styles.row} ${styles.accessGrid}`}>
-              <div className={styles.when}><b><Clock3 size={13} />{time(entry.createdAtBeijing)}</b></div>
+              <div className={styles.when}>
+                <div className={styles.whenLine}>
+                  {canEdit && <input type="checkbox" checked={selectedAccessIds.includes(entry.id)} onChange={() => setSelectedAccessIds((current) => toggleRecordSelection(current, entry.id))} aria-label={`选择成功记录 ${time(entry.createdAtBeijing)}`} />}
+                  <b><Clock3 size={13} />{time(entry.createdAtBeijing)}</b>
+                </div>
+              </div>
               <div className={styles.email}>{entry.userEmail || "--"}</div>
               <div><b className={styles.orderId}>{entry.orderId || "--"}</b></div>
               <div className={`${styles.email} ${styles.accessAccount}`}><span>{entry.accountEmail || "--"}</span>{canEdit && <button type="button" className={styles.deleteButton} onClick={() => removeRecords("delete_access_records", [entry.id], "成功记录")} disabled={Boolean(busyKey)} aria-label="删除成功接码记录" title="删除成功接码记录"><Trash2 size={13} /></button>}</div>
