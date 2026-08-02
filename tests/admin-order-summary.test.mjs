@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { executeOrderCasEval } from "./helpers/order-cas-redis-mock.mjs";
 
 process.env.AUTH_SECRET = "admin-order-summary-test-secret-32-characters";
 process.env.KV_REST_API_URL = "http://redis.order-summary.test";
@@ -41,6 +42,63 @@ function execute(command) {
     return next;
   }
   if (name === "EVAL") {
+    const cas = executeOrderCasEval(command, { values, lists, hashes, sortedSets, sets });
+    if (cas.handled) return cas.result;
+    const script = String(args[0] || "");
+    const keyCount = Number(args[1] || 0);
+    const keys = args.slice(2, 2 + keyCount);
+    const argv = args.slice(2 + keyCount);
+    if (script.includes("state='started'") && script.includes("isNew=true")) {
+      const existing = values.get(keys[0]);
+      if (existing) {
+        const record = JSON.parse(existing);
+        if (record.requestHash !== argv[0]) return JSON.stringify({ ok: false, error: "idempotency_conflict" });
+        return JSON.stringify({ ok: true, state: record.state || "started", record, isNew: false });
+      }
+      const record = {
+        version: 1,
+        state: "started",
+        operationId: argv[1],
+        requestHash: argv[0],
+        createdAt: argv[2],
+      };
+      values.set(keys[0], JSON.stringify(record));
+      return JSON.stringify({ ok: true, state: "started", record, isNew: true });
+    }
+    if (script.includes("record.state='done'") && script.includes("completedAt=ARGV[3]")) {
+      const raw = values.get(keys[0]);
+      if (!raw) return JSON.stringify({ ok: false, error: "operation_record_missing" });
+      const record = JSON.parse(raw);
+      if (record.requestHash !== argv[0]) return JSON.stringify({ ok: false, error: "idempotency_conflict" });
+      if (record.state === "done") return JSON.stringify({ ok: true, state: "done", record, idempotent: true });
+      record.state = "done";
+      record.result = JSON.parse(argv[1]);
+      record.completedAt = argv[2];
+      values.set(keys[0], JSON.stringify(record));
+      return JSON.stringify({ ok: true, state: "done", record, idempotent: false });
+    }
+    if (script.includes("local marked=redis.call('SET',KEYS[1],'1','NX')")) {
+      if (values.has(keys[0])) return 0;
+      values.set(keys[0], "1");
+      const row = lists.get(keys[1]) || [];
+      row.unshift(argv[0]);
+      lists.set(keys[1], row.slice(0, Number(argv[1] || 500)));
+      return 1;
+    }
+    if (script.includes("local added=redis.call('SADD',KEYS[1],ARGV[1])")) {
+      const membershipKey = args[2];
+      const listKey = args[3];
+      const orderId = args[4];
+      if (!sets.has(membershipKey)) sets.set(membershipKey, new Set());
+      const added = sets.get(membershipKey).has(orderId) ? 0 : 1;
+      sets.get(membershipKey).add(orderId);
+      if (added) {
+        const row = lists.get(listKey) || [];
+        row.push(orderId);
+        lists.set(listKey, row);
+      }
+      return JSON.stringify({ ok: true, added });
+    }
     const key = args[2];
     const expected = args[3];
     if (values.get(key) !== expected) return 0;
@@ -114,8 +172,12 @@ function execute(command) {
   }
   if (name === "SADD") {
     if (!sets.has(args[0])) sets.set(args[0], new Set());
-    args.slice(1).forEach((member) => sets.get(args[0]).add(member));
-    return args.length - 1;
+    let added = 0;
+    args.slice(1).forEach((member) => {
+      if (!sets.get(args[0]).has(member)) added += 1;
+      sets.get(args[0]).add(member);
+    });
+    return added;
   }
   if (name === "SMEMBERS") return Array.from(sets.get(args[0]) || []);
   return null;
@@ -254,7 +316,7 @@ test("admin order list keeps every order when the store limits pipeline batches"
     ...entry.order,
     status: "completed",
     completedAt: "2026-07-27T10:00:00.000Z",
-  }), true);
+  }, { expectedRevision: Number(entry.order.revision ?? 0) }), true);
 
   const revisionAfterResponse = await ordersRoute.GET(adminRequest("/api/admin/orders?mode=revision"));
   const revisionAfter = await revisionAfterResponse.json();
@@ -266,6 +328,7 @@ test("admin order list keeps every order when the store limits pipeline batches"
       headers: {
         cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
         "content-type": "application/json",
+        "idempotency-key": "admin-order-summary-complete-0001",
       },
       body: JSON.stringify({
         status: "completed",
@@ -287,8 +350,8 @@ test("admin order list keeps every order when the store limits pipeline batches"
     }),
     { params: Promise.resolve({ orderId: "LMSUMMARY154" }) },
   );
-  assert.equal(deliveryResponse.status, 200);
   const delivery = await deliveryResponse.json();
+  assert.equal(deliveryResponse.status, 200, JSON.stringify(delivery));
   assert.equal(delivery.order.internalNotes, "渠道 A / 家庭组 17");
   assert.equal(delivery.order.items[0].fulfillment.username, "User154");
   assert.equal(delivery.order.items[0].fulfillment.unexpectedField, undefined);

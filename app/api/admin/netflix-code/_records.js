@@ -7,41 +7,18 @@ export function normalizeNetflixRecordQuery(value) {
 }
 
 export function compactNetflixMailEvents(rows) {
-  const compacted = [];
-  for (const source of (Array.isArray(rows) ? rows : [])) {
-    const row = {
-      ...source,
-      eventIds: unique(source.eventIds?.length ? source.eventIds : [source.eventId]),
-      searchValues: unique(source.searchValues),
-      searchHashes: unique(source.searchHashes),
-    };
-    const stamp = new Date(row.receivedAt || 0).getTime();
-    const accountKey = row.accountKey || row.accountHints?.[0] || `unmatched:${row.reason || row.subject || "mail"}`;
-    const duplicate = compacted.find((entry) => entry.accountKey === accountKey
-      && Math.abs(entry.stamp - stamp) <= 15 * 1000);
-    if (!duplicate) {
-      compacted.push({ ...row, accountKey, stamp, duplicateCount: 1 });
-      continue;
-    }
-    const preferred = row.accepted && !duplicate.accepted ? row : duplicate;
-    const mergedOrders = Array.from(new Map([
-      ...(duplicate.orders || []),
-      ...(row.orders || []),
-    ].map((order) => [order.orderId, order])).values());
-    Object.assign(duplicate, preferred, {
-      accountKey,
-      stamp: preferred === row ? stamp : duplicate.stamp,
-      duplicateCount: duplicate.duplicateCount + 1,
-      eventIds: unique([...(duplicate.eventIds || []), ...(row.eventIds || [])]),
-      accountEmails: unique([...(duplicate.accountEmails || []), ...(row.accountEmails || [])]),
-      accountHints: unique([...(duplicate.accountHints || []), ...(row.accountHints || [])]),
-      searchValues: unique([...(duplicate.searchValues || []), ...(row.searchValues || [])]),
-      searchHashes: unique([...(duplicate.searchHashes || []), ...(row.searchHashes || [])]),
-      orders: mergedOrders,
-      matchedOrderCount: Math.max(duplicate.matchedOrderCount || 0, row.matchedOrderCount || 0),
-    });
-  }
-  return compacted;
+  // Every inbound delivery is an independent audit record.  Account and time
+  // proximity are not sufficient evidence that two messages are duplicates:
+  // Netflix can legitimately send different codes seconds apart.  Keep this
+  // compatibility-named helper one-to-one so callers cannot accidentally make
+  // one visible row delete several underlying messages.
+  return (Array.isArray(rows) ? rows : []).map((source) => ({
+    ...source,
+    eventIds: source?.eventId ? [source.eventId] : [],
+    searchValues: unique(source?.searchValues),
+    searchHashes: unique(source?.searchHashes),
+    duplicateCount: 1,
+  }));
 }
 
 export function filterNetflixMailEvents(rows, query, queryHash = "") {
@@ -63,4 +40,16 @@ export function filterNetflixAccessRecords(rows, query) {
     entry.accountEmail,
     entry.orderId,
   ].some((value) => normalizeNetflixRecordQuery(value).includes(normalized)));
+}
+
+export function netflixMailSearchValues(rows) {
+  return unique((Array.isArray(rows) ? rows : []).flatMap((order) => [
+    order?.orderId,
+    order?.email,
+    order?.deliveryEmail,
+    order?.userEmail,
+    order?.ownerEmail,
+    order?.linkedUserEmail,
+    order?.accountEmail,
+  ]));
 }

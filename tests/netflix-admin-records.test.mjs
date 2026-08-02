@@ -4,9 +4,26 @@ import {
   compactNetflixMailEvents,
   filterNetflixAccessRecords,
   filterNetflixMailEvents,
+  netflixMailSearchValues,
 } from "../app/api/admin/netflix-code/_records.js";
+import { isNetflixOrderOwner, netflixOrderIdentity } from "../app/api/netflix-code/_ownership.js";
 
-test("compacts forwarded siblings and keeps every underlying event id", () => {
+test("user-level Netflix controls follow the purchasing account, not the delivery email", () => {
+  assert.deepEqual(netflixOrderIdentity({
+    userEmail: "Owner-A@Example.com",
+    email: "Receipt-B@Example.com",
+  }), {
+    ownerEmail: "owner-a@example.com",
+    deliveryEmail: "receipt-b@example.com",
+    linkedUserEmail: "owner-a@example.com",
+  });
+  assert.equal(netflixOrderIdentity({ email: "guest@example.com" }).ownerEmail, "guest@example.com");
+  const splitIdentityOrder = { userEmail: "owner-a@example.com", email: "receipt-b@example.com" };
+  assert.equal(isNetflixOrderOwner(splitIdentityOrder, "owner-a@example.com"), true);
+  assert.equal(isNetflixOrderOwner(splitIdentityOrder, "receipt-b@example.com"), false);
+});
+
+test("keeps messages with different codes as independent audit rows", () => {
   const rows = compactNetflixMailEvents([
     {
       eventId: "NMREJECTED",
@@ -33,11 +50,13 @@ test("compacts forwarded siblings and keeps every underlying event id", () => {
       orders: [],
     },
   ]);
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].accepted, true);
-  assert.equal(rows[0].result, "0707");
-  assert.deepEqual(new Set(rows[0].eventIds), new Set(["NMREJECTED", "NMACCEPTED"]));
-  assert.deepEqual(rows[0].accountEmails, ["juandavidsandoval1@outlook.es"]);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].accepted, false);
+  assert.equal(rows[1].accepted, true);
+  assert.equal(rows[1].result, "0707");
+  assert.deepEqual(rows[0].eventIds, ["NMREJECTED"]);
+  assert.deepEqual(rows[1].eventIds, ["NMACCEPTED"]);
+  assert.deepEqual(rows[1].accountEmails, ["juandavidsandoval1@outlook.es"]);
 });
 
 test("mail search matches contact email, order number and exact account hash", () => {
@@ -52,6 +71,20 @@ test("mail search matches contact email, order number and exact account hash", (
   assert.equal(filterNetflixMailEvents(rows, "9crjod").length, 1);
   assert.equal(filterNetflixMailEvents(rows, "full.netflix@outlook.es", "netflix-account-hash").length, 1);
   assert.equal(filterNetflixMailEvents(rows, "missing@example.com", "missing-hash").length, 0);
+});
+
+test("mail search keeps historical access-linked orders and purchasing accounts searchable", () => {
+  const searchValues = netflixMailSearchValues([{
+    orderId: "LM-HISTORICAL-ORDER",
+    deliveryEmail: "receipt@example.com",
+    ownerEmail: "buyer@example.com",
+    linkedUserEmail: "buyer@example.com",
+    accountEmail: "replacement.netflix@example.com",
+  }]);
+  const rows = [{ eventId: "NMOLD", searchValues, searchHashes: [], accountEmails: [], accountHints: [] }];
+  assert.equal(filterNetflixMailEvents(rows, "historical-order").length, 1);
+  assert.equal(filterNetflixMailEvents(rows, "buyer@example.com").length, 1);
+  assert.equal(filterNetflixMailEvents(rows, "receipt@example.com").length, 1);
 });
 
 test("successful access search matches user email, Netflix account and order number", () => {

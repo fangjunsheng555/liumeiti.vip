@@ -1,6 +1,6 @@
 import {
   adminSessionFromRequest, adminActorFromSession,
-  deleteAdminStaff, updateAdminStaff, kickAdminStaff, clearStaff2fa,
+  deleteAdminStaff, updateAdminStaff, kickAdminStaff, clearStaff2faAndKick,
   listAdminStaff, getAdminActionLog, clean, isRootAdminSession, pushAdminActionLog,
 } from "../../../_utils.js";
 
@@ -18,7 +18,10 @@ export async function PATCH(request, { params }) {
     const staffId = Number(id);
     if (!Number.isFinite(staffId) || staffId <= 1) return Response.json({ ok: false, error: "cannot_kick_root" }, { status: 400 });
     const ok = await kickAdminStaff(staffId);
-    if (!ok) return Response.json({ ok: false, error: "kick_failed" }, { status: 500 });
+    if (!ok) return Response.json({ ok: false, error: "kick_failed" }, {
+      status: 503,
+      headers: { "Cache-Control": "no-store", "Retry-After": "5" },
+    });
     await pushAdminActionLog({ action: "staff_kick", actor, target: "staff:" + staffId, detail: {} });
     return Response.json({ ok: true, kicked: staffId });
   }
@@ -27,8 +30,11 @@ export async function PATCH(request, { params }) {
   if (body.action === "reset2fa") {
     const staffId = Number(id);
     if (!Number.isFinite(staffId) || staffId <= 1) return Response.json({ ok: false, error: "cannot_reset_root" }, { status: 400 });
-    await clearStaff2fa(staffId);
-    await kickAdminStaff(staffId);
+    const reset = await clearStaff2faAndKick(staffId);
+    if (!reset.ok) return Response.json({ ok: false, error: "kick_failed" }, {
+      status: 503,
+      headers: { "Cache-Control": "no-store", "Retry-After": "5" },
+    });
     await pushAdminActionLog({ action: "staff_2fa_reset", actor, target: "staff:" + staffId, detail: {} });
     return Response.json({ ok: true, reset: staffId });
   }
@@ -40,7 +46,14 @@ export async function PATCH(request, { params }) {
     password: typeof body.password === "string" ? body.password : undefined,
     active: typeof body.active === "boolean" ? body.active : undefined,
   }, actor);
-  if (!result.ok) return Response.json({ ok: false, error: clean(result.error, 80) }, { status: 400 });
+  if (!result.ok) {
+    const storageFailure = ["storage_failed", "storage_unavailable", "storage_error", "invalid_storage_response"].includes(result.error);
+    const conflict = result.error === "staff_concurrent_update";
+    return Response.json({ ok: false, error: clean(result.error, 80) }, {
+      status: storageFailure ? 503 : conflict ? 409 : 400,
+      headers: storageFailure ? { "Cache-Control": "no-store", "Retry-After": "5" } : undefined,
+    });
+  }
   const staff = await listAdminStaff();
   return Response.json({ ok: true, staff, updated: result.staff });
 }
@@ -52,7 +65,12 @@ export async function DELETE(request, { params }) {
   const { id } = await params;
   const result = await deleteAdminStaff(id, adminActorFromSession(session));
   if (!result.ok) {
-    return Response.json({ ok: false, error: clean(result.error, 80) }, { status: 400 });
+    const storageFailure = ["storage_failed", "storage_unavailable", "storage_error", "invalid_storage_response"].includes(result.error);
+    const conflict = result.error === "staff_concurrent_update";
+    return Response.json({ ok: false, error: clean(result.error, 80) }, {
+      status: storageFailure ? 503 : conflict ? 409 : 400,
+      headers: storageFailure ? { "Cache-Control": "no-store", "Retry-After": "5" } : undefined,
+    });
   }
   const [staff, actions] = await Promise.all([listAdminStaff(), getAdminActionLog()]);
   return Response.json({ ok: true, staff, actions });

@@ -9,6 +9,7 @@ import {
 } from "./_utils.js";
 import { getSettings } from "./_settings.js";
 import { getOrderSla } from "../lib/order-sla.js";
+import { deliverOnce } from "./_delivery-once.js";
 
 const SCAN_LOCK_KEY = "lm:keeper:order-sla-scan";
 
@@ -16,16 +17,15 @@ async function sendTelegram(text) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) return { ok: false, reason: "telegram_not_configured" };
-  try {
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
-    });
-    return { ok: response.ok, reason: response.ok ? "" : `telegram_${response.status}` };
-  } catch (error) {
-    return { ok: false, reason: clean(error?.message || "telegram_failed", 120) };
-  }
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+  });
+  if (response.ok) return { ok: true };
+  return response.status >= 500 || response.status === 408 || response.status === 425
+    ? { ok: false, uncertain: true, reason: `telegram_${response.status}` }
+    : { ok: false, retryable: true, reason: `telegram_${response.status}` };
 }
 
 function reminderText(order, sla) {
@@ -66,9 +66,13 @@ export async function scanOverdueOrderSla({ limit = 30 } = {}) {
     const entry = await getOrderEntryById(candidate.order.orderId);
     if (!entry?.order) continue;
     const order = entry.order;
+    const expectedRevision = Number(order.revision ?? 0);
     const sla = getOrderSla(order);
     if (!sla.overdue || order.slaReminderKey === sla.key) continue;
-    const result = await sendTelegram(reminderText(order, sla));
+    const result = await deliverOnce(
+      `sla:${order.orderId}:${sla.key}:telegram`,
+      () => sendTelegram(reminderText(order, sla)),
+    );
     if (!result.ok) {
       failed += 1;
       continue;
@@ -78,7 +82,7 @@ export async function scanOverdueOrderSla({ limit = 30 } = {}) {
     order.slaReminderSentAt = now.toISOString();
     order.slaReminderSentAtBeijing = formatBeijingTime(now);
     order.slaReminderOverdueMinutes = sla.overdueMinutes;
-    if (await setOrderAt(entry.index, order)) {
+    if (await setOrderAt(entry.index, order, { expectedRevision })) {
       sent += 1;
       await pushAdminActionLog({
         action: "order_sla_reminder",
@@ -90,4 +94,3 @@ export async function scanOverdueOrderSla({ limit = 30 } = {}) {
   }
   return { ok: failed === 0, scanned: candidates.length, sent, failed };
 }
-

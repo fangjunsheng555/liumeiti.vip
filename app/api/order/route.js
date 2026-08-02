@@ -5,19 +5,27 @@ import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { getMergedCatalog } from "../_catalog.js";
 import { getSettings } from "../_settings.js";
 import { confirmPendingUsdtPayments } from "../_usdt-confirm.js";
+import { deliverOnce } from "../_delivery-once.js";
 import { supportText, discountLabel as fmtDiscount } from "../../lib/settings-defaults.js";
 import {
-  consumeBestCoupon, restoreCoupon, verifySession, getUser,
-  setUser, addBalanceTx, pushAdminBalanceLog, makeId, roundMoney,
-  validateServiceRedeemCode, consumeServiceRedeemCode, restoreServiceRedeemCode,
+  isRetryableMoneyOperationFailure,
+  retryableMoneyOperationFields,
+} from "../../lib/money-operation-failure.js";
+import {
+  previewBestCoupon, getUser,
+  roundMoney, validateServiceRedeemCode,
   checkRedeemRateLimit, recordRedeemRateFailure, clearRedeemRateLimit, redeemRateLimitMessage,
   checkIdentityRateLimit, checkRateLimit, rateLimitResponse,
   clientIpFromRequest, clientUserAgentFromRequest,
   inviteCodeFromRequest, normalizeInviteCode, resolveReferralForOrder,
   pushAdminActionLog,
-  saveOrderRecord, verifyPaymentQuote, claimUsdtQuote, releaseUsdtQuote, getCookieFromRequest,
-  reserveStock, restoreStock, getUsdtRate, redisCmd, sendSimpleEmail,
+  verifyPaymentQuote, getCookieFromRequest, getUsdtRate, redisCmd, sendSimpleEmail,
 } from "../_utils.js";
+import { authenticateUserRequest, userAuthErrorResponse } from "../_auth-session.js";
+import {
+  commitOrderCreationAtomic, findOrderCreationByIdempotencyKey,
+  idempotencyPayloadHash, orderIdForIdempotencyKey, requiredIdempotencyKey,
+} from "../_money.js";
 
 // 从合并后的目录商品里解析规格(沿用 rocket single→basic 别名 + 默认规格回退)。
 function resolveCatalogPlan(product, value) {
@@ -138,53 +146,29 @@ async function sendTelegram(text) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) return null;
-  try {
-    const response = await fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
-    });
-    return response.ok;
-  } catch (e) {
-    return false;
-  }
+  const response = await fetch("https://api.telegram.org/bot" + token + "/sendMessage", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+  });
+  if (response.ok) return true;
+  return response.status >= 500 || response.status === 408 || response.status === 425
+    ? { ok: false, uncertain: true, error: `telegram_http_${response.status}` }
+    : { ok: false, retryable: true, error: `telegram_http_${response.status}` };
 }
 
-async function sendWebhook(order) {
+async function sendWebhook(order, idempotencyKey = "") {
   const webhookUrl = process.env.ORDER_WEBHOOK_URL;
   if (!webhookUrl) return null;
-  try {
-    const response = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(order),
-    });
-    return response.ok;
-  } catch (e) {
-    return false;
-  }
-}
-
-async function refundFailedBalanceOrder(order, userEmail, finalAmount, now) {
-  if (order.paymentMethod !== "balance" || !order.paidByBalance || !userEmail) return;
-  const user = await getUser(userEmail);
-  if (!user) return;
-  const prev = Number(user.balance || 0);
-  const next = Math.round((prev + finalAmount) * 100) / 100;
-  user.balance = next;
-  await setUser(userEmail, user);
-  const tx = {
-    id: makeId("TX"),
-    amount: finalAmount,
-    reason: `订单提交失败退款 ${order.orderId}`,
-    balanceAfter: next,
-    source: "order",
-    orderId: order.orderId,
-    createdAt: new Date().toISOString(),
-    createdAtBeijing: formatBeijingTime(new Date()),
-  };
-  await addBalanceTx(userEmail, tx);
-  await pushAdminBalanceLog({ ...tx, email: userEmail, balanceBefore: prev });
+  const response = await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}) },
+    body: JSON.stringify(order),
+  });
+  if (response.ok) return true;
+  return response.status >= 500 || response.status === 408 || response.status === 425
+    ? { ok: false, uncertain: true, error: `webhook_http_${response.status}` }
+    : { ok: false, retryable: true, error: `webhook_http_${response.status}` };
 }
 
 async function sendOrderEmail(order) {
@@ -216,6 +200,7 @@ async function sendOrderEmail(order) {
     category: "order",
     relatedType: "order",
     relatedId: order.orderId,
+    idempotencyKey: `order-confirmation:${order.orderId}`,
     subject,
     text,
     html,
@@ -232,9 +217,25 @@ async function sendOrderEmail(order) {
 
 }
 
+async function deliverOrderNotifications(order, knownSettings = null) {
+  const settings = knownSettings || await getSettings();
+  const prefix = `order-created:${order.orderId}`;
+  const attempts = await Promise.all([
+    deliverOnce(`${prefix}:telegram`, () => settings.notify.telegramEnabled ? sendTelegram(orderText(order)) : null)
+      .then((result) => ({ channel: "telegram", ...result })),
+    deliverOnce(`${prefix}:webhook`, (key) => sendWebhook(order, key))
+      .then((result) => ({ channel: "webhook", ...result })),
+    deliverOnce(`${prefix}:email`, () => sendOrderEmail(order))
+      .then((result) => ({ channel: "email", ...result })),
+  ]);
+  return attempts.filter((item) => !item.skipped);
+}
+
 export async function POST(request) {
   let body = {};
   try { body = await request.json(); } catch (error) { body = {}; }
+  const idempotency = requiredIdempotencyKey(request);
+  if (!idempotency.ok) return Response.json({ ok: false, error: idempotency.error }, { status: 400 });
 
   // ── New schema: items array ──
   // ── Backward-compat: single-product { service, account, password } ──
@@ -256,6 +257,104 @@ export async function POST(request) {
   if (!validEmail(email)) {
     return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
   }
+
+  // Scope an untrusted client key to the authenticated account (or the
+  // normalized buyer email for guests). This prevents two users who reuse the
+  // same key from sharing an operation record or deterministic order id.
+  let userEmail = null;
+  let userAuthVersion = 0;
+  let userAccountLifecycleId = "";
+  const expectedIdentityHeader = clean(request.headers.get("x-order-expected-account"), 200).toLowerCase();
+  const expectedIdentityHeaderProvided = request.headers.has("x-order-expected-account");
+  const expectedBodyProvided = Object.prototype.hasOwnProperty.call(body, "expectedAccountEmail");
+  const expectedBodyAccount = clean(body.expectedAccountEmail, 200).toLowerCase();
+  const expectedHeaderAccount = expectedIdentityHeader === "__guest__" ? "" : expectedIdentityHeader;
+  const expectedLifecycleHeaderRaw = clean(request.headers.get("x-operation-expected-lifecycle"), 80).toLowerCase();
+  const expectedLifecycleHeaderProvided = request.headers.has("x-operation-expected-lifecycle");
+  const expectedLifecycleHeader = expectedLifecycleHeaderRaw === "__guest__" ? "" : expectedLifecycleHeaderRaw;
+  const expectedBodyLifecycleProvided = Object.prototype.hasOwnProperty.call(body, "expectedAccountLifecycleId");
+  const expectedBodyLifecycle = clean(body.expectedAccountLifecycleId, 80).toLowerCase();
+  if (expectedIdentityHeaderProvided && expectedIdentityHeader !== "__guest__" && !validEmail(expectedHeaderAccount)) {
+    return Response.json({ ok: false, error: "invalid_expected_account" }, { status: 400 });
+  }
+  if (expectedBodyProvided && expectedBodyAccount && !validEmail(expectedBodyAccount)) {
+    return Response.json({ ok: false, error: "invalid_expected_account" }, { status: 400 });
+  }
+  // The header is intentionally outside the persisted request body/hash. It
+  // lets upgraded clients bind legacy pending journals to their original
+  // account without changing the exact body that may already have committed.
+  // New journals send both representations; disagreement is always unsafe.
+  if (expectedIdentityHeaderProvided && expectedBodyProvided && expectedHeaderAccount !== expectedBodyAccount) {
+    return Response.json({ ok: false, error: "operation_identity_mismatch" }, { status: 409 });
+  }
+  if (!expectedLifecycleHeaderProvided && !expectedBodyLifecycleProvided) {
+    return Response.json({ ok: false, error: "operation_lifecycle_required" }, { status: 400 });
+  }
+  if ((expectedLifecycleHeader && !/^[a-f0-9]{32}$/.test(expectedLifecycleHeader))
+    || (expectedBodyLifecycle && !/^[a-f0-9]{32}$/.test(expectedBodyLifecycle))) {
+    return Response.json({ ok: false, error: "invalid_expected_lifecycle" }, { status: 400 });
+  }
+  if (expectedLifecycleHeaderProvided && expectedBodyLifecycleProvided && expectedLifecycleHeader !== expectedBodyLifecycle) {
+    return Response.json({ ok: false, error: "operation_lifecycle_mismatch" }, { status: 409 });
+  }
+  const expectedIdentityProvided = expectedIdentityHeaderProvided || expectedBodyProvided;
+  const expectedAccountEmail = expectedIdentityHeaderProvided ? expectedHeaderAccount : expectedBodyAccount;
+  const expectedAccountLifecycleId = expectedLifecycleHeaderProvided ? expectedLifecycleHeader : expectedBodyLifecycle;
+  const hasUserCookie = Boolean(getCookieFromRequest(request, "lm_user"));
+  if (expectedIdentityProvided && !expectedAccountEmail && hasUserCookie) {
+    return Response.json({ ok: false, error: "guest_operation_has_session" }, { status: 409 });
+  }
+  if (expectedAccountEmail && !hasUserCookie) {
+    return Response.json({ ok: false, error: "operation_identity_auth_required" }, { status: 401 });
+  }
+  if (expectedAccountLifecycleId && !hasUserCookie) {
+    return Response.json({ ok: false, error: "operation_identity_auth_required" }, { status: 401 });
+  }
+  if (hasUserCookie) {
+    const auth = await authenticateUserRequest(request);
+    if (!auth.ok) return userAuthErrorResponse(auth);
+    if (expectedIdentityProvided && auth.email !== expectedAccountEmail) {
+      return Response.json({ ok: false, error: "operation_identity_changed" }, { status: 409 });
+    }
+    if (!expectedAccountLifecycleId) {
+      return Response.json({ ok: false, error: "operation_lifecycle_required" }, { status: 400 });
+    }
+    if (auth.accountLifecycleId !== expectedAccountLifecycleId) {
+      return Response.json({ ok: false, error: "operation_lifecycle_changed" }, { status: 409 });
+    }
+    userEmail = auth.email;
+    userAuthVersion = auth.authVersion;
+    userAccountLifecycleId = auth.accountLifecycleId;
+  } else if (expectedAccountLifecycleId) {
+    return Response.json({ ok: false, error: "guest_operation_lifecycle_invalid" }, { status: 409 });
+  }
+  const operationIdentity = (userEmail || email).toLowerCase();
+  const operationLifecycle = userEmail ? userAccountLifecycleId : "__guest__";
+  const serverOperationId = "standard-" + createHash("sha256")
+    .update(`order|${operationIdentity}|${operationLifecycle}|${idempotency.key}`)
+    .digest("hex");
+  const requestHash = idempotencyPayloadHash({
+    route: "order",
+    principal: { accountEmail: userEmail || "", accountLifecycleId: userAccountLifecycleId },
+    body,
+  });
+  const previousAttempt = await findOrderCreationByIdempotencyKey(serverOperationId, requestHash);
+  if (!previousAttempt.ok) {
+    return Response.json({ ok: false, error: previousAttempt.error }, {
+      status: previousAttempt.error === "idempotency_conflict" ? 409 : 503,
+    });
+  }
+  if (previousAttempt.found) {
+    const existing = previousAttempt.order;
+    const deliveries = await deliverOrderNotifications(existing);
+    return Response.json({
+      ok: true, orderId: existing.orderId, items: existing.items || [],
+      paidAmount: existing.paidAmount, paidCurrency: existing.paidCurrency,
+      paymentMethod: existing.paymentMethod, couponDiscount: existing.couponDiscount || 0,
+      deliveries, idempotent: true,
+    });
+  }
+
   const ipOrderGuard = await checkIdentityRateLimit({
     namespace: "order:create:ip",
     identity: clientIpFromRequest(request),
@@ -360,24 +459,15 @@ export async function POST(request) {
     serviceRedeem = checked.item;
   }
 
-  // Read user session from cookie if logged in. This links orders to the
-  // account even when the buyer types another delivery email.
-  const cookie = request.headers.get("cookie") || "";
-  const userMatch = cookie.match(/(?:^|;\s*)lm_user=([^;]+)/);
-  let userEmail = null;
-  if (userMatch) {
-    try {
-      const session = verifySession(decodeURIComponent(userMatch[1]));
-      if (session && session.email) userEmail = session.email;
-    } catch (e) {}
-  }
+  // A logged-in order stays linked to the authenticated account even when the
+  // buyer enters a different delivery email.
   const referral = await resolveReferralForOrder({
     userEmail,
     inviteCode: normalizeInviteCode(body.inviteCode || inviteCodeFromRequest(request)),
   });
 
   const hasRocketTrial = items.some((item) => item.service === "rocket" && (item.plan === "trial" || item.rocketPlan === "trial"));
-  const orderId = makeId("LM");
+  const orderId = orderIdForIdempotencyKey(serverOperationId);
 
   // Compute totals(组合优惠档位以站点设置为准)
   const subtotal = items.reduce((s, i) => s + i.amount, 0);
@@ -393,7 +483,7 @@ export async function POST(request) {
   const couponMaxAmount = hasRocketTrial
     ? Math.max(0, Math.round((bundleFinalAmount - rocketTrialAmount) * 100) / 100)
     : bundleFinalAmount;
-  const coupon = userEmail && paymentMethod !== "redeem" ? await consumeBestCoupon(userEmail, orderId, couponMaxAmount) : { discount: 0 };
+  const coupon = userEmail && paymentMethod !== "redeem" ? await previewBestCoupon(userEmail, couponMaxAmount) : { discount: 0 };
   const couponDiscount = roundMoney(coupon.discount || 0);
   const finalAmount = paymentMethod === "redeem" ? 0 : Math.max(0, Math.round((bundleFinalAmount - couponDiscount) * 100) / 100);
   // USDT:汇率取后台固定值(若设)否则每日自动;折扣取站点设置。
@@ -403,7 +493,6 @@ export async function POST(request) {
   const quotedPayment = (paymentMethod === "alipay" || paymentMethod === "usdt") && finalAmount > 0;
   const quote = quotedPayment ? verifyPaymentQuote(body.paymentQuoteToken, paymentMethod) : null;
   if (quotedPayment && !quote) {
-    await restoreCoupon(userEmail, coupon.couponId, orderId);
     return Response.json({ ok: false, error: "payment_quote_required", message: "付款金额已刷新，请返回支付页重新确认金额" }, { status: 400 });
   }
   const paymentAdjustment = quote ? normalizePaymentAdjustment(quote.paymentAdjustment) : 0;
@@ -417,29 +506,14 @@ export async function POST(request) {
   const paidAmount = paymentMethod === "usdt" ? usdtPayAmount : paymentMethod === "alipay" ? payableAmount : finalAmount;
   const paidCurrency = paymentMethod === "usdt" ? "USDT" : paymentMethod === "redeem" ? "CODE" : "CNY";
 
-  let usdtQuoteClaimed = false;
-  if (paymentMethod === "usdt" && finalAmount > 0) {
-    usdtQuoteClaimed = await claimUsdtQuote(quote.quoteId, orderId);
-    if (!usdtQuoteClaimed) {
-      await restoreCoupon(userEmail, coupon.couponId, orderId);
-      return Response.json({
-        ok: false,
-        error: "payment_quote_used",
-        message: "该 USDT 付款金额已提交，请重新生成付款金额",
-      }, { status: 409 });
-    }
-  }
-
   // Balance payment requires logged-in user with sufficient balance
   if (paymentMethod === "balance") {
     if (!userEmail) {
-      await restoreCoupon(userEmail, coupon.couponId, orderId);
       return Response.json({ ok: false, error: "balance_requires_login" }, { status: 401 });
     }
     const user = await getUser(userEmail);
     const bal = Number(user?.balance || 0);
     if (bal < finalAmount) {
-      await restoreCoupon(userEmail, coupon.couponId, orderId);
       return Response.json({
         ok: false,
         error: "insufficient_balance",
@@ -480,9 +554,11 @@ export async function POST(request) {
 
   const order = {
     orderId,
+    revision: 1,
     status: "received",
     locale: getCookieFromRequest(request, "locale") === "en" ? "en" : "zh",
     userEmail, // links order to logged-in user (for /account regardless of buyer email)
+    accountLifecycleId: userAccountLifecycleId || null,
     referral,
     attribution, // 营销渠道首次来源（utm/referrer/landing/fromTool），用于后台漏斗按来源拆分
     createdAt: now.toISOString(),
@@ -533,94 +609,58 @@ export async function POST(request) {
     currency: "CNY",
   };
 
-  // Deduct balance if paying by balance
-  if (paymentMethod === "balance" && userEmail) {
-    const user = await getUser(userEmail);
-    if (!user) {
-      await restoreCoupon(userEmail, coupon.couponId, orderId);
-      return Response.json({ ok: false, error: "user_not_found" }, { status: 404 });
-    }
-    const prev = Number(user.balance || 0);
-    const next = Math.round((prev - finalAmount) * 100) / 100;
-    if (next < 0) {
-      await restoreCoupon(userEmail, coupon.couponId, orderId);
-      return Response.json({ ok: false, error: "insufficient_balance", currentBalance: prev, required: finalAmount }, { status: 400 });
-    }
-    user.balance = next;
-    const savedBalance = await setUser(userEmail, user);
-    if (!savedBalance) {
-      await restoreCoupon(userEmail, coupon.couponId, orderId);
-      return Response.json({ ok: false, error: "balance_deduct_failed" }, { status: 500 });
-    }
-    const tx = {
-      id: makeId("TX"),
-      amount: -finalAmount,
-      reason: `订单支付 ${order.orderId}`,
-      balanceAfter: next,
-      source: "order",
-      orderId: order.orderId,
-      createdAt: now.toISOString(),
-      createdAtBeijing: formatBeijingTime(now),
-    };
-    await addBalanceTx(userEmail, tx);
-    // Also push to global admin ledger so the dashboard sees user spending.
-    await pushAdminBalanceLog({ ...tx, email: userEmail, balanceBefore: prev });
-    order.paidByBalance = true;
-  }
-
-  let consumedServiceCode = null;
-  if (paymentMethod === "redeem") {
-    consumedServiceCode = await consumeServiceRedeemCode(redeemCode, email, order.orderId, { ip: clientIp, userAgent });
-    if (!consumedServiceCode.ok) {
+  const committed = await commitOrderCreationAtomic({
+    order,
+    paymentMethod,
+    userEmail,
+    redeemCode,
+    coupon,
+    couponMaxAmount,
+    operationId: serverOperationId,
+    requestHash,
+    clientIp,
+    userAgent,
+    expectedAuthVersion: userAuthVersion,
+    expectedAccountLifecycleId: userAccountLifecycleId,
+  });
+  if (!committed.ok) {
+    const retryableFailure = isRetryableMoneyOperationFailure(committed);
+    if (paymentMethod === "redeem" && !retryableFailure && ![
+      "idempotency_conflict",
+      "session_state_changed",
+      "account_lifecycle_changed",
+      "account_banned",
+    ].includes(committed.error)) {
       await recordRedeemRateFailure(redeemGuard);
-      return Response.json({ ok: false, error: consumedServiceCode.error || "redeem_code_failed" }, { status: 400 });
     }
-    await clearRedeemRateLimit(redeemGuard);
-  }
-
-  // 库存占用（任意商品规格;原子扣减;售罄则回滚本次订单所有副作用并拒绝。未配库存的规格=不限,放行）
-  const stockReserved = [];
-  for (const it of order.items) {
-    const res = await reserveStock(it.service, it.plan);
-    if (res.ok) {
-      if (!res.unlimited) { it.stockReserved = true; stockReserved.push({ service: it.service, plan: it.plan }); }
-      continue;
-    }
-    for (const r of stockReserved) await restoreStock(r.service, r.plan);
-    await restoreCoupon(userEmail, coupon.couponId, orderId);
-    if (usdtQuoteClaimed) await releaseUsdtQuote(quote.quoteId, orderId);
-    if (paymentMethod === "redeem") await restoreServiceRedeemCode(redeemCode, orderId);
-    await refundFailedBalanceOrder(order, userEmail, finalAmount, now);
+    const conflictErrors = new Set(["idempotency_conflict", "order_exists", "payment_quote_used", "coupon_changed", "coupon_unavailable", "out_of_stock", "account_lifecycle_changed"]);
     return Response.json({
       ok: false,
-      error: "out_of_stock",
-      message: order.locale === "en"
-        ? "This plan is sold out. Please pick another plan or contact support."
-        : "该规格库存不足，请选择其他规格或联系在线客服",
-      soldOutService: it.service,
-      soldOutPlan: it.plan,
-    }, { status: 409 });
+      error: committed.error || "storage_failed",
+      currentBalance: committed.currentBalance,
+      required: committed.required,
+      soldOutService: committed.soldOutService,
+      soldOutPlan: committed.soldOutPlan,
+      ...(retryableFailure ? retryableMoneyOperationFields(committed) : {}),
+    }, { status: retryableFailure ? 503 : committed.error === "session_state_changed" ? 401 : committed.error === "account_banned" ? 403 : (conflictErrors.has(committed.error) ? 409 : 400) });
   }
+  Object.assign(order, committed.order || {});
+  if (paymentMethod === "redeem") await clearRedeemRateLimit(redeemGuard);
+  const deliveries = [{ channel: "storage", ok: true }];
+  if (committed.idempotent) {
+    const deliveries = await deliverOrderNotifications(order, settings);
+    return Response.json({
+      ok: true, orderId: order.orderId, items: order.items || [], paidAmount: order.paidAmount,
+      paidCurrency: order.paidCurrency, paymentMethod: order.paymentMethod,
+      couponDiscount: order.couponDiscount || 0, deliveries, idempotent: true,
+    });
+  }
+  try {
+    const vidKey = createHash("sha256").update(clientIp + "|" + userAgent).digest("hex").slice(0, 24);
+    await redisCmd(["ZREM", "lm:cart:index", vidKey]);
+    await redisCmd(["DEL", "lm:cart:v:" + vidKey]);
+  } catch (e) {}
 
-  const deliveries = [];
-  const stored = await saveOrderRecord(order);
-  deliveries.push({ channel: "storage", ok: Boolean(stored) });
-  // 下单成功 → 清除该访客的弃单记录（同 vid = sha256(ip+ua)，与 /api/track 一致）
-  if (stored) {
-    try {
-      const vidKey = createHash("sha256").update(clientIp + "|" + userAgent).digest("hex").slice(0, 24);
-      await redisCmd(["ZREM", "lm:cart:index", vidKey]);
-      await redisCmd(["DEL", "lm:cart:v:" + vidKey]);
-    } catch (e) {}
-  }
-  if (!stored) {
-    for (const r of stockReserved) await restoreStock(r.service, r.plan);
-    await restoreCoupon(userEmail, coupon.couponId, orderId);
-    if (usdtQuoteClaimed) await releaseUsdtQuote(quote.quoteId, orderId);
-    if (paymentMethod === "redeem") await restoreServiceRedeemCode(redeemCode, orderId);
-    await refundFailedBalanceOrder(order, userEmail, finalAmount, now);
-    return Response.json({ ok: false, error: "storage_failed", orderId: order.orderId, deliveries }, { status: 500 });
-  }
   await pushAdminActionLog({
     action: "order_create",
     actor: { staffId: 0, staffUsername: "system" },
@@ -628,22 +668,7 @@ export async function POST(request) {
     detail: { email: order.email, paymentMethod: order.paymentMethod, paidAmount: order.paidAmount, itemCount: order.itemCount },
   });
 
-  const text = orderText(order);
-  const tasks = [
-    (settings.notify.telegramEnabled ? sendTelegram(text) : Promise.resolve(null))
-      .then((sent) => sent !== null && deliveries.push({ channel: "telegram", ok: sent }))
-      .catch(() => deliveries.push({ channel: "telegram", ok: false })),
-    sendWebhook(order)
-      .then((sent) => sent !== null && deliveries.push({ channel: "webhook", ok: sent }))
-      .catch(() => deliveries.push({ channel: "webhook", ok: false })),
-    sendOrderEmail(order)
-      .then((result) => deliveries.push({ channel: "email", ok: result.ok, info: result }))
-      .catch((error) => {
-        console.error("[email] outer catch:", error.message);
-        deliveries.push({ channel: "email", ok: false, error: error.message });
-      }),
-  ];
-  await Promise.all(tasks);
+  deliveries.push(...await deliverOrderNotifications(order, settings));
 
   // Confirm after the response so USDT submission stays fast. A short retry
   // catches the normal gap between broadcasting and TRON confirmation.

@@ -10,6 +10,7 @@ import {
   validEmail,
 } from "./_utils.js";
 import { getSettings } from "./_settings.js";
+import { deliverOnce } from "./_delivery-once.js";
 import { buildEmailBrandHeader } from "./email-brand.js";
 import { orderExpirySummary, renewalCheckoutPath } from "../lib/order-expiry.js";
 
@@ -100,20 +101,23 @@ export async function sendDueRenewalReminders({ now = Date.now() } = {}) {
   let sent = 0;
   const results = [];
   for (const { order, summary, renewUrl } of due.slice(0, MAX_SENDS_PER_RUN)) {
+    const expectedRevision = Number(order.revision ?? 0);
     const locale = order.locale === "en" ? "en" : "zh";
     const brandName = (locale === "en" ? settings.brand.nameEn : settings.brand.name) || "冒央会社";
     const mail = buildRenewalEmail({ order, summary, renewUrl: SITE_URL + renewUrl + "&utm_source=renewal-email", brandName, locale });
-    const delivery = await sendSimpleEmail({
+    const deliveryId = `renewal:${order.orderId}:${summary.expiresAt}:email`;
+    const delivery = await deliverOnce(deliveryId, () => sendSimpleEmail({
       to: order.email,
       category: "renewal",
       relatedType: "order",
       relatedId: order.orderId,
+      idempotencyKey: deliveryId,
       subject: mail.subject,
       text: mail.text,
       html: mail.html,
       support: settings.support,
       locale,
-    }).catch(() => ({ ok: false }));
+    }));
     if (!delivery?.ok) { results.push({ orderId: order.orderId, ok: false }); continue; }
     const at = new Date();
     const updated = {
@@ -122,9 +126,17 @@ export async function sendDueRenewalReminders({ now = Date.now() } = {}) {
       renewalReminderSentAtBeijing: formatBeijingTime(at),
       renewalReminderForExpiresAt: summary.expiresAt,
     };
-    await setOrderAt({ orderId: order.orderId, legacyIndex: null }, updated);
+    const saved = await setOrderAt(
+      { orderId: order.orderId, legacyIndex: null },
+      updated,
+      { expectedRevision },
+    );
+    if (!saved) {
+      results.push({ orderId: order.orderId, ok: false, error: "stale_revision" });
+      continue;
+    }
     sent += 1;
-    results.push({ orderId: order.orderId, ok: true, daysLeft: summary.daysLeft });
+    results.push({ orderId: order.orderId, ok: true, daysLeft: summary.daysLeft, revision: updated.revision });
   }
   return { ok: true, scanned: orders.length, due: due.length, sent, results };
 }

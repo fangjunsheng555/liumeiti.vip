@@ -1,7 +1,23 @@
+import { createHash } from "node:crypto";
 import { clean, formatBeijingTime, redisCmd } from "./_utils.js";
 
 const TIMELINE_PREFIX = "liumeiti:order-timeline:";
 const MAX_EVENTS = 100;
+const TIMELINE_ONCE_PREFIX = "liumeiti:order-timeline-once:v1:";
+const APPEND_ONCE_SCRIPT = `
+local markerType=redis.call('TYPE',KEYS[1])
+if type(markerType)=='table' then markerType=markerType.ok end
+local listType=redis.call('TYPE',KEYS[2])
+if type(listType)=='table' then listType=listType.ok end
+if markerType~='none' and markerType~='string' then return -2 end
+if listType~='none' and listType~='list' then return -2 end
+local marked=redis.call('SET',KEYS[1],'1','NX')
+if marked then
+  redis.call('LPUSH',KEYS[2],ARGV[1])
+  redis.call('LTRIM',KEYS[2],0,tonumber(ARGV[2])-1)
+  return 1
+end
+return 0`;
 
 function normalizeOrderId(value) {
   return clean(value, 80).replace(/\s+/g, "").toUpperCase();
@@ -44,6 +60,24 @@ export async function appendOrderTimeline(orderId, event) {
   if (pushed === null) return false;
   await redisCmd(["LTRIM", key, "0", String(MAX_EVENTS - 1)]);
   return true;
+}
+
+// Timeline entries are Redis-local effects, so they can be made genuinely
+// exactly-once with the permanent marker and LPUSH in the same Lua script.
+// Callers retry this function after a dropped response without duplicating the
+// event or leaving a marker that was committed without the event.
+export async function appendOrderTimelineOnce(orderId, operationId, event) {
+  const key = timelineKey(orderId);
+  const stableOperation = clean(operationId, 300);
+  if (!key || !stableOperation) return false;
+  const marker = TIMELINE_ONCE_PREFIX
+    + createHash("sha256").update(`${normalizeOrderId(orderId)}\0${stableOperation}`).digest("hex");
+  const next = safeEvent({
+    ...(event || {}),
+    id: event?.id || `OT${createHash("sha256").update(stableOperation).digest("hex").slice(0, 20).toUpperCase()}`,
+  });
+  const appended = await redisCmd(["EVAL", APPEND_ONCE_SCRIPT, "2", marker, key, JSON.stringify(next), String(MAX_EVENTS)]);
+  return appended === 1 || appended === 0;
 }
 
 function baseEvents(order) {

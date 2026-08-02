@@ -1,12 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import MobileNav from "../components/MobileNav";
 import FloatingSupport from "../components/FloatingSupport";
 import AfterSalesTicketSheet from "../components/AfterSalesTicketSheet";
 import { useLocale } from "../components/LocaleProvider";
 import { DEFAULT_USER_AVATAR_ID, USER_AVATARS, normalizeUserAvatarId, userAvatarPath } from "../lib/avatars";
+import {
+  isExplicitTerminalIdempotencyResponse,
+} from "../lib/idempotency";
+import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
+import {
+  clearSinglePendingOperation,
+  prepareSinglePendingOperation,
+  readSinglePendingOperation,
+} from "../lib/single-pending-journal";
 import {
   ArrowRight, CheckCircle2, Clock, Copy, ExternalLink,
   LoaderCircle, LogOut, Mail, ShoppingBag, X,
@@ -126,7 +135,7 @@ function GoogleIcon() {
 export default function AccountPage() {
   const { locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
-  const [state, setState] = useState({ loading: true, email: null, username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
+  const [state, setState] = useState({ loading: true, email: null, accountLifecycleId: "", username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
   const [activeOrder, setActiveOrder] = useState(null);
   const [afterSalesOrder, setAfterSalesOrder] = useState(null);
   const [afterSalesForm, setAfterSalesForm] = useState(null);
@@ -153,6 +162,7 @@ export default function AccountPage() {
   const [casetifyModal, setCasetifyModal] = useState(false);
   const [moneyBusy, setMoneyBusy] = useState("");
   const [moneyStatus, setMoneyStatus] = useState(null);
+  const moneyRequestRef = useRef({});
   const [authMode, setAuthMode] = useState("login");
   const [authForm, setAuthForm] = useState({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
   const [authCaptcha, setAuthCaptcha] = useState({ token: "", image: "", loading: false, error: "" });
@@ -160,6 +170,8 @@ export default function AccountPage() {
   const [authError, setAuthError] = useState("");
   const [authNotice, setAuthNotice] = useState("");
   const [authReturnTo, setAuthReturnTo] = useState("");
+  const [logoutBusy, setLogoutBusy] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
 
   async function load() {
     setState((s) => ({ ...s, loading: true }));
@@ -169,7 +181,7 @@ export default function AccountPage() {
         fetch("/api/auth/balance", { credentials: "same-origin" }),
       ]);
       if (meRes.status === 401) {
-        setState({ loading: false, email: null, username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
+        setState({ loading: false, email: null, accountLifecycleId: "", username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
         return;
       }
       const me = await meRes.json();
@@ -178,6 +190,7 @@ export default function AccountPage() {
         setState({
           loading: false,
           email: me.email,
+          accountLifecycleId: me.accountLifecycleId || "",
           username: me.username || "",
           avatarId: normalizeUserAvatarId(me.avatarId),
           orders: me.orders,
@@ -190,7 +203,7 @@ export default function AccountPage() {
         });
       }
     } catch (e) {
-      setState({ loading: false, email: null, username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
+      setState({ loading: false, email: null, accountLifecycleId: "", username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
     }
   }
 
@@ -348,8 +361,25 @@ export default function AccountPage() {
   }, []);
 
   async function logout() {
-    await fetch("/api/auth/login", { method: "DELETE" });
-    window.location.href = "/";
+    if (logoutBusy) return;
+    setLogoutBusy(true);
+    setLogoutError("");
+    try {
+      const response = await fetch("/api/auth/login", { method: "DELETE", credentials: "same-origin" });
+      let data = null;
+      try { data = await response.json(); } catch {}
+      if (!response.ok || !data?.ok || typeof data.revoked !== "boolean") {
+        throw new Error(L(
+          "暂时无法安全撤销全部登录会话，请稍后重试；当前页面仍保持登录。",
+          "We couldn't safely revoke all sessions yet. Try again shortly; this page remains signed in.",
+        ));
+      }
+      window.location.href = "/";
+    } catch (error) {
+      setLogoutError(error.message || L("安全退出失败，请稍后重试", "Secure sign-out failed. Try again shortly."));
+    } finally {
+      setLogoutBusy(false);
+    }
   }
 
   async function doAuth(e) {
@@ -543,15 +573,60 @@ export default function AccountPage() {
     }
     setMoneyBusy(action);
     setMoneyStatus(null);
+    const storageKey = `liumeiti:idempotency:money:${action}`;
+    const scope = `money-${action}`;
+    const accountEmail = String(state.email || "").trim().toLowerCase();
+    const accountLifecycleId = String(state.accountLifecycleId || "").trim().toLowerCase();
+    const identity = { accountEmail, accountLifecycleId };
     try {
+      await withCheckoutSubmissionCoordination(async () => {
+      const legacyPayload = { accountEmail, ...payload };
+      const memoryPending = moneyRequestRef.current[action] || null;
+      if (memoryPending) {
+        const diskPending = readSinglePendingOperation(
+          window.localStorage,
+          storageKey,
+          scope,
+          payload,
+          { identity, legacyPayload, requireAccountLifecycle: true },
+        ).record;
+        if (!diskPending || diskPending.idempotencyRequest?.key !== memoryPending.idempotencyRequest?.key) {
+          throw new Error("pending_operation_journal_missing_or_replaced");
+        }
+      }
+      const pending = prepareSinglePendingOperation(
+        window.localStorage,
+        storageKey,
+        scope,
+        payload,
+        { identity, legacyPayload, requireAccountLifecycle: true },
+      );
+      moneyRequestRef.current[action] = pending;
+      const operation = pending.idempotencyRequest;
+      const exactPayload = pending.payload;
       const res = await fetch(endpoint, {
         method: "POST",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": operation.key,
+          "X-Operation-Expected-Account": String(pending.identity?.accountEmail || "").trim().toLowerCase(),
+          "X-Operation-Expected-Lifecycle": String(pending.identity?.accountLifecycleId || "").trim().toLowerCase(),
+        },
+        body: JSON.stringify(exactPayload),
       });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.message || data.error || L("操作失败", "Action failed"));
+      let data = null;
+      try { data = await res.json(); } catch {}
+      const terminal = isExplicitTerminalIdempotencyResponse(res.status, data);
+      if (!data?.ok) {
+        if (terminal) {
+          if (moneyRequestRef.current[action]?.idempotencyRequest?.key === operation.key) delete moneyRequestRef.current[action];
+          clearSinglePendingOperation(window.localStorage, storageKey, operation.key);
+        }
+        throw new Error(data?.message || data?.error || L("操作失败", "Action failed"));
+      }
+      if (moneyRequestRef.current[action]?.idempotencyRequest?.key === operation.key) delete moneyRequestRef.current[action];
+      clearSinglePendingOperation(window.localStorage, storageKey, operation.key);
       setMoneyStatus({ type: "success", message: data.message || L("操作成功", "Done") });
       setMoneyForm((cur) => {
         const next = { ...cur };
@@ -560,8 +635,16 @@ export default function AccountPage() {
       });
       setMoneyModal(null);
       await load();
+      });
     } catch (e) {
-      setMoneyStatus({ type: "error", message: e.message || L("操作失败,请稍后再试", "Action failed, please try again") });
+      const unresolved = String(e?.message || "").includes("pending_operation")
+        || String(e?.message || "").startsWith("checkout_");
+      setMoneyStatus({
+        type: "error",
+        message: unresolved
+          ? L("检测到未确认结果的资金操作，请保持原内容并重试；请勿改换账户或重复发起。", "An earlier money operation is unresolved. Keep the original details and retry; do not switch accounts or start it again.")
+          : e.message || L("操作失败,请稍后再试", "Action failed, please try again"),
+      });
     } finally {
       setMoneyBusy("");
     }
@@ -749,12 +832,13 @@ export default function AccountPage() {
         <Link href="/" className="account-brand-only" aria-label={L("冒央会社首页", "Maoyang Taiwan Inc home")}>
           <img src="/logo-transparent.png" alt="冒央会社 Maoyang Taiwan Inc" className="account-logo" />
         </Link>
-        <button type="button" className="account-logout" onClick={logout}>
-          <LogOut size={13} />{L("退出", "Log out")}
+        <button type="button" className="account-logout" onClick={logout} disabled={logoutBusy}>
+          {logoutBusy ? <LoaderCircle size={13} className="spin-icon" /> : <LogOut size={13} />}{L("退出", "Log out")}
         </button>
       </header>
 
       <main className="account-main">
+        {logoutError && <div className="auth-error" role="alert">{logoutError}</div>}
         <section className="account-info-card">
           <button type="button" className="account-avatar" onClick={() => setAvatarModal(true)} aria-label={L("更换头像", "Change avatar")}>
             <img src={userAvatarPath(state.avatarId)} alt="" className="account-avatar-img" />

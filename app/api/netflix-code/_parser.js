@@ -1,4 +1,5 @@
 import PostalMime from "postal-mime";
+import { createHash } from "node:crypto";
 
 const MAX_RAW_BYTES = 5 * 1024 * 1024;
 const MAX_NESTED_MESSAGES = 6;
@@ -256,6 +257,29 @@ function withoutUrls(text) {
     .replace(/\/account\/travel\/verify\?[^\s<>"']+/gi, " ");
 }
 
+const NETFLIX_SRC_UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+// Forwarding providers commonly assign a new RFC Message-ID to each copy, but
+// Netflix repeats one delivery UUID in its visible `SRC:` footer. Only that
+// source-scoped identifier is strong enough to correlate two differently
+// wrapped copies. An arbitrary UUID elsewhere in a forwarded message is not a
+// delivery identity, and multiple distinct SRC UUIDs are deliberately treated
+// as ambiguous so separate Netflix messages can never be folded together.
+function netflixDeliveryFingerprint(values) {
+  const uuids = [];
+  for (const value of (Array.isArray(values) ? values : [values])) {
+    const source = decodeEntities(String(value || ""));
+    for (const match of source.matchAll(/\bsrc\s*:\s*([^\r\n]{0,512})/gi)) {
+      uuids.push(...Array.from(String(match[1] || "").matchAll(NETFLIX_SRC_UUID_PATTERN), (entry) => entry[0].toLowerCase()));
+    }
+  }
+  const distinct = unique(uuids);
+  if (distinct.length !== 1) return "";
+  return createHash("sha256")
+    .update(`netflix-src-v1\0${distinct[0]}`)
+    .digest("hex");
+}
+
 // Netflix repeats its delivery UUID in visible footer metadata (for example
 // `SRC: ..._f73ec386-ca05-4d35-9317-dce0338b88c3_...`). A numeric UUID block
 // such as `9317` is not a sign-in code, even when the footer is close to the
@@ -466,6 +490,7 @@ export async function parseNetflixEmail(raw, envelope = {}) {
     language,
     receivedAt,
     expiresAt,
+    deliveryFingerprint: netflixDeliveryFingerprint([plain, htmlToText(html)]),
   };
 
   const runs = extractDigitRuns(codeText).filter((run) => !FORWARD_HEADER_LINE.test(run.line || ""));
@@ -525,4 +550,5 @@ export const netflixParserInternals = {
   trustedNetflixUrl,
   containsSixDigitToken,
   extractDigitRuns,
+  netflixDeliveryFingerprint,
 };

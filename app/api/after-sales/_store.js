@@ -2,6 +2,7 @@ import {
   clean,
   formatBeijingTime,
   getOrderById,
+  getOrderEntryById,
   getOrdersByInternalReference,
   redisCmd,
   redisPipeline,
@@ -15,8 +16,70 @@ const ACTIVE_ORDER_PREFIX = "liumeiti:after-sales:active:";
 const ALL_INDEX = "liumeiti:after-sales:index";
 const PENDING_INDEX = "liumeiti:after-sales:status:pending";
 const COMPLETED_INDEX = "liumeiti:after-sales:status:completed";
+const COMPLETION_OUTBOX_INDEX = "liumeiti:after-sales:completion-outbox";
 const COMPLETE_LOCK_PREFIX = "liumeiti:after-sales:complete-lock:";
 const CREDENTIAL_SERVICES = new Set(["spotify", "ai", "netflix", "disney", "max"]);
+
+const CREATE_TICKET_SCRIPT = `
+local activeId=redis.call('GET',KEYS[2])
+if activeId then
+  local activeRaw=redis.call('GET',ARGV[5]..activeId)
+  if not activeRaw then
+    return cjson.encode({ok=false,error='pending_ticket_exists',ticketId=activeId,storagePending=true})
+  end
+  local parsed,active=pcall(cjson.decode,activeRaw)
+  if not parsed or type(active)~='table' or tostring(active.status or '')=='pending' then
+    return cjson.encode({ok=false,error='pending_ticket_exists',ticketId=activeId})
+  end
+  redis.call('DEL',KEYS[2])
+end
+if redis.call('EXISTS',KEYS[1])==1 then
+  return cjson.encode({ok=false,error='ticket_id_conflict'})
+end
+redis.call('SET',KEYS[1],ARGV[1])
+redis.call('ZADD',KEYS[3],ARGV[2],ARGV[3])
+redis.call('ZADD',KEYS[4],ARGV[2],ARGV[3])
+redis.call('ZREM',KEYS[5],ARGV[3])
+redis.call('SET',KEYS[2],ARGV[3])
+return cjson.encode({ok=true})`;
+
+const COMPLETE_TICKET_SCRIPT = `
+if redis.call('GET',KEYS[1])~=ARGV[1] then return 0 end
+redis.call('SET',KEYS[1],ARGV[2])
+redis.call('ZREM',KEYS[2],ARGV[3])
+redis.call('ZADD',KEYS[3],ARGV[4],ARGV[3])
+if ARGV[5]~='' then redis.call('ZADD',KEYS[4],ARGV[6],ARGV[3]) end
+if redis.call('GET',KEYS[5])==ARGV[3] then redis.call('DEL',KEYS[5]) end
+return 1`;
+
+const COMPLETE_EFFECTS_SCRIPT = `
+local raw=redis.call('GET',KEYS[1])
+if not raw then return 0 end
+local ok,ticket=pcall(cjson.decode,raw)
+if not ok or type(ticket)~='table' or tostring(ticket.completionOperationId or '')~=ARGV[1] then return 0 end
+ticket.completionEffectsPending=false
+ticket.completionEffectsCompletedAt=ARGV[2]
+redis.call('SET',KEYS[1],cjson.encode(ticket))
+redis.call('ZREM',KEYS[2],ARGV[3])
+return 1`;
+
+const CREATE_EFFECTS_SCRIPT = `
+local raw=redis.call('GET',KEYS[1])
+if not raw then return 0 end
+local ok,ticket=pcall(cjson.decode,raw)
+if not ok or type(ticket)~='table' or tostring(ticket.ticketId or '')~=ARGV[1] then return 0 end
+ticket.creationEffectsPending=false
+ticket.creationEffectsCompletedAt=ARGV[2]
+redis.call('SET',KEYS[1],cjson.encode(ticket))
+return 1`;
+
+const REPAIR_COMPLETED_TICKET_SCRIPT = `
+redis.call('ZADD',KEYS[1],ARGV[1],ARGV[2])
+redis.call('ZREM',KEYS[2],ARGV[2])
+redis.call('ZADD',KEYS[3],ARGV[1],ARGV[2])
+if ARGV[3]=='1' then redis.call('ZADD',KEYS[4],ARGV[4],ARGV[2]) else redis.call('ZREM',KEYS[4],ARGV[2]) end
+if redis.call('GET',KEYS[5])==ARGV[2] then redis.call('DEL',KEYS[5]) end
+return 1`;
 
 function normalizeId(value, limit = 100) {
   return clean(value, limit).replace(/\s+/g, "").toUpperCase();
@@ -160,47 +223,25 @@ export async function createAfterSalesTicket(ticket) {
   const ticketId = normalizeId(ticket.ticketId);
   const orderId = normalizeId(ticket.orderId, 80);
   const activeKey = activeOrderKey(orderId);
-
-  const existingId = normalizeId(await redisCmd(["GET", activeKey]));
-  if (existingId) {
-    const existing = await getAfterSalesTicket(existingId);
-    if (!existing || existing.status === "pending") {
-      return {
-        ok: false,
-        error: "pending_ticket_exists",
-        ticket: existing || { ticketId: existingId, orderId, status: "pending", storagePending: true },
-      };
-    }
-    await compareDelete(activeKey, existingId);
-  }
-
-  // 临时锁覆盖「已抢锁、记录尚未落盘」窗口；保存成功后会改为不失效的待处理锁。
-  const acquired = await redisCmd(["SET", activeKey, ticketId, "NX", "EX", "300"]);
-  if (acquired !== "OK") {
-    const current = await getActiveAfterSalesTicket(orderId);
-    return { ok: false, error: "pending_ticket_exists", ticket: current };
-  }
-
   const score = createdScore(ticket);
-  const commands = [
-    ["SET", ticketKey(ticketId), JSON.stringify({ ...ticket, ticketId, orderId })],
-    ["ZADD", ALL_INDEX, String(score), ticketId],
-    ["ZADD", PENDING_INDEX, String(score), ticketId],
-    ["ZREM", COMPLETED_INDEX, ticketId],
-    ["SET", activeKey, ticketId],
-  ];
-  const saved = writeSucceeded(await redisPipeline(commands), commands.length);
-  if (!saved) {
-    await compareDelete(activeKey, ticketId);
-    await redisPipeline([
-      ["DEL", ticketKey(ticketId)],
-      ["ZREM", ALL_INDEX, ticketId],
-      ["ZREM", PENDING_INDEX, ticketId],
-      ["ZREM", COMPLETED_INDEX, ticketId],
-    ]);
-    return { ok: false, error: "storage_failed" };
+  const normalized = { ...ticket, ticketId, orderId, creationEffectsPending: true };
+  const raw = await redisCmd([
+    "EVAL", CREATE_TICKET_SCRIPT, "5",
+    ticketKey(ticketId), activeKey, ALL_INDEX, PENDING_INDEX, COMPLETED_INDEX,
+    JSON.stringify(normalized), String(score), ticketId, orderId, TICKET_PREFIX,
+  ]);
+  let result = null;
+  try { result = typeof raw === "string" ? JSON.parse(raw) : raw; } catch {}
+  if (!result?.ok) {
+    const existingId = normalizeId(result?.ticketId);
+    const existing = existingId ? await getAfterSalesTicket(existingId) : null;
+    return {
+      ok: false,
+      error: result?.error || "storage_failed",
+      ticket: existing || (existingId ? { ticketId: existingId, orderId, status: "pending", storagePending: Boolean(result?.storagePending) } : null),
+    };
   }
-  return { ok: true, ticket: { ...ticket, ticketId, orderId } };
+  return { ok: true, ticket: normalized };
 }
 
 function mergeCompletionItems(ticket, updates) {
@@ -224,12 +265,30 @@ function mergeCompletionItems(ticket, updates) {
   return { ok: true, items };
 }
 
-async function syncOrderCredentials(ticket, items, actor) {
+async function syncOrderCredentials(ticket, items, actor, operationId = "", requestHash = "") {
   const credentialItems = items.filter((item) => item.credentialManaged && item.account && item.password);
   if (!credentialItems.length) return { ok: true };
 
-  const order = await getOrderById(ticket.orderId);
+  const orderEntry = await getOrderEntryById(ticket.orderId);
+  const order = orderEntry?.order;
   if (!order) return { ok: false, error: "order_not_found" };
+  const stableOperation = clean(operationId, 100);
+  const stableRequestHash = clean(requestHash, 80);
+  const syncRecords = Array.isArray(order.afterSalesCredentialSyncs) ? order.afterSalesCredentialSyncs : [];
+  const priorTicketSync = syncRecords.find((entry) => normalizeId(entry?.ticketId) === normalizeId(ticket.ticketId));
+  if (priorTicketSync) {
+    if (stableRequestHash && priorTicketSync.requestHash !== stableRequestHash) {
+      return { ok: false, error: "idempotency_conflict" };
+    }
+    return { ok: true, idempotent: true };
+  }
+  const processedSyncs = Array.isArray(order.afterSalesCredentialSyncOperations)
+    ? order.afterSalesCredentialSyncOperations.map((value) => clean(value, 100)).filter(Boolean)
+    : [];
+  // The marker and credentials are part of the same order CAS write. A crash
+  // after that write therefore resumes without a second revision/audit entry.
+  if (stableOperation && processedSyncs.includes(stableOperation)) return { ok: true, idempotent: true };
+  const expectedRevision = Number(order.revision ?? 0);
   if (!Array.isArray(order.items) || !order.items.length) {
     const source = credentialItems[0] || items[0] || {};
     order.items = [{
@@ -278,7 +337,8 @@ async function syncOrderCredentials(ticket, items, actor) {
   const now = new Date();
   order.staffAudit = Array.isArray(order.staffAudit) ? order.staffAudit : [];
   order.staffAudit.unshift({
-    id: "OA" + Date.now().toString(36).toUpperCase(),
+    id: stableOperation ? `OA${stableOperation.slice(0, 22).toUpperCase()}` : "OA" + Date.now().toString(36).toUpperCase(),
+    operationId: stableOperation,
     staffId: Number(actor?.staffId || 1),
     staffUsername: clean(actor?.staffUsername || "admin", 60),
     label: clean(actor?.staffUsername || "admin", 60),
@@ -288,7 +348,19 @@ async function syncOrderCredentials(ticket, items, actor) {
     createdAtBeijing: formatBeijingTime(now),
   });
   order.staffAudit = order.staffAudit.slice(0, 30);
-  const saved = await setOrderAt({ orderId: order.orderId, legacyIndex: null }, order);
+  if (stableOperation) {
+    order.afterSalesCredentialSyncOperations = [stableOperation, ...processedSyncs.filter((value) => value !== stableOperation)].slice(0, 100);
+    order.afterSalesCredentialSyncs = [{
+      ticketId: normalizeId(ticket.ticketId),
+      requestHash: stableRequestHash,
+      operationId: stableOperation,
+    }, ...syncRecords.filter((entry) => normalizeId(entry?.ticketId) !== normalizeId(ticket.ticketId))].slice(0, 100);
+  }
+  const saved = await setOrderAt(
+    orderEntry.index,
+    order,
+    { expectedRevision },
+  );
   if (!saved) return { ok: false, error: "order_sync_failed" };
 
   const persisted = await getOrderById(order.orderId);
@@ -314,16 +386,32 @@ export async function completeAfterSalesTicket(ticketId, completion, actor) {
   const locked = await redisCmd(["SET", lockKey, lockToken, "NX", "EX", "30"]);
   if (locked !== "OK") return { ok: false, error: "ticket_busy" };
   try {
-    const storedTicket = await getAfterSalesTicket(id);
+    const storedRaw = await redisCmd(["GET", ticketKey(id)]);
+    const storedTicket = parseRecord(storedRaw);
     if (!storedTicket) return { ok: false, error: "ticket_not_found" };
     const ticket = await hydrateAfterSalesTicketCredentials(storedTicket);
-    if (ticket.status === "completed") return { ok: true, ticket, changed: false };
+    const payload = completion && typeof completion === "object" ? completion : { staffNote: completion };
+    const completionOperationId = clean(payload.operationId, 100);
+    const completionRequestHash = clean(payload.requestHash, 80);
+    if (ticket.status === "completed") {
+      const owned = Boolean(completionOperationId && ticket.completionOperationId === completionOperationId);
+      if (owned && ticket.completionRequestHash && ticket.completionRequestHash !== completionRequestHash) {
+        return { ok: false, error: "idempotency_conflict" };
+      }
+      if (owned) {
+        await redisCmd([
+          "EVAL", REPAIR_COMPLETED_TICKET_SCRIPT, "5",
+          ALL_INDEX, PENDING_INDEX, COMPLETED_INDEX, COMPLETION_OUTBOX_INDEX, activeOrderKey(ticket.orderId),
+          String(createdScore(ticket)), ticket.ticketId, ticket.completionEffectsPending ? "1" : "0", String(Date.now()),
+        ]);
+      }
+      return { ok: true, ticket, changed: false, owned };
+    }
     if (ticket.status !== "pending") return { ok: false, error: "invalid_ticket_status" };
 
-    const payload = completion && typeof completion === "object" ? completion : { staffNote: completion };
     const merged = mergeCompletionItems(ticket, payload.items);
     if (!merged.ok) return merged;
-    const synced = await syncOrderCredentials(ticket, merged.items, actor);
+    const synced = await syncOrderCredentials(ticket, merged.items, actor, completionOperationId, completionRequestHash);
     if (!synced.ok) return synced;
 
     const now = new Date();
@@ -338,21 +426,55 @@ export async function completeAfterSalesTicket(ticketId, completion, actor) {
         staffId: Number(actor?.staffId || 1),
         staffUsername: clean(actor?.staffUsername || "admin", 60),
       },
+      ...(completionOperationId ? {
+        completionOperationId,
+        completionRequestHash,
+        completionEffectsPending: true,
+      } : {}),
       updatedAt: now.toISOString(),
     };
     const score = createdScore(completed);
-    const commands = [
-      ["SET", ticketKey(completed.ticketId), JSON.stringify(completed)],
-      ["ZREM", PENDING_INDEX, completed.ticketId],
-      ["ZADD", COMPLETED_INDEX, String(score), completed.ticketId],
-    ];
-    const saved = writeSucceeded(await redisPipeline(commands), commands.length);
+    const saved = Number(await redisCmd([
+      "EVAL", COMPLETE_TICKET_SCRIPT, "5",
+      ticketKey(completed.ticketId), PENDING_INDEX, COMPLETED_INDEX, COMPLETION_OUTBOX_INDEX, activeOrderKey(completed.orderId),
+      String(storedRaw), JSON.stringify(completed), completed.ticketId, String(score), completionOperationId, String(Date.now()),
+    ])) === 1;
     if (!saved) return { ok: false, error: "storage_failed" };
-    await compareDelete(activeOrderKey(completed.orderId), completed.ticketId);
-    return { ok: true, ticket: completed, changed: true };
+    return { ok: true, ticket: completed, changed: true, owned: Boolean(completionOperationId) };
   } finally {
     await compareDelete(lockKey, lockToken);
   }
+}
+
+export async function getAfterSalesCompletionOutbox(limit = 30) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit || 30)));
+  const ids = await redisCmd(["ZRANGE", COMPLETION_OUTBOX_INDEX, "0", String(safeLimit - 1)]);
+  return getTicketsByIds(ids);
+}
+
+export async function getAfterSalesCreationOutbox(limit = 30) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit || 30)));
+  const ids = await redisCmd(["ZREVRANGE", PENDING_INDEX, "0", String(safeLimit - 1)]);
+  return (await getTicketsByIds(ids)).filter((ticket) => ticket.creationEffectsPending !== false);
+}
+
+export async function markAfterSalesCreationEffectsDone(ticketId) {
+  const id = normalizeId(ticketId);
+  if (!id) return false;
+  return Number(await redisCmd([
+    "EVAL", CREATE_EFFECTS_SCRIPT, "1", ticketKey(id), id, new Date().toISOString(),
+  ])) === 1;
+}
+
+export async function markAfterSalesCompletionEffectsDone(ticketId, operationId) {
+  const id = normalizeId(ticketId);
+  const stableOperation = clean(operationId, 100);
+  if (!id || !stableOperation) return false;
+  return Number(await redisCmd([
+    "EVAL", COMPLETE_EFFECTS_SCRIPT, "2",
+    ticketKey(id), COMPLETION_OUTBOX_INDEX,
+    stableOperation, new Date().toISOString(), id,
+  ])) === 1;
 }
 
 export async function getAfterSalesCounts() {

@@ -1,8 +1,9 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import {
   clean, ensureOAuthUser, getCookieFromRequest, inviteCodeFromRequest,
-  normalizeInviteCode, signSession, setCookieValue,
+  normalizeInviteCode, setCookieValue,
 } from "../../_utils.js";
+import { createUserSession } from "../../_auth-session.js";
 
 const STATE_COOKIE = "lm_oauth_state";
 
@@ -179,6 +180,11 @@ export async function finishOAuth(provider, request, code) {
     err.code = result.error || "oauth_user_failed";
     throw err;
   }
-  const session = signSession({ email, exp: Date.now() + 14 * 24 * 60 * 60 * 1000 });
-  return { user: result.user, cookie: setCookieValue("lm_user", session), isNew: result.isNew };
+  const session = await createUserSession(email, Date.now(), result.authVersion);
+  if (!session.ok) {
+    const err = new Error(session.error || "auth_store_unavailable");
+    err.code = session.error || "auth_store_unavailable";
+    throw err;
+  }
+  return { user: result.user, cookie: setCookieValue("lm_user", session.token), isNew: result.isNew };
 }

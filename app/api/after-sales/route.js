@@ -7,12 +7,11 @@ import {
   makeId,
   rateLimitResponse,
   validEmail,
-  verifySession,
 } from "../_utils.js";
+import { verifyAfterSalesToken } from "../_auth-session.js";
 import { getMergedCatalog } from "../_catalog.js";
 import { createAfterSalesTicket, publicAfterSalesSummary } from "./_store.js";
-import { sendAfterSalesEmail } from "./_email.js";
-import { appendOrderTimeline } from "../_order-timeline.js";
+import { settleAfterSalesCreationEffects } from "./_creation-effects.js";
 
 function normalizeOrderId(value) {
   return clean(value, 80).replace(/\s+/g, "").toUpperCase();
@@ -35,8 +34,8 @@ export async function POST(request) {
   try { body = await request.json(); } catch {}
 
   const orderId = normalizeOrderId(body.orderId);
-  const claim = verifySession(clean(body.token, 4000));
-  if (!claim || claim.type !== "after-sales-order" || normalizeOrderId(claim.orderId) !== orderId) {
+  const claim = verifyAfterSalesToken(clean(body.token, 4000));
+  if (!claim || normalizeOrderId(claim.orderId) !== orderId) {
     return Response.json({ ok: false, error: "verification_required" }, { status: 401 });
   }
 
@@ -134,26 +133,22 @@ export async function POST(request) {
   };
   const created = await createAfterSalesTicket(ticket);
   if (!created.ok) {
+    const existingEffects = created.error === "pending_ticket_exists" && created.ticket?.ticketId && !created.ticket?.storagePending
+      ? await settleAfterSalesCreationEffects(created.ticket).catch(() => ({ email: false }))
+      : null;
     return Response.json({
       ok: false,
       error: created.error,
       ticket: publicAfterSalesSummary(created.ticket),
+      notice: existingEffects ? { email: Boolean(existingEffects.email), recovered: true } : undefined,
     }, { status: created.error === "pending_ticket_exists" ? 409 : 500 });
   }
 
-  const mailResult = await sendAfterSalesEmail(created.ticket, "received").catch(() => ({ ok: false }));
-  await appendOrderTimeline(orderId, {
-    type: "after_sales_created",
-    visibility: "public",
-    summaryZh: "售后工单已提交",
-    summaryEn: "After-sales ticket submitted",
-    actor: "customer",
-    meta: { ticketId: created.ticket.ticketId },
-  });
+  const effects = await settleAfterSalesCreationEffects(created.ticket).catch(() => ({ email: false }));
   return Response.json({
     ok: true,
     ticket: publicAfterSalesSummary(created.ticket),
-    notice: { email: Boolean(mailResult?.ok) },
+    notice: { email: Boolean(effects.email) },
   });
 }
 

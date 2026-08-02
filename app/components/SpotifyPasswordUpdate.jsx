@@ -2,9 +2,15 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, CheckCircle2, Eye, EyeOff, LoaderCircle, LockKeyhole } from "lucide-react";
 import { useLocale } from "./LocaleProvider";
+import {
+  createPendingIdempotencyRecord,
+  idempotencyFingerprint,
+  isExplicitTerminalIdempotencyResponse,
+} from "../lib/idempotency";
+import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
 
 export default function SpotifyPasswordUpdate({ orderId }) {
   const { locale } = useLocale();
@@ -17,6 +23,7 @@ export default function SpotifyPasswordUpdate({ orderId }) {
   const [error, setError] = useState("");
   const [completed, setCompleted] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const updateRequestRef = useRef(null);
 
   function errorMessage(code) {
     return {
@@ -29,6 +36,8 @@ export default function SpotifyPasswordUpdate({ orderId }) {
       invalid_email: L("请填写有效的下单邮箱", "Enter a valid order email."),
       contact_required: L("请填写联系方式", "Enter your contact details."),
       save_failed: L("保存失败，请稍后重试", "Couldn't save. Try again shortly."),
+      order_update_busy: L("订单资料正在更新，请保持原内容并稍后重试", "The order is being updated. Keep the same fields and retry shortly."),
+      idempotency_conflict: L("待提交资料与原请求不一致，请勿反复提交并联系客服核对", "The pending details conflict with the original request. Do not resubmit; contact support."),
     }[code] || L("无法读取更新链接", "Couldn't open this update link.");
   }
 
@@ -48,6 +57,10 @@ export default function SpotifyPasswordUpdate({ orderId }) {
       .then(({ response, data }) => {
         if (!response.ok || !data.ok) throw new Error(errorMessage(data.error));
         setDetails(data.details);
+        if (data.resolved) {
+          setCompleted(true);
+          return;
+        }
         setForm({
           account: data.details.account || "",
           password: "",
@@ -70,17 +83,43 @@ export default function SpotifyPasswordUpdate({ orderId }) {
     setSubmitting(true);
     setError("");
     try {
-      const response = await fetch(`/api/order-password-update/${encodeURIComponent(orderId)}`, {
-        method: "PATCH",
-        cache: "no-store",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+      await withCheckoutSubmissionCoordination(async () => {
+        const payload = { ...form };
+        const identity = { orderId: String(orderId || "").toUpperCase(), token };
+        const fingerprint = idempotencyFingerprint("spotify-password-update", { identity, payload });
+        let pending = updateRequestRef.current;
+        if (pending && pending.idempotencyRequest?.fingerprint !== fingerprint) {
+          throw new Error(L(
+            "上一次提交结果尚未确认，请恢复原内容后重试；如已刷新页面，请先重新打开原链接核对结果。",
+            "The previous submission is still unresolved. Restore its exact fields and retry; if you reloaded, reopen the original link to verify the result.",
+          ));
+        }
+        if (!pending) {
+          pending = createPendingIdempotencyRecord(null, "spotify-password-update", payload, { identity });
+          updateRequestRef.current = pending;
+        }
+        const operation = pending.idempotencyRequest;
+        const response = await fetch(`/api/order-password-update/${encodeURIComponent(orderId)}`, {
+          method: "PATCH",
+          cache: "no-store",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "Idempotency-Key": operation.key,
+          },
+          body: JSON.stringify(pending.payload),
+        });
+        let data = null;
+        try { data = await response.json(); } catch {}
+        if (!response.ok || !data?.ok) {
+          if (isExplicitTerminalIdempotencyResponse(response.status, data)) updateRequestRef.current = null;
+          throw new Error(errorMessage(data?.error));
+        }
+        updateRequestRef.current = null;
+        setDetails(data.details);
+        setForm((current) => ({ ...current, password: "" }));
+        setCompleted(true);
       });
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(errorMessage(data.error));
-      setDetails(data.details);
-      setForm((current) => ({ ...current, password: "" }));
-      setCompleted(true);
     } catch (requestError) {
       setError(requestError.message || errorMessage("save_failed"));
     } finally {

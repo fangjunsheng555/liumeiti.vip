@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -26,6 +26,13 @@ import {
 } from "lucide-react";
 import { copyText, useSiteSettings, usdtDiscountLabel } from "../lib/store";
 import MobileNav from "../components/MobileNav";
+import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
+import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
+import {
+  clearSinglePendingOperation,
+  prepareSinglePendingOperation,
+  readSinglePendingOperation,
+} from "../lib/single-pending-journal";
 import FloatingSupport from "../components/FloatingSupport";
 import { QQBrandIcon, TelegramBrandIcon, WhatsAppBrandIcon } from "../components/BrandIcons";
 import { useLocale } from "../components/LocaleProvider";
@@ -205,6 +212,7 @@ export default function ServiceCenterPage() {
   const [copiedKey, setCopiedKey] = useState("");
   const { locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
+  const redeemRequestRef = useRef(null);
   const support = useSiteSettings().support; // 客服联系方式以后台设置为准
   const supportChannels = [
     { label: "QQ", value: support.qq.value, copyValue: support.qq.value },
@@ -308,15 +316,31 @@ export default function ServiceCenterPage() {
     setRedeemBusy(true);
     setRedeemStatus({ type: "info", message: L("正在识别兑换码...", "Checking the code...") });
     try {
-      const infoRes = await fetch(`/api/redeem-code?code=${encodeURIComponent(code)}`, { cache: "no-store" });
-      const info = await infoRes.json();
-      if (!infoRes.ok || !info.ok || info.status !== "active") {
-        setRedeemStatus({ type: "error", message: info.message || L("兑换码不存在、已使用或已作废", "Code doesn't exist, is used, or is voided") });
-        return;
-      }
-      if (info.type === "service") {
-        window.location.href = `/checkout?redeem=${encodeURIComponent(code)}`;
-        return;
+      await withCheckoutSubmissionCoordination(async () => {
+      const storageKey = "liumeiti:idempotency:balance-redeem";
+      const accountEmail = authUser && authUser !== false ? String(authUser.email || "").trim().toLowerCase() : "";
+      const payload = { code };
+      const identity = { accountEmail };
+      const legacyPayload = { accountEmail, code };
+      let pending = readSinglePendingOperation(
+        window.localStorage,
+        storageKey,
+        "balance-redeem",
+        payload,
+        { identity, legacyPayload },
+      ).record;
+      const retryingCommittedRequest = Boolean(pending);
+      if (!retryingCommittedRequest) {
+        const infoRes = await fetch(`/api/redeem-code?code=${encodeURIComponent(code)}`, { cache: "no-store" });
+        const info = await infoRes.json();
+        if (!infoRes.ok || !info.ok || info.status !== "active") {
+          setRedeemStatus({ type: "error", message: info.message || L("兑换码不存在、已使用或已作废", "Code doesn't exist, is used, or is voided") });
+          return;
+        }
+        if (info.type === "service") {
+          window.location.href = `/checkout?redeem=${encodeURIComponent(code)}`;
+          return;
+        }
       }
       if (!authUser || authUser === false) {
         setAuthModal("login");
@@ -324,21 +348,53 @@ export default function ServiceCenterPage() {
         setRedeemStatus({ type: "error", message: L("余额兑换码需要登录账号后兑换", "Please sign in to redeem a balance code") });
         return;
       }
+      pending = prepareSinglePendingOperation(
+        window.localStorage,
+        storageKey,
+        "balance-redeem",
+        payload,
+        { identity, legacyPayload },
+      );
+      redeemRequestRef.current = pending;
+      const operation = pending.idempotencyRequest;
       const res = await fetch("/api/auth/redeem", {
         method: "POST",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": operation.key,
+          "X-Operation-Expected-Account": String(pending.identity?.accountEmail || "").trim().toLowerCase(),
+        },
+        body: JSON.stringify(pending.payload),
       });
-      const data = await res.json();
+      let data = null;
+      try { data = await res.json(); } catch {}
       if (!data.ok) {
+        if (isExplicitTerminalIdempotencyResponse(res.status, data)) {
+          redeemRequestRef.current = null;
+          clearSinglePendingOperation(window.localStorage, storageKey, operation.key);
+        }
         setRedeemStatus({ type: "error", message: data.message || L("兑换失败,请联系客服", "Redeem failed, please contact support") });
         return;
       }
+      redeemRequestRef.current = null;
+      clearSinglePendingOperation(window.localStorage, storageKey, operation.key);
       setAuthUser((cur) => cur && cur !== false ? { ...cur, balance: Number(data.balance || cur.balance || 0) } : cur);
       setRedeemInput("");
       setRedeemStatus({ type: "success", message: L(`兑换成功,余额已到账，当前余额 ¥${Number(data.balance || 0).toFixed(2)}`, `Redeemed! Balance updated — current balance ¥${Number(data.balance || 0).toFixed(2)}`) });
-    } catch {
+      });
+    } catch (error) {
+      if (String(error?.message || "").includes("pending_operation")
+        || String(error?.message || "").startsWith("checkout_")) {
+        setRedeemStatus({
+          type: "error",
+          message: L(
+            "检测到未确认结果的兑换请求，请勿更换兑换码或重复提交，请联系客服核对。",
+            "An earlier redeem request is unresolved. Do not change the code or resubmit it; contact support to verify it.",
+          ),
+        });
+        return;
+      }
       setRedeemStatus({ type: "error", message: L("兑换失败,请稍后再试", "Redeem failed, please try again") });
     } finally {
       setRedeemBusy(false);
@@ -483,14 +539,34 @@ export default function ServiceCenterPage() {
     if (!order?.afterSalesToken || resendCorrection.busy || resendCorrection.done) return;
     setResendCorrection({ busy: true, done: false, error: "" });
     try {
+      await withCheckoutSubmissionCoordination(async () => {
+      const storageKey = `lm:idempotency:spotify-resend:${order.orderId}`;
+      const payload = { orderId: order.orderId, token: order.afterSalesToken };
+      const identity = { orderId: order.orderId };
+      const pending = prepareSinglePendingOperation(
+        window.localStorage,
+        storageKey,
+        "spotify-resend",
+        payload,
+        { identity, legacyPayload: { orderId: order.orderId } },
+      );
+      const operation = pending.idempotencyRequest;
       const response = await fetch("/api/order-password-update/resend", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orderId: order.orderId, token: order.afterSalesToken }),
+        headers: { "Content-Type": "application/json", "Idempotency-Key": operation.key },
+        body: JSON.stringify(pending.payload),
       });
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.message || data.error || "resend_failed");
+      let data = null;
+      try { data = await response.json(); } catch {}
+      if (!response.ok || !data?.ok) {
+        if (isExplicitTerminalIdempotencyResponse(response.status, data)) {
+          clearSinglePendingOperation(window.localStorage, storageKey, operation.key);
+        }
+        throw new Error(data?.message || data?.error || "resend_failed");
+      }
+      clearSinglePendingOperation(window.localStorage, storageKey, operation.key);
       setResendCorrection({ busy: false, done: true, error: "" });
+      });
     } catch (error) {
       setResendCorrection({
         busy: false,
@@ -629,7 +705,7 @@ export default function ServiceCenterPage() {
         <section className="section container service-tools-section">
           <div className="service-single-column">
             <div id="order-query" className="query-pair-block order-query-section">
-              <div className="section-head simple-head">
+              <div className="section-head simple-head service-query-head">
                 <div>
                   <div className="section-kicker">{L("订单查询/申请售后", "Order lookup / after-sales")}</div>
                   <h1 className="section-title">{L("订单查询/申请售后", "Order lookup / after-sales")}</h1>
@@ -651,9 +727,10 @@ export default function ServiceCenterPage() {
               </div>
               <div className="order-query-panel">
                 <form className={`order-query-form ${queryVerification ? "is-verifying" : ""}`} onSubmit={submitQuery}>
-                  <label className="order-query-field">
+                  <label className="order-query-field" htmlFor="service-order-query-input">
                     <span>{L("完整订单号 / 下单邮箱", "Full order number / order email")}</span>
                     <input
+                      id="service-order-query-input"
                       value={queryInput}
                       onChange={(e) => {
                         setQueryInput(e.target.value);
@@ -663,6 +740,7 @@ export default function ServiceCenterPage() {
                         }
                       }}
                       placeholder={L("输入完整订单号或下单时填写的邮箱", "Enter your full order number or order email")}
+                      aria-label={L("完整订单号或下单邮箱", "Full order number or order email")}
                       autoComplete="off"
                     />
                   </label>

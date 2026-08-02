@@ -1,10 +1,15 @@
 import {
-  getCookieFromRequest, verifySession, getOrdersByEmail,
-  getUser, setUser, validUsername, generateRandomUsername, clean,
+  getCookieFromRequest, getOrdersByEmail,
+  setUser, setCookieValue, validUsername, generateRandomUsername, clean,
   generateRandomUserAvatarId, validUserAvatarId,
   publicCoupons, publicReferral, ensureUserReferralProfile, getReferralDownlineRecords,
-  signSession,
 } from "../../_utils.js";
+import {
+  authenticateUserRequest,
+  refreshedUserSessionToken,
+  signAfterSalesToken,
+  userAuthErrorResponse,
+} from "../../_auth-session.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../../lib/order-i18n.js";
 import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../../after-sales/_store.js";
 import { orderExpirySummary, renewalCheckoutPath } from "../../../lib/order-expiry.js";
@@ -120,29 +125,27 @@ async function publicReferralDownlines(email, locale = "zh") {
 }
 
 export async function GET(request) {
-  const token = getCookieFromRequest(request, "lm_user");
-  const session = verifySession(token);
-  if (!session || !session.email) {
-    return Response.json({ ok: false, error: "not_logged_in" }, { status: 401 });
-  }
+  const auth = await authenticateUserRequest(request);
+  if (!auth.ok) return userAuthErrorResponse(auth);
   const locale = getCookieFromRequest(request, "locale") === "en" ? "en" : "zh";
 
-  const sessionEmail = session.email;
-  const user = await getUser(sessionEmail);
+  const sessionEmail = auth.email;
+  const user = auth.user;
+  const profileWriteOptions = { expectedAuthVersion: auth.authVersion };
   // Backfill username for legacy accounts on the fly
   let username = user?.username;
   let avatarId = user?.avatarId;
   if (user && !username) {
     username = generateRandomUsername();
     user.username = username;
-    await setUser(sessionEmail, user);
+    await setUser(sessionEmail, user, profileWriteOptions);
   }
   if (user && !validUserAvatarId(avatarId)) {
     avatarId = generateRandomUserAvatarId();
     user.avatarId = avatarId;
-    await setUser(sessionEmail, user);
+    await setUser(sessionEmail, user, profileWriteOptions);
   }
-  const profile = user ? await ensureUserReferralProfile(sessionEmail, user) : null;
+  const profile = user ? await ensureUserReferralProfile(sessionEmail, user, profileWriteOptions) : null;
 
   const myOrderRecords = await getOrdersByEmail(sessionEmail, 100);
   const activeTickets = await getActiveAfterSalesTickets(myOrderRecords.map((order) => order.orderId));
@@ -152,19 +155,23 @@ export async function GET(request) {
     return {
       ...publicOrder(order, locale),
       afterSalesEligible: eligible,
-      afterSalesToken: eligible ? signSession({
-        type: "after-sales-order",
+      afterSalesToken: eligible ? signAfterSalesToken({
         orderId: String(order.orderId || "").replace(/\s+/g, "").toUpperCase(),
         email: String(order.email || "").toLowerCase().trim(),
-        exp: Date.now() + 24 * 60 * 60 * 1000,
       }) : "",
       afterSalesTicket: publicAfterSalesSummary(activeTicket),
     };
   });
 
+  const headers = {};
+  if (auth.legacy) {
+    const refreshed = refreshedUserSessionToken(auth);
+    if (refreshed) headers["Set-Cookie"] = setCookieValue("lm_user", refreshed);
+  }
   return Response.json({
     ok: true,
     email: sessionEmail,
+    accountLifecycleId: auth.accountLifecycleId,
     username: profile?.username || username || "",
     avatarId: validUserAvatarId(profile?.avatarId) ? profile.avatarId : avatarId,
     balance: Number(profile?.balance || 0),
@@ -173,16 +180,13 @@ export async function GET(request) {
     referralDownlines: await publicReferralDownlines(sessionEmail, locale),
     banned: !!profile?.banned,
     orders: myOrders,
-  });
+  }, { headers });
 }
 
 // PATCH /api/auth/me  body: { username?, avatarId? }
 export async function PATCH(request) {
-  const token = getCookieFromRequest(request, "lm_user");
-  const session = verifySession(token);
-  if (!session || !session.email) {
-    return Response.json({ ok: false, error: "not_logged_in" }, { status: 401 });
-  }
+  const auth = await authenticateUserRequest(request);
+  if (!auth.ok) return userAuthErrorResponse(auth);
   const en = getCookieFromRequest(request, "locale") === "en";
   let body = {};
   try { body = await request.json(); } catch (e) {}
@@ -207,11 +211,21 @@ export async function PATCH(request) {
       message: en ? "Please choose an available avatar" : "请选择可用头像",
     }, { status: 400 });
   }
-  const user = await getUser(session.email);
-  if (!user) return Response.json({ ok: false, error: "user_not_found" }, { status: 404 });
+  const user = auth.user;
   if (hasUsername) user.username = username;
   if (hasAvatar) user.avatarId = avatarId;
-  const saved = await setUser(session.email, user);
-  if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
-  return Response.json({ ok: true, username: user.username || "", avatarId: user.avatarId || "" });
+  const saved = await setUser(auth.email, user, {
+    expectedAuthVersion: auth.authVersion,
+    returnResult: true,
+  });
+  if (!saved?.ok) {
+    const stale = saved?.error === "session_state_changed";
+    return Response.json({ ok: false, error: stale ? "session_revoked" : "save_failed" }, { status: stale ? 401 : 500 });
+  }
+  const headers = {};
+  if (auth.legacy) {
+    const refreshed = refreshedUserSessionToken(auth);
+    if (refreshed) headers["Set-Cookie"] = setCookieValue("lm_user", refreshed);
+  }
+  return Response.json({ ok: true, username: user.username || "", avatarId: user.avatarId || "" }, { headers });
 }

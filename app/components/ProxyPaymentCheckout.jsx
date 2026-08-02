@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -17,6 +17,27 @@ import {
 import FloatingSupport from "./FloatingSupport";
 import { useLocale } from "./LocaleProvider";
 import { validEmail } from "../lib/store";
+import {
+  createPendingIdempotencyRecord,
+  idempotencyFingerprint,
+  isExplicitTerminalIdempotencyResponse,
+  restorePendingIdempotencyRecord,
+} from "../lib/idempotency";
+import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
+import {
+  clearSinglePendingOperation,
+  completeSinglePendingOperation,
+} from "../lib/single-pending-journal";
+
+const QUOTE_ORDER_PENDING_KEY = "liumeiti:quote-order-pending:v1";
+const QUOTE_ORDER_COMPLETED_DEDUP_MS = 10 * 60 * 1000;
+
+async function withQuoteOrderLock(callback) {
+  // Reuse the checkout origin-wide lock. It provides Web Locks when present,
+  // a verified localStorage bakery lock otherwise, and fails closed if the
+  // browser cannot safely coordinate tabs.
+  return withCheckoutSubmissionCoordination(callback);
+}
 
 function inviteCode() {
   if (typeof window === "undefined") return "";
@@ -27,17 +48,74 @@ function inviteCode() {
   }
 }
 
-export default function ProxyPaymentCheckout({ initialEmail = "", onSubmitted }) {
+function visibleQuoteForm(value) {
+  return {
+    email: String(value?.email || ""),
+    platformUrl: String(value?.platformUrl || ""),
+    productPrice: String(value?.productPrice || ""),
+    contact: String(value?.contact || ""),
+    remark: String(value?.remark || ""),
+  };
+}
+
+function sameVisibleQuoteForm(left, right) {
+  return idempotencyFingerprint("quote-order-visible-form", visibleQuoteForm(left))
+    === idempotencyFingerprint("quote-order-visible-form", visibleQuoteForm(right));
+}
+
+function validQuoteOperationIdentity(identity) {
+  if (!Object.prototype.hasOwnProperty.call(identity || {}, "accountLifecycleId")) return false;
+  const email = String(identity?.accountEmail || "").trim().toLowerCase();
+  const lifecycle = String(identity?.accountLifecycleId || "").trim().toLowerCase();
+  return email ? /^[a-f0-9]{32}$/.test(lifecycle) : lifecycle === "";
+}
+
+export default function ProxyPaymentCheckout({ initialEmail = "", accountEmail = "", accountLifecycleId = "", onSubmitted }) {
   const { locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
   const [form, setForm] = useState({ email: initialEmail, platformUrl: "", productPrice: "", contact: "", remark: "" });
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState(null);
   const [result, setResult] = useState(null);
+  const requestRef = useRef(null);
 
   useEffect(() => {
     if (initialEmail) setForm((current) => current.email ? current : { ...current, email: initialEmail });
   }, [initialEmail]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(QUOTE_ORDER_PENDING_KEY) || "null");
+      if (!stored?.payload || stored.completed) return;
+      const restored = restorePendingIdempotencyRecord(stored, "quote-order");
+      if (!restored.ok) return;
+      if (!validQuoteOperationIdentity(restored.record.identity)) {
+        setNotice({ type: "error", message: L(
+          "旧版未完成报价缺少账户生命周期绑定，不能安全自动恢复。请勿重复提交，并联系客服核对。",
+          "The unfinished legacy quote lacks an account-lifecycle binding. Do not resubmit it; contact support.",
+        ) });
+        return;
+      }
+      const originalAccount = String(restored.record.identity?.accountEmail || "").trim().toLowerCase();
+      const originalLifecycle = String(restored.record.identity?.accountLifecycleId || "").trim().toLowerCase();
+      const currentAccount = String(accountEmail || "").trim().toLowerCase();
+      const currentLifecycle = String(accountLifecycleId || "").trim().toLowerCase();
+      if (originalAccount !== currentAccount || originalLifecycle !== currentLifecycle) return;
+      requestRef.current = restored.record;
+      setForm(visibleQuoteForm(restored.record.payload));
+      setNotice((current) => current || {
+        type: "info",
+        message: L(
+          "已恢复未完成的原报价申请；提交时会沿用原请求，请勿更改后重复申请。",
+          "Your unfinished quote request was restored. It will replay the original request; do not edit it and submit again.",
+        ),
+      });
+    } catch {
+      // Submission performs the authoritative fail-closed validation. Avoid
+      // deleting or guessing at a record merely because hydration failed.
+    }
+  }, [accountEmail, accountLifecycleId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function update(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -56,35 +134,177 @@ export default function ProxyPaymentCheckout({ initialEmail = "", onSubmitted })
   async function submit(event) {
     event.preventDefault();
     if (submitting) return;
-    const error = validate();
-    if (error) {
-      setNotice({ type: "error", message: error });
-      return;
-    }
     setSubmitting(true);
     setNotice({ type: "info", message: L("正在提交申请...", "Submitting request...") });
     try {
-      const response = await fetch("/api/quote-orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, locale, inviteCode: inviteCode() }),
+      await withQuoteOrderLock(async () => {
+        const currentAccount = String(accountEmail || "").trim().toLowerCase();
+        const currentLifecycle = String(accountLifecycleId || "").trim().toLowerCase();
+        if ((currentAccount && !/^[a-f0-9]{32}$/.test(currentLifecycle)) || (!currentAccount && currentLifecycle)) {
+          throw new Error("quote_operation_identity_unavailable");
+        }
+        const currentPayload = {
+          ...form,
+          expectedAccountEmail: currentAccount,
+          expectedAccountLifecycleId: currentLifecycle,
+          locale,
+          inviteCode: inviteCode(),
+        };
+        // Storage is authoritative after acquiring the cross-tab lock. A
+        // stale in-memory ref must never overwrite a newer operation created
+        // or completed by another tab.
+        let pending = null;
+        if (typeof window !== "undefined") {
+          let stored = null;
+          try {
+            stored = JSON.parse(window.localStorage.getItem(QUOTE_ORDER_PENDING_KEY) || "null");
+          } catch {
+            throw new Error(L("检测到无法安全读取的未完成报价申请，请勿重复提交并联系客服核对。", "An unfinished quote request cannot be safely read. Do not resubmit it; contact support."));
+          }
+          if (stored?.payload) {
+            const restored = restorePendingIdempotencyRecord(stored, "quote-order");
+            if (!restored.ok) {
+              throw new Error(L("检测到无法安全恢复的未完成报价申请，请勿重复提交并联系客服核对。", "An unfinished quote request cannot be safely restored. Do not resubmit it; contact support."));
+            }
+            if (!validQuoteOperationIdentity(restored.record.identity)) {
+              throw new Error("quote_operation_lifecycle_missing");
+            }
+            pending = restored.record;
+          } else if (stored) {
+            // The old journal did not store the request body or account. Its
+            // server outcome cannot be distinguished safely after an account
+            // switch, so never guess or mint a replacement key.
+            throw new Error(L("检测到旧版未完成报价申请，请勿重复提交并联系客服核对原订单。", "A legacy quote request is still unresolved. Do not resubmit it; contact support to verify the original order."));
+          }
+        }
+        if (!pending && requestRef.current) pending = requestRef.current;
+
+        if (pending) {
+          const originalAccount = String(pending.identity?.accountEmail || "").trim().toLowerCase();
+          const originalLifecycle = String(pending.identity?.accountLifecycleId || "").trim().toLowerCase();
+          if (pending.completed) {
+            const completedAt = Date.parse(pending.completedAt || "");
+            if (!Number.isFinite(completedAt) || !pending.result?.orderId) {
+              throw new Error(L(
+                "报价申请的完成记录无法安全验证，请勿重复提交并联系客服核对。",
+                "The quote completion record cannot be safely verified. Do not resubmit it; contact support.",
+              ));
+            }
+            const currentFingerprint = idempotencyFingerprint("quote-order", {
+              identity: { accountEmail: currentAccount, accountLifecycleId: currentLifecycle },
+              payload: currentPayload,
+            });
+            if (
+              Number.isFinite(completedAt)
+              && Date.now() - completedAt >= 0
+              && Date.now() - completedAt <= QUOTE_ORDER_COMPLETED_DEDUP_MS
+              && pending.idempotencyRequest?.fingerprint === currentFingerprint
+              && pending.result?.orderId
+            ) {
+              setResult({ orderId: pending.result.orderId });
+              setNotice(null);
+              onSubmitted?.();
+              return;
+            }
+            // A confirmed terminal success may be replaced by a genuinely new
+            // request or a different account. Only unresolved operations bind
+            // the browser to their original identity.
+            requestRef.current = null;
+            pending = null;
+          } else if (originalAccount !== currentAccount) {
+            throw new Error(originalAccount
+              ? L(`请先登录 ${originalAccount} 恢复原报价申请，请勿重复提交。`, `Sign in as ${originalAccount} to recover the original quote request; do not submit it again.`)
+              : L("请先退出当前账户恢复原访客申请，请勿重复提交。", "Sign out to recover the original guest request; do not submit it again."));
+          } else if (originalLifecycle !== currentLifecycle) {
+            throw new Error(L(
+              "原账户已被删除或重新注册，未完成报价不能关联到新账户。请勿重复提交，并联系客服核对。",
+              "The original account was deleted or re-registered. The unfinished quote cannot be attached to the new account. Do not resubmit it; contact support.",
+            ));
+          } else if (!sameVisibleQuoteForm(pending.payload, form)) {
+            throw new Error(L(
+              "当前表单与未完成的原报价申请不一致。请恢复原内容后重试，或联系客服核对；系统未发送新申请。",
+              "The form differs from the unfinished original quote request. Restore the original details or contact support; no new request was sent.",
+            ));
+          }
+        }
+
+        if (!pending) {
+          const validationError = validate();
+          if (validationError) throw new Error(validationError);
+          pending = createPendingIdempotencyRecord(null, "quote-order", currentPayload, {
+            identity: { accountEmail: currentAccount, accountLifecycleId: currentLifecycle },
+          });
+          if (typeof window !== "undefined") {
+            const encoded = JSON.stringify(pending);
+            window.localStorage.setItem(QUOTE_ORDER_PENDING_KEY, encoded);
+            if (window.localStorage.getItem(QUOTE_ORDER_PENDING_KEY) !== encoded) {
+              throw new Error(L("浏览器无法安全保存报价申请，请检查存储权限后重试。", "The browser cannot safely save this quote request. Check storage permissions and try again."));
+            }
+          }
+        }
+
+        requestRef.current = pending;
+        const operation = pending.idempotencyRequest;
+        const exactPayload = pending.payload;
+        const originalAccount = String(pending.identity?.accountEmail || "").trim().toLowerCase();
+        const originalLifecycle = String(pending.identity?.accountLifecycleId || "").trim().toLowerCase();
+        const response = await fetch("/api/quote-orders", {
+          method: "POST",
+          credentials: originalAccount ? "same-origin" : "omit",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": operation.key,
+            "X-Order-Expected-Account": originalAccount || "__guest__",
+            "X-Operation-Expected-Lifecycle": originalAccount ? originalLifecycle : "__guest__",
+          },
+          body: JSON.stringify(exactPayload),
+        });
+        let data = null;
+        try { data = await response.json(); } catch {}
+        if (!response.ok || !data?.ok) {
+          if (isExplicitTerminalIdempotencyResponse(response.status, data)) {
+            requestRef.current = null;
+            if (typeof window !== "undefined") {
+              clearSinglePendingOperation(window.localStorage, QUOTE_ORDER_PENDING_KEY, operation.key);
+            }
+          }
+          const message = {
+            invalid_email: L("邮箱格式不正确", "Invalid email"),
+            missing_platform_url: L("请填写网站链接", "Website link is required"),
+            invalid_platform_url: L("网站链接格式不正确", "Invalid website link"),
+            mainland_site_not_supported: L("暂不支持中国大陆网站", "Mainland China websites are not supported"),
+            invalid_product_price: L("请填写商品标价和币种", "Enter the listed price and currency"),
+            missing_contact: L("请填写联系方式", "Contact is required"),
+            operation_identity_changed: L("登录账户已变化，请切回原账户恢复申请", "The signed-in account changed. Return to the original account to recover this request."),
+            operation_identity_auth_required: L("登录已失效，请重新登录原账户恢复申请", "Your session expired. Sign in to the original account to recover this request."),
+            operation_lifecycle_changed: L("原账户已删除或重新注册，申请不能转移到新账户，请联系客服核对", "The original account was deleted or re-registered. This request cannot move to the new account; contact support."),
+            idempotency_conflict: L("原报价申请内容冲突，请勿重复提交并联系客服", "The original quote request conflicts with the stored operation. Do not resubmit it; contact support."),
+          }[data?.error] || data?.message || data?.error || L("提交失败，原请求已保留，请勿重复提交", "Submission failed. The original request is preserved; do not submit it again.");
+          throw new Error(message);
+        }
+
+        const completed = {
+          ...pending,
+          completed: true,
+          completedAt: new Date().toISOString(),
+          result: { orderId: data.orderId },
+        };
+        requestRef.current = null;
+        if (typeof window !== "undefined") {
+          // Completion is UI dedup metadata, not permission to overwrite a
+          // different unresolved request that appeared while fetch awaited.
+          completeSinglePendingOperation(
+            window.localStorage,
+            QUOTE_ORDER_PENDING_KEY,
+            operation.key,
+            completed,
+          );
+        }
+        setResult({ orderId: data.orderId });
+        setNotice(null);
+        onSubmitted?.();
+        window.scrollTo({ top: 0, behavior: "smooth" });
       });
-      const data = await response.json();
-      if (!response.ok || !data.ok) {
-        const message = {
-          invalid_email: L("邮箱格式不正确", "Invalid email"),
-          missing_platform_url: L("请填写网站链接", "Website link is required"),
-          invalid_platform_url: L("网站链接格式不正确", "Invalid website link"),
-          mainland_site_not_supported: L("暂不支持中国大陆网站", "Mainland China websites are not supported"),
-          invalid_product_price: L("请填写商品标价和币种", "Enter the listed price and currency"),
-          missing_contact: L("请填写联系方式", "Contact is required"),
-        }[data.error] || data.message || data.error || L("提交失败，请稍后再试", "Couldn't submit. Try again shortly.");
-        throw new Error(message);
-      }
-      setResult({ orderId: data.orderId });
-      setNotice(null);
-      onSubmitted?.();
-      window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (error) {
       setNotice({ type: "error", message: error.message || L("网络错误，请稍后再试", "Network error. Try again shortly.") });
     } finally {

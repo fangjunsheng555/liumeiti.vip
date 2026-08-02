@@ -17,14 +17,23 @@ const EVENT_TTL_SECONDS = 7 * 24 * 60 * 60;
 const ACCESS_TTL_SECONDS = 90 * 24 * 60 * 60;
 const SIBLING_EVENT_WINDOW_MS = 15 * 1000;
 
+function deliveryFingerprint(record) {
+  const value = String(record?.deliveryFingerprint || "").trim().toLowerCase();
+  return /^[a-f0-9]{64}$/.test(value) ? value : "";
+}
+
 export function latestNetflixSiblingCluster(records) {
   const sorted = [...(Array.isArray(records) ? records : [])]
     .filter((entry) => Number.isFinite(Number(entry?.receivedAt)))
     .sort((left, right) => Number(right.receivedAt) - Number(left.receivedAt));
   const newestReceivedAt = Number(sorted[0]?.receivedAt || 0);
-  return newestReceivedAt
-    ? sorted.filter((entry) => newestReceivedAt - Number(entry.receivedAt) <= SIBLING_EVENT_WINDOW_MS)
-    : [];
+  if (!newestReceivedAt) return [];
+  const newestFingerprint = deliveryFingerprint(sorted[0]?.record);
+  return sorted.filter((entry, index) => index === 0 || (
+    newestFingerprint
+    && deliveryFingerprint(entry?.record) === newestFingerprint
+    && newestReceivedAt - Number(entry.receivedAt) <= SIBLING_EVENT_WINDOW_MS
+  ));
 }
 
 // A customer mailbox often delivers the same Netflix email twice: an automatic
@@ -39,7 +48,23 @@ export function latestAcceptedNetflixRecords(records, windowMs = NETFLIX_DUAL_DE
     .sort((left, right) => Number(right.receivedAt) - Number(left.receivedAt));
   const newestReceivedAt = Number(sorted[0]?.receivedAt || 0);
   if (!newestReceivedAt) return [];
+  const newest = sorted[0];
+  const newestFingerprint = deliveryFingerprint(newest?.record);
+  // The newest accepted message is authoritative by itself, even when an old
+  // legacy record has no delivery fingerprint. Older accepted copies may only
+  // participate when they prove they belong to exactly the same Netflix SRC
+  // delivery as the newest message.
+  if (newest.record?.accepted) {
+    return sorted.filter((entry, index) => entry.record?.accepted && (
+      index === 0
+      || (newestFingerprint
+        && deliveryFingerprint(entry?.record) === newestFingerprint
+        && newestReceivedAt - Number(entry.receivedAt) <= windowMs)
+    ));
+  }
+  if (!newestFingerprint) return [];
   return sorted.filter((entry) => entry.record?.accepted
+    && deliveryFingerprint(entry?.record) === newestFingerprint
     && newestReceivedAt - Number(entry.receivedAt) <= windowMs);
 }
 
@@ -198,6 +223,7 @@ export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "
     expiresAt: parsed?.expiresAt || "",
     sender: maskNetflixEmail(parsed?.sender),
     subject: clean(parsed?.subject, 240),
+    deliveryFingerprint: deliveryFingerprint(parsed),
     accountHashes,
     accountHints: accountEmails.map(maskNetflixEmail).filter(Boolean),
     accountEmailPayload,
@@ -326,6 +352,29 @@ async function recordsFromIndex(indexKey, offset, limit, prefix) {
   return rows.map((entry) => parseJson(pipelineValue(entry))).filter(Boolean);
 }
 
+async function allRecordsFromIndex(indexKey, prefix, pageSize = 200) {
+  const safePageSize = Math.max(20, Math.min(500, Number(pageSize || 200)));
+  const records = [];
+  let offset = 0;
+  // Fetch every retained index member in bounded pipelines.  Search callers
+  // filter only after this completes, so matches older than the dashboard's
+  // normal 100/200-row preview are not silently lost.
+  while (true) {
+    const ids = await redisCmd([
+      "ZREVRANGE",
+      indexKey,
+      String(offset),
+      String(offset + safePageSize - 1),
+    ]);
+    if (!Array.isArray(ids) || !ids.length) break;
+    const rows = pipelineRows(await redisPipeline(ids.map((id) => ["GET", prefix + id])));
+    records.push(...rows.map((entry) => parseJson(pipelineValue(entry))).filter(Boolean));
+    offset += ids.length;
+    if (ids.length < safePageSize) break;
+  }
+  return records;
+}
+
 // Latest mail arrival per account hash, straight from the account indexes.
 // Lets the admin panel distinguish "mail never arrived" (forwarding broken)
 // from "mail arrived but was not parsed" (visible as a mail event).
@@ -348,6 +397,14 @@ export async function listNetflixMailEvents({ offset = 0, limit = 60 } = {}) {
 
 export async function listNetflixCodeAccess({ offset = 0, limit = 100 } = {}) {
   return recordsFromIndex(ACCESS_INDEX, Math.max(0, Number(offset || 0)), Math.max(1, Math.min(200, Number(limit || 100))), ACCESS_PREFIX);
+}
+
+export async function listAllNetflixMailEvents() {
+  return allRecordsFromIndex(EVENT_INDEX, EVENT_PREFIX);
+}
+
+export async function listAllNetflixCodeAccess() {
+  return allRecordsFromIndex(ACCESS_INDEX, ACCESS_PREFIX);
 }
 
 export async function deleteNetflixMailEvents(values) {

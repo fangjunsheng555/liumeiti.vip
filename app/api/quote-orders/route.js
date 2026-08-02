@@ -8,18 +8,28 @@ import {
   formatBeijingTime,
   getCookieFromRequest,
   inviteCodeFromRequest,
-  makeId,
   normalizeInviteCode,
   pushAdminActionLog,
   rateLimitResponse,
   redisCmd,
   resolveReferralForOrder,
-  saveOrderRecord,
   sendSimpleEmail,
-  verifySession,
 } from "../_utils.js";
+import { authenticateUserRequest, userAuthErrorResponse } from "../_auth-session.js";
+import {
+  commitOrderCreationAtomic,
+  findOrderCreationByIdempotencyKey,
+  idempotencyPayloadHash,
+  orderIdForIdempotencyKey,
+  requiredIdempotencyKey,
+} from "../_money.js";
 import { getSettings } from "../_settings.js";
 import { buildProxyOrderEmail } from "./_email.js";
+import { deliverOnce } from "../_delivery-once.js";
+import {
+  isRetryableMoneyOperationFailure,
+  retryableMoneyOperationFields,
+} from "../../lib/money-operation-failure.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
@@ -55,35 +65,61 @@ async function sendTelegram(text) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) return null;
-  try {
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+  });
+  if (response.ok) return true;
+  return response.status >= 500 || response.status === 408 || response.status === 425
+    ? { ok: false, uncertain: true, error: `telegram_http_${response.status}` }
+    : { ok: false, retryable: true, error: `telegram_http_${response.status}` };
 }
 
-async function sendWebhook(order) {
+async function sendWebhook(order, idempotencyKey = "") {
   if (!process.env.ORDER_WEBHOOK_URL) return null;
-  try {
-    const response = await fetch(process.env.ORDER_WEBHOOK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(order),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
+  const response = await fetch(process.env.ORDER_WEBHOOK_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}) },
+    body: JSON.stringify(order),
+  });
+  if (response.ok) return true;
+  return response.status >= 500 || response.status === 408 || response.status === 425
+    ? { ok: false, uncertain: true, error: `webhook_http_${response.status}` }
+    : { ok: false, retryable: true, error: `webhook_http_${response.status}` };
+}
+
+async function deliverQuoteApplicationNotifications(order, knownSettings = null) {
+  const settings = knownSettings || await getSettings();
+  const locale = order.locale === "en" ? "en" : "zh";
+  const brandName = settings.brand.name || BRAND_NAME;
+  const emailContent = buildProxyOrderEmail({ kind: "application", order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale, support: settings.support });
+  const prefix = `quote-application:${order.orderId}`;
+  const attempts = await Promise.all([
+    deliverOnce(`${prefix}:telegram`, () => settings.notify.telegramEnabled ? sendTelegram(requestNotice(order)) : null)
+      .then((result) => ({ channel: "telegram", ...result })),
+    deliverOnce(`${prefix}:webhook`, (key) => sendWebhook(order, key))
+      .then((result) => ({ channel: "webhook", ...result })),
+    deliverOnce(`${prefix}:email`, () => sendSimpleEmail({
+      to: order.email,
+      ...emailContent,
+      category: "quote",
+      relatedType: "order",
+      relatedId: order.orderId,
+      idempotencyKey: prefix,
+      fromName: brandName,
+      support: settings.support,
+      locale,
+    })).then((result) => ({ channel: "email", ...result })),
+  ]);
+  return attempts.filter((item) => !item.skipped);
 }
 
 export async function POST(request) {
   let body = {};
   try { body = await request.json(); } catch {}
+  const idempotency = requiredIdempotencyKey(request);
+  if (!idempotency.ok) return Response.json({ ok: false, error: idempotency.error }, { status: 400 });
 
   const email = clean(body.email, 200).toLowerCase();
   const platform = normalizePlatformUrl(body.platformUrl);
@@ -93,6 +129,97 @@ export async function POST(request) {
   const locale = getCookieFromRequest(request, "locale") === "en" || body.locale === "en" ? "en" : "zh";
 
   if (!validEmail(email)) return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
+
+  let userEmail = null;
+  let userAuthVersion = 0;
+  let userAccountLifecycleId = "";
+  const expectedIdentityHeader = clean(request.headers.get("x-order-expected-account"), 200).toLowerCase();
+  const expectedIdentityHeaderProvided = request.headers.has("x-order-expected-account");
+  const expectedBodyProvided = Object.prototype.hasOwnProperty.call(body, "expectedAccountEmail");
+  const expectedBodyAccount = clean(body.expectedAccountEmail, 200).toLowerCase();
+  const expectedHeaderAccount = expectedIdentityHeader === "__guest__" ? "" : expectedIdentityHeader;
+  const expectedLifecycleHeaderRaw = clean(request.headers.get("x-operation-expected-lifecycle"), 80).toLowerCase();
+  const expectedLifecycleHeaderProvided = request.headers.has("x-operation-expected-lifecycle");
+  const expectedLifecycleHeader = expectedLifecycleHeaderRaw === "__guest__" ? "" : expectedLifecycleHeaderRaw;
+  const expectedBodyLifecycleProvided = Object.prototype.hasOwnProperty.call(body, "expectedAccountLifecycleId");
+  const expectedBodyLifecycle = clean(body.expectedAccountLifecycleId, 80).toLowerCase();
+  if (expectedIdentityHeaderProvided && expectedIdentityHeader !== "__guest__" && !validEmail(expectedHeaderAccount)) {
+    return Response.json({ ok: false, error: "invalid_expected_account" }, { status: 400 });
+  }
+  if (expectedBodyProvided && expectedBodyAccount && !validEmail(expectedBodyAccount)) {
+    return Response.json({ ok: false, error: "invalid_expected_account" }, { status: 400 });
+  }
+  if (expectedIdentityHeaderProvided && expectedBodyProvided && expectedHeaderAccount !== expectedBodyAccount) {
+    return Response.json({ ok: false, error: "operation_identity_mismatch" }, { status: 409 });
+  }
+  if (!expectedLifecycleHeaderProvided && !expectedBodyLifecycleProvided) {
+    return Response.json({ ok: false, error: "operation_lifecycle_required" }, { status: 400 });
+  }
+  if ((expectedLifecycleHeader && !/^[a-f0-9]{32}$/.test(expectedLifecycleHeader))
+    || (expectedBodyLifecycle && !/^[a-f0-9]{32}$/.test(expectedBodyLifecycle))) {
+    return Response.json({ ok: false, error: "invalid_expected_lifecycle" }, { status: 400 });
+  }
+  if (expectedLifecycleHeaderProvided && expectedBodyLifecycleProvided && expectedLifecycleHeader !== expectedBodyLifecycle) {
+    return Response.json({ ok: false, error: "operation_lifecycle_mismatch" }, { status: 409 });
+  }
+  const expectedIdentityProvided = expectedIdentityHeaderProvided || expectedBodyProvided;
+  const expectedAccountEmail = expectedIdentityHeaderProvided ? expectedHeaderAccount : expectedBodyAccount;
+  const expectedAccountLifecycleId = expectedLifecycleHeaderProvided ? expectedLifecycleHeader : expectedBodyLifecycle;
+  const hasUserCookie = Boolean(getCookieFromRequest(request, "lm_user"));
+  if (expectedIdentityProvided && !expectedAccountEmail && hasUserCookie) {
+    return Response.json({ ok: false, error: "guest_operation_has_session" }, { status: 409 });
+  }
+  if (expectedAccountEmail && !hasUserCookie) {
+    return Response.json({ ok: false, error: "operation_identity_auth_required" }, { status: 401 });
+  }
+  if (expectedAccountLifecycleId && !hasUserCookie) {
+    return Response.json({ ok: false, error: "operation_identity_auth_required" }, { status: 401 });
+  }
+  if (hasUserCookie) {
+    const userSession = await authenticateUserRequest(request);
+    if (!userSession.ok) return userAuthErrorResponse(userSession);
+    if (expectedIdentityProvided && userSession.email !== expectedAccountEmail) {
+      return Response.json({ ok: false, error: "operation_identity_changed" }, { status: 409 });
+    }
+    if (!expectedAccountLifecycleId) {
+      return Response.json({ ok: false, error: "operation_lifecycle_required" }, { status: 400 });
+    }
+    if (userSession.accountLifecycleId !== expectedAccountLifecycleId) {
+      return Response.json({ ok: false, error: "operation_lifecycle_changed" }, { status: 409 });
+    }
+    userEmail = userSession.email;
+    userAuthVersion = userSession.authVersion;
+    userAccountLifecycleId = userSession.accountLifecycleId;
+  } else if (expectedAccountLifecycleId) {
+    return Response.json({ ok: false, error: "guest_operation_lifecycle_invalid" }, { status: 409 });
+  }
+  const operationIdentity = userEmail || email;
+  const operationLifecycle = userEmail ? userAccountLifecycleId : "__guest__";
+  const serverOperationId = "quote-" + createHash("sha256")
+    .update(`quote-order|${operationIdentity}|${operationLifecycle}|${idempotency.key}`)
+    .digest("hex");
+  const requestHash = idempotencyPayloadHash({
+    route: "quote-order",
+    principal: { accountEmail: userEmail || "", accountLifecycleId: userAccountLifecycleId },
+    body,
+  });
+  const previousAttempt = await findOrderCreationByIdempotencyKey(serverOperationId, requestHash);
+  if (!previousAttempt.ok) {
+    return Response.json({ ok: false, error: previousAttempt.error }, {
+      status: previousAttempt.error === "idempotency_conflict" ? 409 : 503,
+    });
+  }
+  if (previousAttempt.found) {
+    const deliveries = await deliverQuoteApplicationNotifications(previousAttempt.order);
+    return Response.json({
+      ok: true,
+      orderId: previousAttempt.order.orderId,
+      status: previousAttempt.order.status,
+      deliveries,
+      idempotent: true,
+    });
+  }
+
   if (!platform.ok) return Response.json({ ok: false, error: platform.error }, { status: 400 });
   if (!productPrice || productPrice.length < 2 || !/\d/.test(productPrice)) {
     return Response.json({ ok: false, error: "invalid_product_price" }, { status: 400 });
@@ -106,8 +233,6 @@ export async function POST(request) {
   const orderGuard = await checkRateLimit(request, { namespace: "quote-order:create", identity: email, limit: 5, windowSec: 30 * 60 });
   if (!orderGuard.ok) return rateLimitResponse(orderGuard, LIMIT_MESSAGE);
 
-  const userSession = verifySession(getCookieFromRequest(request, "lm_user"));
-  const userEmail = userSession?.email || null;
   const referral = await resolveReferralForOrder({
     userEmail,
     inviteCode: normalizeInviteCode(body.inviteCode || inviteCodeFromRequest(request)),
@@ -129,7 +254,7 @@ export async function POST(request) {
   } catch {}
 
   const now = new Date();
-  const orderId = makeId("LM");
+  const orderId = orderIdForIdempotencyKey(serverOperationId);
   const item = {
     service: "proxy-pay",
     label: "全球代付 · 人工报价",
@@ -142,10 +267,12 @@ export async function POST(request) {
   };
   const order = {
     orderId,
+    revision: 1,
     orderType: "proxy_payment",
     status: "awaiting_quote",
     locale,
     userEmail,
+    accountLifecycleId: userAccountLifecycleId || null,
     referral,
     attribution,
     createdAt: now.toISOString(),
@@ -182,8 +309,31 @@ export async function POST(request) {
     currency: "CNY",
   };
 
-  const stored = await saveOrderRecord(order);
-  if (!stored) return Response.json({ ok: false, error: "storage_failed" }, { status: 500 });
+  const committed = await commitOrderCreationAtomic({
+    order,
+    paymentMethod: "quote",
+    operationId: serverOperationId,
+    requestHash,
+    userEmail,
+    expectedAuthVersion: userAuthVersion,
+    expectedAccountLifecycleId: userAccountLifecycleId,
+  });
+  if (!committed.ok) {
+    const retryableFailure = isRetryableMoneyOperationFailure(committed);
+    const conflict = ["idempotency_conflict", "order_exists", "out_of_stock", "account_lifecycle_changed"].includes(committed.error);
+    return Response.json({
+      ok: false,
+      error: committed.error || "storage_failed",
+      ...(retryableFailure ? retryableMoneyOperationFields(committed) : {}),
+    }, {
+      status: retryableFailure ? 503 : committed.error === "session_state_changed" ? 401 : committed.error === "account_banned" ? 403 : conflict ? 409 : 400,
+    });
+  }
+  Object.assign(order, committed.order || {});
+  if (committed.idempotent) {
+    const deliveries = await deliverQuoteApplicationNotifications(order);
+    return Response.json({ ok: true, orderId, status: order.status, deliveries, idempotent: true });
+  }
 
   try {
     const visitorId = createHash("sha256").update(ip + "|" + userAgent).digest("hex").slice(0, 24);
@@ -198,18 +348,7 @@ export async function POST(request) {
     detail: { email, platformUrl: platform.value, productPrice },
   });
 
-  const settings = await getSettings();
-  const brandName = settings.brand.name || BRAND_NAME;
-  const emailContent = buildProxyOrderEmail({ kind: "application", order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale, support: settings.support });
-  const deliveries = [];
-  const tasks = [
-    (settings.notify.telegramEnabled ? sendTelegram(requestNotice(order)) : Promise.resolve(null))
-      .then((ok) => { if (ok !== null) deliveries.push({ channel: "telegram", ok }); }),
-    sendWebhook(order).then((ok) => { if (ok !== null) deliveries.push({ channel: "webhook", ok }); }),
-    sendSimpleEmail({ to: email, ...emailContent, category: "quote", relatedType: "order", relatedId: order.orderId, fromName: brandName, support: settings.support, locale })
-      .then((result) => deliveries.push({ channel: "email", ok: result.ok })),
-  ];
-  await Promise.allSettled(tasks);
+  const deliveries = await deliverQuoteApplicationNotifications(order);
 
   return Response.json({ ok: true, orderId, status: order.status, deliveries });
 }

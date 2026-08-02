@@ -2,16 +2,20 @@ import { createHash } from "node:crypto";
 import {
   checkRateLimit,
   clean,
-  getCookieFromRequest,
   getOrderById,
   getUser,
   rateLimitResponse,
   redisCmd,
-  signSession,
-  verifySession,
 } from "../_utils.js";
+import {
+  authenticateUserRequest,
+  signNetflixCodeSession,
+  verifyAfterSalesToken,
+  verifyNetflixCodeSession,
+} from "../_auth-session.js";
 import { orderExpirySummary } from "../../lib/order-expiry.js";
 import { shouldAwaitAcceptedSibling } from "./_policy.js";
+import { isNetflixOrderOwner, netflixOrderIdentity } from "./_ownership.js";
 import {
   findLatestNetflixMailState,
   maskNetflixEmail,
@@ -43,13 +47,18 @@ function effectiveNetflixAccount(order) {
 }
 
 async function accessForOrder(request, order, providedToken = "") {
-  const userSession = verifySession(getCookieFromRequest(request, "lm_user"));
-  const orderEmail = normalizeEmail(order?.email);
-  if (userSession?.email && [orderEmail, normalizeEmail(order?.userEmail)].includes(normalizeEmail(userSession.email))) {
+  const userSession = await authenticateUserRequest(request);
+  const { deliveryEmail } = netflixOrderIdentity(order);
+  const orderEmail = deliveryEmail;
+  // A delivery address is not an account principal. When a signed-in buyer
+  // supplied a different receipt email, only that purchasing account owns the
+  // self-service session. Guests continue through the order-bound after-sales
+  // token below.
+  if (userSession.ok && isNetflixOrderOwner(order, userSession.email)) {
     return { ok: true, actorType: "user", email: normalizeEmail(userSession.email) };
   }
-  const claim = verifySession(clean(providedToken, 4000));
-  if (claim?.type === "after-sales-order"
+  const claim = verifyAfterSalesToken(clean(providedToken, 4000));
+  if (claim
     && normalizeOrderId(claim.orderId) === normalizeOrderId(order?.orderId)
     && normalizeEmail(claim.email) === orderEmail) {
     return { ok: true, actorType: "guest", email: orderEmail };
@@ -65,9 +74,9 @@ async function eligibility(order) {
   if (!account || !account.includes("@")) return { ok: false, error: "netflix_account_missing" };
   const expiry = orderExpirySummary(order);
   if (expiry?.expired) return { ok: false, error: "service_expired" };
-  const ownerEmails = Array.from(new Set([order.email, order.userEmail].map(normalizeEmail).filter(Boolean)));
-  const owners = await Promise.all(ownerEmails.map((email) => getUser(email)));
-  if (owners.some((user) => user?.netflixSelfServiceDisabled)) return { ok: false, error: "self_service_disabled" };
+  const { ownerEmail } = netflixOrderIdentity(order);
+  const owner = ownerEmail ? await getUser(ownerEmail) : null;
+  if (owner?.netflixSelfServiceDisabled) return { ok: false, error: "self_service_disabled" };
   return { ok: true, account };
 }
 
@@ -133,14 +142,12 @@ export async function POST(request) {
     });
     if (!guard.ok) return rateLimitResponse(guard, "请求过于频繁，请稍后再试");
     const startedAt = Date.now();
-    const sessionToken = signSession({
-      type: "netflix-code-session",
+    const sessionToken = signNetflixCodeSession({
       orderId,
       accountHash: netflixAccountHash(eligible.account),
       actorType: access.actorType,
       accessEmail: access.email,
       startedAt,
-      exp: startedAt + 15 * 60 * 1000,
     });
     return Response.json({
       ok: true,
@@ -152,8 +159,8 @@ export async function POST(request) {
     }, { headers: { "Cache-Control": "no-store" } });
   }
 
-  const claim = verifySession(clean(body.sessionToken, 4000));
-  if (!claim || claim.type !== "netflix-code-session" || !claim.orderId || !claim.accountHash) {
+  const claim = verifyNetflixCodeSession(clean(body.sessionToken, 4000));
+  if (!claim || !claim.orderId || !claim.accountHash) {
     return Response.json({ ok: false, error: "session_expired" }, { status: 401 });
   }
   const order = await getOrderById(claim.orderId);

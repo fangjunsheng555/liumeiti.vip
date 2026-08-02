@@ -19,7 +19,7 @@ function multiline(value) {
   return escapeHtml(value).replace(/\n/g, "<br>");
 }
 
-export async function sendAfterSalesEmail(ticket, kind = "received") {
+export async function sendAfterSalesEmail(ticket, kind = "received", { idempotencyKey = "" } = {}) {
   const settings = await getSettings();
   const locale = ticket?.locale === "en" ? "en" : "zh";
   const en = locale === "en";
@@ -88,5 +88,6 @@ export async function sendAfterSalesEmail(ticket, kind = "received") {
     fromName: brandName,
     support: settings.support,
     locale,
+    idempotencyKey,
   });
 }

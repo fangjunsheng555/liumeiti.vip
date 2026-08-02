@@ -1,18 +1,18 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   clean,
   validEmail,
   redisCmd,
   sendSimpleEmail,
   generateNumericCode,
-  checkRateLimit,
+  checkCriticalRateLimit,
   rateLimitResponse,
   getOrderById,
   getOrdersByEmail,
   redisConfig,
   getCookieFromRequest,
-  signSession,
 } from "../_utils.js";
+import { signAfterSalesToken } from "../_auth-session.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { buildEmailBrandHeader } from "../email-brand.js";
 import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../after-sales/_store.js";
@@ -181,13 +181,6 @@ function maskEmail(email) {
   return `${head}${"*".repeat(Math.max(2, Math.min(6, name.length - head.length - tail.length)))}${tail}@${domain}`;
 }
 
-function safeEqualCode(a, b) {
-  const left = Buffer.from(String(a || ""));
-  const right = Buffer.from(String(b || ""));
-  if (left.length !== right.length) return false;
-  try { return timingSafeEqual(left, right); } catch (error) { return false; }
-}
-
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -257,13 +250,26 @@ async function storeVerificationCode(email, query, code) {
 }
 
 async function verifyCode(email, query, code) {
-  const raw = await redisCmd(["GET", verificationKey(email, query)]);
-  if (!raw) return false;
-  let record = null;
-  try { record = JSON.parse(raw); } catch (error) { record = null; }
-  const ok = record && normalizeEmail(record.email) === normalizeEmail(email) && safeEqualCode(record.code, code);
-  if (ok) await redisCmd(["DEL", verificationKey(email, query)]);
-  return ok;
+  const script = `
+local raw=redis.call('GET',KEYS[1])
+if not raw then return 'missing' end
+local decoded,record=pcall(cjson.decode,raw)
+if not decoded or type(record)~='table' then return 'invalid' end
+if tostring(record.email or '')~=ARGV[1] or tostring(record.query or '')~=ARGV[2] or tostring(record.code or '')~=ARGV[3] then
+  return 'invalid'
+end
+redis.call('DEL',KEYS[1])
+return 'matched'`;
+  const result = await redisCmd([
+    "EVAL",
+    script,
+    "1",
+    verificationKey(email, query),
+    normalizeEmail(email),
+    clean(query, 160),
+    String(code || ""),
+  ]);
+  return result === "matched";
 }
 
 async function handle(request) {
@@ -297,9 +303,10 @@ async function handle(request) {
   }
 
   if (!code) {
-    const guard = await checkRateLimit(request, {
+    const guard = await checkCriticalRateLimit(request, {
       namespace: "order-query:send",
-      limit: 5,
+      identityLimit: 5,
+      ipLimit: 30,
       windowSec: 15 * 60,
       identity: recipient + "|" + query,
     });
@@ -322,9 +329,10 @@ async function handle(request) {
     }, { headers });
   }
 
-  const verifyGuard = await checkRateLimit(request, {
+  const verifyGuard = await checkCriticalRateLimit(request, {
     namespace: "order-query:verify",
-    limit: 10,
+    identityLimit: 10,
+    ipLimit: 80,
     windowSec: 15 * 60,
     identity: recipient + "|" + query,
   });
@@ -340,11 +348,9 @@ async function handle(request) {
     return {
       ...publicOrder(order, matchType(type), locale),
       afterSalesEligible: eligible,
-      afterSalesToken: eligible ? signSession({
-        type: "after-sales-order",
+      afterSalesToken: eligible ? signAfterSalesToken({
         orderId: normalizeOrderId(order.orderId),
         email: normalizeEmail(order.email),
-        exp: Date.now() + 24 * 60 * 60 * 1000,
       }) : "",
       afterSalesTicket: publicAfterSalesSummary(activeTicket),
     };

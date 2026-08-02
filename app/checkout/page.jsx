@@ -54,9 +54,20 @@ import {
 import FloatingSupport from "../components/FloatingSupport";
 import ProxyPaymentCheckout from "../components/ProxyPaymentCheckout";
 import { useLocale } from "../components/LocaleProvider";
+import {
+  createPendingIdempotencyRecord,
+  isExplicitTerminalIdempotencyResponse,
+} from "../lib/idempotency";
+import {
+  CHECKOUT_PENDING_LEGACY_KEY,
+  clearCheckoutPendingJournal,
+  isCheckoutJournalStorageKey,
+  readCheckoutPendingJournals,
+  withCheckoutSubmissionCoordination,
+  writeCheckoutPendingJournal,
+} from "../lib/checkout-pending-journal";
 
 const CHECKOUT_DRAFT_KEY = "liumeiti:checkout-draft:v2";
-const CHECKOUT_PENDING_KEY = "liumeiti:checkout-pending:v1";
 const CHECKOUT_DRAFT_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
 const GOOGLE_OAUTH_START = "/api/auth/oauth/google/start";
 
@@ -188,6 +199,7 @@ export default function CheckoutPage() {
   const [copiedKey, setCopiedKey] = useState(null);
   const [orderResults, setOrderResults] = useState([]);
   const [authedUser, setAuthedUser] = useState(null); // {email, balance} | null
+  const [accountReady, setAccountReady] = useState(false);
   const [authModal, setAuthModal] = useState(null); // null | "login" | "register" | "forgot" | "reset"
   const [authForm, setAuthForm] = useState({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
   const [authCaptcha, setAuthCaptcha] = useState({ token: "", image: "", loading: false, error: "" });
@@ -199,17 +211,18 @@ export default function CheckoutPage() {
   const [draftReady, setDraftReady] = useState(false);
   const [usdtRate, setUsdtRate] = useState(USDT_RATE);
   const [proxySubmitted, setProxySubmitted] = useState(false);
+  const [pendingJournalVersion, setPendingJournalVersion] = useState(0);
+  const orderRequestRef = useRef(null);
+  const pendingOrderRef = useRef(null);
+  const pendingReplayStartedRef = useRef(false);
 
   async function refreshAccountState(isCancelled = () => false) {
     try {
-      const [balanceRes, meRes] = await Promise.all([
-        fetch("/api/auth/balance", { credentials: "same-origin" }),
-        fetch("/api/auth/me", { credentials: "same-origin" }),
-      ]);
-      const balanceData = balanceRes.ok ? await balanceRes.json() : null;
+      const meRes = await fetch("/api/auth/me", { credentials: "same-origin" });
       const meData = meRes.ok ? await meRes.json() : null;
       if (isCancelled()) return { ok: false, boughtTrial: false };
-      if (balanceData && balanceData.ok) {
+      const accountData = meData?.ok && /^[a-f0-9]{32}$/.test(String(meData.accountLifecycleId || "")) ? meData : null;
+      if (accountData) {
         const orders = Array.isArray(meData?.orders) ? meData.orders : [];
         const boughtTrial = orders.some((order) =>
           order?.status !== "invalid" &&
@@ -220,13 +233,14 @@ export default function CheckoutPage() {
           )
         );
         setAuthedUser({
-          email: balanceData.email,
-          balance: Number(balanceData.balance || 0),
-          coupons: balanceData.coupons || [],
+          email: accountData.email,
+          accountLifecycleId: accountData.accountLifecycleId,
+          balance: Number(accountData.balance || 0),
+          coupons: accountData.coupons || [],
           orders,
         });
-        setForm((cur) => cur.email ? cur : { ...cur, email: balanceData.email });
-        return { ok: true, boughtTrial, email: balanceData.email };
+        setForm((cur) => cur.email ? cur : { ...cur, email: accountData.email });
+        return { ok: true, boughtTrial, email: accountData.email };
       }
       setAuthedUser(null);
       return { ok: false, boughtTrial: false };
@@ -238,7 +252,9 @@ export default function CheckoutPage() {
   // Pre-fill email + load balance for logged-in user
   useEffect(() => {
     let cancelled = false;
-    refreshAccountState(() => cancelled);
+    refreshAccountState(() => cancelled).finally(() => {
+      if (!cancelled) setAccountReady(true);
+    });
     return () => { cancelled = true; };
   }, []);
 
@@ -391,19 +407,70 @@ export default function CheckoutPage() {
         const planId = planParamFor(params, key);
         if (planId) explicitPlans[key] = planId;
       });
-      const rawPending = window.localStorage.getItem(CHECKOUT_PENDING_KEY);
+      const pendingSnapshot = readCheckoutPendingJournals(window.localStorage);
       const rawDraft = window.localStorage.getItem(CHECKOUT_DRAFT_KEY);
-      const saved = rawPending ? JSON.parse(rawPending) : rawDraft ? JSON.parse(rawDraft) : null;
-      if (saved && Date.now() - Number(saved.createdAt || 0) < CHECKOUT_DRAFT_MAX_AGE) {
+      let saved = null;
+      let isPending = false;
+      if (!pendingSnapshot.ok || pendingSnapshot.records.length > 1) {
+        // Any corrupt record, or more than one distinct unresolved operation,
+        // is ambiguous. Preserve every journal and prevent another order.
+        pendingOrderRef.current = {
+          invalid: true,
+          error: !pendingSnapshot.ok ? "checkout_journal_ambiguous" : "checkout_multiple_pending_orders",
+        };
+        setStatus({
+          type: "error",
+          message: L(
+            "检测到一个或多个无法安全自动恢复的待处理订单。请勿重复付款，并联系客服逐笔核对。",
+            "One or more unfinished orders cannot be safely auto-restored. Do not pay again; contact support to verify each one.",
+          ),
+        });
+      } else if (pendingSnapshot.records.length === 1) {
+        const entry = pendingSnapshot.records[0];
+        saved = entry.record;
+        try {
+          // Copy legacy v1 into the per-operation namespace. The legacy copy
+          // remains until this exact operation reaches a terminal response.
+          if (entry.storageKey === CHECKOUT_PENDING_LEGACY_KEY) {
+            writeCheckoutPendingJournal(window.localStorage, saved);
+          }
+        } catch {
+          pendingOrderRef.current = { invalid: true, error: "checkout_journal_migration_failed" };
+          saved = null;
+          setStatus({
+            type: "error",
+            message: L(
+              "待处理订单无法安全迁移。请勿重复付款，并联系客服核对。",
+              "The unfinished order could not be safely migrated. Do not pay again; contact support.",
+            ),
+          });
+        }
+        if (saved) {
+          isPending = true;
+          pendingOrderRef.current = saved;
+          orderRequestRef.current = saved.idempotencyRequest;
+        }
+      } else if (rawDraft) {
+        try {
+          const draft = JSON.parse(rawDraft);
+          if (draft && Date.now() - Number(draft.createdAt || 0) < CHECKOUT_DRAFT_MAX_AGE) saved = draft;
+          else window.localStorage.removeItem(CHECKOUT_DRAFT_KEY);
+        } catch (ignore) {
+          window.localStorage.removeItem(CHECKOUT_DRAFT_KEY);
+        }
+      }
+      if (saved) {
         if (saved.form && typeof saved.form === "object") {
           const savedFields = { ...((saved.form && saved.form.fields) || {}) };
-          urlKeys.forEach((key) => {
-            if (!hasProductPlans(key)) return;
-            const nextField = { ...(savedFields[key] || {}) };
-            if (explicitPlans[key]) nextField.plan = explicitPlans[key];
-            else delete nextField.plan;
-            savedFields[key] = nextField;
-          });
+          if (!isPending) {
+            urlKeys.forEach((key) => {
+              if (!hasProductPlans(key)) return;
+              const nextField = { ...(savedFields[key] || {}) };
+              if (explicitPlans[key]) nextField.plan = explicitPlans[key];
+              else delete nextField.plan;
+              savedFields[key] = nextField;
+            });
+          }
           setForm((current) => ({
             ...current,
             ...saved.form,
@@ -412,20 +479,37 @@ export default function CheckoutPage() {
         }
         // 仅恢复 alipay/usdt；'balance' 不从草稿恢复——未登录会落到无 QR 的余额付款页且 balance 为 undefined。
         // 登录后由下方余额可用逻辑自动选中余额。
-        if (["alipay", "usdt"].includes(saved.paymentMethod)) {
-          setPaymentMethod(saved.paymentMethod);
+        const savedPaymentMethod = saved.payload?.paymentMethod || saved.paymentMethod;
+        if (["alipay", "usdt", "balance", "redeem"].includes(savedPaymentMethod)) {
+          setPaymentMethod(savedPaymentMethod);
         }
-        if (!hasRedeem && !hasItems && cart.length === 0 && Array.isArray(saved.cart)) {
+        if (isPending) {
+          setPaymentQuoteToken(String(saved.payload?.paymentQuoteToken || ""));
+          setPaymentAdjustment(Number(saved.paymentQuote?.paymentAdjustment || 0));
+          setUsdtNonce(Number(saved.paymentQuote?.usdtNonce || 0));
+          setUsdtPrecision(Number(saved.paymentQuote?.usdtPrecision) === 6 ? 6 : 4);
+        }
+        if ((isPending || (!hasRedeem && !hasItems && cart.length === 0)) && Array.isArray(saved.cart)) {
           const valid = new Set(products.map((item) => item.key));
           const keys = saved.cart.filter((key) => valid.has(key));
           if (keys.length > 0) replaceCart(keys);
         }
       }
     } catch (e) {
-      try {
-        window.localStorage.removeItem(CHECKOUT_PENDING_KEY);
-        window.localStorage.removeItem(CHECKOUT_DRAFT_KEY);
-      } catch (ignore) {}
+      // Never erase a pending journal on a client exception: its server-side
+      // outcome is unknown until the exact request receives a terminal reply.
+      pendingOrderRef.current = {
+        ...(pendingOrderRef.current && typeof pendingOrderRef.current === "object"
+          ? pendingOrderRef.current
+          : {}),
+        invalid: true,
+        error: "checkout_journal_restore_failed",
+      };
+      orderRequestRef.current = null;
+      setStatus({
+        type: "error",
+        message: L("待处理订单恢复失败，请勿重复支付并联系在线客服。", "Order recovery failed. Do not pay again; contact support."),
+      });
     } finally {
       setDraftReady(true);
     }
@@ -442,6 +526,100 @@ export default function CheckoutPage() {
       }));
     } catch (e) {}
   }, [hydrated, draftReady, form, paymentMethod, cart, step]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const syncPendingJournal = (event) => {
+      if (event.storageArea && event.storageArea !== window.localStorage) return;
+      if (!isCheckoutJournalStorageKey(event.key)) return;
+      const snapshot = readCheckoutPendingJournals(window.localStorage);
+      if (!snapshot.ok || snapshot.records.length > 1) {
+        pendingOrderRef.current = {
+          invalid: true,
+          error: !snapshot.ok ? "checkout_journal_ambiguous" : "checkout_multiple_pending_orders",
+        };
+        orderRequestRef.current = null;
+        pendingReplayStartedRef.current = false;
+        setStatus({
+          type: "error",
+          message: L(
+            "其他标签页产生了无法安全自动恢复的待处理订单。请勿重复付款，并联系客服逐笔核对。",
+            "Another tab created unfinished order state that cannot be safely auto-restored. Do not pay again; contact support.",
+          ),
+        });
+        setPendingJournalVersion((version) => version + 1);
+        return;
+      }
+      if (snapshot.records.length !== 1) {
+        // A different tab may have received a terminal response. Do not erase
+        // an in-memory in-flight request based only on a removal event.
+        return;
+      }
+
+      const incoming = snapshot.records[0].record;
+      const incomingKey = incoming.idempotencyRequest.key;
+      const currentKey = pendingOrderRef.current?.idempotencyRequest?.key;
+      if (currentKey && currentKey !== incomingKey) {
+        pendingOrderRef.current = { invalid: true, error: "checkout_concurrent_pending_orders" };
+        orderRequestRef.current = null;
+        pendingReplayStartedRef.current = false;
+        setStatus({
+          type: "error",
+          message: L(
+            "检测到并发的待处理订单。请勿重复付款，并联系客服核对。",
+            "Concurrent unfinished orders were detected. Do not pay again; contact support.",
+          ),
+        });
+      } else {
+        pendingOrderRef.current = incoming;
+        orderRequestRef.current = incoming.idempotencyRequest;
+        pendingReplayStartedRef.current = false;
+      }
+      setPendingJournalVersion((version) => version + 1);
+    };
+    window.addEventListener("storage", syncPendingJournal);
+    return () => window.removeEventListener("storage", syncPendingJournal);
+  }, []);
+
+  useEffect(() => {
+    if (!draftReady || !accountReady || pendingReplayStartedRef.current) return;
+    const pending = pendingOrderRef.current;
+    if (!pending || pending.invalid) return;
+    const originalAccount = String(pending.identity?.accountEmail || "").trim().toLowerCase();
+    const originalLifecycle = String(pending.identity?.accountLifecycleId || "").trim().toLowerCase();
+    const currentAccount = String(authedUser?.email || "").trim().toLowerCase();
+    const currentLifecycle = String(authedUser?.accountLifecycleId || "").trim().toLowerCase();
+    if (originalAccount !== currentAccount) {
+      setStatus({
+        type: "error",
+        action: originalAccount ? "reauthenticate" : "logout-guest",
+        message: originalAccount
+          ? L(
+              `请先登录 ${originalAccount} 以安全恢复待处理订单，请勿重复支付。`,
+              `Sign in as ${originalAccount} to safely recover the unfinished order. Do not pay again.`,
+            )
+          : L(
+              "该待处理订单由访客提交，请先退出当前账户再恢复，请勿重复支付。",
+              "This unfinished order was submitted as a guest. Sign out before recovering it; do not pay again.",
+            ),
+      });
+      if (originalAccount) openPendingReauthentication(pending);
+      return;
+    }
+    if (originalLifecycle !== currentLifecycle) {
+      pendingReplayStartedRef.current = false;
+      setStatus({
+        type: "error",
+        message: L(
+          "该邮箱对应的原账户生命周期已结束，待处理订单不能关联到重新注册的新账户。请勿重复支付，并联系客服核对原订单。",
+          "The original account lifecycle for this email has ended. This pending order cannot be attached to a re-registered account. Do not pay again; contact support to verify it.",
+        ),
+      });
+      return;
+    }
+    pendingReplayStartedRef.current = true;
+    void replayPendingOrder(pending);
+  }, [draftReady, accountReady, authedUser?.email, authedUser?.accountLifecycleId, pendingJournalVersion]);
 
   const cartItems = cart.map((key) => products.find((p) => p.key === key)).filter(Boolean);
   const cartCount = cartItems.length;
@@ -570,6 +748,13 @@ export default function CheckoutPage() {
       if (data.ok) {
         const account = await refreshAccountState();
         setAuthModal(null);
+        // Do not depend on the authedUser effect to resume an ambiguous order:
+        // re-authenticating A as A may not change that dependency at all.
+        const pending = pendingOrderRef.current;
+        if (pending && !pending.invalid && account?.ok && pendingIdentityMatches(pending, account.email)) {
+          pendingReplayStartedRef.current = true;
+          await replayPendingOrder(pending, account.email);
+        }
       } else {
         const msg = {
           captcha_failed: L("验证码错误，请重新输入", "Wrong captcha, please try again"),
@@ -612,8 +797,205 @@ export default function CheckoutPage() {
     return "";
   }
 
+  function pendingIdentityMatches(pending, accountEmailOverride) {
+    const originalAccount = String(pending?.identity?.accountEmail || "").trim().toLowerCase();
+    const originalLifecycle = String(pending?.identity?.accountLifecycleId || "").trim().toLowerCase();
+    const currentAccount = String(
+      arguments.length > 1 ? accountEmailOverride : (authedUser?.email || ""),
+    ).trim().toLowerCase();
+    const currentLifecycle = arguments.length > 1 && !currentAccount
+      ? ""
+      : String(authedUser?.accountLifecycleId || "").trim().toLowerCase();
+    return originalAccount === currentAccount && originalLifecycle === currentLifecycle;
+  }
+
+  function openPendingReauthentication(pending = pendingOrderRef.current) {
+    const originalAccount = String(pending?.identity?.accountEmail || "").trim().toLowerCase();
+    if (!originalAccount) return;
+    pendingReplayStartedRef.current = false;
+    setAuthedUser(null);
+    setAuthError("");
+    setAuthNotice("");
+    setAuthForm((current) => ({ ...current, email: originalAccount, password: "" }));
+    setAuthModal("login");
+  }
+
+  async function signOutAndRecoverGuestOrder() {
+    const pending = pendingOrderRef.current;
+    if (!pending || pending.invalid || String(pending.identity?.accountEmail || "").trim()) return;
+    setStatus({ type: "info", message: L("正在退出当前账户并安全恢复访客订单...", "Signing out and safely recovering the guest order...") });
+    try {
+      // Do not pretend to be a guest while the authenticated cookie may still
+      // be valid. A store outage deliberately keeps that cookie so the user
+      // can retry durable all-device revocation.
+      const response = await fetch("/api/auth/login", { method: "DELETE", credentials: "same-origin" });
+      let data = null;
+      try { data = await response.json(); } catch {}
+      if (!response.ok || !data?.ok || typeof data.revoked !== "boolean") {
+        throw new Error("logout_not_confirmed");
+      }
+      setAuthedUser(null);
+      setAccountReady(true);
+      pendingReplayStartedRef.current = true;
+      await replayPendingOrder(pending, "");
+    } catch {
+      pendingReplayStartedRef.current = false;
+      setStatus({
+        type: "error",
+        action: "logout-guest",
+        message: L(
+          "退出登录失败，访客订单请求仍已保留。请勿重复支付，网络恢复后重试。",
+          "Sign-out failed. The guest order is still preserved; do not pay again. Retry when the network recovers.",
+        ),
+      });
+    }
+  }
+
+  function clearPendingJournal(operationKey) {
+    if (typeof window !== "undefined") {
+      try {
+        clearCheckoutPendingJournal(window.localStorage, operationKey);
+      } catch (ignore) {
+        // A corrupt journal remains fail-closed; never erase an operation we
+        // cannot prove is the one that just reached a terminal response.
+      }
+    }
+    if (operationKey && pendingOrderRef.current?.idempotencyRequest?.key === operationKey) {
+      pendingOrderRef.current = null;
+    }
+    if (operationKey && orderRequestRef.current?.key === operationKey) orderRequestRef.current = null;
+  }
+
+  function finishOrderSubmission(data, payload, operationKey) {
+    setOrderResults([{
+      orderId: data.orderId,
+      items: data.items || [],
+      paidAmount: data.paidAmount,
+      paidCurrency: data.paidCurrency,
+      paymentMethod: data.paymentMethod || (payload.paymentMethod === "redeem" ? "redeem" : payload.paymentMethod),
+    }]);
+    setStep("done");
+    setStatus({ type: "success", message: L("订单已成功提交", "Order submitted successfully") });
+    clearPendingJournal(operationKey);
+    clearCart();
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(CHECKOUT_DRAFT_KEY);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
+
+  async function dispatchExactOrder(pending) {
+    const payload = pending.payload;
+    const operation = pending.idempotencyRequest;
+    const originalAccount = String(pending.identity?.accountEmail || "").trim();
+    const originalLifecycle = String(pending.identity?.accountLifecycleId || "").trim();
+    const response = await fetch("/api/order", {
+      method: "POST",
+      // Guest recovery deliberately omits any session cookie acquired after
+      // the first attempt so the server derives the same operation identity.
+      credentials: originalAccount ? "same-origin" : "omit",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": operation.key,
+        // This also binds pre-upgrade journals whose exact persisted body did
+        // not yet contain expectedAccountEmail.
+        "X-Order-Expected-Account": originalAccount.toLowerCase() || "__guest__",
+        "X-Operation-Expected-Lifecycle": originalAccount ? originalLifecycle : "__guest__",
+      },
+      body: JSON.stringify(payload),
+    });
+    let data = null;
+    try { data = await response.json(); } catch (ignore) {}
+    if (data?.ok) {
+      finishOrderSubmission(data, payload, operation.key);
+      return data;
+    }
+    if (isExplicitTerminalIdempotencyResponse(response.status, data)) {
+      clearPendingJournal(operation.key);
+      if (data?.error === "payment_quote_required") {
+        setPaymentQuoteToken("");
+        setPaymentAdjustment(0);
+        setUsdtNonce(0);
+        setStep("form");
+      }
+    }
+    const requestMessage = data?.error === "operation_lifecycle_changed"
+      ? L(
+          "原账户已被删除或重新注册，待处理订单不能转移到新账户。请勿重复支付，并联系客服核对。",
+          "The original account was deleted or re-registered. The pending order cannot move to the new account. Do not pay again; contact support.",
+        )
+      : data?.message || data?.error || `submit_failed_${response.status || "network"}`;
+    const requestError = new Error(requestMessage);
+    requestError.terminal = isExplicitTerminalIdempotencyResponse(response.status, data);
+    requestError.status = response.status;
+    requestError.code = data?.error || "";
+    throw requestError;
+  }
+
+  async function replayPendingOrder(pending, accountEmailOverride) {
+    if (!pending || pending.invalid || submitting) return;
+    if (!pendingIdentityMatches(
+      pending,
+      arguments.length > 1 ? accountEmailOverride : (authedUser?.email || ""),
+    )) return;
+    setSubmitting(true);
+    setStatus({ type: "info", message: L("正在安全恢复待处理订单...", "Safely recovering your unfinished order...") });
+    try {
+      // Startup recovery, re-auth recovery, and manual retry all use the same
+      // origin-wide admission gate as a new checkout. The server key is still
+      // authoritative, but avoiding parallel client replays also prevents
+      // competing tabs from racing journal cleanup and UI recovery state.
+      await withCheckoutSubmissionCoordination(() => dispatchExactOrder(pending));
+    } catch (error) {
+      const retained = !error.terminal;
+      const mustReauthenticate = error.status === 401 || error.code === "operation_identity_changed" || error.code === "operation_identity_auth_required";
+      const mustSignOutForGuest = error.code === "guest_operation_has_session";
+      if (mustReauthenticate) pendingReplayStartedRef.current = false;
+      if (mustReauthenticate) openPendingReauthentication(pending);
+      setStatus({
+        type: "error",
+        action: mustReauthenticate ? "reauthenticate" : mustSignOutForGuest ? "logout-guest" : "",
+        message: mustReauthenticate
+          ? L(
+              `登录状态已变化。请重新登录 ${pending.identity?.accountEmail || "原账户"} 后原样恢复订单，请勿重复支付。`,
+              `Your session changed. Sign in again as ${pending.identity?.accountEmail || "the original account"} to replay the original order; do not pay again.`,
+            )
+          : mustSignOutForGuest
+          ? L(
+              "该待处理订单最初由访客提交。请先退出当前账户，再原样恢复；请勿重复支付。",
+              "This unfinished order was submitted as a guest. Sign out to replay it exactly; do not pay again.",
+            )
+          : retained
+          ? L(
+              `${error.message || "订单恢复暂时失败"}，原订单请求已保留，请勿重复支付，可稍后重试或联系在线客服。`,
+              `${error.message || "Order recovery is temporarily unavailable"}. The original request is preserved; do not pay again. Retry later or contact support.`,
+            )
+          : L(
+              `${error.message || "原订单请求已被服务器拒绝"}，请重新确认订单信息。`,
+              `${error.message || "The original request was rejected by the server"}. Review the order details before trying again.`,
+            ),
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   async function goPay(event) {
     event.preventDefault();
+    const pending = pendingOrderRef.current;
+    if (pending) {
+      if (pending.invalid) {
+        setStatus({
+          type: "error",
+          message: L("待处理订单无法安全恢复，请勿重复支付并联系在线客服。", "The unfinished order can't be safely restored. Do not pay again; contact support."),
+        });
+        return;
+      }
+      if (!pendingIdentityMatches(pending)) return;
+      pendingReplayStartedRef.current = true;
+      await replayPendingOrder(pending);
+      return;
+    }
     const error = validateForm();
     if (error) {
       setStatus({ type: "error", message: error });
@@ -658,7 +1040,22 @@ export default function CheckoutPage() {
   }
 
   async function submitOrders() {
-    if (submitting || cartCount === 0) return;
+    if (submitting) return;
+    const unresolved = pendingOrderRef.current;
+    if (unresolved) {
+      if (unresolved.invalid) {
+        setStatus({
+          type: "error",
+          message: L("待处理订单无法安全恢复，请勿重复支付并联系在线客服。", "The unfinished order can't be safely restored. Do not pay again; contact support."),
+        });
+        return;
+      }
+      if (!pendingIdentityMatches(unresolved)) return;
+      pendingReplayStartedRef.current = true;
+      await replayPendingOrder(unresolved);
+      return;
+    }
+    if (cartCount === 0) return;
     const error = validateForm();
     if (error) {
       setStatus({ type: "error", message: error });
@@ -691,53 +1088,113 @@ export default function CheckoutPage() {
     });
 
     try {
-      const payload = {
-        email: form.email.trim(),
-        contact: form.contact.trim(),
-        remark: form.remark.trim(),
-        paymentMethod,
-        paymentQuoteToken: (paymentMethod === "alipay" || paymentMethod === "usdt") ? paymentQuoteToken : "",
-        redeemCode: serviceRedeemActive ? redeemMode.code : "",
-        inviteCode: storedInviteCode(),
-        items,
-      };
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(CHECKOUT_PENDING_KEY, JSON.stringify({
-          createdAt: Date.now(),
-          form,
-          paymentMethod,
-          cart,
-          payload,
-        }));
-      }
-      const response = await fetch("/api/order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await response.json();
-      if (!data.ok) {
-        const errorMessage = data.message || data.error || "submit_failed";
-        throw new Error(errorMessage);
-      }
+      await withCheckoutSubmissionCoordination(async () => {
+        // Re-read after acquiring origin-wide ownership. A journal may have
+        // appeared after this tab rendered but before the user clicked.
+        const snapshot = readCheckoutPendingJournals(window.localStorage);
+        if (!snapshot.ok || snapshot.records.length > 1) {
+          pendingOrderRef.current = {
+            invalid: true,
+            error: !snapshot.ok ? "checkout_journal_ambiguous" : "checkout_multiple_pending_orders",
+          };
+          throw new Error("checkout_journal_ambiguous");
+        }
+        if (snapshot.records.length === 1) {
+          const existing = snapshot.records[0].record;
+          pendingOrderRef.current = existing;
+          orderRequestRef.current = existing.idempotencyRequest;
+          if (!pendingIdentityMatches(existing)) {
+            const originalAccount = String(existing.identity?.accountEmail || "").trim();
+            const identityError = new Error(originalAccount ? "operation_identity_changed" : "guest_operation_has_session");
+            identityError.code = identityError.message;
+            identityError.status = 409;
+            throw identityError;
+          }
+          await dispatchExactOrder(existing);
+          return;
+        }
 
-      setOrderResults([{
-        orderId: data.orderId,
-        items: data.items || [],
-        paidAmount: data.paidAmount,
-        paidCurrency: data.paidCurrency,
-        paymentMethod: data.paymentMethod || (serviceRedeemActive ? "redeem" : paymentMethod),
-      }]);
-      setStep("done");
-      setStatus({ type: "success", message: L("订单已成功提交", "Order submitted successfully") });
-      clearCart();
-      if (typeof window !== "undefined") {
-        window.localStorage.removeItem(CHECKOUT_PENDING_KEY);
-        window.localStorage.removeItem(CHECKOUT_DRAFT_KEY);
-      }
-      if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+        const payload = {
+          email: form.email.trim(),
+          contact: form.contact.trim(),
+          remark: form.remark.trim(),
+          // The server verifies this persisted identity against the cookie on
+          // every exact replay. This closes a cross-tab account-switch race that
+          // client-side state alone cannot reliably detect.
+          expectedAccountEmail: authedUser?.email || "",
+          expectedAccountLifecycleId: authedUser?.accountLifecycleId || "",
+          paymentMethod,
+          paymentQuoteToken: (paymentMethod === "alipay" || paymentMethod === "usdt") ? paymentQuoteToken : "",
+          redeemCode: serviceRedeemActive ? redeemMode.code : "",
+          inviteCode: storedInviteCode(),
+          items,
+        };
+        const operationAccountEmail = payload.expectedAccountEmail;
+        const pending = createPendingIdempotencyRecord(
+          orderRequestRef.current,
+          "checkout-order",
+          payload,
+          {
+            identity: {
+              accountEmail: operationAccountEmail,
+              accountLifecycleId: payload.expectedAccountLifecycleId,
+            },
+            metadata: {
+              form,
+              paymentMethod,
+              cart,
+              paymentQuote: { paymentAdjustment, usdtNonce, usdtPrecision },
+            },
+          },
+        );
+        const persisted = writeCheckoutPendingJournal(window.localStorage, pending);
+        const operation = persisted.record.idempotencyRequest;
+        orderRequestRef.current = operation;
+        pendingOrderRef.current = persisted.record;
+        await dispatchExactOrder(persisted.record);
+      });
     } catch (error) {
-      setStatus({ type: "error", message: L(`${error.message || "订单提交失败"}，已保留填写内容，可稍后重试或联系在线客服处理`, `${error.message || "Order submission failed"}. Your details are saved — retry later or contact support.`) });
+      const retained = !error.terminal;
+      const mustReauthenticate = error.status === 401 || error.code === "operation_identity_changed" || error.code === "operation_identity_auth_required";
+      const mustSignOutForGuest = error.code === "guest_operation_has_session";
+      const journalBlocked = String(error.message || "").startsWith("checkout_");
+      if (journalBlocked && !pendingOrderRef.current) {
+        pendingOrderRef.current = { invalid: true, error: error.message };
+        orderRequestRef.current = null;
+        pendingReplayStartedRef.current = false;
+      }
+      if (mustReauthenticate) {
+        pendingReplayStartedRef.current = false;
+        openPendingReauthentication(pendingOrderRef.current);
+      }
+      setStatus({
+        type: "error",
+        action: mustReauthenticate ? "reauthenticate" : mustSignOutForGuest ? "logout-guest" : "",
+        message: journalBlocked
+          ? L(
+              "检测到其他标签页的待处理订单，或当前浏览器无法安全协调多标签提交。未发送新的订单请求；请勿重复付款，并在原标签页重试或联系客服。",
+              "Another tab has an unfinished order, or this browser cannot safely coordinate checkout tabs. No new order was sent; do not pay again. Retry in the original tab or contact support.",
+            )
+          : mustReauthenticate
+          ? L(
+              `登录状态已变化。请重新登录 ${pendingOrderRef.current?.identity?.accountEmail || "原账户"} 后原样恢复订单，请勿重复支付。`,
+              `Your session changed. Sign in again as ${pendingOrderRef.current?.identity?.accountEmail || "the original account"} to replay the original order; do not pay again.`,
+            )
+          : mustSignOutForGuest
+          ? L(
+              "该待处理订单最初由访客提交。请先退出当前账户，再原样恢复；请勿重复支付。",
+              "This unfinished order was submitted as a guest. Sign out to replay it exactly; do not pay again.",
+            )
+          : retained
+          ? L(
+              `${error.message || "订单提交失败"}，原请求已完整保留，请勿重复支付，可稍后原样重试或联系在线客服。`,
+              `${error.message || "Order submission failed"}. The exact request is preserved; do not pay again. Retry later or contact support.`,
+            )
+          : L(
+              `${error.message || "订单请求已被服务器拒绝"}，请重新确认订单信息。`,
+              `${error.message || "The order request was rejected by the server"}. Review the details before trying again.`,
+            ),
+      });
     } finally {
       setSubmitting(false);
     }
@@ -766,15 +1223,16 @@ export default function CheckoutPage() {
     );
   }
 
-  if (checkoutReady && (proxyQuoteCart || proxySubmitted)) {
+  if (checkoutReady && !pendingOrderRef.current && (proxyQuoteCart || proxySubmitted)) {
     return (
       <ProxyPaymentCheckout
         initialEmail={form.email || authedUser?.email || ""}
+        accountEmail={authedUser?.email || ""}
+        accountLifecycleId={authedUser?.accountLifecycleId || ""}
         onSubmitted={() => {
           setProxySubmitted(true);
           clearCart();
           try {
-            window.localStorage.removeItem(CHECKOUT_PENDING_KEY);
             window.localStorage.removeItem(CHECKOUT_DRAFT_KEY);
           } catch {}
         }}
@@ -839,7 +1297,19 @@ export default function CheckoutPage() {
         </div>
 
         {status && (
-          <div className={`checkout-alert ${status.type}`}>{status.message}</div>
+          <div className={`checkout-alert ${status.type}`} role={status.type === "error" ? "alert" : "status"}>
+            <span>{status.message}</span>
+            {status.action === "reauthenticate" && (
+              <button type="button" className="checkout-alert-action" onClick={() => openPendingReauthentication()}>
+                {L("重新登录原账户", "Sign in as the original account")}
+              </button>
+            )}
+            {status.action === "logout-guest" && (
+              <button type="button" className="checkout-alert-action" onClick={signOutAndRecoverGuestOrder}>
+                {L("退出并恢复访客订单", "Sign out and recover guest order")}
+              </button>
+            )}
+          </div>
         )}
 
         {serviceRedeemActive && (

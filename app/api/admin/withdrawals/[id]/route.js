@@ -5,6 +5,12 @@ import {
 import { buildEmailBrandHeader } from "../../../email-brand.js";
 import { getSettings } from "../../../_settings.js";
 import { supportHtml, supportText } from "../../../../lib/settings-defaults.js";
+import {
+  isRetryableMoneyOperationFailure,
+  retryableMoneyOperationFields,
+} from "../../../../lib/money-operation-failure.js";
+import { deliverOnce } from "../../../_delivery-once.js";
+import { requiredIdempotencyKey } from "../../../_money.js";
 
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
 
@@ -50,6 +56,7 @@ async function sendWithdrawalResultEmail(withdrawal) {
       category: "withdrawal",
       relatedType: "withdrawal",
       relatedId: withdrawal.id,
+      idempotencyKey: `withdrawal-result:${withdrawal.id}:${withdrawal.revision || withdrawal.status}`,
       subject: `${okStatus ? "✅" : "⚠️"} ${title} · ¥${amount} · ${brandName}`,
       text, html, fromName: brandName, support: settings.support, locale: "zh",
     });
@@ -69,24 +76,42 @@ export async function PATCH(request, { params }) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   if (!adminPermissionProfile(session).canReviewWithdrawals) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
+  const idempotency = requiredIdempotencyKey(request);
+  if (!idempotency.ok) return Response.json({ ok: false, error: idempotency.error }, { status: 400 });
   const { id } = await params;
   let body = {};
   try { body = await request.json(); } catch (e) {}
 
   // 记录变更前状态:只在「真正变为 成功/失败」时给用户发结果邮件(重复保存不重发)。
-  const before = await getWithdrawalDetail(id);
-  const oldStatus = before?.withdrawal?.status || "pending";
-
-  const result = await updateWithdrawalStatus(id, body.status, body.reviewNote, adminActorFromSession(session));
+  const result = await updateWithdrawalStatus(id, body.status, body.reviewNote, adminActorFromSession(session), {
+    operationId: idempotency.key,
+    expectedRevision: body.expectedRevision,
+  });
   if (!result.ok) {
     const code = clean(result.error, 80);
-    return Response.json({ ok: false, error: code }, { status: 400 });
+    const retryableFailure = isRetryableMoneyOperationFailure(result);
+    const status = retryableFailure
+      ? 503
+      : (code === "stale_revision" || code === "invalid_transition" || code === "idempotency_conflict" || code === "withdrawal_archived"
+        || code === "account_lifecycle_changed" || code === "account_lifecycle_required")
+      ? 409
+      : 400;
+    return Response.json({
+      ok: false,
+      error: code || "storage_unavailable",
+      currentRevision: result.currentRevision,
+      manualReview: result.manualReview === true,
+      ...(retryableFailure ? retryableMoneyOperationFields(result) : {}),
+    }, { status });
   }
 
   let notice = null;
   const newStatus = result.withdrawal?.status;
-  if ((newStatus === "success" || newStatus === "failed") && newStatus !== oldStatus) {
-    notice = await sendWithdrawalResultEmail(result.withdrawal);
+  if (result.changed && (newStatus === "success" || newStatus === "failed")) {
+    notice = await deliverOnce(
+      `withdrawal-result:${result.withdrawal.id}:${result.withdrawal.revision || newStatus}:email`,
+      () => sendWithdrawalResultEmail(result.withdrawal),
+    );
   }
 
   const detail = await getWithdrawalDetail(id);

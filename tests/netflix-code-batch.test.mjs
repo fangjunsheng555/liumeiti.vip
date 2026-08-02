@@ -14,12 +14,12 @@ test("record selection supports individual and current-list toggles", () => {
   assert.deepEqual(toggleVisibleRecordSelection(["OLD", "A", "B"], ["A", "B"]), ["OLD"]);
 });
 
-test("selected compact mail rows delete every underlying delivery copy", () => {
+test("selected mail rows delete only their visible event ids", () => {
   const events = [
     { eventId: "DISPLAY-A", eventIds: ["MAIL-A1", "MAIL-A2"] },
     { eventId: "DISPLAY-B", eventIds: ["MAIL-B"] },
   ];
-  assert.deepEqual(selectedMailDeletionIds(events, ["DISPLAY-A"]), ["MAIL-A1", "MAIL-A2"]);
+  assert.deepEqual(selectedMailDeletionIds(events, ["DISPLAY-A"]), ["DISPLAY-A"]);
 });
 
 test("large batch deletion is split to the existing API limit", () => {

@@ -23,13 +23,20 @@ test("marketing and scheduled mail never use the transactional SMTP fallback", (
   assert.equal(shouldFallbackToBackupSmtp({ category: "order", scheduledAt: "2026-07-15T10:30:00Z" }, quotaError), false);
 });
 
-test("provider and transport failures use the transactional fallback", () => {
+test("only explicit primary-provider rejections use the transactional fallback", () => {
   assert.equal(shouldFallbackToBackupSmtp({ to: "buyer@example.com", category: "order" }, { ok: false, code: 401 }), true);
-  assert.equal(shouldFallbackToBackupSmtp({ to: "buyer@example.com", category: "order" }, { ok: false, code: 500 }), true);
   assert.equal(shouldFallbackToBackupSmtp({ to: "buyer@example.com", category: "order" }, { ok: false, code: 400, error: "Domain is not verified" }), true);
-  assert.equal(shouldFallbackToBackupSmtp({ to: "buyer@example.com", category: "order" }, { ok: false, code: "TypeError", error: "fetch failed" }), true);
-  assert.equal(shouldFallbackToBackupSmtp({ to: "buyer@example.com", category: "order" }, { ok: false, code: "AbortError", error: "This operation was aborted" }), true);
   assert.equal(shouldFallbackToBackupSmtp({ to: "buyer@example.com", category: "order" }, { ok: false, reason: "resend_api_key_missing" }), true);
+});
+
+test("ambiguous provider results never switch transport", () => {
+  for (const result of [
+    { ok: false, code: 500, uncertain: true },
+    { ok: false, code: "TypeError", error: "fetch failed", uncertain: true },
+    { ok: false, code: "AbortError", error: "This operation was aborted", uncertain: true },
+  ]) {
+    assert.equal(shouldFallbackToBackupSmtp({ to: "buyer@example.com", category: "order" }, result), false);
+  }
 });
 
 test("recipient and content validation failures do not use another provider", () => {

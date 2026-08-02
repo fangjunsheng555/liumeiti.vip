@@ -1,14 +1,21 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   checkRateLimit,
   clean,
   formatBeijingTime,
-  getOrderById,
   getOrderEntryById,
+  pushAdminActionLog,
   rateLimitResponse,
+  redisCmd,
   setOrderAt,
   validEmail,
 } from "../../_utils.js";
+import { appendOrderTimelineOnce } from "../../_order-timeline.js";
+import { deliverOnce } from "../../_delivery-once.js";
+import { idempotencyPayloadHash, requiredIdempotencyKey } from "../../_money.js";
+import { claimDurableOperation, completeDurableOperation } from "../../_durable-operation.js";
+
+const RELEASE_ORDER_LOCK_SCRIPT = "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end";
 
 function bearerToken(request) {
   const value = request.headers.get("authorization") || "";
@@ -30,14 +37,23 @@ async function findTarget(orderId, token) {
   const entry = await getOrderEntryById(normalizedId);
   if (!entry) return { error: "order_not_found" };
   if (entry.order.status === "invalid") return { error: "order_invalid" };
-  const itemIndex = (entry.order.items || []).findIndex((item) => (
+  let itemIndex = (entry.order.items || []).findIndex((item) => (
     item?.service === "spotify" && tokenMatches(token, item.passwordCorrectionTokenHash)
   ));
+  let resolved = false;
+  if (itemIndex < 0) {
+    itemIndex = (entry.order.items || []).findIndex((item) => (
+      item?.service === "spotify" && tokenMatches(token, item.passwordCorrectionResolvedTokenHash)
+    ));
+    resolved = itemIndex >= 0;
+  }
   if (itemIndex < 0) return { error: "invalid_update_link" };
   const item = entry.order.items[itemIndex];
-  const expiresAt = new Date(item.passwordCorrectionExpiresAt || 0).getTime();
+  const expiresAt = new Date(resolved
+    ? item.passwordCorrectionResolvedTokenExpiresAt || item.passwordCorrectionResolvedAt || 0
+    : item.passwordCorrectionExpiresAt || 0).getTime();
   if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) return { error: "update_link_expired" };
-  return { entry, item, itemIndex };
+  return { entry, item, itemIndex, resolved };
 }
 
 function publicDetails(order, item, itemIndex) {
@@ -101,7 +117,11 @@ export async function GET(request, { params }) {
     const status = target.error === "order_not_found" ? 404 : target.error === "order_invalid" ? 409 : 401;
     return Response.json({ ok: false, error: target.error }, { status });
   }
-  return Response.json({ ok: true, details: publicDetails(target.entry.order, target.item, target.itemIndex) });
+  return Response.json({
+    ok: true,
+    resolved: Boolean(target.resolved),
+    details: publicDetails(target.entry.order, target.item, target.itemIndex),
+  });
 }
 
 export async function PATCH(request, { params }) {
@@ -111,13 +131,9 @@ export async function PATCH(request, { params }) {
     windowSec: 10 * 60,
   });
   if (!guard.ok) return rateLimitResponse(guard, "提交过于频繁，请稍后再试");
-  const { orderId } = await params;
-  const target = await findTarget(orderId, bearerToken(request));
-  if (target.error) {
-    const status = target.error === "order_not_found" ? 404 : target.error === "order_invalid" ? 409 : 401;
-    return Response.json({ ok: false, error: target.error }, { status });
-  }
-
+  const { orderId: rawOrderId } = await params;
+  const orderId = clean(rawOrderId, 80).replace(/\s+/g, "").toUpperCase();
+  const token = bearerToken(request);
   let body = {};
   try { body = await request.json(); } catch {}
   const account = clean(body.account, 80);
@@ -129,53 +145,106 @@ export async function PATCH(request, { params }) {
   if (!password) return Response.json({ ok: false, error: "password_required" }, { status: 400 });
   if (!validEmail(email)) return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
   if (!contact) return Response.json({ ok: false, error: "contact_required" }, { status: 400 });
+  const idempotency = requiredIdempotencyKey(request);
+  if (!idempotency.ok) return Response.json({ ok: false, error: idempotency.error }, { status: 400 });
+  const requestHash = idempotencyPayloadHash({ orderId, account, password, email, contact, remark });
+  const lockKey = `lm:order:update-lock:${orderId}`;
+  const lockToken = randomBytes(18).toString("hex");
+  const locked = await redisCmd(["SET", lockKey, lockToken, "NX", "EX", "120"]);
+  if (locked !== "OK") return Response.json({ ok: false, error: "order_update_busy" }, { status: 409 });
 
-  const { entry, item, itemIndex } = target;
-  const now = new Date();
-  item.account = account;
-  item.password = password;
-  item.staffAccount = "";
-  item.staffPassword = "";
-  item.customerPasswordUpdatedAt = now.toISOString();
-  item.customerPasswordUpdatedAtBeijing = formatBeijingTime(now);
-  item.customerPasswordUpdateCount = Number(item.customerPasswordUpdateCount || 0) + 1;
-  item.passwordCorrectionResolvedAt = now.toISOString();
-  item.passwordCorrectionResolvedAtBeijing = formatBeijingTime(now);
-  entry.order.email = email;
-  entry.order.contact = contact;
-  entry.order.remark = remark;
-  entry.order.customerDetailsUpdatedAt = now.toISOString();
-  entry.order.customerDetailsUpdatedAtBeijing = formatBeijingTime(now);
-
-  const saved = await setOrderAt(entry.index, entry.order);
-  if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
-  let persistedOrder = await getOrderById(entry.order.orderId);
-  let persistedItem = persistedOrder?.items?.[itemIndex];
-  const detailsPersisted = () => Boolean(
-    persistedOrder
-    && persistedItem
-    && persistedItem.account === account
-    && persistedItem.password === password
-    && !persistedItem.staffAccount
-    && !persistedItem.staffPassword
-    && persistedOrder.email === email
-    && persistedOrder.contact === contact
-    && persistedOrder.remark === remark
-  );
-  if (!detailsPersisted()) {
-    const retried = await setOrderAt(entry.index, entry.order);
-    if (retried) {
-      persistedOrder = await getOrderById(entry.order.orderId);
-      persistedItem = persistedOrder?.items?.[itemIndex];
+  try {
+    const target = await findTarget(orderId, token);
+    if (target.error) {
+      const status = target.error === "order_not_found" ? 404 : target.error === "order_invalid" ? 409 : 401;
+      return Response.json({ ok: false, error: target.error }, { status });
     }
+    const operation = await claimDurableOperation({
+      scope: "spotify-password-update",
+      principal: `${orderId}:${createHash("sha256").update(token).digest("hex")}`,
+      idempotencyKey: idempotency.key,
+      requestHash,
+    });
+    if (!operation.ok) {
+      return Response.json({ ok: false, error: operation.error }, {
+        status: operation.error === "idempotency_conflict" ? 409 : 503,
+      });
+    }
+    if (operation.state === "done") {
+      return Response.json({ ...(operation.record.result || { ok: true }), idempotent: true });
+    }
+
+    const { entry, item, itemIndex } = target;
+    let persistedOrder = entry.order;
+    let persistedItem = item;
+    if (!target.resolved) {
+      const expectedRevision = Number(entry.order.revision ?? 0);
+      const now = new Date();
+      const activeTokenHash = item.passwordCorrectionTokenHash;
+      const activeTokenExpiresAt = item.passwordCorrectionExpiresAt;
+      item.account = account;
+      item.password = password;
+      item.staffAccount = "";
+      item.staffPassword = "";
+      item.customerPasswordUpdatedAt = now.toISOString();
+      item.customerPasswordUpdatedAtBeijing = formatBeijingTime(now);
+      item.customerPasswordUpdateCount = Number(item.customerPasswordUpdateCount || 0) + 1;
+      item.passwordCorrectionResolvedAt = now.toISOString();
+      item.passwordCorrectionResolvedAtBeijing = formatBeijingTime(now);
+      item.passwordCorrectionResolvedOperationId = operation.operationId;
+      item.passwordCorrectionResolvedTokenHash = activeTokenHash;
+      item.passwordCorrectionResolvedTokenExpiresAt = activeTokenExpiresAt;
+      delete item.passwordCorrectionTokenHash;
+      delete item.passwordCorrectionExpiresAt;
+      entry.order.email = email;
+      entry.order.contact = contact;
+      entry.order.remark = remark;
+      entry.order.customerDetailsUpdatedAt = now.toISOString();
+      entry.order.customerDetailsUpdatedAtBeijing = formatBeijingTime(now);
+
+      const saved = await setOrderAt(entry.index, entry.order, { expectedRevision });
+      if (!saved) return Response.json({ ok: false, error: "stale_revision" }, { status: 409 });
+      const latest = await getOrderEntryById(orderId);
+      persistedOrder = latest?.order;
+      persistedItem = persistedOrder?.items?.[itemIndex];
+      if (!persistedOrder || persistedItem?.passwordCorrectionResolvedOperationId !== operation.operationId) {
+        return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
+      }
+    }
+
+    const effectOperationId = persistedItem.passwordCorrectionResolvedOperationId || operation.operationId;
+    const timelineOk = await appendOrderTimelineOnce(orderId, `${effectOperationId}:timeline`, {
+      type: "credentials_updated",
+      visibility: "public",
+      summaryZh: "用户已提交更新后的 Spotify 登录资料",
+      summaryEn: "The customer submitted updated Spotify login details",
+      actor: "customer",
+    });
+    const logOk = await pushAdminActionLog({
+      action: "spotify_customer_details_updated",
+      actor: { staffId: 0, staffUsername: "system" },
+      target: "order:" + orderId,
+      detail: { itemIndex },
+      operationId: `${effectOperationId}:admin-log`,
+    });
+    const notice = await deliverOnce(
+      `spotify-password-updated:${orderId}:${itemIndex}:${effectOperationId}:telegram`,
+      () => notifySpotifyDetailsUpdated(persistedOrder, persistedItem),
+    );
+    if (!timelineOk || !logOk) {
+      return Response.json({ ok: false, error: "operation_effect_journal_unavailable" }, { status: 503 });
+    }
+    const responsePayload = {
+      ok: true,
+      details: publicDetails(persistedOrder, persistedItem, itemIndex),
+      updatedAtBeijing: persistedItem.customerPasswordUpdatedAtBeijing,
+      alreadySubmitted: Boolean(target.resolved),
+      notification: { ok: Boolean(notice?.ok) },
+    };
+    const completed = await completeDurableOperation(operation, responsePayload);
+    if (!completed.ok) return Response.json({ ok: false, error: completed.error }, { status: 503 });
+    return Response.json(responsePayload);
+  } finally {
+    await redisCmd(["EVAL", RELEASE_ORDER_LOCK_SCRIPT, "1", lockKey, lockToken]);
   }
-  if (!detailsPersisted()) {
-    return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
-  }
-  await notifySpotifyDetailsUpdated(persistedOrder, persistedItem);
-  return Response.json({
-    ok: true,
-    details: publicDetails(persistedOrder, persistedItem, itemIndex),
-    updatedAtBeijing: persistedItem.customerPasswordUpdatedAtBeijing,
-  });
 }

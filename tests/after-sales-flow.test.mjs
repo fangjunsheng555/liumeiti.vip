@@ -1,17 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { executeOrderCasEval } from "./helpers/order-cas-redis-mock.mjs";
 
 process.env.AUTH_SECRET = "after-sales-test-secret-at-least-32-characters";
 process.env.KV_REST_API_URL = "http://redis.test";
 process.env.KV_REST_API_TOKEN = "test-token";
-delete process.env.RESEND_API_KEY;
+process.env.RESEND_API_KEY = "after-sales-resend-test-key";
 delete process.env.EMAIL_PROVIDER;
 
 const values = new Map();
 const lists = new Map();
 const sortedSets = new Map();
+const sets = new Map();
 const originalFetch = globalThis.fetch;
+const resendRequests = [];
+const resendFailuresRemaining = new Map();
+const resendUncertainFailuresRemaining = new Map();
+let failNextCompletionCommit = false;
 
 function sortedSet(key) {
   if (!sortedSets.has(key)) sortedSets.set(key, new Map());
@@ -30,7 +36,11 @@ function execute(command) {
   }
   if (name === "DEL") {
     let removed = 0;
-    args.forEach((key) => { if (values.delete(key)) removed += 1; });
+    args.forEach((key) => {
+      if (values.delete(key)) removed += 1;
+      if (lists.delete(key)) removed += 1;
+      if (sets.delete(key)) removed += 1;
+    });
     return removed;
   }
   if (name === "INCR") {
@@ -40,6 +50,149 @@ function execute(command) {
   }
   if (name === "EXPIRE") return 1;
   if (name === "EVAL") {
+    const cas = executeOrderCasEval(command, { values, lists, sortedSets, sets });
+    if (cas.handled) return cas.result;
+    const script = String(args[0] || "");
+    const keyCount = Number(args[1] || 0);
+    const keys = args.slice(2, 2 + keyCount);
+    const argv = args.slice(2 + keyCount);
+    if (script.includes("ticket_id_conflict") && script.includes("storagePending=true")) {
+      const activeId = values.get(keys[1]);
+      if (activeId) {
+        const activeRaw = values.get(argv[4] + activeId);
+        if (!activeRaw) return JSON.stringify({ ok: false, error: "pending_ticket_exists", ticketId: activeId, storagePending: true });
+        const active = JSON.parse(activeRaw);
+        if (active.status === "pending") return JSON.stringify({ ok: false, error: "pending_ticket_exists", ticketId: activeId });
+        values.delete(keys[1]);
+      }
+      if (values.has(keys[0])) return JSON.stringify({ ok: false, error: "ticket_id_conflict" });
+      values.set(keys[0], argv[0]);
+      sortedSet(keys[2]).set(argv[2], Number(argv[1]));
+      sortedSet(keys[3]).set(argv[2], Number(argv[1]));
+      sortedSet(keys[4]).delete(argv[2]);
+      values.set(keys[1], argv[2]);
+      return JSON.stringify({ ok: true });
+    }
+    if (script.includes("if redis.call('GET',KEYS[1])~=ARGV[1] then return 0 end")) {
+      if (failNextCompletionCommit) {
+        failNextCompletionCommit = false;
+        return 0;
+      }
+      if (values.get(keys[0]) !== argv[0]) return 0;
+      values.set(keys[0], argv[1]);
+      sortedSet(keys[1]).delete(argv[2]);
+      sortedSet(keys[2]).set(argv[2], Number(argv[3]));
+      if (argv[4]) sortedSet(keys[3]).set(argv[2], Number(argv[5]));
+      if (values.get(keys[4]) === argv[2]) values.delete(keys[4]);
+      return 1;
+    }
+    if (script.includes("ticket.creationEffectsPending=false")) {
+      const ticket = JSON.parse(values.get(keys[0]) || "null");
+      if (!ticket || ticket.ticketId !== argv[0]) return 0;
+      ticket.creationEffectsPending = false;
+      ticket.creationEffectsCompletedAt = argv[1];
+      values.set(keys[0], JSON.stringify(ticket));
+      return 1;
+    }
+    if (script.includes("ticket.completionEffectsPending=false")) {
+      const ticket = JSON.parse(values.get(keys[0]) || "null");
+      if (!ticket || ticket.completionOperationId !== argv[0]) return 0;
+      ticket.completionEffectsPending = false;
+      ticket.completionEffectsCompletedAt = argv[1];
+      values.set(keys[0], JSON.stringify(ticket));
+      sortedSet(keys[1]).delete(argv[2]);
+      return 1;
+    }
+    if (script.includes("if ARGV[3]=='1' then redis.call('ZADD',KEYS[4]")) {
+      sortedSet(keys[0]).set(argv[1], Number(argv[0]));
+      sortedSet(keys[1]).delete(argv[1]);
+      sortedSet(keys[2]).set(argv[1], Number(argv[0]));
+      if (argv[2] === "1") sortedSet(keys[3]).set(argv[1], Number(argv[3]));
+      else sortedSet(keys[3]).delete(argv[1]);
+      if (values.get(keys[4]) === argv[1]) values.delete(keys[4]);
+      return 1;
+    }
+    if (script.includes("state='started'") && script.includes("createdAt=ARGV[3]")) {
+      const existingRaw = values.get(keys[0]);
+      if (existingRaw) {
+        const record = JSON.parse(existingRaw);
+        if (record.requestHash !== argv[0]) {
+          return JSON.stringify({ ok: false, error: "idempotency_conflict" });
+        }
+        return JSON.stringify({ ok: true, state: record.state || "started", record, isNew: false });
+      }
+      const record = {
+        version: 1,
+        state: "started",
+        operationId: argv[1],
+        requestHash: argv[0],
+        createdAt: argv[2],
+      };
+      values.set(keys[0], JSON.stringify(record));
+      return JSON.stringify({ ok: true, state: "started", record, isNew: true });
+    }
+    if (script.includes("if record.plan~=nil then") && script.includes("record.plan=plan")) {
+      const record = JSON.parse(values.get(keys[0]) || "null");
+      if (!record) return JSON.stringify({ ok: false, error: "operation_record_missing" });
+      if (record.requestHash !== argv[0]) return JSON.stringify({ ok: false, error: "idempotency_conflict" });
+      if (record.plan !== undefined) return JSON.stringify({ ok: true, record, created: false });
+      record.plan = JSON.parse(argv[1]);
+      record.planCreatedAt = argv[2];
+      values.set(keys[0], JSON.stringify(record));
+      return JSON.stringify({ ok: true, record, created: true });
+    }
+    if (script.includes("record.state='done'") && script.includes("completedAt=ARGV[3]")) {
+      const existingRaw = values.get(keys[0]);
+      if (!existingRaw) return JSON.stringify({ ok: false, error: "operation_record_missing" });
+      const record = JSON.parse(existingRaw);
+      if (record.requestHash !== argv[0]) {
+        return JSON.stringify({ ok: false, error: "idempotency_conflict" });
+      }
+      if (record.state === "done") {
+        return JSON.stringify({ ok: true, state: "done", record, idempotent: true });
+      }
+      record.state = "done";
+      record.result = JSON.parse(argv[1]);
+      record.completedAt = argv[2];
+      values.set(keys[0], JSON.stringify(record));
+      return JSON.stringify({ ok: true, state: "done", record, idempotent: false });
+    }
+    if (script.includes("local marked=redis.call('SET',KEYS[1],'1','NX')")) {
+      if (values.has(keys[0])) return 0;
+      values.set(keys[0], "1");
+      const list = lists.get(keys[1]) || [];
+      list.unshift(argv[0]);
+      const max = Number(argv[1] || 500);
+      lists.set(keys[1], list.slice(0, max));
+      return 1;
+    }
+    if (script.includes("if raw=='done' then return 'done' end") && script.includes("return 'acquired'")) {
+      const raw = values.get(keys[0]);
+      if (raw === "done") return "done";
+      if (raw) {
+        let state = null;
+        try { state = JSON.parse(raw); } catch {}
+        const status = String(state?.status || "");
+        if (["done", "sending", "uncertain"].includes(status)) return status;
+        if (status !== "retryable") return "uncertain";
+      }
+      values.set(keys[0], argv[1]);
+      return "acquired";
+    }
+    if (script.includes("local added=redis.call('SADD',KEYS[1],ARGV[1])")) {
+      const membershipKey = args[2];
+      const listKey = args[3];
+      const orderId = args[4];
+      if (!sets.has(membershipKey)) sets.set(membershipKey, new Set());
+      const added = sets.get(membershipKey).has(orderId) ? 0 : 1;
+      sets.get(membershipKey).add(orderId);
+      if (added) {
+        const list = lists.get(listKey) || [];
+        list.push(orderId);
+        lists.set(listKey, list);
+      }
+      return JSON.stringify({ ok: true, added });
+    }
     const key = args[2];
     const expected = args[3];
     if (values.get(key) !== expected) return 0;
@@ -92,6 +245,7 @@ function execute(command) {
     const stop = Number(args[2]);
     return list.slice(start, stop < 0 ? undefined : stop + 1);
   }
+  if (name === "LINDEX") return (lists.get(args[0]) || [])[Number(args[1])] ?? null;
   if (name === "LSET") {
     const list = lists.get(args[0]) || [];
     const index = Number(args[1]);
@@ -101,11 +255,37 @@ function execute(command) {
     return "OK";
   }
   if (name === "HSET" || name === "HDEL") return 1;
+  if (name === "SADD") {
+    if (!sets.has(args[0])) sets.set(args[0], new Set());
+    let added = 0;
+    for (const member of args.slice(1)) {
+      if (!sets.get(args[0]).has(member)) added += 1;
+      sets.get(args[0]).add(member);
+    }
+    return added;
+  }
+  if (name === "SMEMBERS") return Array.from(sets.get(args[0]) || []);
   return null;
 }
 
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(String(input));
+  if (url.origin === "https://api.resend.com") {
+    const payload = JSON.parse(options.body || "{}");
+    const email = String(Array.isArray(payload.to) ? payload.to[0] : payload.to || "").toLowerCase();
+    resendRequests.push({ email, idempotencyKey: options.headers?.["Idempotency-Key"] || "", text: String(payload.text || "") });
+    const remaining = Number(resendFailuresRemaining.get(email) || 0);
+    if (remaining > 0) {
+      resendFailuresRemaining.set(email, remaining - 1);
+      return Response.json({ message: "test rejection" }, { status: 400 });
+    }
+    const uncertainRemaining = Number(resendUncertainFailuresRemaining.get(email) || 0);
+    if (uncertainRemaining > 0) {
+      resendUncertainFailuresRemaining.set(email, uncertainRemaining - 1);
+      return Response.json({ message: "ambiguous upstream failure" }, { status: 500 });
+    }
+    return Response.json({ id: "after-sales-email-test-id" });
+  }
   if (url.origin !== "http://redis.test") return originalFetch(input, options);
   if (url.pathname === "/pipeline") {
     const commands = JSON.parse(options.body || "[]");
@@ -119,11 +299,13 @@ const utils = await import("../app/api/_utils.js");
 const customerRoute = await import("../app/api/after-sales/route.js");
 const adminListRoute = await import("../app/api/admin/after-sales/route.js");
 const adminDetailRoute = await import("../app/api/admin/after-sales/[ticketId]/route.js");
+const referenceNoticeRoute = await import("../app/api/admin/after-sales/notify-by-reference/route.js");
 const store = await import("../app/api/after-sales/_store.js");
 const adminOrderRoute = await import("../app/api/admin/orders/[orderId]/route.js");
 const adminOrdersRoute = await import("../app/api/admin/orders/route.js");
 const passwordUpdateRoute = await import("../app/api/order-password-update/[orderId]/route.js");
 const passwordUpdateEmail = await import("../app/api/order-password-update/email.js");
+const completionEffects = await import("../app/api/after-sales/_completion-effects.js");
 const orderAttention = await import("../app/lib/order-attention.js");
 const settingsDefaults = await import("../app/lib/settings-defaults.js");
 
@@ -213,7 +395,7 @@ test("after-sales ticket lifecycle enforces one pending ticket per order", async
   const incompleteCredentialsResponse = await adminDetailRoute.PATCH(
     new Request(`https://www.liumeiti.vip/api/admin/after-sales/${created.ticket.ticketId}`, {
       method: "PATCH",
-      headers: adminHeaders,
+      headers: { ...adminHeaders, "Idempotency-Key": "after-sales-incomplete-test-0001" },
       body: JSON.stringify({ status: "completed", items: [{ index: 0, account: "", password: "resolved-password" }] }),
     }),
     { params: Promise.resolve({ ticketId: created.ticket.ticketId }) },
@@ -225,7 +407,7 @@ test("after-sales ticket lifecycle enforces one pending ticket per order", async
   const completedResponse = await adminDetailRoute.PATCH(
     new Request(`https://www.liumeiti.vip/api/admin/after-sales/${created.ticket.ticketId}`, {
       method: "PATCH",
-      headers: adminHeaders,
+      headers: { ...adminHeaders, "Idempotency-Key": "after-sales-complete-test-0001" },
       body: JSON.stringify({
         status: "completed",
         staffNote: "已重新配置，请重新登录。",
@@ -253,7 +435,7 @@ test("after-sales ticket lifecycle enforces one pending ticket per order", async
   const repeatedCompletionResponse = await adminDetailRoute.PATCH(
     new Request(`https://www.liumeiti.vip/api/admin/after-sales/${created.ticket.ticketId}`, {
       method: "PATCH",
-      headers: adminHeaders,
+      headers: { ...adminHeaders, "Idempotency-Key": "after-sales-repeat-test-0001" },
       body: JSON.stringify({ status: "completed", staffNote: "不应重复覆盖" }),
     }),
     { params: Promise.resolve({ ticketId: created.ticket.ticketId }) },
@@ -288,6 +470,298 @@ test("concurrent customer submissions create only one pending ticket", async () 
   assert.equal(active.orderId, order.orderId);
 });
 
+test("a dropped after-sales creation notification is drained from the existing active ticket", async () => {
+  const order = orderRecord("LMAFTERSALESOUTBOX1", "creation-retry@example.com");
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const token = utils.signSession({
+    type: "after-sales-order",
+    orderId: order.orderId,
+    email: order.email,
+    exp: Date.now() + 60_000,
+  });
+  resendRequests.length = 0;
+  resendFailuresRemaining.set(order.email, 2);
+
+  const first = await customerRoute.POST(customerRequest(order, token, "首次通知投递失败后必须恢复"));
+  assert.equal(first.status, 200);
+  const firstBody = await first.json();
+  assert.equal(firstBody.notice.email, false);
+
+  const retry = await customerRoute.POST(customerRequest(order, token, "首次通知投递失败后必须恢复"));
+  assert.equal(retry.status, 409);
+  const retryBody = await retry.json();
+  assert.equal(retryBody.error, "pending_ticket_exists");
+  assert.equal(retryBody.ticket.ticketId, firstBody.ticket.ticketId);
+  assert.equal(retryBody.notice.recovered, true);
+  assert.equal(retryBody.notice.email, true);
+  const attempts = resendRequests.filter((entry) => entry.email === order.email);
+  assert.equal(attempts.length, 3);
+  assert.equal(new Set(attempts.map((entry) => entry.idempotencyKey)).size, 1);
+  assert.ok(attempts[0].idempotencyKey);
+  assert.equal((lists.get(`liumeiti:order-timeline:${order.orderId}`) || []).length, 1);
+});
+
+test("after-sales completion resumes the same operation without duplicating credential audit", async () => {
+  const order = orderRecord("LMAFTERSALESCOMPLETE1", "completion-retry@example.com");
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const ticket = {
+    ticketId: "ASCOMPLETEOUTBOX1",
+    orderId: order.orderId,
+    status: "pending",
+    locale: "zh",
+    email: order.email,
+    contact: "contact",
+    issue: "账号需要重新配置并验证完成邮件恢复",
+    items: [{ index: 0, service: "spotify", label: "Spotify", credentialManaged: true, account: "old@example.com", password: "old-password" }],
+    createdAt: new Date().toISOString(),
+  };
+  assert.equal((await store.createAfterSalesTicket(ticket)).ok, true);
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const secondAdminToken = utils.signSession({ role: "admin", staffId: 2, staffUsername: "operator-two", staffRole: "operator", exp: Date.now() + 60_000 });
+  const body = {
+    status: "completed",
+    staffNote: "已重新配置",
+    items: [{ index: 0, account: "new@example.com", password: "new-password" }],
+  };
+  const request = (sessionToken = adminToken) => new Request(`https://www.liumeiti.vip/api/admin/after-sales/${ticket.ticketId}`, {
+    method: "PATCH",
+    headers: {
+      cookie: `lm_admin=${encodeURIComponent(sessionToken)}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": "after-sales-outbox-retry-0001",
+    },
+    body: JSON.stringify(body),
+  });
+  const missingKey = await adminDetailRoute.PATCH(new Request(`https://www.liumeiti.vip/api/admin/after-sales/${ticket.ticketId}`, {
+    method: "PATCH",
+    headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }), { params: Promise.resolve({ ticketId: ticket.ticketId }) });
+  assert.equal(missingKey.status, 400);
+  assert.equal((await missingKey.json()).error, "idempotency_key_required");
+  resendRequests.length = 0;
+  resendFailuresRemaining.set(order.email, 2);
+
+  const first = await adminDetailRoute.PATCH(request(), { params: Promise.resolve({ ticketId: ticket.ticketId }) });
+  assert.equal(first.status, 503);
+  assert.equal((await first.json()).error, "completion_email_retryable");
+  const afterCommit = await store.getAfterSalesTicket(ticket.ticketId);
+  assert.equal(afterCommit.status, "completed");
+  assert.equal(afterCommit.completionEffectsPending, true);
+  const orderAfterCommit = await utils.getOrderById(order.orderId);
+  const committedRevision = orderAfterCommit.revision;
+  assert.equal(orderAfterCommit.staffAudit.filter((entry) => entry.action === "after_sales_credentials_sync").length, 1);
+
+  const drained = await completionEffects.settleAfterSalesCompletionEffects(
+    afterCommit,
+    afterCommit.completedBy,
+  );
+  assert.equal(drained.email, true);
+  assert.equal(drained.settled, true);
+  assert.equal((await store.getAfterSalesTicket(ticket.ticketId)).completionEffectsPending, false);
+
+  const retry = await adminDetailRoute.PATCH(request(secondAdminToken), { params: Promise.resolve({ ticketId: ticket.ticketId }) });
+  assert.equal(retry.status, 200);
+  const retryBody = await retry.json();
+  assert.equal(retryBody.ok, true);
+  assert.equal(retryBody.changed, true);
+  const orderAfterRetry = await utils.getOrderById(order.orderId);
+  assert.equal(orderAfterRetry.revision, committedRevision);
+  assert.equal(orderAfterRetry.staffAudit.filter((entry) => entry.action === "after_sales_credentials_sync").length, 1);
+  const attempts = resendRequests.filter((entry) => entry.email === order.email);
+  assert.equal(attempts.length, 3);
+  assert.equal(new Set(attempts.map((entry) => entry.idempotencyKey)).size, 1);
+
+  const replay = await adminDetailRoute.PATCH(request(), { params: Promise.resolve({ ticketId: ticket.ticketId }) });
+  assert.equal(replay.status, 200);
+  assert.equal((await replay.json()).idempotent, true);
+  assert.equal(resendRequests.filter((entry) => entry.email === order.email).length, 3);
+  const conflict = await adminDetailRoute.PATCH(new Request(`https://www.liumeiti.vip/api/admin/after-sales/${ticket.ticketId}`, {
+    method: "PATCH",
+    headers: {
+      cookie: `lm_admin=${encodeURIComponent(secondAdminToken)}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": "after-sales-outbox-retry-0001",
+    },
+    body: JSON.stringify({ ...body, staffNote: "changed payload" }),
+  }), { params: Promise.resolve({ ticketId: ticket.ticketId }) });
+  assert.equal(conflict.status, 409);
+  assert.equal((await conflict.json()).error, "idempotency_conflict");
+});
+
+test("a ticket commit failure cannot apply credential synchronization twice", async () => {
+  const order = orderRecord("LMAFTERSALESSYNC1", "sync-once@example.com");
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const ticket = {
+    ticketId: "ASSYNCONCE1",
+    orderId: order.orderId,
+    status: "pending",
+    locale: "zh",
+    email: order.email,
+    issue: "验证凭据同步只执行一次",
+    items: [{ index: 0, service: "spotify", label: "Spotify", credentialManaged: true, account: "old@example.com", password: "old-password" }],
+    createdAt: new Date().toISOString(),
+  };
+  assert.equal((await store.createAfterSalesTicket(ticket)).ok, true);
+  const completion = {
+    staffNote: "已修复",
+    items: [{ index: 0, account: "fixed@example.com", password: "fixed-password" }],
+    operationId: "a".repeat(64),
+    requestHash: "b".repeat(64),
+  };
+  failNextCompletionCommit = true;
+  const failed = await store.completeAfterSalesTicket(ticket.ticketId, completion, { staffId: 1, staffUsername: "admin" });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.error, "storage_failed");
+  const afterFailedCommit = await utils.getOrderById(order.orderId);
+  const revision = afterFailedCommit.revision;
+  assert.equal(afterFailedCommit.staffAudit.filter((entry) => entry.action === "after_sales_credentials_sync").length, 1);
+
+  const recovered = await store.completeAfterSalesTicket(ticket.ticketId, {
+    ...completion,
+    operationId: "c".repeat(64),
+  }, { staffId: 1, staffUsername: "admin" });
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.changed, true);
+  const afterRecovery = await utils.getOrderById(order.orderId);
+  assert.equal(afterRecovery.revision, revision);
+  assert.equal(afterRecovery.staffAudit.filter((entry) => entry.action === "after_sales_credentials_sync").length, 1);
+  assert.equal(afterRecovery.items[0].password, "fixed-password");
+});
+
+test("reference notices resume only failed recipients from one immutable delivery plan", async () => {
+  const reference = "REFNOTICEOUTBOX1";
+  const firstOrder = {
+    ...orderRecord("LMREFERENCEORDER1", "reference-one@example.com"),
+    internalReference: reference,
+    remark: "first immutable note",
+  };
+  const secondOrder = {
+    ...orderRecord("LMREFERENCEORDER2", "reference-two@example.com"),
+    internalReference: reference,
+    remark: "second immutable note",
+  };
+  values.set(`liumeiti:orders:record:${firstOrder.orderId}`, JSON.stringify(firstOrder));
+  values.set(`liumeiti:orders:record:${secondOrder.orderId}`, JSON.stringify(secondOrder));
+  sets.set(`liumeiti:orders:reference:${reference}`, new Set([firstOrder.orderId, secondOrder.orderId]));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const secondAdminToken = utils.signSession({ role: "admin", staffId: 2, staffUsername: "operator-two", staffRole: "operator", exp: Date.now() + 60_000 });
+  const body = {
+    reference,
+    orderIds: [secondOrder.orderId, firstOrder.orderId],
+    subject: "服务资料更新",
+    message: "请使用邮件中的最新资料。",
+  };
+  const request = (sessionToken = adminToken) => new Request("https://www.liumeiti.vip/api/admin/after-sales/notify-by-reference", {
+    method: "POST",
+    headers: {
+      cookie: `lm_admin=${encodeURIComponent(sessionToken)}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": "reference-notice-retry-0001",
+    },
+    body: JSON.stringify(body),
+  });
+  resendRequests.length = 0;
+  resendFailuresRemaining.set(secondOrder.email, 2);
+
+  const first = await referenceNoticeRoute.POST(request());
+  assert.equal(first.status, 503);
+  const firstBody = await first.json();
+  assert.equal(firstBody.partial, true);
+  assert.equal(firstBody.delivered, 1);
+  const plannedOperation = [...values.entries()]
+    .filter(([key]) => key.startsWith("liumeiti:durable-operation:v1:") && !key.endsWith(":lock"))
+    .map(([, raw]) => { try { return JSON.parse(raw); } catch { return null; } })
+    .find((record) => record?.plan?.reference === reference);
+  assert.equal(plannedOperation?.state, "started");
+
+  const mutated = { ...secondOrder, remark: "MUTATED CONTENT MUST NOT LEAK INTO RETRY" };
+  values.set(`liumeiti:orders:record:${secondOrder.orderId}`, JSON.stringify(mutated));
+  const retry = await referenceNoticeRoute.POST(request(secondAdminToken));
+  assert.equal(retry.status, 200);
+  assert.equal((await retry.json()).delivered, 2);
+  assert.equal(JSON.parse(values.get(`liumeiti:durable-operation:v1:${plannedOperation.operationId}`)).state, "done");
+  const firstRecipientAttempts = resendRequests.filter((entry) => entry.email === firstOrder.email);
+  const secondRecipientAttempts = resendRequests.filter((entry) => entry.email === secondOrder.email);
+  assert.equal(firstRecipientAttempts.length, 1);
+  assert.equal(secondRecipientAttempts.length, 3);
+  assert.equal(new Set(secondRecipientAttempts.map((entry) => entry.idempotencyKey)).size, 1);
+  assert.match(secondRecipientAttempts.at(-1).text, /second immutable note/);
+  assert.doesNotMatch(secondRecipientAttempts.at(-1).text, /MUTATED CONTENT/);
+
+  const replay = await referenceNoticeRoute.POST(request());
+  assert.equal(replay.status, 200);
+  assert.equal((await replay.json()).idempotent, true);
+  assert.equal(resendRequests.filter((entry) => entry.email === firstOrder.email).length, 1);
+  assert.equal(resendRequests.filter((entry) => entry.email === secondOrder.email).length, 3);
+});
+
+test("an uncertain reference delivery enters manual review and is never automatically resent", async () => {
+  const reference = "REFNOTICEUNCERTAIN1";
+  const order = {
+    ...orderRecord("LMREFERENCEUNCERTAIN1", "reference-uncertain@example.com"),
+    internalReference: reference,
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  sets.set(`liumeiti:orders:reference:${reference}`, new Set([order.orderId]));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const body = { reference, orderIds: [order.orderId], subject: "人工核对通知", message: "此通知结果需要人工核对。" };
+  const request = () => new Request("https://www.liumeiti.vip/api/admin/after-sales/notify-by-reference", {
+    method: "POST",
+    headers: {
+      cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": "reference-notice-uncertain-0001",
+    },
+    body: JSON.stringify(body),
+  });
+  resendRequests.length = 0;
+  resendUncertainFailuresRemaining.set(order.email, 2);
+  const first = await referenceNoticeRoute.POST(request());
+  assert.equal(first.status, 409);
+  const firstBody = await first.json();
+  assert.equal(firstBody.manualReview, true);
+  assert.equal(firstBody.error, "reference_notice_delivery_uncertain");
+  assert.equal(resendRequests.filter((entry) => entry.email === order.email).length, 2);
+
+  const retry = await referenceNoticeRoute.POST(request());
+  assert.equal(retry.status, 409);
+  assert.equal((await retry.json()).manualReview, true);
+  assert.equal(resendRequests.filter((entry) => entry.email === order.email).length, 2);
+});
+
+test("concurrent completion outbox keepers dispatch one provider request", async () => {
+  const order = orderRecord("LMAFTERSALESKEEPER1", "keeper-once@example.com");
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const ticket = {
+    ticketId: "ASKEEPERONCE1",
+    orderId: order.orderId,
+    status: "pending",
+    locale: "zh",
+    email: order.email,
+    issue: "并发 keeper 只能发送一次完成邮件",
+    items: [{ index: 0, service: "spotify", label: "Spotify", credentialManaged: true, account: "old@example.com", password: "old-password" }],
+    createdAt: new Date().toISOString(),
+  };
+  assert.equal((await store.createAfterSalesTicket(ticket)).ok, true);
+  const completed = await store.completeAfterSalesTicket(ticket.ticketId, {
+    staffNote: "已完成",
+    items: [{ index: 0, account: "keeper@example.com", password: "keeper-password" }],
+    operationId: "d".repeat(64),
+    requestHash: "e".repeat(64),
+  }, { staffId: 1, staffUsername: "admin" });
+  assert.equal(completed.ok, true);
+  resendRequests.length = 0;
+  const results = await Promise.all([
+    completionEffects.settleAfterSalesCompletionEffects(completed.ticket, completed.ticket.completedBy),
+    completionEffects.settleAfterSalesCompletionEffects(completed.ticket, completed.ticket.completedBy),
+  ]);
+  assert.equal(resendRequests.filter((entry) => entry.email === order.email).length, 1);
+  assert.equal(results.filter((result) => result.email).length, 1);
+  assert.ok(results.some((result) => result.pending || result.uncertain));
+  assert.equal((await store.getAfterSalesTicket(ticket.ticketId)).completionEffectsPending, false);
+});
+
 test("Spotify password correction updates the original order without exposing the old password", async () => {
   const order = {
     orderId: "LMSPOTIFYPASSWORD1",
@@ -307,11 +781,22 @@ test("Spotify password correction updates the original order without exposing th
   };
   lists.set("liumeiti:orders", [JSON.stringify(order)]);
   const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const correctionBody = {
+    action: "spotify_password_error",
+    itemIndex: 0,
+    staffNote: "请确认密码可正常登录",
+    expectedRevision: 0,
+  };
+  const correctionHeaders = {
+    cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "spotify-password-error-test-0001",
+  };
   const adminResponse = await adminOrderRoute.PATCH(
     new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
       method: "PATCH",
-      headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "spotify_password_error", itemIndex: 0, staffNote: "请确认密码可正常登录" }),
+      headers: correctionHeaders,
+      body: JSON.stringify(correctionBody),
     }),
     { params: Promise.resolve({ orderId: order.orderId }) },
   );
@@ -322,6 +807,18 @@ test("Spotify password correction updates the original order without exposing th
   assert.equal(indexedOrderIds.filter((orderId) => orderId === order.orderId).length, 1);
   assert.equal(adminResult.order.items[0].passwordCorrectionStaffNote, "请确认密码可正常登录");
   assert.equal(Object.hasOwn(adminResult.order.items[0], "passwordCorrectionTokenHash"), false);
+  const retryResponse = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: correctionHeaders,
+      body: JSON.stringify(correctionBody),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(retryResponse.status, 200);
+  const retryResult = await retryResponse.json();
+  assert.equal(retryResult.idempotent, true);
+  assert.equal(retryResult.order.items[0].passwordCorrectionRequestVersion, 1);
   const abnormalResponse = await adminOrdersRoute.GET(new Request(
     "https://www.liumeiti.vip/api/admin/orders?status=abnormal",
     { headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}` } },
@@ -393,7 +890,11 @@ test("Spotify password correction updates the original order without exposing th
     patchResponse = await passwordUpdateRoute.PATCH(
       new Request(`https://www.liumeiti.vip/api/order-password-update/${order.orderId}`, {
         method: "PATCH",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": "spotify-customer-update-test-0001",
+        },
         body: JSON.stringify({
           account: "correct-account@example.com",
           password: "correct-password",
@@ -539,7 +1040,7 @@ test("legacy staff-provided service tickets hydrate and sync latest credentials"
   const completedResponse = await adminDetailRoute.PATCH(
     new Request("https://www.liumeiti.vip/api/admin/after-sales/ASLEGACYAI1", {
       method: "PATCH",
-      headers: adminHeaders,
+      headers: { ...adminHeaders, "Idempotency-Key": "after-sales-legacy-complete-test-0001" },
       body: JSON.stringify({
         status: "completed",
         staffNote: "账号已更新",

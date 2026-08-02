@@ -11,18 +11,45 @@ const RENEWAL_TICK_LOCK = "lm:keeper:renewal-tick";
 const RENEWAL_TICK_INTERVAL_SEC = 6 * 60 * 60; // 到期提醒扫描至多每 6 小时一次
 const QUOTE_EXPIRY_TICK_LOCK = "lm:keeper:quote-expiry-tick";
 const QUOTE_EXPIRY_TICK_INTERVAL_SEC = 60;
+const ORDER_TRANSITION_TICK_LOCK = "lm:keeper:order-transition-tick";
+const ORDER_TRANSITION_TICK_INTERVAL_SEC = 30;
 const ORDER_SLA_TICK_LOCK = "lm:keeper:order-sla-tick";
 const ORDER_SLA_TICK_INTERVAL_SEC = 5 * 60;
 const MARKETING_TICK_LOCK = "lm:keeper:marketing-tick";
 const MARKETING_TICK_INTERVAL_SEC = 120;
 const WEEKLY_BACKUP_TICK_LOCK = "lm:keeper:weekly-backup-tick";
 const WEEKLY_BACKUP_TICK_INTERVAL_SEC = 60 * 60;
+const AFTER_SALES_OUTBOX_TICK_LOCK = "lm:keeper:after-sales-completion-outbox";
+const AFTER_SALES_OUTBOX_TICK_INTERVAL_SEC = 60;
+
+async function afterSalesCompletionOutboxTick() {
+  const acquired = await redisCmd(["SET", AFTER_SALES_OUTBOX_TICK_LOCK, "1", "NX", "EX", String(AFTER_SALES_OUTBOX_TICK_INTERVAL_SEC)]);
+  if (acquired !== "OK") return;
+  const { getAfterSalesCompletionOutbox, getAfterSalesCreationOutbox } = await import("./after-sales/_store.js");
+  const { settleAfterSalesCompletionEffects } = await import("./after-sales/_completion-effects.js");
+  const { settleAfterSalesCreationEffects } = await import("./after-sales/_creation-effects.js");
+  const pendingTickets = await getAfterSalesCreationOutbox(30);
+  for (const ticket of pendingTickets) {
+    try { await settleAfterSalesCreationEffects(ticket); } catch {}
+  }
+  const tickets = await getAfterSalesCompletionOutbox(30);
+  for (const ticket of tickets) {
+    try { await settleAfterSalesCompletionEffects(ticket, ticket.completedBy || { staffId: 0, staffUsername: "keeper" }); } catch {}
+  }
+}
 
 async function quoteExpiryTick() {
   const acquired = await redisCmd(["SET", QUOTE_EXPIRY_TICK_LOCK, "1", "NX", "EX", String(QUOTE_EXPIRY_TICK_INTERVAL_SEC)]);
   if (acquired !== "OK") return;
   const { expireDueQuoteOrders } = await import("./_quote-expiry.js");
   await expireDueQuoteOrders({ limit: 100 });
+}
+
+async function orderTransitionTick() {
+  const acquired = await redisCmd(["SET", ORDER_TRANSITION_TICK_LOCK, "1", "NX", "EX", String(ORDER_TRANSITION_TICK_INTERVAL_SEC)]);
+  if (acquired !== "OK") return;
+  const { resumeDueOrderTransitions } = await import("./_order-transition.js");
+  await resumeDueOrderTransitions({ limit: 50 });
 }
 
 async function usdtTick() {
@@ -82,6 +109,8 @@ async function marketingCampaignTick() {
 
 export async function runMaintenanceTick() {
   if (!redisConfig()) return;
+  try { await afterSalesCompletionOutboxTick(); } catch (e) {}
+  try { await orderTransitionTick(); } catch (e) {}
   try { await quoteExpiryTick(); } catch (e) {}
   try { await usdtTick(); } catch (e) {}
   try { await renewalTick(); } catch (e) {}

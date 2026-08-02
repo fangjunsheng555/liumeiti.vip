@@ -4,9 +4,30 @@ import { createHmac, createHash, createCipheriv, createDecipheriv, randomBytes, 
 import { USER_AVATAR_IDS, isUserAvatarId, normalizeUserAvatarId } from "../lib/avatars.js";
 import { hasPendingSpotifyPasswordCorrection } from "../lib/order-attention.js";
 import { mergeSettings } from "../lib/settings-defaults.js";
+import {
+  applyBalanceEffectAtomic,
+  accountLifecycleKey,
+  adjustStockEffectAtomic,
+  balanceCentsKey,
+  createWithdrawalAtomic,
+  redeemBalanceCodeAtomic,
+  restoreServiceCodeAtomic,
+  saveUserPreservingBalanceAtomic,
+  consumeServiceCodeAtomic,
+  transferBalanceAtomic,
+  transitionWithdrawalAtomic,
+  transitionOrderCouponAtomic,
+  idempotencyPayloadHash,
+  redisEvalAtomic,
+} from "./_money.js";
+import {
+  REDIS_ATOMIC_CLUSTER_MODE,
+  redisAtomicKeyspaceMode,
+} from "./_redis-atomic-keyspace.js";
 
 export const ORDERS_KEY = "liumeiti:orders";
 export const ORDER_INDEX_KEY = ORDERS_KEY + ":index";
+export const ORDER_INDEX_MEMBERSHIP_KEY = ORDER_INDEX_KEY + ":members";
 export const ORDER_DELETED_INDEX_KEY = ORDERS_KEY + ":deleted-index"; // SET of soft-deleted order ids(供快速分页精确排除)
 export const ORDER_RECORD_PREFIX = ORDERS_KEY + ":record:";
 export const ORDER_EMAIL_INDEX_PREFIX = ORDERS_KEY + ":email:";
@@ -21,6 +42,8 @@ export const ORDER_LIST_REVISION_KEY = ORDERS_KEY + ":list-revision";
 const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v7";
 const ORDER_INDEX_MIGRATION_READY_KEY = ORDER_INDEX_KEY + ":legacy-ready";
 const ORDER_INDEX_MIGRATION_LOCK_KEY = ORDER_INDEX_KEY + ":legacy-lock";
+const ORDER_INDEX_MEMBERSHIP_READY_KEY = ORDER_INDEX_MEMBERSHIP_KEY + ":ready:v1";
+const ORDER_INDEX_MEMBERSHIP_LOCK_KEY = ORDER_INDEX_MEMBERSHIP_KEY + ":migration-lock";
 const ORDER_RECORD_INDEX_READY_KEY = ORDER_INDEX_KEY + ":record-ready:v1";
 const ORDER_RECORD_INDEX_LOCK_KEY = ORDER_INDEX_KEY + ":record-lock";
 export const USERS_KEY = "liumeiti:users";
@@ -30,7 +53,11 @@ export function clean(value, limit = 500) {
 }
 
 export function validEmail(value) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+  const email = String(value || "").trim();
+  return email.length > 3
+    && email.length <= 254
+    && !/[\x00-\x1f\x7f]/.test(email)
+    && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 export function pad2(value) { return String(value).padStart(2, "0"); }
@@ -302,6 +329,68 @@ async function scanOrderRecordIds() {
   return ids;
 }
 
+const ADD_ORDER_INDEX_MEMBER_SCRIPT = `
+local function keytype(key)
+  local result=redis.call('TYPE',key)
+  if type(result)=='table' then return result.ok end
+  return result
+end
+local function validtype(key,expected)
+  local actual=keytype(key)
+  return actual=='none' or actual==expected
+end
+if not validtype(KEYS[1],'set') then return redis.error_reply('storage_type_error:key1') end
+if not validtype(KEYS[2],'list') then return redis.error_reply('storage_type_error:key2') end
+local added=redis.call('SADD',KEYS[1],ARGV[1])
+if added==1 then redis.call('RPUSH',KEYS[2],ARGV[1]) end
+return cjson.encode({ok=true,added=added})
+`;
+
+function addOrderIndexMemberCommand(orderId) {
+  return [
+    "EVAL", ADD_ORDER_INDEX_MEMBER_SCRIPT, "2",
+    ORDER_INDEX_MEMBERSHIP_KEY, ORDER_INDEX_KEY, orderId,
+  ];
+}
+
+async function backfillOrderIndexMembership() {
+  const rawIds = await redisCmd(["LRANGE", ORDER_INDEX_KEY, "0", "-1"]);
+  if (!Array.isArray(rawIds)) return false;
+  const ids = Array.from(new Set(rawIds.map(normalizeOrderIdForStorage).filter(Boolean)));
+  for (let offset = 0; offset < ids.length; offset += 500) {
+    const batch = ids.slice(offset, offset + 500);
+    const result = await redisPipeline([["SADD", ORDER_INDEX_MEMBERSHIP_KEY, ...batch]]);
+    const rows = pipelineResults(result);
+    if (rows.length !== 1 || rows[0]?.error) return false;
+  }
+  return await redisCmd(["SET", ORDER_INDEX_MEMBERSHIP_READY_KEY, "1"]) === "OK";
+}
+
+// Historical deployments only kept a LIST. Backfill its IDs once before any
+// CAS write starts using the O(1) membership SET, otherwise the first update of
+// an old order could append a duplicate list entry.
+async function ensureOrderIndexMembership() {
+  if (!redisConfig()) return false;
+  if (await redisCmd(["GET", ORDER_INDEX_MEMBERSHIP_READY_KEY]) === "1") return true;
+  const lockToken = randomBytes(12).toString("hex");
+  const locked = await redisCmd(["SET", ORDER_INDEX_MEMBERSHIP_LOCK_KEY, lockToken, "EX", "60", "NX"]);
+  if (locked !== "OK") {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      if (await redisCmd(["GET", ORDER_INDEX_MEMBERSHIP_READY_KEY]) === "1") return true;
+    }
+    // The migration is additive and idempotent, so independently finishing it
+    // is safe if the lock holder is slow or its response was lost.
+    return backfillOrderIndexMembership();
+  }
+  try {
+    return await backfillOrderIndexMembership();
+  } finally {
+    const release = "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end";
+    await redisCmd(["EVAL", release, "1", ORDER_INDEX_MEMBERSHIP_LOCK_KEY, lockToken]);
+  }
+}
+
 async function ensureStandaloneOrderIndex() {
   if (!redisConfig()) return false;
   if (await redisCmd(["GET", ORDER_RECORD_INDEX_READY_KEY]) === "1") return true;
@@ -323,7 +412,7 @@ async function ensureStandaloneOrderIndex() {
         const order = entry.order;
         const orderId = normalizeOrderIdForStorage(entry.orderId || order?.orderId);
         if (!order || !orderId) continue;
-        commands.push(["RPUSH", ORDER_INDEX_KEY, orderId]);
+        commands.push(addOrderIndexMemberCommand(orderId));
         if (order.deleted) {
           commands.push(["SADD", ORDER_DELETED_INDEX_KEY, orderId]);
           continue;
@@ -350,40 +439,15 @@ async function ensureStandaloneOrderIndex() {
 }
 
 export async function saveOrderRecord(order) {
-  const r = redisConfig();
-  if (!r || !order?.orderId) return false;
+  if (!redisConfig() || !order?.orderId) return false;
   const orderId = normalizeOrderIdForStorage(order.orderId);
-  const previous = parseOrderJson(await redisCmd(["GET", orderRecordKey(orderId)]));
-  const commands = [
-    ["SET", orderRecordKey(orderId), JSON.stringify(order)],
-    ["LPUSH", ORDER_INDEX_KEY, orderId],
-  ];
-  commands.push(isPendingUsdtOrder(order)
-    ? ["ZADD", USDT_PENDING_ORDER_INDEX_KEY, String(orderCreatedScore(order)), orderId]
-    : ["ZREM", USDT_PENDING_ORDER_INDEX_KEY, orderId]);
-  const quoteExpiryScore = pendingQuoteExpiryScore(order);
-  commands.push(quoteExpiryScore
-    ? ["ZADD", QUOTE_EXPIRY_ORDER_INDEX_KEY, String(quoteExpiryScore), orderId]
-    : ["ZREM", QUOTE_EXPIRY_ORDER_INDEX_KEY, orderId]);
-  const overview = orderOverviewSnapshot(order);
-  if (overview) {
-    commands.push(["HSET", ORDER_OVERVIEW_HASH_KEY, orderId, JSON.stringify(overview)]);
-    commands.push(["ZADD", ORDER_SUMMARY_INDEX_KEY, String(orderCreatedScore(order)), orderId]);
-  }
-  commands.push(["INCR", ORDER_LIST_REVISION_KEY]);
-  const buyerEmailKey = orderEmailIndexKey(order.email);
-  const userEmailKey = orderEmailIndexKey(order.userEmail);
-  if (buyerEmailKey) commands.push(["LPUSH", buyerEmailKey, orderId]);
-  if (userEmailKey && userEmailKey !== buyerEmailKey) commands.push(["LPUSH", userEmailKey, orderId]);
-  const previousReferenceKey = orderReferenceIndexKey(previous?.internalReference);
-  const referenceKey = orderReferenceIndexKey(order.internalReference);
-  if (previousReferenceKey && previousReferenceKey !== referenceKey) commands.push(["SREM", previousReferenceKey, orderId]);
-  if (referenceKey) commands.push(["SADD", referenceKey, orderId]);
-  try {
-    const result = await redisPipeline(commands);
-    const rows = pipelineResults(result);
-    return rows.length === commands.length && rows.every((item) => !item?.error);
-  } catch (e) { return false; }
+  if (!orderId) return false;
+  const entry = await getOrderEntryById(orderId);
+  return setOrderAt(
+    entry?.index || { orderId, legacyIndex: null },
+    order,
+    entry?.order ? { expectedRevision: Number(entry.order.revision ?? 0) } : {},
+  );
 }
 
 export async function getOrderById(orderId) {
@@ -437,6 +501,20 @@ export async function getOrdersByEmail(email, limit = 50) {
       return true;
     })
     .slice(0, Number(limit || 50));
+}
+
+// Administrative recovery paths sometimes need to prove that a soft-delete
+// already committed after the HTTP response was lost. Normal readers must keep
+// using getOrderEntryById/getOrderById, which deliberately hide tombstones.
+export async function getOrderEntryByIdIncludingDeleted(orderId) {
+  const id = normalizeOrderIdForStorage(orderId);
+  if (!id) return null;
+  const raw = await redisCmd(["GET", orderRecordKey(id)]);
+  const stored = parseOrderJson(raw);
+  if (stored) return { index: { orderId: id, legacyIndex: null }, order: stored };
+  const legacy = await getLegacyOrderEntries();
+  const found = legacy.find((entry) => normalizeOrderIdForStorage(entry.order?.orderId) === id);
+  return found?.order ? { index: { orderId: id, legacyIndex: found.index }, order: found.order } : null;
 }
 
 export async function getOrdersByInternalReference(reference, limit = 200) {
@@ -584,70 +662,254 @@ export async function getPendingUsdtOrderEntries(limit = 500) {
   return live;
 }
 
-// Update an order at a specific handle. New records update by orderId; legacy
-// records also keep their old list slot in sync while being promoted to a record.
-export async function setOrderAt(index, order) {
-  const r = redisConfig();
-  if (!r) return false;
+const SET_ORDER_AT_SCRIPT = `
+local function keytype(key)
+  local result=redis.call('TYPE',key)
+  if type(result)=='table' then return result.ok end
+  return result
+end
+local function validtype(key,expected)
+  local actual=keytype(key)
+  return actual=='none' or actual==expected
+end
+local function decode(value)
+  local ok,result=pcall(cjson.decode,value)
+  if not ok or type(result)~='table' then return nil end
+  return result
+end
+local function response(value) return cjson.encode(value) end
+
+local expectedTypes={'string','list','list','zset','zset','hash','zset','string','set','set','set','list','list','list','list','set'}
+for index,key in ipairs(KEYS) do
+  local required=true
+  if index==9 then required=ARGV[12]=='1' end
+  if index==10 then required=ARGV[13]=='1' end
+  if index>=12 and index<=15 then required=ARGV[index+3]=='1' end
+  if required and not validtype(key,expectedTypes[index]) then return response({ok=false,error='storage_type_error',keyIndex=index}) end
+end
+
+local absent='__LM_ORDER_RECORD_ABSENT__'
+local current=redis.call('GET',KEYS[1])
+if (ARGV[1]==absent and current) or (ARGV[1]~=absent and current~=ARGV[1]) then
+  return response({ok=false,error='stale_order'})
+end
+local baseRaw=current
+local legacyIndex=tonumber(ARGV[3]) or -1
+if legacyIndex>=0 then
+  if legacyIndex~=math.floor(legacyIndex) then return response({ok=false,error='invalid_legacy_index'}) end
+  local legacy=redis.call('LINDEX',KEYS[3],tostring(legacyIndex))
+  if ARGV[2]==absent or legacy~=ARGV[2] then return response({ok=false,error='stale_order'}) end
+  if not baseRaw then baseRaw=legacy end
+end
+
+local order=decode(ARGV[4])
+if not order or tostring(order.orderId or '')~=ARGV[5] then return response({ok=false,error='invalid_order_record'}) end
+local expectedRevision=tonumber(ARGV[19])
+if not expectedRevision or expectedRevision~=math.floor(expectedRevision) or expectedRevision<0 or expectedRevision>9007199254740990 then
+  return response({ok=false,error='invalid_expected_revision'})
+end
+local existing=ARGV[20]=='1'
+if existing then
+  local baseOrder=decode(baseRaw)
+  if not baseOrder then return response({ok=false,error='invalid_order_record'}) end
+  local storedRevision=tonumber(baseOrder.revision or 0)
+  if not storedRevision or storedRevision~=math.floor(storedRevision) or storedRevision<0 or storedRevision>9007199254740990 then
+    return response({ok=false,error='invalid_order_revision'})
+  end
+  if storedRevision~=expectedRevision then return response({ok=false,error='stale_order'}) end
+elseif baseRaw then
+  return response({ok=false,error='stale_order'})
+end
+local nextRevision=tonumber(order.revision)
+local requiredRevision=existing and (expectedRevision+1) or 1
+if not nextRevision or nextRevision~=requiredRevision then return response({ok=false,error='invalid_order_revision'}) end
+local createdScore=tonumber(ARGV[7])
+if not createdScore or createdScore~=createdScore or createdScore<-9007199254740991 or createdScore>9007199254740991 then
+  return response({ok=false,error='invalid_order_score'})
+end
+local quoteScore=tonumber(ARGV[9]) or 0
+if ARGV[8]=='1' and (quoteScore<=0 or quoteScore~=quoteScore or quoteScore>9007199254740991) then
+  return response({ok=false,error='invalid_quote_score'})
+end
+local revisionRaw=redis.call('GET',KEYS[8]); local listRevision=0
+if revisionRaw then
+  if not string.match(revisionRaw,'^%d+$') then return response({ok=false,error='invalid_order_revision'}) end
+  listRevision=tonumber(revisionRaw)
+  if not listRevision or listRevision~=math.floor(listRevision) or listRevision<0 or listRevision>9007199254740990 then
+    return response({ok=false,error='invalid_order_revision'})
+  end
+end
+
+-- No command below can fail after the complete read/validation phase.
+redis.call('SET',KEYS[1],ARGV[4])
+if redis.call('SADD',KEYS[16],ARGV[5])==1 then redis.call('RPUSH',KEYS[2],ARGV[5]) end
+if legacyIndex>=0 then redis.call('LSET',KEYS[3],tostring(legacyIndex),ARGV[4]) end
+if ARGV[6]=='1' then redis.call('ZADD',KEYS[4],ARGV[7],ARGV[5]) else redis.call('ZREM',KEYS[4],ARGV[5]) end
+if ARGV[8]=='1' then redis.call('ZADD',KEYS[5],ARGV[9],ARGV[5]) else redis.call('ZREM',KEYS[5],ARGV[5]) end
+if ARGV[10]=='1' then
+  redis.call('HSET',KEYS[6],ARGV[5],ARGV[11]); redis.call('ZADD',KEYS[7],ARGV[7],ARGV[5])
+else
+  redis.call('HDEL',KEYS[6],ARGV[5]); redis.call('ZREM',KEYS[7],ARGV[5])
+end
+redis.call('SET',KEYS[8],tostring(listRevision+1))
+if ARGV[12]=='1' and (ARGV[13]~='1' or KEYS[9]~=KEYS[10]) then redis.call('SREM',KEYS[9],ARGV[5]) end
+if ARGV[13]=='1' then redis.call('SADD',KEYS[10],ARGV[5]) end
+if ARGV[14]=='1' then redis.call('SADD',KEYS[11],ARGV[5]) else redis.call('SREM',KEYS[11],ARGV[5]) end
+for slot=12,13 do
+  local enabled=ARGV[slot+3]=='1'; local newSlot=slot+2; local newEnabled=ARGV[newSlot+3]=='1'
+  if enabled and (not newEnabled or KEYS[slot]~=KEYS[newSlot]) then redis.call('LREM',KEYS[slot],'0',ARGV[5]) end
+end
+for slot=14,15 do
+  if ARGV[slot+3]=='1' and not redis.call('LPOS',KEYS[slot],ARGV[5]) then redis.call('LPUSH',KEYS[slot],ARGV[5]) end
+end
+return response({ok=true,listRevision=listRevision+1})
+`;
+
+// Atomically compare-and-set the order record and every derived index. The
+// exact raw record read here is compared inside Lua, so a concurrent writer can
+// no longer leave the main record and indexes at different revisions.
+export async function setOrderAt(index, order, options = {}) {
+  if (!redisConfig() || !order || typeof order !== "object") return false;
   const handle = typeof index === "object" && index !== null ? index : { legacyIndex: index, orderId: order?.orderId };
   const orderId = normalizeOrderIdForStorage(handle.orderId || order?.orderId);
-  if (orderId) {
-    const previous = parseOrderJson(await redisCmd(["GET", orderRecordKey(orderId)]));
-    const commands = [["SET", orderRecordKey(orderId), JSON.stringify(order)]];
-    // Promoted legacy records must enter the primary index before their old list copy can go stale.
-    const indexPosition = await redisCmd(["LPOS", ORDER_INDEX_KEY, orderId]);
-    if (indexPosition === null) commands.push(["RPUSH", ORDER_INDEX_KEY, orderId]);
-    if (Number.isInteger(handle.legacyIndex) && handle.legacyIndex >= 0) {
-      commands.push(["LSET", ORDERS_KEY, String(handle.legacyIndex), JSON.stringify(order)]);
-    }
-    commands.push(isPendingUsdtOrder(order)
-      ? ["ZADD", USDT_PENDING_ORDER_INDEX_KEY, String(orderCreatedScore(order)), orderId]
-      : ["ZREM", USDT_PENDING_ORDER_INDEX_KEY, orderId]);
-    const quoteExpiryScore = pendingQuoteExpiryScore(order);
-    commands.push(quoteExpiryScore
-      ? ["ZADD", QUOTE_EXPIRY_ORDER_INDEX_KEY, String(quoteExpiryScore), orderId]
-      : ["ZREM", QUOTE_EXPIRY_ORDER_INDEX_KEY, orderId]);
-    const overview = orderOverviewSnapshot(order);
-    if (overview) {
-      commands.push(["HSET", ORDER_OVERVIEW_HASH_KEY, orderId, JSON.stringify(overview)]);
-      commands.push(["ZADD", ORDER_SUMMARY_INDEX_KEY, String(orderCreatedScore(order)), orderId]);
-    } else {
-      commands.push(["HDEL", ORDER_OVERVIEW_HASH_KEY, orderId]);
-      commands.push(["ZREM", ORDER_SUMMARY_INDEX_KEY, orderId]);
-    }
-    commands.push(["INCR", ORDER_LIST_REVISION_KEY]);
-    const previousReferenceKey = orderReferenceIndexKey(previous?.internalReference);
-    const referenceKey = orderReferenceIndexKey(order.internalReference);
-    if (previousReferenceKey && previousReferenceKey !== referenceKey) commands.push(["SREM", previousReferenceKey, orderId]);
-    if (referenceKey) commands.push(["SADD", referenceKey, orderId]);
-    const result = await redisPipeline(commands);
-    const rows = pipelineResults(result);
-    return rows.length === commands.length && rows.every((item) => !item?.error);
+  if (!orderId) return false;
+  if (!await ensureOrderIndexMembership()) return false;
+
+  const recordKey = orderRecordKey(orderId);
+  const currentRaw = await redisCmd(["GET", recordKey]);
+  let previous = parseOrderJson(currentRaw);
+  const legacyIndex = Number.isInteger(handle.legacyIndex) && handle.legacyIndex >= 0 ? handle.legacyIndex : -1;
+  const legacyRaw = legacyIndex >= 0 ? await redisCmd(["LINDEX", ORDERS_KEY, String(legacyIndex)]) : null;
+  if (!previous && legacyRaw) previous = parseOrderJson(legacyRaw);
+  if (!previous && currentRaw) return false;
+
+  const pendingTransitionId = clean(previous?.pendingTransition?.id, 100);
+  if (pendingTransitionId && clean(options.completeTransitionId, 100) !== pendingTransitionId) return false;
+
+  const currentRevision = Number(previous?.revision ?? 0);
+  if (previous && (!Number.isSafeInteger(currentRevision) || currentRevision < 0)) return false;
+  const expectedRevision = options.expectedRevision == null ? null : Number(options.expectedRevision);
+  if (previous) {
+    // Existing records must always name the exact version the caller observed.
+    // The revision embedded in `order` is deliberately ignored, so pre-bumping
+    // a stale snapshot cannot disguise it as a fresh one.
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || expectedRevision !== currentRevision) return false;
+  } else if (expectedRevision != null && expectedRevision !== 0) {
+    return false;
   }
-  try {
-    const res = await fetch(r.url + "/lset/" + encodeURIComponent(ORDERS_KEY) + "/" + index, {
-      method: "POST",
-      headers: { Authorization: "Bearer " + r.token, "Content-Type": "text/plain" },
-      body: JSON.stringify(order),
-    });
-    return res.ok;
-  } catch (e) { return false; }
+  const casRevision = previous ? expectedRevision : 0;
+  const targetRevision = previous ? expectedRevision + 1 : 1;
+  const nextOrder = { ...order, orderId, revision: targetRevision };
+  const orderJson = JSON.stringify(nextOrder);
+  const overview = orderOverviewSnapshot(nextOrder);
+  const createdScore = orderCreatedScore(nextOrder);
+  const quoteScore = pendingQuoteExpiryScore(nextOrder);
+  const previousReferenceKey = orderReferenceIndexKey(previous?.internalReference);
+  const referenceKey = orderReferenceIndexKey(nextOrder.internalReference);
+  const previousBuyerKey = orderEmailIndexKey(previous?.email);
+  const previousUserKey = orderEmailIndexKey(previous?.userEmail);
+  const buyerKey = orderEmailIndexKey(nextOrder.email);
+  const userKey = orderEmailIndexKey(nextOrder.userEmail);
+  const noopPrefix = recordKey + ":noop:";
+  const absent = "__LM_ORDER_RECORD_ABSENT__";
+
+  const executed = await redisEvalAtomic(SET_ORDER_AT_SCRIPT, [
+    recordKey,
+    ORDER_INDEX_KEY,
+    ORDERS_KEY,
+    USDT_PENDING_ORDER_INDEX_KEY,
+    QUOTE_EXPIRY_ORDER_INDEX_KEY,
+    ORDER_OVERVIEW_HASH_KEY,
+    ORDER_SUMMARY_INDEX_KEY,
+    ORDER_LIST_REVISION_KEY,
+    previousReferenceKey || noopPrefix + "previous-reference",
+    referenceKey || noopPrefix + "reference",
+    ORDER_DELETED_INDEX_KEY,
+    previousBuyerKey || noopPrefix + "previous-buyer",
+    previousUserKey || noopPrefix + "previous-user",
+    buyerKey || noopPrefix + "buyer",
+    userKey || noopPrefix + "user",
+    ORDER_INDEX_MEMBERSHIP_KEY,
+  ], [
+    currentRaw == null ? absent : currentRaw,
+    legacyIndex >= 0 && legacyRaw != null ? String(legacyRaw) : absent,
+    String(legacyIndex),
+    orderJson,
+    orderId,
+    isPendingUsdtOrder(nextOrder) ? "1" : "0",
+    String(createdScore),
+    quoteScore ? "1" : "0",
+    String(quoteScore || 0),
+    overview ? "1" : "0",
+    overview ? JSON.stringify(overview) : "",
+    previousReferenceKey ? "1" : "0",
+    referenceKey ? "1" : "0",
+    nextOrder.deleted ? "1" : "0",
+    previousBuyerKey ? "1" : "0",
+    previousUserKey ? "1" : "0",
+    buyerKey ? "1" : "0",
+    userKey ? "1" : "0",
+    String(casRevision),
+    previous ? "1" : "0",
+  ]);
+  let saved = Boolean(executed.ok && executed.value?.ok);
+  if (!saved && !executed.ok) {
+    // A dropped REST response is ambiguous even though Redis may have committed
+    // the Lua script. Exact record equality proves this write won.
+    saved = await redisCmd(["GET", recordKey]) === orderJson;
+  }
+  if (saved) order.revision = targetRevision;
+  return saved;
 }
 
-// Soft-delete: replace the entry at index with a tombstone {deleted:true,orderId}
-// getAllOrders filters these out so they vanish from queries.
-export async function softDeleteOrderAt(index, orderId, meta = {}) {
+// Archive only financially closed invalid orders. The complete record remains
+// available for audit while normal order queries exclude `deleted` entries.
+export function orderArchiveEligibility(order) {
+  if (!order || typeof order !== "object" || order.deleted) return { ok: false, error: "order_not_found" };
+  if (order.pendingTransition) return { ok: false, error: "order_transition_pending" };
+  if (order.status !== "invalid") return { ok: false, error: "order_must_be_invalid_before_delete" };
+  if ((order.paidByBalance || order.couponId) && !order.refundedAt) {
+    return { ok: false, error: "order_financial_effects_open" };
+  }
+  if (order.referralCommissionSettledAt) return { ok: false, error: "order_commission_effect_open" };
+  if ((Array.isArray(order.items) ? order.items : []).some((item) => item?.stockReserved || item?.aiStockReserved)) {
+    return { ok: false, error: "order_stock_effect_open" };
+  }
+  return { ok: true };
+}
+
+export async function archiveOrderAt(index, order, meta = {}) {
+  const eligible = orderArchiveEligibility(order);
+  if (!eligible.ok) return eligible;
   const now = new Date();
-  const ok = await setOrderAt(index, {
+  const currentRevision = Math.max(0, Number(order.revision || 0));
+  const archiveOperationId = clean(meta.archiveOperationId, 160)
+    || `archive:${normalizeOrderIdForStorage(order.orderId)}:revision:${currentRevision}`;
+  const archived = {
+    ...order,
     deleted: true,
-    orderId,
+    archived: true,
+    revision: currentRevision + 1,
     deletedAt: now.toISOString(),
     deletedAtBeijing: formatBeijingTime(now),
+    archivedAt: now.toISOString(),
+    archivedAtBeijing: formatBeijingTime(now),
     ...meta,
-  });
-  // 记入删除集,供快速分页精确排除(失败不影响删除本身:快速路径仍会二次过滤 order.deleted)
-  if (ok) { try { await redisCmd(["SADD", ORDER_DELETED_INDEX_KEY, normalizeOrderIdForStorage(orderId)]); } catch (e) {} }
-  return ok;
+    archiveOperationId,
+  };
+  const saved = await setOrderAt(index, archived, { expectedRevision: currentRevision });
+  if (saved) return { ok: true, order: archived };
+  const latest = parseOrderJson(await redisCmd(["GET", orderRecordKey(order.orderId)]));
+  return latest?.deleted && latest.archiveOperationId === archiveOperationId
+    ? { ok: true, order: latest, idempotent: true }
+    : { ok: false, error: "stale_revision" };
+}
+
+export async function softDeleteOrderAt(index, orderId, meta = {}) {
+  const entry = await getOrderEntryById(orderId);
+  if (!entry?.order) return false;
+  const archived = await archiveOrderAt(index || entry.index, entry.order, meta);
+  return Boolean(archived.ok);
 }
 
 async function ensureLegacyOrderIndex() {
@@ -665,7 +927,7 @@ async function ensureLegacyOrderIndex() {
       if (!orderId || existing.has(orderId)) continue;
       existing.add(orderId);
       commands.push(["SET", orderRecordKey(orderId), JSON.stringify(order)]);
-      commands.push(["RPUSH", ORDER_INDEX_KEY, orderId]);
+      commands.push(addOrderIndexMemberCommand(orderId));
       if (order?.deleted) commands.push(["SADD", ORDER_DELETED_INDEX_KEY, orderId]);
     }
     for (let offset = 0; offset < commands.length; offset += 100) {
@@ -972,15 +1234,183 @@ export function sanitizeStaffPerms(input) {
 }
 
 // ── 会话管理:强制下线(踢下线) ──
-// lm:staff:kick:<id> = 毫秒时间戳;签发时间(iat)早于它的会话一律失效(middleware 对 /api/admin/* 强制)。
+// lm:staff:kick:<id> 是持久化的毫秒撤销边界。iat <= 边界的会话一律失效。
+// lm:staff:issue-fence:<id> 是最终签发栅栏。登录在签 JWT 前原子保留 iat；
+// 任何随后才抵达 Redis 的变更都必须把 kick 至少推进到该栅栏。因此变更
+// 请求即使预先捕获了旧进程时间，也不能越过最终检查签出旧权限 JWT。
 function staffKickKey(id) { return "lm:staff:kick:" + Number(id); }
-export async function kickAdminStaff(id) {
-  const ok = await redisCmd(["SET", staffKickKey(id), String(Date.now())]);
-  return ok === "OK";
+function staffIssueFenceKey(id) { return "lm:staff:issue-fence:" + Number(id); }
+
+const ADMIN_SESSION_INTEGER_HELPERS = `
+local function readinteger(key)
+  local raw=redis.call('GET',key)
+  if not raw then return 0 end
+  if not string.match(raw,'^%d+$') then return nil end
+  local value=tonumber(raw)
+  if not value or value<0 or value~=math.floor(value) or value>9007199254740991 then return nil end
+  return value
+end
+`;
+
+const KICK_ADMIN_STAFF_SCRIPT = ADMIN_SESSION_INTEGER_HELPERS + `
+local current=readinteger(KEYS[1]); local fence=readinteger(KEYS[2])
+if not current or not fence then return cjson.encode({ok=false,error='invalid_session_state'}) end
+local proposed=tonumber(ARGV[1]) or 0
+if proposed<fence then proposed=fence end
+if proposed<=current then proposed=current+1 end
+if proposed>9007199254740991 then return cjson.encode({ok=false,error='invalid_session_state'}) end
+redis.call('SET',KEYS[1],tostring(proposed))
+return cjson.encode({ok=true,kickTs=proposed})
+`;
+
+const REVOKE_ADMIN_SESSION_SCRIPT = ADMIN_SESSION_INTEGER_HELPERS + `
+local current=readinteger(KEYS[1]); local fence=readinteger(KEYS[2])
+if not current or not fence then return cjson.encode({ok=false,error='invalid_session_state'}) end
+local issuedAt=tonumber(ARGV[1]) or 0
+if current>0 and issuedAt<=current then
+  return cjson.encode({ok=false,error='session_revoked',kickTs=current})
+end
+local proposed=tonumber(ARGV[2]) or 0
+if proposed<issuedAt then proposed=issuedAt end
+if proposed<fence then proposed=fence end
+if proposed<=current then proposed=current+1 end
+if proposed>9007199254740991 then return cjson.encode({ok=false,error='invalid_session_state'}) end
+redis.call('SET',KEYS[1],tostring(proposed))
+return cjson.encode({ok=true,kickTs=proposed})
+`;
+
+const RESERVE_ADMIN_SESSION_ISSUANCE_SCRIPT = ADMIN_SESSION_INTEGER_HELPERS + `
+-- admin_session_issue_fence_v1
+local current=readinteger(KEYS[1]); local fence=readinteger(KEYS[2])
+if not current or not fence then return cjson.encode({ok=false,error='invalid_session_state'}) end
+local expected=tonumber(ARGV[1]); local proposed=tonumber(ARGV[2])
+if not expected or expected<0 or expected~=math.floor(expected) or current~=expected then
+  return cjson.encode({ok=false,error='session_state_changed',kickTs=current})
+end
+if not proposed or proposed<0 or proposed~=math.floor(proposed) then
+  return cjson.encode({ok=false,error='invalid_session_state'})
+end
+local issuedAt=proposed
+if issuedAt<=current then issuedAt=current+1 end
+if issuedAt<=fence then issuedAt=fence+1 end
+if issuedAt>9007199254740991 then return cjson.encode({ok=false,error='invalid_session_state'}) end
+redis.call('SET',KEYS[2],tostring(issuedAt))
+return cjson.encode({ok=true,issuedAt=issuedAt,kickTs=current})
+`;
+
+export async function revokeAdminStaffSessions(id, proposedTs = Date.now()) {
+  const staffId = Number(id);
+  if (!Number.isSafeInteger(staffId) || staffId <= 0) return { ok: false, error: "invalid_staff_id" };
+  const result = await redisEvalAtomic(
+    KICK_ADMIN_STAFF_SCRIPT,
+    [staffKickKey(staffId), staffIssueFenceKey(staffId)],
+    [String(proposedTs)],
+  );
+  if (!result.ok || result.value?.ok !== true || !Number.isSafeInteger(Number(result.value?.kickTs))) {
+    return { ok: false, error: result.error || "storage_failed" };
+  }
+  return { ok: true, kickTs: Number(result.value.kickTs) };
 }
+
+// A signed captcha proves the answer but, by itself, is replayable until exp.
+// Consume its nonce before creating the account so one solved image cannot
+// register an arbitrary number of addresses. Storage ambiguity fails closed.
+export async function consumeRegisterCaptcha(token, answer, now = Date.now()) {
+  const payload = verifySession(token);
+  if (!payload || payload.type !== "register-captcha" || !payload.nonce || !payload.hash) {
+    return { ok: false, error: "captcha_failed" };
+  }
+  const expected = captchaDigest(payload.nonce, answer);
+  try {
+    if (!timingSafeEqual(Buffer.from(payload.hash), Buffer.from(expected))) {
+      return { ok: false, error: "captcha_failed" };
+    }
+  } catch {
+    return { ok: false, error: "captcha_failed" };
+  }
+  const expiresAt = Number(payload.exp || 0);
+  const ttl = Math.ceil((expiresAt - Number(now || Date.now())) / 1000);
+  if (!Number.isSafeInteger(ttl) || ttl <= 0 || ttl > 10 * 60) {
+    return { ok: false, error: "captcha_failed" };
+  }
+  const nonceHash = createHash("sha256").update(String(payload.nonce)).digest("hex");
+  const key = "liumeiti:captcha:used:" + nonceHash;
+  const script = "if redis.call('EXISTS',KEYS[1])==1 then return 'used' end redis.call('SET',KEYS[1],'1','EX',ARGV[1]) return 'consumed'";
+  const consumed = await redisCmd(["EVAL", script, "1", key, String(ttl)]);
+  if (consumed === "consumed") return { ok: true };
+  if (consumed === "used") return { ok: false, error: "captcha_reused" };
+  return { ok: false, error: "captcha_store_unavailable" };
+}
+
+export async function revokeAdminSession(id, issuedAt, proposedTs = Date.now()) {
+  const staffId = Number(id);
+  if (!Number.isSafeInteger(staffId) || staffId <= 0) return { ok: false, error: "invalid_staff_id" };
+  const tokenIat = Number(issuedAt || 0);
+  const result = await redisEvalAtomic(
+    REVOKE_ADMIN_SESSION_SCRIPT,
+    [staffKickKey(staffId), staffIssueFenceKey(staffId)],
+    [Number.isSafeInteger(tokenIat) && tokenIat >= 0 ? String(tokenIat) : "0", String(proposedTs)],
+  );
+  if (!result.ok) return { ok: false, error: result.error || "storage_failed" };
+  if (result.value?.ok !== true) {
+    return { ok: false, error: clean(result.value?.error, 80) || "storage_failed" };
+  }
+  return { ok: true, kickTs: Number(result.value.kickTs) };
+}
+
+export async function reserveAdminSessionIssuance(id, expectedKickTs, proposedIssuedAt = Date.now()) {
+  const staffId = Number(id);
+  const expected = Number(expectedKickTs);
+  const proposed = Number(proposedIssuedAt);
+  if (
+    !Number.isSafeInteger(staffId) || staffId <= 0
+    || !Number.isSafeInteger(expected) || expected < 0
+    || !Number.isSafeInteger(proposed) || proposed < 0
+  ) return { ok: false, error: "invalid_session_state" };
+  const result = await redisEvalAtomic(
+    RESERVE_ADMIN_SESSION_ISSUANCE_SCRIPT,
+    [staffKickKey(staffId), staffIssueFenceKey(staffId)],
+    [String(expected), String(proposed)],
+  );
+  if (!result.ok || result.value?.ok !== true) {
+    return { ok: false, error: clean(result.value?.error || result.error, 80) || "storage_failed" };
+  }
+  const issuedAt = Number(result.value.issuedAt);
+  return Number.isSafeInteger(issuedAt) && issuedAt > Number(result.value.kickTs || 0)
+    ? { ok: true, issuedAt, kickTs: Number(result.value.kickTs || 0) }
+    : { ok: false, error: "invalid_session_state" };
+}
+
+export async function kickAdminStaff(id) {
+  return (await revokeAdminStaffSessions(id)).ok;
+}
+
+export async function getStaffKickState(id) {
+  const staffId = Number(id);
+  if (!Number.isSafeInteger(staffId) || staffId <= 0) return { ok: false, error: "invalid_staff_id", kickTs: 0 };
+  const r = redisConfig();
+  if (!r) return { ok: false, error: "storage_unavailable", configured: false, kickTs: 0 };
+  try {
+    const response = await fetch(r.url + "/get/" + encodeURIComponent(staffKickKey(staffId)), {
+      headers: { Authorization: "Bearer " + r.token },
+    });
+    if (!response.ok) return { ok: false, error: "storage_unavailable", configured: true, kickTs: 0 };
+    const payload = await response.json();
+    if (payload?.error) return { ok: false, error: "storage_error", configured: true, kickTs: 0 };
+    if (payload?.result == null) return { ok: true, configured: true, kickTs: 0 };
+    const kickTs = Number(payload.result);
+    if (!Number.isSafeInteger(kickTs) || kickTs < 0) {
+      return { ok: false, error: "invalid_storage_response", configured: true, kickTs: 0 };
+    }
+    return { ok: true, configured: true, kickTs };
+  } catch (e) {
+    return { ok: false, error: "storage_unavailable", configured: true, kickTs: 0 };
+  }
+}
+
 export async function getStaffKickTs(id) {
-  const raw = await redisCmd(["GET", staffKickKey(id)]);
-  return raw == null ? 0 : Number(raw) || 0;
+  const state = await getStaffKickState(id);
+  return state.ok ? state.kickTs : 0;
 }
 
 // ── 后台两步验证(TOTP, RFC 6238)+ 登录日志 ──
@@ -1053,17 +1483,78 @@ function staff2faKey(id) { return "lm:staff:2fa:" + Number(id); }
 function backupCodeHash(code) {
   return createHash("sha256").update("backup|" + String(code).toUpperCase().replace(/[^A-Z0-9]/g, "")).digest("hex");
 }
+function validStaff2faRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value)
+    && typeof value.secretEnc === "string" && value.secretEnc
+    && Array.isArray(value.backupHashes)
+    && value.backupHashes.every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/i.test(hash)));
+}
+
+// Authentication callers must distinguish an unconfigured account from a
+// Redis outage or corrupt data. Nullable getStaff2fa remains for UI summaries.
+export async function getStaff2faState(id) {
+  const staffId = Number(id);
+  if (!Number.isSafeInteger(staffId) || staffId <= 0) {
+    return { ok: false, exists: false, record: null, error: "invalid_staff_id" };
+  }
+  const r = redisConfig();
+  if (!r) return { ok: false, exists: false, record: null, error: "storage_unavailable" };
+  try {
+    const response = await fetch(r.url + "/get/" + encodeURIComponent(staff2faKey(staffId)), {
+      headers: { Authorization: "Bearer " + r.token },
+    });
+    if (!response.ok) return { ok: false, exists: false, record: null, error: "storage_unavailable" };
+    const payload = await response.json();
+    if (!payload || typeof payload !== "object" || payload.error || !("result" in payload)) {
+      return { ok: false, exists: false, record: null, error: "storage_error" };
+    }
+    if (payload.result == null) return { ok: true, exists: false, record: null };
+    if (typeof payload.result !== "string") {
+      return { ok: false, exists: true, record: null, error: "invalid_storage_response" };
+    }
+    let record = null;
+    try { record = JSON.parse(payload.result); } catch (e) {}
+    if (!validStaff2faRecord(record)) {
+      return { ok: false, exists: true, record: null, error: "invalid_storage_response" };
+    }
+    return { ok: true, exists: true, record };
+  } catch (e) {
+    return { ok: false, exists: false, record: null, error: "storage_unavailable" };
+  }
+}
+
 export async function getStaff2fa(id) {
-  const raw = await redisCmd(["GET", staff2faKey(id)]);
-  if (!raw) return null;
-  try { const d = JSON.parse(raw); return d && d.secretEnc ? d : null; } catch (e) { return null; }
+  const state = await getStaff2faState(id);
+  return state.ok && state.exists ? state.record : null;
 }
 export async function setStaff2fa(id, data) {
   return (await redisCmd(["SET", staff2faKey(id), JSON.stringify(data)])) === "OK";
 }
 export async function clearStaff2fa(id) {
-  await redisCmd(["DEL", staff2faKey(id)]);
-  return true;
+  const removed = await redisCmd(["DEL", staff2faKey(id)]);
+  return removed != null && Number.isSafeInteger(Number(removed)) && Number(removed) >= 0;
+}
+export async function clearStaff2faAndKick(id) {
+  const staffId = Number(id);
+  if (!Number.isSafeInteger(staffId) || staffId <= 0) return { ok: false, error: "invalid_staff_id" };
+  const script = ADMIN_SESSION_INTEGER_HELPERS + `
+local current=readinteger(KEYS[2]); local fence=readinteger(KEYS[3])
+if not current or not fence then return cjson.encode({ok=false,error='invalid_session_state'}) end
+local proposed=tonumber(ARGV[1]) or 0
+if proposed<fence then proposed=fence end
+if proposed<=current then proposed=current+1 end
+if proposed>9007199254740991 then return cjson.encode({ok=false,error='invalid_session_state'}) end
+redis.call('DEL',KEYS[1])
+redis.call('SET',KEYS[2],tostring(proposed))
+return cjson.encode({ok=true,kickTs=proposed})`;
+  const result = await redisEvalAtomic(
+    script,
+    [staff2faKey(staffId), staffKickKey(staffId), staffIssueFenceKey(staffId)],
+    [String(Date.now())],
+  );
+  return result.ok && result.value?.ok === true
+    ? { ok: true, kickTs: Number(result.value.kickTs) || 0 }
+    : { ok: false, error: result.error || "storage_failed" };
 }
 export function twoFaGloballyDisabled() {
   return process.env.ADMIN_2FA_DISABLE === "1";
@@ -1078,20 +1569,72 @@ export function generateBackupCodes() {
   return { codes, hashes: codes.map(backupCodeHash) };
 }
 
+const CONSUME_STAFF_2FA_BACKUP_SCRIPT = `
+-- admin_2fa_backup_consume_v1
+local raw=redis.call('GET',KEYS[1])
+if not raw then return cjson.encode({ok=false,error='not_enabled'}) end
+local decodedOk,record=pcall(cjson.decode,raw)
+if not decodedOk or type(record)~='table' or type(record.secretEnc)~='string' or record.secretEnc=='' then
+  return cjson.encode({ok=false,error='invalid_storage_response'})
+end
+local hashes=record.backupHashes
+if type(hashes)~='table' then
+  return cjson.encode({ok=false,error='invalid_storage_response'})
+end
+local found=false
+local remaining={}
+for _,stored in ipairs(hashes) do
+  if type(stored)~='string' then
+    return cjson.encode({ok=false,error='invalid_storage_response'})
+  end
+  if not found and stored==ARGV[1] then
+    found=true
+  else
+    table.insert(remaining,stored)
+  end
+end
+if not found then return cjson.encode({ok=false,error='invalid_code'}) end
+record.backupHashes=remaining
+local encoded=cjson.encode(record)
+if #remaining==0 then
+  encoded=string.gsub(encoded,'"backupHashes":{}','"backupHashes":[]')
+end
+redis.call('SET',KEYS[1],encoded)
+return cjson.encode({ok=true,method='backup',remainingBackup=#remaining})
+`;
+
+async function consumeStaff2faBackupCode(id, hash) {
+  const result = await redisEvalAtomic(CONSUME_STAFF_2FA_BACKUP_SCRIPT, [staff2faKey(id)], [hash]);
+  if (!result.ok) return { ok: false, error: result.error || "storage_failed", storageError: true };
+  if (result.value?.ok !== true) {
+    const error = clean(result.value?.error, 80) || "invalid_code";
+    return {
+      ok: false,
+      error,
+      storageError: error === "invalid_storage_response" || error === "storage_failed",
+    };
+  }
+  return {
+    ok: true,
+    method: "backup",
+    remainingBackup: Number(result.value.remainingBackup) || 0,
+  };
+}
+
 // 校验登录提供的动态码:TOTP 或备用码(备用码命中即消耗)。
 export async function verifyStaff2faCode(id, code) {
-  const rec = await getStaff2fa(id);
-  if (!rec) return { ok: true, skipped: true }; // 未绑定 → 不要求
+  const state = await getStaff2faState(id);
+  if (!state.ok) return { ok: false, error: state.error || "storage_failed", storageError: true };
+  if (!state.exists) return { ok: true, skipped: true }; // 未绑定 → 不要求
+  const rec = state.record;
   const secret = decryptTotpSecret(rec.secretEnc);
-  if (secret && verifyTotp(secret, code)) return { ok: true, method: "totp" };
-  const hash = backupCodeHash(code);
-  const idx = Array.isArray(rec.backupHashes) ? rec.backupHashes.indexOf(hash) : -1;
-  if (idx >= 0) {
-    rec.backupHashes.splice(idx, 1); // 一次性:用过即废
-    await setStaff2fa(id, rec);
-    return { ok: true, method: "backup", remainingBackup: rec.backupHashes.length };
-  }
-  return { ok: false };
+  if (!secret) return { ok: false, error: "invalid_storage_response", storageError: true };
+  const supplied = String(code || "").trim();
+  // Backup codes can contain exactly six digits among their letters. Never
+  // reinterpret such a backup code as a reusable TOTP by stripping letters.
+  if (/^\d{6}$/.test(supplied) && verifyTotp(secret, supplied)) return { ok: true, method: "totp" };
+  const hash = backupCodeHash(supplied);
+  return consumeStaff2faBackupCode(id, hash);
 }
 
 // ── 后台登录日志(成功/失败均记,含 IP/UA)──
@@ -1186,24 +1729,121 @@ export async function listAllUserEmails() {
 }
 
 export async function deleteUser(email) {
-  const r = redisConfig();
-  if (!r) return false;
+  if (!redisConfig()) return { ok: false, error: "storage_unavailable" };
   const lower = String(email).toLowerCase().trim();
+  if (!validEmail(lower)) return { ok: false, error: "invalid_email" };
+  const keyspaceMode = redisAtomicKeyspaceMode();
+  if (keyspaceMode !== "legacy") {
+    return {
+      ok: false,
+      error: keyspaceMode === REDIS_ATOMIC_CLUSTER_MODE
+        ? "redis_cluster_keyspace_not_supported"
+        : "invalid_redis_keyspace_mode",
+    };
+  }
   try {
     // 删除前读出上下级,清理返佣反向索引(从上级名下移除 + 删除自身下级集合)。
-    const existing = await getUser(lower);
-    if (existing) await deindexReferralRelation(existing);
-    const res = await fetch(r.url + "/pipeline", {
-      method: "POST",
-      headers: { Authorization: "Bearer " + r.token, "Content-Type": "application/json" },
-      body: JSON.stringify([
-        ["DEL", USERS_KEY + ":" + lower],
-        ["DEL", USERS_KEY + ":" + lower + ":tx"],
-        ["SREM", USER_EMAIL_SET_KEY, lower],
-      ]),
-    });
-    return res.ok;
-  } catch (e) { return false; }
+    const script = `
+local function keytype(key)
+  local value=redis.call('TYPE',key)
+  if type(value)=='table' then return value.ok end
+  return value
+end
+local userType=keytype(KEYS[1])
+if userType=='none' then return cjson.encode({ok=false,error='user_not_found'}) end
+if userType~='string' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
+local expected={'string','list','set','string','string','string','string','string','string','string','string'}
+for index=2,#KEYS do
+  local actual=keytype(KEYS[index])
+  if actual~='none' and actual~=expected[index-1] then
+    return cjson.encode({ok=false,error='auth_record_invalid'})
+  end
+end
+local raw=redis.call('GET',KEYS[1])
+local decoded,user=pcall(cjson.decode,raw)
+if not decoded or type(user)~='table' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
+local inviteCode=string.upper(tostring(user.inviteCode or ''))
+inviteCode=string.gsub(inviteCode,'[^A-Z0-9]','')
+local inviteKey=''
+if inviteCode~='' then
+  inviteKey=ARGV[2]..inviteCode
+  local inviteType=keytype(inviteKey)
+  if inviteType~='none' and inviteType~='string' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
+end
+local nextQuotaRaw=nil
+if keytype(KEYS[11])=='string' then
+  local quotaRaw=redis.call('GET',KEYS[11])
+  local quotaDecoded,quota=pcall(cjson.decode,quotaRaw)
+  if not quotaDecoded or type(quota)~='table' or type(quota.overrides)~='table' or type(quota.requests)~='table' then
+    return cjson.encode({ok=false,error='auth_record_invalid'})
+  end
+  local overrides=cjson.decode('[]')
+  for _,entry in ipairs(quota.overrides) do
+    if type(entry)=='table' and string.lower(tostring(entry.email or ''))~=ARGV[1] then overrides[#overrides+1]=entry end
+  end
+  local requests=cjson.decode('[]')
+  for _,entry in ipairs(quota.requests) do
+    if type(entry)=='table' and string.lower(tostring(entry.email or ''))~=ARGV[1] then requests[#requests+1]=entry end
+  end
+  quota.overrides=overrides
+  quota.requests=requests
+  local quotaEncoded,nextQuota=pcall(cjson.encode,quota)
+  if not quotaEncoded then return cjson.encode({ok=false,error='auth_record_invalid'}) end
+  nextQuotaRaw=nextQuota
+end
+local current=1
+if keytype(KEYS[5])=='string' then
+  local versionRaw=redis.call('GET',KEYS[5])
+  if not string.match(versionRaw or '','^%d+$') then return cjson.encode({ok=false,error='auth_record_invalid'}) end
+  current=tonumber(versionRaw)
+end
+if not current or current<1 or current~=math.floor(current) or current>9007199254740990 then
+  return cjson.encode({ok=false,error='auth_record_invalid'})
+end
+local nextVersion=current+1
+redis.call('SET',KEYS[5],tostring(nextVersion))
+redis.call('DEL',KEYS[1],KEYS[2],KEYS[3],KEYS[6],KEYS[7],KEYS[8],KEYS[9],KEYS[10],KEYS[12])
+redis.call('SREM',KEYS[4],ARGV[1])
+if inviteKey~='' and redis.call('GET',inviteKey)==ARGV[1] then redis.call('DEL',inviteKey) end
+if nextQuotaRaw then redis.call('SET',KEYS[11],nextQuotaRaw) end
+return cjson.encode({
+  ok=true,
+  authVersion=nextVersion,
+  user={
+    email=ARGV[1],
+    username=tostring(user.username or ''),
+    invitedByEmail=tostring(user.invitedByEmail or ''),
+    invitedBy2Email=tostring(user.invitedBy2Email or ''),
+    inviteCode=tostring(user.inviteCode or '')
+  }
+})`;
+    const deleted = await redisEvalAtomic(
+      script,
+      [
+      USERS_KEY + ":" + lower,
+      balanceCentsKey(lower),
+      USERS_KEY + ":" + lower + ":tx",
+      USER_EMAIL_SET_KEY,
+       "lm:user:authver:" + lower,
+       "liumeiti:reset:" + lower,
+       "liumeiti:tool:2fa:" + lower,
+       "liumeiti:tool:data:" + lower + ":favs",
+       "liumeiti:tool:data:" + lower + ":recent_tools",
+       "liumeiti:tool:data:" + lower + ":ai_history",
+       "lm:tool:quota",
+       accountLifecycleKey(lower),
+       ],
+      [lower, INVITE_CODE_PREFIX_KEY],
+    );
+    if (!deleted.ok) return deleted;
+    if (!deleted.value?.ok) return deleted.value || { ok: false, error: "delete_failed" };
+
+    // Referral indexes are derived and readers verify every member against the
+    // canonical user record. Clean them only after the delete/tombstone commit,
+    // so an auxiliary-index outage can never leave an authenticated account.
+    await deindexReferralRelation(deleted.value.user);
+    return { ...deleted.value, email: lower };
+  } catch (e) { return { ok: false, error: "delete_failed" }; }
 }
 
 export function generateRandomUsername() {
@@ -1320,28 +1960,27 @@ export function validUsername(value) {
 }
 
 export async function getUser(email) {
-  const r = redisConfig();
-  if (!r) return null;
   try {
-    const res = await fetch(r.url + "/get/" + encodeURIComponent(userKey(email)), {
-      headers: { Authorization: "Bearer " + r.token },
-    });
-    const data = await res.json();
-    if (!data.result) return null;
-    try { return JSON.parse(data.result); } catch (e) { return null; }
+    // One round trip: JSON profile plus canonical integer-cents shadow.
+    const values = await redisCmd(["MGET", userKey(email), balanceCentsKey(email)]);
+    if (!Array.isArray(values) || !values[0]) return null;
+    const user = JSON.parse(values[0]);
+    if (!user || typeof user !== "object") return null;
+    if (values[1] != null) {
+      const raw = String(values[1]);
+      if (!/^-?\d+$/.test(raw)) return null;
+      const storedCents = Number(raw);
+      if (!Number.isSafeInteger(storedCents)) return null;
+      user.balance = storedCents / 100;
+    }
+    return user;
   } catch (e) { return null; }
 }
 
-export async function setUser(email, user) {
-  const r = redisConfig();
-  if (!r) return false;
+export async function setUser(email, user, options = {}) {
   try {
-    const res = await fetch(r.url + "/set/" + encodeURIComponent(userKey(email)), {
-      method: "POST",
-      headers: { Authorization: "Bearer " + r.token, "Content-Type": "text/plain" },
-      body: JSON.stringify(user),
-    });
-    return res.ok;
+    const result = await saveUserPreservingBalanceAtomic(email, user, options);
+    return options.returnResult ? result : Boolean(result?.ok);
   } catch (e) { return false; }
 }
 
@@ -1630,7 +2269,13 @@ async function sendViaResend({
         signal: controller.signal,
       });
       clearTimeout(timer);
-      if (!res.ok) return { ok: false, error: await readEmailApiError(res), code: res.status, attempt };
+      if (!res.ok) return {
+        ok: false,
+        error: await readEmailApiError(res),
+        code: res.status,
+        attempt,
+        uncertain: res.status >= 500 || res.status === 408 || res.status === 425,
+      };
       const data = await res.json();
       return {
         ok: true,
@@ -1643,7 +2288,7 @@ async function sendViaResend({
       };
     } catch (e) {
       clearTimeout(timer);
-      return { ok: false, error: e.message, code: e.name || "fetch_error", attempt };
+      return { ok: false, error: e.message, code: e.name || "fetch_error", attempt, uncertain: true };
     }
   }
 
@@ -1654,7 +2299,14 @@ async function sendViaResend({
   const r2 = await attemptSend(2);
   if (r2.ok) return r2;
   console.error(`[email:resend] both attempts failed for ${recipients.join(",")}: ${r2.error}`);
-  return { ok: false, provider: "resend", reason: "send_failed_after_retry", error: r2.error, code: r2.code };
+  return {
+    ok: false,
+    provider: "resend",
+    reason: "send_failed_after_retry",
+    error: r2.error,
+    code: r2.code,
+    uncertain: Boolean(r1.uncertain || r2.uncertain),
+  };
 }
 
 function smtpTransportConfig(prefix = "SMTP") {
@@ -1676,6 +2328,10 @@ function smtpTransportConfig(prefix = "SMTP") {
 
 export function shouldFallbackToBackupSmtp(args, result) {
   if (result?.ok || args?.marketing || args?.scheduledAt) return false;
+  // A timeout, transport exception or upstream 5xx can arrive after the
+  // primary provider accepted the message. Switching providers in that state
+  // defeats every provider-side idempotency key and can send a duplicate.
+  if (result?.uncertain) return false;
   if (clean(args?.category, 40).toLowerCase() === "marketing") return false;
   const recipients = (Array.isArray(args?.to) ? args.to : [args?.to]).filter(Boolean);
   if (!recipients.length || recipients.some((address) => !validEmail(address))) return false;
@@ -1688,20 +2344,11 @@ export function shouldFallbackToBackupSmtp(args, result) {
     || detail.includes("not authorized to send")
   ) return true;
   if ([400, 404, 409, 413, 422].includes(code)) return false;
-  if ([401, 403, 408, 425, 429].includes(code) || (code >= 500 && code <= 599)) return true;
+  if ([401, 403, 429].includes(code)) return true;
   return detail.includes("resend_api_key_missing")
     || detail.includes("daily_quota_exceeded")
     || detail.includes("monthly_quota_exceeded")
-    || detail.includes("rate_limit")
-    || detail.includes("fetch failed")
-    || detail.includes("network")
-    || detail.includes("timeout")
-    || detail.includes("timed out")
-    || detail.includes("abort")
-    || detail.includes("econnreset")
-    || detail.includes("econnrefused")
-    || detail.includes("enotfound")
-    || detail.includes("socket hang up");
+    || detail.includes("rate_limit");
 }
 
 async function sendViaSmtp({ to, subject, text, html, fromName, marketing = false, idempotencyKey = "" }, config = smtpTransportConfig()) {
@@ -1751,23 +2398,17 @@ async function sendViaSmtp({ to, subject, text, html, fromName, marketing = fals
       return { ok: true, messageId: info.messageId || messageId, provider, attempt };
     } catch (e) {
       try { transporter.close(); } catch (er) {}
-      return { ok: false, provider, error: e.message, code: e.code, response: e.response, attempt };
+      // Nodemailer cannot prove whether a transport error happened before or
+      // after the SMTP server accepted DATA. Mark it ambiguous and never send
+      // it again automatically, even with the same Message-ID.
+      return { ok: false, provider, error: e.message, code: e.code, response: e.response, attempt, uncertain: true };
     }
   }
 
-  // First attempt
-  const r1 = await attemptSend(1);
-  if (r1.ok) return r1;
-  console.warn(`[email] attempt 1 failed (${r1.code || "?"}): ${r1.error}; retrying...`);
-  // Wait 1.5s then retry once
-  await new Promise((res) => setTimeout(res, 1500));
-  const r2 = await attemptSend(2);
-  if (r2.ok) {
-    console.log(`[email] succeeded on retry to ${to}`);
-    return r2;
-  }
-  console.error(`[email] both attempts failed for ${to}: ${r2.error}`);
-  return { ok: false, provider, reason: "send_failed_after_retry", error: r2.error, code: r2.code };
+  const result = await attemptSend(1);
+  if (result.ok) return result;
+  console.error(`[email] SMTP result is uncertain for ${to}: ${result.error}`);
+  return { ...result, reason: "smtp_delivery_uncertain", uncertain: true };
 }
 
 // ── Account extensions: coupons, transfers, redeem codes, withdrawals ──
@@ -1894,6 +2535,7 @@ const WITHDRAWAL_LIST_KEY = "liumeiti:withdrawals";
 const ADMIN_STAFF_KEY = "liumeiti:admin:staff";
 const ADMIN_ACTION_LOG_KEY = "liumeiti:admin:action-log";
 const ADMIN_MAIL_LOG_KEY = "liumeiti:admin:mail-log";
+const DURABLE_ADMIN_OPERATION_PREFIX = "liumeiti:admin:operation:";
 
 export const REDEEM_SERVICE_PRODUCTS = {
   spotify: { label: "Spotify", amount: 128, hasPlan: true },
@@ -1961,11 +2603,16 @@ function stockKey(service, planId) { return "liumeiti:stock:" + clean(service, 4
 // value: ""/null → 删键(不限);整数≥0 → 设值
 export async function setStock(service, planId, value) {
   const key = stockKey(service, planId);
-  if (value === "" || value == null) { await redisCmd(["DEL", key]); return true; }
-  const n = Math.floor(Number(value));
-  if (!Number.isFinite(n) || n < 0) return false;
-  await redisCmd(["SET", key, String(n)]);
-  return true;
+  if (value === "" || value == null) {
+    const deleted = await redisCmd(["DEL", key]);
+    return Number.isInteger(Number(deleted)) && Number(deleted) >= 0;
+  }
+  const n = Number(value);
+  // Keep stock values inside JavaScript/Lua's exact integer range and a sane
+  // operational ceiling. This also guarantees Redis DECRBY cannot overflow
+  // after an earlier stock key has already been changed in the same script.
+  if (!Number.isSafeInteger(n) || n < 0 || n > 1_000_000_000) return false;
+  return await redisCmd(["SET", key, String(n)]) === "OK";
 }
 
 // 原子占用一个库存:未配置/Redis 不可用 → 放行(fail-soft);售罄 → 回滚并拒绝
@@ -2103,6 +2750,53 @@ function redeemCodeKey(code) { return "liumeiti:redeem-code:" + normalizeRedeemC
 function redeemBatchKey(id) { return "liumeiti:redeem-code-batch:" + clean(id, 80); }
 function withdrawalKey(id) { return "liumeiti:withdrawal:" + clean(id, 80); }
 
+function durableAdminOperationKey(scope, operationId) {
+  const digest = createHash("sha256")
+    .update(String(scope || "") + "\0" + String(operationId || ""))
+    .digest("hex");
+  return DURABLE_ADMIN_OPERATION_PREFIX + clean(scope, 60) + ":" + digest;
+}
+
+function validAdminOperationId(value) {
+  const raw = String(value || "").trim();
+  return raw.length >= 8 && raw.length <= 160 && /^[A-Za-z0-9._:-]+$/.test(raw) ? raw : "";
+}
+
+function parseDurableAdminOperation(raw, requestHash) {
+  if (!raw || typeof raw !== "string") return null;
+  let record = null;
+  try { record = JSON.parse(raw); } catch (e) { return { ok: false, error: "storage_failed" }; }
+  if (!record || typeof record !== "object" || Array.isArray(record)) return { ok: false, error: "storage_failed" };
+  if (clean(record.requestHash, 80) !== requestHash) return { ok: false, error: "idempotency_conflict" };
+  let result = null;
+  try {
+    if (typeof record.retryResultJson === "string") result = JSON.parse(record.retryResultJson);
+    else if (typeof record.resultJson === "string") result = JSON.parse(record.resultJson);
+    else if (record.result && typeof record.result === "object" && !Array.isArray(record.result)) result = record.result;
+  } catch (e) { return { ok: false, error: "storage_failed" }; }
+  if (!result || typeof result !== "object" || Array.isArray(result)) return { ok: false, error: "storage_failed" };
+  return { ...result, idempotent: true, recovered: true };
+}
+
+async function recoverDurableAdminOperation(operationKey, requestHash) {
+  const raw = await redisCmd(["GET", operationKey]);
+  return parseDurableAdminOperation(raw, requestHash);
+}
+
+function adminActionEntry(action, actor, target, detail, now = new Date()) {
+  const staff = adminActorFromSession(actor);
+  return {
+    id: makeId("AL"),
+    action: clean(action, 80),
+    target: clean(target, 180),
+    detail: detail && typeof detail === "object" ? detail : {},
+    staffId: Number(staff.staffId || 1),
+    staffUsername: clean(staff.staffUsername || "admin", 60),
+    createdAt: now.toISOString(),
+    createdAtBeijing: formatBeijingTime(now),
+  };
+}
+
 export function roundMoney(value) {
   const n = Number(value || 0);
   if (!Number.isFinite(n)) return 0;
@@ -2150,6 +2844,92 @@ function rateLimitIdentityFingerprint(identity = "") {
   return createHmac("sha256", secret).update(subject).digest("hex").slice(0, 40);
 }
 
+const STRICT_DUAL_RATE_LIMIT_SCRIPT = `
+local function kind(key)
+  local value=redis.call('TYPE',key)
+  if type(value)=='table' then return value.ok end
+  return value
+end
+for _,key in ipairs(KEYS) do
+  local value=kind(key)
+  if value~='none' and value~='string' then return cjson.encode({ok=false,error='rate_limit_record_invalid'}) end
+end
+local window=tonumber(ARGV[1])
+local identityLimit=tonumber(ARGV[2])
+local ipLimit=tonumber(ARGV[3])
+if not window or window<1 or not identityLimit or identityLimit<1 or not ipLimit or ipLimit<1 then
+  return cjson.encode({ok=false,error='rate_limit_config_invalid'})
+end
+local identityCount=redis.call('INCR',KEYS[1])
+local ipCount=redis.call('INCR',KEYS[2])
+if identityCount==1 then redis.call('EXPIRE',KEYS[1],tostring(window)) end
+if ipCount==1 then redis.call('EXPIRE',KEYS[2],tostring(window)) end
+local identityTtl=redis.call('TTL',KEYS[1])
+local ipTtl=redis.call('TTL',KEYS[2])
+if identityTtl<0 then redis.call('EXPIRE',KEYS[1],tostring(window)); identityTtl=window end
+if ipTtl<0 then redis.call('EXPIRE',KEYS[2],tostring(window)); ipTtl=window end
+return cjson.encode({ok=true,identityCount=identityCount,ipCount=ipCount,identityTtl=identityTtl,ipTtl=ipTtl})`;
+
+// Authentication and verification endpoints use independent identity-only and
+// IP-only buckets. User-Agent is intentionally absent because clients can
+// rotate it on every guess. Both counters update in one script and fail closed.
+export async function checkCriticalRateLimit(request, {
+  namespace,
+  identity,
+  identityLimit = 10,
+  ipLimit = 60,
+  windowSec = 600,
+} = {}) {
+  const safeNamespace = clean(namespace || "critical", 80).replace(/[^a-z0-9:_-]/gi, "");
+  const normalizedIdentity = clean(identity || "unknown", 500).toLowerCase();
+  const ip = clientIpFromRequest(request);
+  const identityKey = "liumeiti:rate:" + safeNamespace + ":identity:"
+    + rateLimitIdentityFingerprint("identity|" + normalizedIdentity);
+  const ipKey = "liumeiti:rate:" + safeNamespace + ":ip:"
+    + rateLimitIdentityFingerprint("ip|" + ip);
+  const raw = await redisCmd([
+    "EVAL",
+    STRICT_DUAL_RATE_LIMIT_SCRIPT,
+    "2",
+    identityKey,
+    ipKey,
+    String(windowSec),
+    String(identityLimit),
+    String(ipLimit),
+  ]);
+  let result = null;
+  try { result = typeof raw === "string" ? JSON.parse(raw) : null; } catch {}
+  if (!result?.ok) {
+    return {
+      ok: false,
+      unavailable: true,
+      status: 503,
+      error: result?.error || "rate_limit_unavailable",
+      retryAfter: 5,
+    };
+  }
+  const identityExceeded = Number(result.identityCount) > Number(identityLimit);
+  const ipExceeded = Number(result.ipCount) > Number(ipLimit);
+  if (identityExceeded || ipExceeded) {
+    const retryAfter = Math.max(
+      identityExceeded ? Number(result.identityTtl || windowSec) : 0,
+      ipExceeded ? Number(result.ipTtl || windowSec) : 0,
+    );
+    return {
+      ok: false,
+      count: identityExceeded ? Number(result.identityCount) : Number(result.ipCount),
+      limit: identityExceeded ? Number(identityLimit) : Number(ipLimit),
+      retryAfter: retryAfter > 0 ? retryAfter : Number(windowSec),
+    };
+  }
+  return {
+    ok: true,
+    identityCount: Number(result.identityCount),
+    ipCount: Number(result.ipCount),
+    retryAfter: 0,
+  };
+}
+
 export async function checkRateLimit(request, { namespace, limit = 10, windowSec = 600, identity = "" } = {}) {
   const r = redisConfig();
   if (!r) return { ok: true, key: "", count: 0, limit, retryAfter: 0 };
@@ -2191,6 +2971,18 @@ export async function checkIdentityRateLimit({ namespace, identity, limit = 10, 
 }
 
 export function rateLimitResponse(guard, message = "请求过于频繁，请稍后再试") {
+  if (guard?.unavailable || Number(guard?.status) === 503) {
+    const retryAfter = Number(guard?.retryAfter || 5);
+    return Response.json({
+      ok: false,
+      error: guard?.error || "rate_limit_unavailable",
+      message: "请求验证服务暂时不可用，请稍后重试",
+      retryAfter,
+    }, {
+      status: 503,
+      headers: { "Cache-Control": "no-store", "Retry-After": String(retryAfter) },
+    });
+  }
   const retryAfter = Number(guard?.retryAfter || 60);
   return Response.json({
     ok: false,
@@ -2345,6 +3137,24 @@ const INVITE_CODE_PREFIX_KEY = "liumeiti:invite-code:";
 export const REFERRAL_LEVEL_ONE_RATE = 0.10;
 export const REFERRAL_LEVEL_TWO_RATE = 0.05;
 
+function validAccountLifecycleId(value) {
+  return /^[a-f0-9]{32}$/.test(String(value || "").trim().toLowerCase());
+}
+
+async function readReferralAccountState(email) {
+  const lower = String(email || "").trim().toLowerCase();
+  if (!validEmail(lower)) return null;
+  try {
+    const { readUserAuthState } = await import("./_auth-session.js");
+    const state = await readUserAuthState(lower);
+    return state.ok && validAccountLifecycleId(state.accountLifecycleId)
+      ? state
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function inviteCodeKey(code) {
   return INVITE_CODE_PREFIX_KEY + normalizeInviteCode(code);
 }
@@ -2395,7 +3205,7 @@ export async function getUserByInviteCode(code) {
   return null;
 }
 
-export async function ensureUserReferralProfile(email, currentUser = null) {
+export async function ensureUserReferralProfile(email, currentUser = null, options = {}) {
   const lower = String(email || "").trim().toLowerCase();
   if (!validEmail(lower)) return null;
   const user = currentUser || await getUser(lower);
@@ -2405,8 +3215,14 @@ export async function ensureUserReferralProfile(email, currentUser = null) {
     user.inviteCode = await createUniqueInviteCode();
     changed = true;
   }
+  // Do not publish an invite-code mapping until the guarded profile write has
+  // committed. In particular, a request holding a snapshot from a deleted
+  // lifecycle must not bind that old code to a newly registered account.
+  if (changed) {
+    const saved = await setUser(lower, user, { ...options, returnResult: true });
+    if (!saved?.ok) return null;
+  }
   await bindInviteCode(lower, user.inviteCode);
-  if (changed) await setUser(lower, user);
   return user;
 }
 
@@ -2509,16 +3325,31 @@ export async function prepareNewUserReferralProfile(email, user, inviteCode = ""
   if (normalizedInvite) {
     const inviter = await getUserByInviteCode(normalizedInvite);
     if (inviter && inviter.email !== lower) {
-      const inviterUser = await ensureUserReferralProfile(inviter.email, inviter.user);
-      next.invitedByEmail = inviter.email;
-      next.invitedByCode = inviterUser?.inviteCode || normalizedInvite;
-      next.invitedBy2Email = inviterUser?.invitedByEmail && inviterUser.invitedByEmail !== lower
-        ? inviterUser.invitedByEmail
-        : "";
-      next.invitedAt = new Date().toISOString();
-      next.invitedAtBeijing = formatBeijingTime(new Date());
-      // 关系成立 → 写入反向索引(上级名下登记该新用户)。
-      await indexReferralRelation(lower, next.invitedByEmail, next.invitedBy2Email);
+      const inviterState = await readReferralAccountState(inviter.email);
+      const inviterUser = inviterState?.user;
+      // Re-check the canonical code after the lifecycle read. A delete and
+      // re-registration between the lookup and this point must not transfer
+      // an old referral relationship to the replacement account.
+      if (inviterUser && normalizeInviteCode(inviterUser.inviteCode) === normalizedInvite) {
+        await ensureUserReferralProfile(inviter.email, inviterUser, {
+          expectedAuthVersion: inviterState.authVersion,
+          updateOnly: true,
+        });
+        next.invitedByEmail = inviter.email;
+        next.invitedByCode = normalizeInviteCode(inviterUser.inviteCode) || normalizedInvite;
+        next.invitedByAccountLifecycleId = inviterState.accountLifecycleId;
+        next.invitedBy2Email = inviterUser.invitedByEmail && inviterUser.invitedByEmail !== lower
+          ? String(inviterUser.invitedByEmail).toLowerCase()
+          : "";
+        next.invitedBy2AccountLifecycleId = next.invitedBy2Email
+          && validAccountLifecycleId(inviterUser.invitedByAccountLifecycleId)
+          ? String(inviterUser.invitedByAccountLifecycleId).toLowerCase()
+          : "";
+        next.invitedAt = new Date().toISOString();
+        next.invitedAtBeijing = formatBeijingTime(new Date());
+        // 关系成立 → 写入反向索引(上级名下登记该新用户)。
+        await indexReferralRelation(lower, next.invitedByEmail, next.invitedBy2Email);
+      }
     }
   }
   await bindInviteCode(lower, next.inviteCode);
@@ -2548,14 +3379,28 @@ export async function resolveReferralForOrder({ userEmail, inviteCode }) {
   const buyerEmail = String(userEmail || "").trim().toLowerCase();
   let firstEmail = "";
   let secondEmail = "";
+  let firstLifecycleId = "";
+  let secondLifecycleId = "";
   let source = "";
   let code = "";
 
   if (validEmail(buyerEmail)) {
-    const buyer = await ensureUserReferralProfile(buyerEmail);
+    const buyerState = await readReferralAccountState(buyerEmail);
+    const buyer = buyerState?.user
+      ? await ensureUserReferralProfile(buyerEmail, buyerState.user, {
+          expectedAuthVersion: buyerState.authVersion,
+          updateOnly: true,
+        })
+      : null;
     if (buyer?.invitedByEmail && buyer.invitedByEmail !== buyerEmail) {
       firstEmail = String(buyer.invitedByEmail).toLowerCase();
       secondEmail = buyer.invitedBy2Email ? String(buyer.invitedBy2Email).toLowerCase() : "";
+      firstLifecycleId = validAccountLifecycleId(buyer.invitedByAccountLifecycleId)
+        ? String(buyer.invitedByAccountLifecycleId).toLowerCase()
+        : "";
+      secondLifecycleId = validAccountLifecycleId(buyer.invitedBy2AccountLifecycleId)
+        ? String(buyer.invitedBy2AccountLifecycleId).toLowerCase()
+        : "";
       code = normalizeInviteCode(buyer.invitedByCode);
       source = "registered_relation";
     }
@@ -2565,22 +3410,38 @@ export async function resolveReferralForOrder({ userEmail, inviteCode }) {
     const normalized = normalizeInviteCode(inviteCode);
     const inviter = normalized ? await getUserByInviteCode(normalized) : null;
     if (inviter && inviter.email !== buyerEmail) {
-      const inviterUser = await ensureUserReferralProfile(inviter.email, inviter.user);
-      firstEmail = inviter.email;
-      secondEmail = inviterUser?.invitedByEmail ? String(inviterUser.invitedByEmail).toLowerCase() : "";
-      code = inviterUser?.inviteCode || normalized;
-      source = "invite_link";
+      const inviterState = await readReferralAccountState(inviter.email);
+      const inviterUser = inviterState?.user;
+      if (inviterUser && normalizeInviteCode(inviterUser.inviteCode) === normalized) {
+        await ensureUserReferralProfile(inviter.email, inviterUser, {
+          expectedAuthVersion: inviterState.authVersion,
+          updateOnly: true,
+        });
+        firstEmail = inviter.email;
+        firstLifecycleId = inviterState.accountLifecycleId;
+        secondEmail = inviterUser.invitedByEmail ? String(inviterUser.invitedByEmail).toLowerCase() : "";
+        secondLifecycleId = validAccountLifecycleId(inviterUser.invitedByAccountLifecycleId)
+          ? String(inviterUser.invitedByAccountLifecycleId).toLowerCase()
+          : "";
+        code = inviterUser.inviteCode || normalized;
+        source = "invite_link";
+      }
     }
   }
 
-  if (secondEmail === firstEmail || secondEmail === buyerEmail) secondEmail = "";
+  if (secondEmail === firstEmail || secondEmail === buyerEmail) {
+    secondEmail = "";
+    secondLifecycleId = "";
+  }
   if (!firstEmail) return null;
   return {
     source,
     inviteCode: normalizeInviteCode(code),
     levelOneEmail: firstEmail,
+    levelOneAccountLifecycleId: firstLifecycleId,
     levelOneRate: REFERRAL_LEVEL_ONE_RATE,
     levelTwoEmail: secondEmail,
+    levelTwoAccountLifecycleId: secondEmail ? secondLifecycleId : "",
     levelTwoRate: secondEmail ? REFERRAL_LEVEL_TWO_RATE : 0,
   };
 }
@@ -2590,65 +3451,110 @@ export async function settleOrderReferralCommission(order, actor = null) {
   const referral = order.referral || null;
   const baseAmount = roundMoney(order.finalAmount || 0);
   if (!referral || baseAmount <= 0) return { ok: true, skipped: "no_referral", entries: [] };
-
   const now = new Date();
+  const cycle = Math.max(1, Number(order.referralCommissionCycle || 0) + 1);
   const candidates = [
-    { level: 1, email: referral.levelOneEmail, rate: Number(referral.levelOneRate || REFERRAL_LEVEL_ONE_RATE) },
-    { level: 2, email: referral.levelTwoEmail, rate: Number(referral.levelTwoRate || REFERRAL_LEVEL_TWO_RATE) },
+    {
+      level: 1,
+      email: referral.levelOneEmail,
+      accountLifecycleId: String(referral.levelOneAccountLifecycleId || "").toLowerCase(),
+      rate: Number(referral.levelOneRate || REFERRAL_LEVEL_ONE_RATE),
+    },
+    {
+      level: 2,
+      email: referral.levelTwoEmail,
+      accountLifecycleId: String(referral.levelTwoAccountLifecycleId || "").toLowerCase(),
+      rate: Number(referral.levelTwoRate || REFERRAL_LEVEL_TWO_RATE),
+    },
   ].filter((item) => validEmail(item.email) && item.rate > 0);
-
   const entries = [];
+  const skippedEntries = [];
   for (const item of candidates) {
     const email = String(item.email).toLowerCase();
-    const existingTxs = await getBalanceTxs(email);
-    // 净额去重:已发(referral)笔数 > 已冲正(referral_reversal)笔数 时视为当前已发放,跳过。
-    // 这样「完成→作废(冲正)→再次完成」可以重新发放,而重复保存不会重复发。
-    const matchLevel = (tx, src) => tx?.source === src && tx?.orderId === order.orderId && Number(tx?.referralLevel || 0) === item.level;
-    const paidCount = existingTxs.filter((tx) => matchLevel(tx, "referral")).length;
-    const reversedCount = existingTxs.filter((tx) => matchLevel(tx, "referral_reversal")).length;
-    if (paidCount > reversedCount) continue;
-
-    const user = await getUser(email);
-    if (!user || user.banned) continue;
     const commission = roundMoney(baseAmount * item.rate);
     if (commission <= 0) continue;
-    const prev = roundMoney(user.balance);
-    const next = roundMoney(prev + commission);
-    user.balance = next;
-    user.referralStats = user.referralStats && typeof user.referralStats === "object" ? user.referralStats : {};
-    user.referralStats.totalCommission = roundMoney(Number(user.referralStats.totalCommission || 0) + commission);
-    user.referralStats.lastCommissionAt = now.toISOString();
-    await setUser(email, user);
-    const tx = {
-      id: makeId("TX"),
-      amount: commission,
+    if (!validAccountLifecycleId(item.accountLifecycleId)) {
+      skippedEntries.push({
+        email,
+        accountLifecycleId: "",
+        level: item.level,
+        rate: item.rate,
+        amount: commission,
+        reason: "referral_account_lifecycle_required",
+        manualReview: true,
+      });
+      continue;
+    }
+    const effect = await applyBalanceEffectAtomic({
+      email,
+      delta: commission,
+      effectId: `referral:${order.orderId}:cycle:${cycle}:level:${item.level}`,
       reason: `合伙人收益 ${maskReferralOrderId(order.orderId)} · ${item.level === 1 ? "一级10%" : "二级5%"}`,
-      balanceAfter: next,
       source: "referral",
       orderId: order.orderId,
       referralLevel: item.level,
-      commissionRate: item.rate,
-      commissionBase: baseAmount,
-      createdAt: now.toISOString(),
-      createdAtBeijing: formatBeijingTime(now),
       staffId: Number(actor?.staffId || 1),
       staffUsername: clean(actor?.staffUsername || "admin", 60),
-    };
-    await addBalanceTx(email, tx);
-    await pushAdminBalanceLog({
-      ...tx,
-      email,
-      balanceBefore: prev,
-      action: "referral_commission",
       detail: { orderId: order.orderId, level: item.level, rate: item.rate, baseAmount },
+      referralCommissionDelta: commission,
+      skipUnavailable: true,
+      expectedAccountLifecycleId: item.accountLifecycleId,
     });
-    entries.push({ email, level: item.level, rate: item.rate, amount: commission, balanceAfter: next });
+    if (!effect.ok) {
+      if (effect.error === "account_lifecycle_changed" || effect.error === "account_lifecycle_required") {
+        skippedEntries.push({
+          email,
+          accountLifecycleId: item.accountLifecycleId,
+          level: item.level,
+          rate: item.rate,
+          amount: commission,
+          reason: effect.error,
+          manualReview: true,
+        });
+        continue;
+      }
+      return { ok: false, error: effect.error, entries, skippedEntries };
+    }
+    if (effect.skipped) {
+      skippedEntries.push({
+        email,
+        accountLifecycleId: item.accountLifecycleId,
+        level: item.level,
+        rate: item.rate,
+        amount: commission,
+        reason: clean(effect.reason || "referral_account_unavailable", 100),
+        manualReview: false,
+      });
+      continue;
+    }
+    entries.push({
+      email,
+      accountLifecycleId: item.accountLifecycleId,
+      level: item.level,
+      rate: item.rate,
+      amount: commission,
+      balanceAfter: effect.balance,
+    });
   }
-
+  order.referralCommissionCycle = cycle;
   order.referralCommissionSettledAt = now.toISOString();
   order.referralCommissionSettledAtBeijing = formatBeijingTime(now);
   order.referralCommissionEntries = entries;
-  return { ok: true, entries };
+  order.referralCommissionSkippedEntries = skippedEntries;
+  order.referralCommissionManualReview = skippedEntries.some((entry) => entry.manualReview)
+    ? {
+        required: true,
+        reason: "referral_account_lifecycle_mismatch",
+        levels: skippedEntries.filter((entry) => entry.manualReview).map((entry) => entry.level),
+        recordedAt: now.toISOString(),
+      }
+    : null;
+  return {
+    ok: true,
+    entries,
+    skippedEntries,
+    manualReview: Boolean(order.referralCommissionManualReview),
+  };
 }
 
 // 订单从「已完成」改回其它状态(作废/未完成)时,把已发放的返佣按笔冲正回收。
@@ -2659,49 +3565,49 @@ export async function reverseOrderReferralCommission(order, actor = null) {
   }
   const settledEntries = Array.isArray(order.referralCommissionEntries) ? order.referralCommissionEntries : [];
   const now = new Date();
+  const cycle = Math.max(1, Number(order.referralCommissionCycle || 1));
+  const unbound = settledEntries.find((entry) =>
+    validEmail(entry?.email)
+    && Number(entry?.amount || 0) > 0
+    && !validAccountLifecycleId(entry?.accountLifecycleId)
+  );
+  if (unbound) {
+    return {
+      ok: false,
+      error: "referral_account_lifecycle_required",
+      manualReview: true,
+      reversed: [],
+    };
+  }
   const reversed = [];
   for (const entry of settledEntries) {
     const email = String(entry?.email || "").toLowerCase();
+    const accountLifecycleId = String(entry?.accountLifecycleId || "").toLowerCase();
     const level = Number(entry?.level || 0);
     const amount = roundMoney(entry?.amount || 0);
     if (!validEmail(email) || amount <= 0) continue;
-    const existingTxs = await getBalanceTxs(email);
-    const matchLevel = (tx, src) => tx?.source === src && tx?.orderId === order.orderId && Number(tx?.referralLevel || 0) === level;
-    const paidCount = existingTxs.filter((tx) => matchLevel(tx, "referral")).length;
-    const reversedCount = existingTxs.filter((tx) => matchLevel(tx, "referral_reversal")).length;
-    if (paidCount <= reversedCount) continue; // 当前已无未冲正的发放,跳过
-
-    const user = await getUser(email);
-    if (!user) continue;
-    const prev = roundMoney(user.balance);
-    const next = roundMoney(prev - amount); // 允许为负:佣金可能已被提现/消费,负余额如实反映欠款
-    user.balance = next;
-    user.referralStats = user.referralStats && typeof user.referralStats === "object" ? user.referralStats : {};
-    user.referralStats.totalCommission = roundMoney(Math.max(0, Number(user.referralStats.totalCommission || 0) - amount));
-    await setUser(email, user);
-    const tx = {
-      id: makeId("TX"),
-      amount: -amount,
+    const effect = await applyBalanceEffectAtomic({
+      email,
+      delta: -amount,
+      effectId: `referral-reversal:${order.orderId}:cycle:${cycle}:level:${level}`,
       reason: `合伙人收益冲正 ${maskReferralOrderId(order.orderId)} · ${level === 1 ? "一级10%" : "二级5%"}(订单作废)`,
-      balanceAfter: next,
       source: "referral_reversal",
+      allowNegative: true,
       orderId: order.orderId,
       referralLevel: level,
-      commissionBase: roundMoney(entry?.amount || 0),
-      createdAt: now.toISOString(),
-      createdAtBeijing: formatBeijingTime(now),
       staffId: Number(actor?.staffId || 1),
       staffUsername: clean(actor?.staffUsername || "admin", 60),
-    };
-    await addBalanceTx(email, tx);
-    await pushAdminBalanceLog({
-      ...tx,
-      email,
-      balanceBefore: prev,
-      action: "referral_commission_reversal",
       detail: { orderId: order.orderId, level, amount },
+      referralCommissionDelta: -amount,
+      expectedAccountLifecycleId: accountLifecycleId,
     });
-    reversed.push({ email, level, amount, balanceAfter: next });
+    if (!effect.ok) return {
+      ok: false,
+      error: effect.error,
+      manualReview: effect.error === "account_lifecycle_changed" || effect.error === "account_lifecycle_required",
+      reversed,
+    };
+    reversed.push({ email, accountLifecycleId, level, amount, balanceAfter: effect.balance });
   }
 
   order.referralCommissionReversedAt = now.toISOString();
@@ -2714,42 +3620,24 @@ export async function reverseOrderReferralCommission(order, actor = null) {
   return { ok: true, reversed };
 }
 
-export async function consumeBestCoupon(email, orderId, maxAmount) {
+export async function previewBestCoupon(email, maxAmount) {
   const user = await getUser(email);
   if (!user) return { discount: 0 };
   const coupons = Array.isArray(user.coupons) ? user.coupons : [];
-  const idx = coupons.findIndex((c) => c && c.status === "active" && Number(c.amount) > 0);
-  if (idx < 0) return { discount: 0 };
-  const now = new Date();
-  const discount = Math.min(roundMoney(coupons[idx].amount), roundMoney(maxAmount));
-  if (discount <= 0) return { discount: 0 };
-  coupons[idx] = {
-    ...coupons[idx],
-    status: "used",
-    usedOrderId: orderId,
-    discount,
-    usedAt: now.toISOString(),
-    usedAtBeijing: formatBeijingTime(now),
-  };
-  user.coupons = coupons;
-  const saved = await setUser(email, user);
-  if (!saved) return { discount: 0 };
-  return { discount, couponId: coupons[idx].id, couponTitle: coupons[idx].title };
+  const coupon = coupons.find((item) => item && item.status === "active" && Number(item.amount) > 0);
+  if (!coupon) return { discount: 0 };
+  const discount = Math.min(roundMoney(coupon.amount), roundMoney(maxAmount));
+  return discount > 0
+    ? { discount, couponId: clean(coupon.id, 100), couponTitle: clean(coupon.title, 160) }
+    : { discount: 0 };
 }
 
-export async function restoreCoupon(email, couponId, orderId) {
-  if (!email || !couponId) return false;
-  const user = await getUser(email);
-  if (!user || !Array.isArray(user.coupons)) return false;
-  const idx = user.coupons.findIndex((c) => c.id === couponId && c.usedOrderId === orderId);
-  if (idx < 0) return false;
-  const restored = { ...user.coupons[idx], status: "active" };
-  delete restored.usedOrderId;
-  delete restored.discount;
-  delete restored.usedAt;
-  delete restored.usedAtBeijing;
-  user.coupons[idx] = restored;
-  return setUser(email, user);
+export async function restoreStockOnce(service, planId, effectId) {
+  return adjustStockEffectAtomic(service, planId, 1, effectId);
+}
+
+export async function reserveStockOnce(service, planId, effectId) {
+  return adjustStockEffectAtomic(service, planId, -1, effectId);
 }
 
 // 订单作废退款 — 退余额(余额支付)+ 还优惠券 + 恢复兑换码。幂等(order.refundedAt 守卫 + 退款流水去重)。
@@ -2759,72 +3647,63 @@ export async function refundVoidedOrder(order, actor = null) {
   const now = new Date();
   const email = String(order.userEmail || "").trim().toLowerCase();
   const out = { balance: 0, coupon: false };
+  const cycle = Math.max(1, Number(order.refundCycle || 0) + 1);
+  const accountLifecycleId = String(order.accountLifecycleId || "").trim().toLowerCase();
+  const balanceAmount = order.paidByBalance ? roundMoney(order.finalAmount || 0) : 0;
+  if ((balanceAmount > 0 || Boolean(order.couponId)) && !validEmail(email)) {
+    return { ok: false, error: "user_not_found", manualReview: true, ...out };
+  }
+  if ((balanceAmount > 0 || Boolean(order.couponId)) && !validAccountLifecycleId(accountLifecycleId)) {
+    return { ok: false, error: "account_lifecycle_required", manualReview: true, ...out };
+  }
 
   // 1) 余额支付 → 退回余额
   if (order.paidByBalance && validEmail(email)) {
-    const amount = roundMoney(order.finalAmount || 0);
+    const amount = balanceAmount;
     if (amount > 0) {
-      const user = await getUser(email);
-      const txs = await getBalanceTxs(email);
-      // 净额去重:退款笔数 > 收回笔数 = 当前已有未收回的退款,跳过;
-      // 收回后(reclaim)再作废可再次退款,与 reclaimRefundOnReactivate 对称幂等。
-      const refundCount = txs.filter((tx) => tx?.source === "order_refund" && tx?.orderId === order.orderId).length;
-      const reclaimCount = txs.filter((tx) => tx?.source === "order_refund_reclaim" && tx?.orderId === order.orderId).length;
-      const outstanding = refundCount > reclaimCount;
-      if (user && !outstanding) {
-        const prev = roundMoney(user.balance);
-        const next = roundMoney(prev + amount);
-        user.balance = next;
-        await setUser(email, user);
-        const tx = {
-          id: makeId("TX"),
-          amount,
-          reason: `订单作废退款 ${order.orderId}`,
-          balanceAfter: next,
-          source: "order_refund",
-          orderId: order.orderId,
-          createdAt: now.toISOString(),
-          createdAtBeijing: formatBeijingTime(now),
-          staffId: Number(actor?.staffId || 1),
-          staffUsername: clean(actor?.staffUsername || "admin", 60),
-        };
-        await addBalanceTx(email, tx);
-        await pushAdminBalanceLog({ ...tx, email, balanceBefore: prev, action: "order_refund", detail: { orderId: order.orderId, amount } });
-        out.balance = amount;
-      }
+      const effect = await applyBalanceEffectAtomic({
+        email, delta: amount, effectId: `order-refund:${order.orderId}:cycle:${cycle}`,
+        reason: `订单作废退款 ${order.orderId}`, source: "order_refund", orderId: order.orderId,
+        staffId: Number(actor?.staffId || 1), staffUsername: clean(actor?.staffUsername || "admin", 60),
+        detail: { orderId: order.orderId, amount, cycle },
+        expectedAccountLifecycleId: accountLifecycleId,
+      });
+      if (!effect.ok) return {
+        ok: false,
+        error: effect.error,
+        manualReview: effect.error === "account_lifecycle_changed" || effect.error === "account_lifecycle_required",
+        ...out,
+      };
+      out.balance = amount;
     }
   }
 
   // 2) 优惠券 → 还回(若该订单用过)
   if (order.couponId && validEmail(email)) {
-    out.coupon = Boolean(await restoreCoupon(email, order.couponId, order.orderId));
+    const restored = await transitionOrderCouponAtomic(
+      email, order.couponId, order.orderId, "active", `coupon-refund:${order.orderId}:cycle:${cycle}`,
+      accountLifecycleId,
+    );
+    if (!restored.ok) {
+      return {
+        ok: false,
+        error: restored.error || "coupon_refund_failed",
+        manualReview: restored.error === "account_lifecycle_changed" || restored.error === "account_lifecycle_required",
+        partial: out.balance > 0,
+        ...out,
+      };
+    }
+    out.coupon = Boolean(restored.ok && (restored.changed || restored.idempotent));
   }
 
   // 注:兑换码「兑换过即失效」—— 订单作废不恢复兑换码(已消耗,永久失效)。
   // 仅下单创建失败的回滚(order/route.js)才返还,那是订单根本没成立的场景。
 
+  order.refundCycle = cycle;
   order.refundedAt = now.toISOString();
   order.refundedAtBeijing = formatBeijingTime(now);
   order.refund = out;
   return { ok: true, ...out };
-}
-
-// 优惠券重新标记为已用(reactivate 时用,restoreCoupon 的逆操作)。
-async function reconsumeCoupon(email, couponId, orderId) {
-  if (!email || !couponId) return false;
-  const user = await getUser(email);
-  if (!user || !Array.isArray(user.coupons)) return false;
-  const idx = user.coupons.findIndex((c) => c.id === couponId && c.status === "active");
-  if (idx < 0) return false;
-  const now = new Date();
-  user.coupons[idx] = {
-    ...user.coupons[idx],
-    status: "used",
-    usedOrderId: orderId,
-    usedAt: now.toISOString(),
-    usedAtBeijing: formatBeijingTime(now),
-  };
-  return setUser(email, user);
 }
 
 // 作废订单被改回「有效」时,回收此前的退款 —— 否则用户既拿退款、订单又生效(白嫖资金洞)。
@@ -2835,46 +3714,60 @@ export async function reclaimRefundOnReactivate(order, actor = null) {
   const now = new Date();
   const email = String(order.userEmail || "").trim().toLowerCase();
   const out = { balance: 0, coupon: false };
+  const cycle = Math.max(1, Number(order.refundCycle || 1));
+  const accountLifecycleId = String(order.accountLifecycleId || "").trim().toLowerCase();
+  const balanceAmount = order.paidByBalance
+    ? roundMoney(order.refund?.balance || order.finalAmount || 0)
+    : 0;
+  if ((balanceAmount > 0 || Boolean(order.couponId && order.refund?.coupon)) && !validEmail(email)) {
+    return { ok: false, error: "user_not_found", manualReview: true, ...out };
+  }
+  if ((balanceAmount > 0 || Boolean(order.couponId && order.refund?.coupon)) && !validAccountLifecycleId(accountLifecycleId)) {
+    return { ok: false, error: "account_lifecycle_required", manualReview: true, ...out };
+  }
+
+  // Resolve the only permanent ownership conflict before reclaiming money.
+  // This keeps a failed reactivation from deducting balance.
+  if (order.couponId && validEmail(email) && order.refund?.coupon) {
+    const consumed = await transitionOrderCouponAtomic(
+      email, order.couponId, order.orderId, "used", `coupon-reclaim:${order.orderId}:cycle:${cycle}`,
+      accountLifecycleId,
+    );
+    if (!consumed.ok) {
+      return {
+        ok: false,
+        error: consumed.error || "coupon_reclaim_failed",
+        manualReview: consumed.error === "account_lifecycle_changed" || consumed.error === "account_lifecycle_required",
+        partial: false,
+        ...out,
+      };
+    }
+    out.coupon = Boolean(consumed.changed || consumed.idempotent);
+  }
 
   // 1) 余额:把作废时退回的钱重新扣除(净额去重:退款笔数 > 收回笔数 时才收回)
   if (order.paidByBalance && validEmail(email)) {
-    const amount = roundMoney(order.refund?.balance || order.finalAmount || 0);
+    const amount = balanceAmount;
     if (amount > 0) {
-      const txs = await getBalanceTxs(email);
-      const refundCount = txs.filter((tx) => tx?.source === "order_refund" && tx?.orderId === order.orderId).length;
-      const reclaimCount = txs.filter((tx) => tx?.source === "order_refund_reclaim" && tx?.orderId === order.orderId).length;
-      if (refundCount > reclaimCount) {
-        const user = await getUser(email);
-        if (user) {
-          const prev = roundMoney(user.balance);
-          const next = roundMoney(prev - amount); // 允许为负:退款可能已被花掉,负余额如实反映欠款
-          user.balance = next;
-          await setUser(email, user);
-          const tx = {
-            id: makeId("TX"),
-            amount: -amount,
-            reason: `作废撤销·退款收回 ${order.orderId}`,
-            balanceAfter: next,
-            source: "order_refund_reclaim",
-            orderId: order.orderId,
-            createdAt: now.toISOString(),
-            createdAtBeijing: formatBeijingTime(now),
-            staffId: Number(actor?.staffId || 1),
-            staffUsername: clean(actor?.staffUsername || "admin", 60),
-          };
-          await addBalanceTx(email, tx);
-          await pushAdminBalanceLog({ ...tx, email, balanceBefore: prev, action: "order_refund_reclaim", detail: { orderId: order.orderId, amount } });
-          out.balance = amount;
-        }
-      }
+      const effect = await applyBalanceEffectAtomic({
+        email, delta: -amount, effectId: `order-refund-reclaim:${order.orderId}:cycle:${cycle}`,
+        reason: `作废撤销·退款收回 ${order.orderId}`, source: "order_refund_reclaim", allowNegative: true,
+        orderId: order.orderId, staffId: Number(actor?.staffId || 1),
+        staffUsername: clean(actor?.staffUsername || "admin", 60), detail: { orderId: order.orderId, amount, cycle },
+        expectedAccountLifecycleId: accountLifecycleId,
+      });
+      if (!effect.ok) return {
+        ok: false,
+        error: effect.error,
+        manualReview: effect.error === "account_lifecycle_changed" || effect.error === "account_lifecycle_required",
+        partial: out.coupon,
+        ...out,
+      };
+      out.balance = amount;
     }
   }
 
   // 2) 优惠券:重新置为已用(仅当作废时还回过)
-  if (order.couponId && validEmail(email) && order.refund?.coupon) {
-    out.coupon = Boolean(await reconsumeCoupon(email, order.couponId, order.orderId));
-  }
-
   // 清空退款标记,使订单若再次作废可再次退款(与净额去重配合幂等)
   order.refundedAt = "";
   order.refundedAtBeijing = "";
@@ -2889,23 +3782,42 @@ export async function ensureOAuthUser({ email, provider, providerId, username, i
   const lower = String(email || "").trim().toLowerCase();
   if (!validEmail(lower)) return { ok: false, error: "invalid_email" };
   const now = new Date();
-  const existing = await getUser(lower);
+  let initialState;
+  try {
+    const { readUserAuthState } = await import("./_auth-session.js");
+    initialState = await readUserAuthState(lower);
+  } catch (error) {
+    return { ok: false, error: "storage_failed" };
+  }
+  if (!initialState.ok && initialState.status !== 401) {
+    return { ok: false, error: initialState.error || "storage_failed" };
+  }
+  const existing = initialState.ok ? initialState.user : null;
   if (existing) {
     if (existing.banned) return { ok: false, error: "account_banned" };
     const social = { ...(existing.social || {}) };
     if (provider && providerId) social[provider] = providerId;
-    const existingWithReferral = await ensureUserReferralProfile(lower, existing);
+    const stableInviteCode = normalizeInviteCode(existing.inviteCode) || await createUniqueInviteCode();
     const next = {
-      ...existingWithReferral,
-      username: existingWithReferral.username || clean(username, 40) || generateRandomUsername(),
-      avatarId: validUserAvatarId(existingWithReferral.avatarId) ? existingWithReferral.avatarId : generateRandomUserAvatarId(),
-      balance: typeof existingWithReferral.balance === "number" ? existingWithReferral.balance : 0,
+      ...existing,
+      inviteCode: stableInviteCode,
+      username: existing.username || clean(username, 40) || generateRandomUsername(),
+      avatarId: validUserAvatarId(existing.avatarId) ? existing.avatarId : generateRandomUserAvatarId(),
+      balance: typeof existing.balance === "number" ? existing.balance : 0,
       social,
       updatedAt: now.toISOString(),
     };
-    await setUser(lower, next);
-    await registerUserEmail(lower);
-    return { ok: true, user: next, isNew: false };
+    const saved = await setUser(lower, next, {
+      expectedAuthVersion: initialState.authVersion,
+      updateOnly: true,
+      returnResult: true,
+    });
+    if (!saved?.ok) {
+      const changed = saved?.error === "session_state_changed" || saved?.error === "user_not_found";
+      return { ok: false, error: changed ? "account_state_changed" : (saved?.error || "storage_failed") };
+    }
+    await bindInviteCode(lower, stableInviteCode);
+    return { ok: true, user: next, isNew: false, authVersion: saved.authVersion };
   }
   const user = await prepareNewUserReferralProfile(lower, attachRegisterCoupon({
     email: lower,
@@ -2916,58 +3828,43 @@ export async function ensureOAuthUser({ email, provider, providerId, username, i
     createdAt: now.toISOString(),
     createdAtBeijing: formatBeijingTime(now),
   }, now), inviteCode);
-  const saved = await setUser(lower, user);
-  if (!saved) return { ok: false, error: "storage_failed" };
-  await registerUserEmail(lower);
-  return { ok: true, user, isNew: true };
+  const saved = await setUser(lower, user, { createOnly: true, returnResult: true });
+  if (!saved?.ok && saved?.error === "user_exists") {
+    // Another registration won after our initial read. Merge only the OAuth
+    // identity into that authoritative lifecycle. Pinning its auth version
+    // prevents a concurrent delete/re-registration from being overwritten.
+    let racedState;
+    try {
+      const { readUserAuthState } = await import("./_auth-session.js");
+      racedState = await readUserAuthState(lower);
+    } catch (error) {
+      return { ok: false, error: "storage_failed" };
+    }
+    if (!racedState.ok) {
+      return { ok: false, error: racedState.status === 401 ? "account_state_changed" : (racedState.error || "storage_failed") };
+    }
+    const raced = racedState.user;
+    if (raced.banned) return { ok: false, error: "account_banned" };
+    const social = { ...(raced.social || {}) };
+    if (provider && providerId) social[provider] = providerId;
+    const merged = { ...raced, social, updatedAt: now.toISOString() };
+    const mergedSaved = await setUser(lower, merged, {
+      expectedAuthVersion: racedState.authVersion,
+      updateOnly: true,
+      returnResult: true,
+    });
+    if (!mergedSaved?.ok) {
+      const changed = mergedSaved?.error === "session_state_changed" || mergedSaved?.error === "user_not_found";
+      return { ok: false, error: changed ? "account_state_changed" : (mergedSaved?.error || "storage_failed") };
+    }
+    return { ok: true, user: merged, isNew: false, authVersion: mergedSaved.authVersion };
+  }
+  if (!saved?.ok) return { ok: false, error: saved?.error || "storage_failed" };
+  return { ok: true, user, isNew: true, authVersion: saved.authVersion };
 }
 
-export async function transferBalanceByEmail(fromEmail, toEmail, amount) {
-  const from = String(fromEmail || "").trim().toLowerCase();
-  const to = String(toEmail || "").trim().toLowerCase();
-  const delta = roundMoney(amount);
-  if (!validEmail(from) || !validEmail(to) || from === to) return { ok: false, error: "invalid_recipient" };
-  if (delta <= 0 || delta > 100000) return { ok: false, error: "invalid_amount" };
-  const fromUser = await getUser(from);
-  const toUser = await getUser(to);
-  if (!fromUser) return { ok: false, error: "user_not_found" };
-  if (!toUser) return { ok: false, error: "recipient_not_found" };
-  if (toUser.banned) return { ok: false, error: "recipient_unavailable" };
-  const fromPrev = roundMoney(fromUser.balance);
-  const toPrev = roundMoney(toUser.balance);
-  if (fromPrev < delta) return { ok: false, error: "insufficient_balance", currentBalance: fromPrev };
-  const now = new Date();
-  const transferId = makeId("TR");
-  fromUser.balance = roundMoney(fromPrev - delta);
-  toUser.balance = roundMoney(toPrev + delta);
-  const savedFrom = await setUser(from, fromUser);
-  const savedTo = await setUser(to, toUser);
-  if (!savedFrom || !savedTo) return { ok: false, error: "save_failed" };
-  const fromTx = {
-    id: makeId("TX"),
-    amount: -delta,
-    reason: "转账给 " + to,
-    balanceAfter: fromUser.balance,
-    source: "transfer",
-    transferId,
-    createdAt: now.toISOString(),
-    createdAtBeijing: formatBeijingTime(now),
-  };
-  const toTx = {
-    id: makeId("TX"),
-    amount: delta,
-    reason: "收到 " + from + " 转账",
-    balanceAfter: toUser.balance,
-    source: "transfer",
-    transferId,
-    createdAt: now.toISOString(),
-    createdAtBeijing: formatBeijingTime(now),
-  };
-  await addBalanceTx(from, fromTx);
-  await addBalanceTx(to, toTx);
-  await pushAdminBalanceLog({ ...fromTx, email: from, balanceBefore: fromPrev });
-  await pushAdminBalanceLog({ ...toTx, email: to, balanceBefore: toPrev });
-  return { ok: true, balance: fromUser.balance };
+export async function transferBalanceByEmail(fromEmail, toEmail, amount, options = {}) {
+  return transferBalanceAtomic(fromEmail, toEmail, amount, options);
 }
 
 async function getJsonKey(key) {
@@ -2996,6 +3893,60 @@ async function adminStaffRecords() {
 
 async function saveAdminStaffRecords(records) {
   return setJsonKey(ADMIN_STAFF_KEY, Array.isArray(records) ? records : []);
+}
+
+async function adminStaffSnapshot() {
+  try {
+    const r = redisConfig();
+    if (!r) return { ok: false, error: "storage_unavailable" };
+    const response = await fetch(r.url + "/get/" + encodeURIComponent(ADMIN_STAFF_KEY), {
+      headers: { Authorization: "Bearer " + r.token },
+    });
+    if (!response.ok) return { ok: false, error: "storage_unavailable" };
+    const payload = await response.json();
+    if (payload?.error) return { ok: false, error: "storage_error" };
+    const raw = payload?.result;
+    if (raw == null) return { ok: true, raw: null, records: [] };
+    const records = JSON.parse(raw);
+    return Array.isArray(records)
+      ? { ok: true, raw: String(raw), records }
+      : { ok: false, error: "storage_failed" };
+  } catch (e) {
+    return { ok: false, error: "storage_unavailable" };
+  }
+}
+
+const MUTATE_ADMIN_STAFF_AND_KICK_SCRIPT = ADMIN_SESSION_INTEGER_HELPERS + `
+local current=redis.call('GET',KEYS[1])
+local absent='__LM_ADMIN_STAFF_ABSENT__'
+if (ARGV[1]==absent and current) or (ARGV[1]~=absent and current~=ARGV[1]) then
+  return cjson.encode({ok=false,error='staff_concurrent_update'})
+end
+local decodedOk,records=pcall(cjson.decode,ARGV[2])
+if not decodedOk or type(records)~='table' then
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+local currentKick=readinteger(KEYS[2]); local fence=readinteger(KEYS[3])
+if not currentKick or not fence then return cjson.encode({ok=false,error='invalid_session_state'}) end
+local proposed=tonumber(ARGV[3]) or 0
+if proposed<fence then proposed=fence end
+if proposed<=currentKick then proposed=currentKick+1 end
+if proposed>9007199254740991 then return cjson.encode({ok=false,error='invalid_session_state'}) end
+redis.call('SET',KEYS[1],ARGV[2])
+redis.call('SET',KEYS[2],tostring(proposed))
+return cjson.encode({ok=true,kickTs=proposed})
+`;
+
+async function commitAdminStaffMutation(expectedRaw, records, staffId) {
+  const result = await redisEvalAtomic(
+    MUTATE_ADMIN_STAFF_AND_KICK_SCRIPT,
+    [ADMIN_STAFF_KEY, staffKickKey(staffId), staffIssueFenceKey(staffId)],
+    [expectedRaw == null ? "__LM_ADMIN_STAFF_ABSENT__" : expectedRaw, JSON.stringify(records), String(Date.now())],
+  );
+  if (!result.ok) return { ok: false, error: result.error || "storage_failed" };
+  return result.value?.ok === true
+    ? { ok: true, kickTs: Number(result.value.kickTs) || 0 }
+    : { ok: false, error: clean(result.value?.error, 80) || "storage_failed" };
 }
 
 export function envAdminUsername() {
@@ -3127,40 +4078,50 @@ export async function createAdminStaff(input, actor) {
 export async function updateAdminStaff(id, patch, actor) {
   const staffId = Number(id);
   if (!Number.isFinite(staffId) || staffId <= 1) return { ok: false, error: "cannot_edit_root" };
-  const records = await adminStaffRecords();
-  const index = records.findIndex((item) => Number(item.id) === staffId);
-  if (index < 0) return { ok: false, error: "staff_not_found" };
-  const staff = { ...records[index] };
-  const changed = {};
+  if (typeof patch?.password === "string" && patch.password
+      && (patch.password.length < 6 || patch.password.length > 64)) {
+    return { ok: false, error: "invalid_password" };
+  }
 
-  if (patch && typeof patch.perms === "object" && patch.perms !== null) {
-    staff.perms = sanitizeStaffPerms(patch.perms);
-    changed.perms = staff.perms;
-  }
-  if (typeof patch?.role === "string" && ["operator", "support", "finance"].includes(patch.role.toLowerCase())) {
-    staff.role = patch.role.toLowerCase();
-    changed.role = staff.role;
-  }
-  if (typeof patch?.remark === "string") {
-    staff.remark = clean(patch.remark, 160);
-    changed.remark = staff.remark;
-  }
-  if (typeof patch?.password === "string" && patch.password) {
-    if (patch.password.length < 6 || patch.password.length > 64) return { ok: false, error: "invalid_password" };
-    staff.passwordHash = hashPassword(patch.password);
-    changed.passwordReset = true;
-  }
-  if (typeof patch?.active === "boolean") {
-    staff.active = patch.active;
-    changed.active = staff.active;
-  }
-  if (!Object.keys(changed).length) return { ok: false, error: "nothing_to_update" };
+  let staff = null;
+  let changed = null;
+  let committed = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const snapshot = await adminStaffSnapshot();
+    if (!snapshot.ok) return { ok: false, error: snapshot.error || "storage_failed" };
+    const records = snapshot.records;
+    const index = records.findIndex((item) => Number(item.id) === staffId);
+    if (index < 0) return { ok: false, error: "staff_not_found" };
+    staff = { ...records[index] };
+    changed = {};
 
-  records[index] = staff;
-  const saved = await saveAdminStaffRecords(records);
-  if (!saved) return { ok: false, error: "storage_failed" };
-  // 权限/密码/启停变化 → 立即踢下线,强制重新登录生效。
-  await kickAdminStaff(staffId);
+    if (patch && typeof patch.perms === "object" && patch.perms !== null) {
+      staff.perms = sanitizeStaffPerms(patch.perms);
+      changed.perms = staff.perms;
+    }
+    if (typeof patch?.role === "string" && ["operator", "support", "finance"].includes(patch.role.toLowerCase())) {
+      staff.role = patch.role.toLowerCase();
+      changed.role = staff.role;
+    }
+    if (typeof patch?.remark === "string") {
+      staff.remark = clean(patch.remark, 160);
+      changed.remark = staff.remark;
+    }
+    if (typeof patch?.password === "string" && patch.password) {
+      staff.passwordHash = hashPassword(patch.password);
+      changed.passwordReset = true;
+    }
+    if (typeof patch?.active === "boolean") {
+      staff.active = patch.active;
+      changed.active = staff.active;
+    }
+    if (!Object.keys(changed).length) return { ok: false, error: "nothing_to_update" };
+
+    records[index] = staff;
+    committed = await commitAdminStaffMutation(snapshot.raw, records, staffId);
+    if (committed.ok || committed.error !== "staff_concurrent_update") break;
+  }
+  if (!committed?.ok) return { ok: false, error: committed?.error || "staff_concurrent_update" };
   await pushAdminActionLog({
     action: "staff_update",
     actor,
@@ -3173,14 +4134,20 @@ export async function updateAdminStaff(id, patch, actor) {
 export async function deleteAdminStaff(id, actor) {
   const staffId = Number(id);
   if (!Number.isFinite(staffId) || staffId <= 1) return { ok: false, error: "cannot_delete_root" };
-  const records = await adminStaffRecords();
-  const index = records.findIndex((item) => Number(item.id) === staffId);
-  if (index < 0) return { ok: false, error: "staff_not_found" };
   const now = new Date();
-  const [removed] = records.splice(index, 1);
-  const saved = await saveAdminStaffRecords(records);
-  if (!saved) return { ok: false, error: "storage_failed" };
-  await kickAdminStaff(staffId); // 删除即踢下线,残留会话立即失效
+  let removed = null;
+  let committed = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const snapshot = await adminStaffSnapshot();
+    if (!snapshot.ok) return { ok: false, error: snapshot.error || "storage_failed" };
+    const records = snapshot.records;
+    const index = records.findIndex((item) => Number(item.id) === staffId);
+    if (index < 0) return { ok: false, error: "staff_not_found" };
+    [removed] = records.splice(index, 1);
+    committed = await commitAdminStaffMutation(snapshot.raw, records, staffId);
+    if (committed.ok || committed.error !== "staff_concurrent_update") break;
+  }
+  if (!committed?.ok) return { ok: false, error: committed?.error || "staff_concurrent_update" };
   await pushAdminActionLog({
     action: "staff_delete",
     actor,
@@ -3190,7 +4157,22 @@ export async function deleteAdminStaff(id, actor) {
   return { ok: true, deleted: staffId, deletedAtBeijing: formatBeijingTime(now) };
 }
 
-export async function pushAdminActionLog({ action, actor, target, detail }) {
+const PUSH_ADMIN_ACTION_ONCE_SCRIPT = `
+local markerType=redis.call('TYPE',KEYS[1])
+if type(markerType)=='table' then markerType=markerType.ok end
+local listType=redis.call('TYPE',KEYS[2])
+if type(listType)=='table' then listType=listType.ok end
+if markerType~='none' and markerType~='string' then return -2 end
+if listType~='none' and listType~='list' then return -2 end
+local marked=redis.call('SET',KEYS[1],'1','NX')
+if marked then
+  redis.call('LPUSH',KEYS[2],ARGV[1])
+  redis.call('LTRIM',KEYS[2],0,499)
+  return 1
+end
+return 0`;
+
+export async function pushAdminActionLog({ action, actor, target, detail, operationId = "" }) {
   const staff = adminActorFromSession(actor);
   const now = new Date();
   const entry = {
@@ -3205,6 +4187,16 @@ export async function pushAdminActionLog({ action, actor, target, detail }) {
   };
   const r = redisConfig();
   if (!r) return false;
+  const stableOperation = clean(operationId, 300);
+  if (stableOperation) {
+    const marker = "liumeiti:admin-action-once:v1:"
+      + createHash("sha256").update(stableOperation).digest("hex");
+    const appended = await redisCmd([
+      "EVAL", PUSH_ADMIN_ACTION_ONCE_SCRIPT, "2",
+      marker, ADMIN_ACTION_LOG_KEY, JSON.stringify(entry),
+    ]);
+    return appended === 1 || appended === 0;
+  }
   try {
     const res = await fetch(r.url + "/pipeline", {
       method: "POST",
@@ -3385,20 +4377,28 @@ function normalizeRedeemInput(input) {
   return { ok: true, body, type, value, services, quantity, remark: clean(body.remark || body.note, 180), customCode };
 }
 
-export async function createRedeemCodes(input, actor = null) {
+export async function createRedeemCodes(input, actor = null, options = {}) {
   const normalized = normalizeRedeemInput(input);
   if (!normalized.ok) return normalized;
+  const rawOperationId = String(options?.operationId || "").trim();
+  if (!rawOperationId) return { ok: false, error: "idempotency_key_required" };
+  const operationId = validAdminOperationId(rawOperationId);
+  if (!operationId) return { ok: false, error: "invalid_idempotency_key" };
   const { type, value, services, quantity, remark, customCode } = normalized;
   const now = new Date();
   const batchId = makeId("RB");
-  const actorInfo = actor ? adminActorFromSession(actor) : null;
-  if (customCode) {
-    const exists = await getJsonKey(redeemCodeKey(customCode));
-    if (exists) return { ok: false, error: "custom_code_exists" };
-  }
+  const actorInfo = adminActorFromSession(actor);
+  const requestHash = idempotencyPayloadHash({ type, value, services, quantity, remark, customCode });
+  // The client operation belongs to the redeem-management business domain,
+  // not to whichever authorised staff session happens to deliver a retry.
+  // Actor identity remains on the first committed batch/items/audit entry.
+  const operationKey = durableAdminOperationKey("redeem-create", operationId);
   const items = [];
+  const generatedCodes = new Set();
   for (let i = 0; i < quantity; i += 1) {
-    const code = customCode && i === 0 ? customCode : await generateUniqueRedeemCode();
+    let code = customCode && i === 0 ? customCode : await generateUniqueRedeemCode();
+    while (generatedCodes.has(code)) code = await generateUniqueRedeemCode();
+    generatedCodes.add(code);
     const item = {
       code,
       batchId,
@@ -3413,10 +4413,8 @@ export async function createRedeemCodes(input, actor = null) {
       createdAtBeijing: formatBeijingTime(now),
     };
     if (type === "service") item.services = services;
-    if (actorInfo) {
-      item.createdByStaffId = actorInfo.staffId;
-      item.createdByStaffUsername = actorInfo.staffUsername;
-    }
+    item.createdByStaffId = actorInfo.staffId;
+    item.createdByStaffUsername = actorInfo.staffUsername;
     items.push(item);
   }
   const batch = {
@@ -3433,33 +4431,142 @@ export async function createRedeemCodes(input, actor = null) {
     codes: items.map((item) => item.code),
     customCode: customCode || "",
   };
-  if (actorInfo) {
-    batch.createdByStaffId = actorInfo.staffId;
-    batch.createdByStaffUsername = actorInfo.staffUsername;
-  }
-  const commands = [
-    ...items.flatMap((item) => [
-      ["SET", redeemCodeKey(item.code), JSON.stringify(item)],
-      ["LPUSH", REDEEM_LIST_KEY, item.code],
-    ]),
-    ["SET", redeemBatchKey(batchId), JSON.stringify(batch)],
-    ["LPUSH", REDEEM_BATCH_LIST_KEY, batchId],
-    ["LTRIM", REDEEM_LIST_KEY, "0", "499"],
-    ["LTRIM", REDEEM_BATCH_LIST_KEY, "0", "199"],
-  ];
-  const ok = await redisPipeline(commands);
-  if (!ok) return { ok: false, error: "storage_failed" };
-  await pushAdminActionLog({
-    action: "redeem_batch_create",
-    actor: actorInfo,
-    target: "redeem-batch:" + batchId,
-    detail: { type, amount: value, quantity, remark, customCode: customCode || "" },
-  });
-  return { ok: true, code: items[0], codes: items, batch };
+  batch.createdByStaffId = actorInfo.staffId;
+  batch.createdByStaffUsername = actorInfo.staffUsername;
+
+  const resultValue = { ok: true, code: items[0], codes: items, batch };
+  const operationRecord = {
+    version: 1,
+    requestHash,
+    resultJson: JSON.stringify(resultValue),
+    retryResultJson: JSON.stringify({ ...resultValue, idempotent: true, recovered: true }),
+  };
+  const audit = adminActionEntry(
+    "redeem_batch_create",
+    actorInfo,
+    "redeem-batch:" + batchId,
+    { type, amount: value, quantity, remark, customCode: customCode || "" },
+    now,
+  );
+  // REDEEM_BATCH_CREATE_ATOMIC_V1: the operation record is written in the
+  // same script as every code, both indexes, the batch, and its audit entry.
+  // Every possible wrong-type/collision/JSON error is checked before writes.
+  const createScript = `
+local function keyType(key)
+  local reply = redis.call('TYPE', key)
+  return type(reply) == 'table' and reply.ok or reply
+end
+
+local opType = keyType(KEYS[1])
+if opType == 'string' then
+  local raw = redis.call('GET', KEYS[1])
+  local decodedOk, existing = pcall(cjson.decode, raw)
+  if not decodedOk or type(existing) ~= 'table' or type(existing.retryResultJson) ~= 'string' then
+    return cjson.encode({ok=false,error='storage_failed'})
+  end
+  if tostring(existing.requestHash or '') ~= ARGV[1] then
+    return cjson.encode({ok=false,error='idempotency_conflict'})
+  end
+  local resultOk, result = pcall(cjson.decode, existing.retryResultJson)
+  if not resultOk or type(result) ~= 'table' or result.ok ~= true then
+    return cjson.encode({ok=false,error='storage_failed'})
+  end
+  return existing.retryResultJson
+elseif opType ~= 'none' then
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+
+local redeemListType = keyType(KEYS[2])
+local batchListType = keyType(KEYS[4])
+local auditType = keyType(KEYS[5])
+if (redeemListType ~= 'none' and redeemListType ~= 'list')
+  or (batchListType ~= 'none' and batchListType ~= 'list')
+  or (auditType ~= 'none' and auditType ~= 'list') then
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+if keyType(KEYS[3]) ~= 'none' then
+  return cjson.encode({ok=false,error='batch_exists'})
+end
+
+local batchOk, batch = pcall(cjson.decode, ARGV[3])
+local itemsOk, items = pcall(cjson.decode, ARGV[4])
+local resultOk, result = pcall(cjson.decode, ARGV[5])
+local operationOk, operation = pcall(cjson.decode, ARGV[6])
+local auditOk, audit = pcall(cjson.decode, ARGV[7])
+if not batchOk or type(batch) ~= 'table'
+  or not itemsOk or type(items) ~= 'table'
+  or not resultOk or type(result) ~= 'table' or result.ok ~= true
+  or not operationOk or type(operation) ~= 'table' or tostring(operation.requestHash or '') ~= ARGV[1]
+    or type(operation.resultJson) ~= 'string' or type(operation.retryResultJson) ~= 'string'
+  or not auditOk or type(audit) ~= 'table'
+  or tostring(batch.id or '') ~= ARGV[2]
+  or #items ~= (#KEYS - 5)
+  or type(batch.codes) ~= 'table' or #batch.codes ~= #items then
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+
+local encodedItems = {}
+local seenCodes = {}
+for itemIndex = 1, #items do
+  local item = items[itemIndex]
+  local code = tostring(item.code or '')
+  if code == '' or code ~= tostring(batch.codes[itemIndex] or '') or seenCodes[code] then
+    return cjson.encode({ok=false,error='storage_failed'})
+  end
+  seenCodes[code] = true
+  if keyType(KEYS[itemIndex + 5]) ~= 'none' then
+    return cjson.encode({ok=false,error=ARGV[8]})
+  end
+  local encodedOk, encoded = pcall(cjson.encode, item)
+  if not encodedOk then return cjson.encode({ok=false,error='storage_failed'}) end
+  encodedItems[itemIndex] = encoded
+end
+
+for itemIndex = 1, #items do
+  redis.call('SET', KEYS[itemIndex + 5], encodedItems[itemIndex])
+  redis.call('LPUSH', KEYS[2], tostring(items[itemIndex].code))
+end
+redis.call('SET', KEYS[3], ARGV[3])
+redis.call('LPUSH', KEYS[4], ARGV[2])
+redis.call('LTRIM', KEYS[2], 0, 499)
+redis.call('LTRIM', KEYS[4], 0, 199)
+redis.call('LPUSH', KEYS[5], ARGV[7])
+redis.call('LTRIM', KEYS[5], 0, 499)
+redis.call('SET', KEYS[1], ARGV[6])
+return ARGV[5]`;
+
+  const execution = await redisEvalAtomic(
+    createScript,
+    [
+      operationKey,
+      REDEEM_LIST_KEY,
+      redeemBatchKey(batchId),
+      REDEEM_BATCH_LIST_KEY,
+      ADMIN_ACTION_LOG_KEY,
+      ...items.map((item) => redeemCodeKey(item.code)),
+    ],
+    [
+      requestHash,
+      batchId,
+      JSON.stringify(batch),
+      JSON.stringify(items),
+      JSON.stringify(resultValue),
+      JSON.stringify(operationRecord),
+      JSON.stringify(audit),
+      customCode ? "custom_code_exists" : "code_exists",
+    ],
+  );
+  if (execution.ok) return execution.value;
+  return await recoverDurableAdminOperation(operationKey, requestHash)
+    || { ok: false, error: "storage_failed" };
 }
 
-export async function createRedeemCode(input, actor = null) {
-  const result = await createRedeemCodes({ ...(input && typeof input === "object" ? input : { amount: input }), quantity: 1 }, actor);
+export async function createRedeemCode(input, actor = null, options = {}) {
+  const result = await createRedeemCodes(
+    { ...(input && typeof input === "object" ? input : { amount: input }), quantity: 1 },
+    actor,
+    options,
+  );
   if (!result.ok) return result;
   return { ok: true, code: result.code, batch: result.batch };
 }
@@ -3550,57 +4657,123 @@ export async function getRedeemCodePublic(codeValue) {
   };
 }
 
-export async function updateRedeemCodeStatus(codeValue, status, actor = null) {
+async function mutateRedeemCodeAtomic(codeValue, action, actor = null) {
   const code = normalizeRedeemCode(codeValue);
-  const item = await getJsonKey(redeemCodeKey(code));
-  if (!item) return { ok: false, error: "code_not_found" };
-  if (item.status === "used" && status !== "deleted") return { ok: false, error: "code_already_used" };
+  if (!code) return { ok: false, error: "code_not_found" };
+  if (action !== "void" && action !== "delete") return { ok: false, error: "invalid_action" };
   const now = new Date();
-  const next = { ...item, status, updatedAt: now.toISOString() };
-  const actorInfo = actor ? adminActorFromSession(actor) : null;
-  if (status === "void") {
-    next.voidedAt = now.toISOString();
-    next.voidedAtBeijing = formatBeijingTime(now);
-    if (actorInfo) {
-      next.voidedByStaffId = actorInfo.staffId;
-      next.voidedByStaffUsername = actorInfo.staffUsername;
-    }
-  }
-  const saved = await setJsonKey(redeemCodeKey(code), next);
-  if (!saved) return { ok: false, error: "save_failed" };
-  await pushAdminActionLog({
-    action: "redeem_code_" + status,
-    actor: actorInfo,
-    target: "redeem-code:" + code,
-    detail: { batchId: item.batchId || "", type: redeemCodeType(item), amount: item.amount || 0 },
-  });
-  return { ok: true, code: next };
+  const actorInfo = adminActorFromSession(actor);
+  const audit = adminActionEntry("redeem_code_" + action, actorInfo, "redeem-code:" + code, {}, now);
+  // REDEEM_CODE_MANAGEMENT_CAS_V1: the authoritative status is inspected and
+  // changed inside one script, so a concurrent redemption to `used` wins and
+  // can never be overwritten or removed by an earlier admin read.
+  const script = `
+local function keyType(key)
+  local reply = redis.call('TYPE', key)
+  return type(reply) == 'table' and reply.ok or reply
+end
+
+local codeType = keyType(KEYS[1])
+if codeType == 'none' then
+  if ARGV[1] == 'delete' then
+    return cjson.encode({ok=true,deleted=true,idempotent=true,code=ARGV[2]})
+  end
+  return cjson.encode({ok=false,error='code_not_found'})
+elseif codeType ~= 'string' then
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+
+local listType = keyType(KEYS[2])
+local auditType = keyType(KEYS[3])
+if (listType ~= 'none' and listType ~= 'list') or (auditType ~= 'none' and auditType ~= 'list') then
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+local raw = redis.call('GET', KEYS[1])
+local decodedOk, item = pcall(cjson.decode, raw)
+local actorOk, actor = pcall(cjson.decode, ARGV[5])
+local auditOk, audit = pcall(cjson.decode, ARGV[6])
+if not decodedOk or type(item) ~= 'table'
+  or not actorOk or type(actor) ~= 'table'
+  or not auditOk or type(audit) ~= 'table' then
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+local status = tostring(item.status or 'active')
+if status == 'used' then
+  return cjson.encode({ok=false,error='code_already_used'})
+end
+
+if ARGV[1] == 'void' and status == 'void' then
+  return cjson.encode({ok=true,code=item,idempotent=true})
+end
+if ARGV[1] == 'void' and status ~= 'active' then
+  return cjson.encode({ok=false,error='code_unavailable'})
+end
+if ARGV[1] ~= 'void' and ARGV[1] ~= 'delete' then
+  return cjson.encode({ok=false,error='invalid_action'})
+end
+
+audit.detail = {
+  batchId=tostring(item.batchId or ''),
+  type=tostring(item.type or item.kind or 'balance'),
+  amount=tonumber(item.amount or 0) or 0
+}
+local encodedAuditOk, encodedAudit = pcall(cjson.encode, audit)
+if not encodedAuditOk then return cjson.encode({ok=false,error='storage_failed'}) end
+
+local encodedItem = nil
+local encodedResult = nil
+if ARGV[1] == 'void' then
+  item.status = 'void'
+  item.updatedAt = ARGV[3]
+  item.updatedAtBeijing = ARGV[4]
+  item.voidedAt = ARGV[3]
+  item.voidedAtBeijing = ARGV[4]
+  item.voidedByStaffId = tonumber(actor.staffId or 1) or 1
+  item.voidedByStaffUsername = tostring(actor.staffUsername or 'admin')
+  local itemOk
+  itemOk, encodedItem = pcall(cjson.encode, item)
+  if not itemOk then return cjson.encode({ok=false,error='storage_failed'}) end
+  local resultOk
+  resultOk, encodedResult = pcall(cjson.encode, {ok=true,code=item})
+  if not resultOk then return cjson.encode({ok=false,error='storage_failed'}) end
+else
+  local resultOk
+  resultOk, encodedResult = pcall(cjson.encode, {ok=true,deleted=true,code=ARGV[2]})
+  if not resultOk then return cjson.encode({ok=false,error='storage_failed'}) end
+end
+
+if ARGV[1] == 'void' then
+  redis.call('SET', KEYS[1], encodedItem)
+else
+  redis.call('DEL', KEYS[1])
+  redis.call('LREM', KEYS[2], 0, ARGV[2])
+end
+redis.call('LPUSH', KEYS[3], encodedAudit)
+redis.call('LTRIM', KEYS[3], 0, 499)
+return encodedResult`;
+  const keys = [redeemCodeKey(code), REDEEM_LIST_KEY, ADMIN_ACTION_LOG_KEY];
+  const args = [
+    action,
+    code,
+    now.toISOString(),
+    formatBeijingTime(now),
+    JSON.stringify(actorInfo),
+    JSON.stringify(audit),
+  ];
+  let execution = await redisEvalAtomic(script, keys, args);
+  // A second execution is safe and recovers the target state when the first
+  // Redis response was lost after commit.
+  if (!execution.ok) execution = await redisEvalAtomic(script, keys, args);
+  return execution.ok ? execution.value : { ok: false, error: "storage_failed" };
+}
+
+export async function updateRedeemCodeStatus(codeValue, status, actor = null) {
+  if (status !== "void") return { ok: false, error: "invalid_status" };
+  return mutateRedeemCodeAtomic(codeValue, "void", actor);
 }
 
 export async function deleteRedeemCode(codeValue, actor = null) {
-  const code = normalizeRedeemCode(codeValue);
-  const item = await getJsonKey(redeemCodeKey(code));
-  if (item?.status === "used") return { ok: false, error: "code_already_used" };
-  const r = redisConfig();
-  if (!r) return { ok: false, error: "storage_failed" };
-  try {
-    const res = await fetch(r.url + "/pipeline", {
-      method: "POST",
-      headers: { Authorization: "Bearer " + r.token, "Content-Type": "application/json" },
-      body: JSON.stringify([
-        ["DEL", redeemCodeKey(code)],
-        ["LREM", REDEEM_LIST_KEY, "0", code],
-      ]),
-    });
-    const actorInfo = actor ? adminActorFromSession(actor) : null;
-    await pushAdminActionLog({
-      action: "redeem_code_delete",
-      actor: actorInfo,
-      target: "redeem-code:" + code,
-      detail: { batchId: item?.batchId || "", type: item ? redeemCodeType(item) : "", amount: item?.amount || 0 },
-    });
-    return { ok: res.ok };
-  } catch (e) { return { ok: false, error: "delete_failed" }; }
+  return mutateRedeemCodeAtomic(codeValue, "delete", actor);
 }
 
 export async function deleteRedeemHistoryEntries(codes, actor = null) {
@@ -3642,129 +4815,221 @@ export async function deleteRedeemHistoryEntries(codes, actor = null) {
 }
 
 export async function updateRedeemBatchStatus(batchId, status, actor = null) {
+  if (status !== "void") return { ok: false, error: "invalid_status" };
+  return mutateRedeemBatchAtomic(batchId, "void", actor);
+}
+
+async function mutateRedeemBatchAtomic(batchId, action, actor = null) {
   const id = clean(batchId, 80);
-  const batch = await getJsonKey(redeemBatchKey(id));
-  if (!batch) return { ok: false, error: "batch_not_found" };
-  const codes = Array.isArray(batch.codes) ? batch.codes : [];
-  const actorInfo = actor ? adminActorFromSession(actor) : null;
-  const results = [];
-  for (const code of codes) {
-    const item = await getJsonKey(redeemCodeKey(code));
-    if (!item || item.status !== "active") {
-      results.push({ code, ok: false, skipped: true });
-      continue;
-    }
-    const updated = await updateRedeemCodeStatus(code, status, actorInfo);
-    results.push({ code, ok: updated.ok });
+  if (!id) return { ok: false, error: "batch_not_found" };
+  if (action !== "void" && action !== "delete") return { ok: false, error: "invalid_action" };
+  const batchRaw = await redisCmd(["GET", redeemBatchKey(id)]);
+  if (typeof batchRaw !== "string" || !batchRaw) return { ok: false, error: "batch_not_found" };
+  let batch = null;
+  try { batch = JSON.parse(batchRaw); } catch (e) { return { ok: false, error: "storage_failed" }; }
+  if (!batch || typeof batch !== "object" || Array.isArray(batch)) return { ok: false, error: "storage_failed" };
+  const codes = Array.isArray(batch.codes)
+    ? batch.codes.map((code) => normalizeRedeemCode(code)).filter(Boolean)
+    : [];
+  if (codes.length !== (Array.isArray(batch.codes) ? batch.codes.length : 0) || new Set(codes).size !== codes.length) {
+    return { ok: false, error: "storage_failed" };
   }
+  const actorInfo = adminActorFromSession(actor);
   const now = new Date();
-  const next = {
-    ...batch,
-    status,
-    updatedAt: now.toISOString(),
-    updatedAtBeijing: formatBeijingTime(now),
-  };
-  if (status === "void") {
-    next.voidedAtBeijing = formatBeijingTime(now);
-    if (actorInfo) next.voidedByStaffId = actorInfo.staffId;
+  const audit = adminActionEntry("redeem_batch_" + action, actorInfo, "redeem-batch:" + id, {}, now);
+  // REDEEM_BATCH_MANAGEMENT_CAS_V1: the batch record is compared with the
+  // exact snapshot used to declare KEYS, then every current code status is
+  // evaluated in the same script. `used` records are always preserved.
+  const script = `
+local function keyType(key)
+  local reply = redis.call('TYPE', key)
+  return type(reply) == 'table' and reply.ok or reply
+end
+
+if keyType(KEYS[1]) == 'none' then
+  return cjson.encode({ok=false,error='batch_not_found'})
+elseif keyType(KEYS[1]) ~= 'string' then
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+local currentRaw = redis.call('GET', KEYS[1])
+if currentRaw ~= ARGV[3] then
+  return cjson.encode({ok=false,error='batch_conflict'})
+end
+
+local batchListType = keyType(KEYS[2])
+local redeemListType = keyType(KEYS[3])
+local auditType = keyType(KEYS[4])
+if (batchListType ~= 'none' and batchListType ~= 'list')
+  or (redeemListType ~= 'none' and redeemListType ~= 'list')
+  or (auditType ~= 'none' and auditType ~= 'list') then
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+
+local batchOk, currentBatch = pcall(cjson.decode, currentRaw)
+local codesOk, codes = pcall(cjson.decode, ARGV[8])
+local actorOk, actor = pcall(cjson.decode, ARGV[6])
+local auditOk, audit = pcall(cjson.decode, ARGV[7])
+if not batchOk or type(currentBatch) ~= 'table'
+  or not codesOk or type(codes) ~= 'table' or #codes ~= (#KEYS - 4)
+  or not actorOk or type(actor) ~= 'table'
+  or not auditOk or type(audit) ~= 'table' then
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+
+local updates = {}
+local deletions = {}
+local results = {}
+local preservedUsed = {}
+local changed = 0
+for codeIndex = 1, #codes do
+  local code = tostring(codes[codeIndex] or '')
+  local recordType = keyType(KEYS[codeIndex + 4])
+  if recordType == 'none' then
+    results[#results + 1] = {code=code,ok=false,skipped=true,reason='missing'}
+  elseif recordType ~= 'string' then
+    return cjson.encode({ok=false,error='storage_failed',code=code})
+  else
+    local raw = redis.call('GET', KEYS[codeIndex + 4])
+    local itemOk, item = pcall(cjson.decode, raw)
+    if not itemOk or type(item) ~= 'table' or tostring(item.code or '') ~= code then
+      return cjson.encode({ok=false,error='storage_failed',code=code})
+    end
+    local status = tostring(item.status or 'active')
+    if status == 'used' then
+      preservedUsed[#preservedUsed + 1] = code
+      results[#results + 1] = {code=code,ok=false,skipped=true,reason='used'}
+    elseif ARGV[1] == 'delete' then
+      deletions[#deletions + 1] = {key=KEYS[codeIndex + 4],code=code}
+      changed = changed + 1
+      results[#results + 1] = {code=code,ok=true}
+    elseif ARGV[1] == 'void' and status == 'active' then
+      item.status = 'void'
+      item.updatedAt = ARGV[4]
+      item.updatedAtBeijing = ARGV[5]
+      item.voidedAt = ARGV[4]
+      item.voidedAtBeijing = ARGV[5]
+      item.voidedByStaffId = tonumber(actor.staffId or 1) or 1
+      item.voidedByStaffUsername = tostring(actor.staffUsername or 'admin')
+      local encodedOk, encoded = pcall(cjson.encode, item)
+      if not encodedOk then return cjson.encode({ok=false,error='storage_failed',code=code}) end
+      updates[#updates + 1] = {key=KEYS[codeIndex + 4],value=encoded}
+      changed = changed + 1
+      results[#results + 1] = {code=code,ok=true}
+    elseif ARGV[1] == 'void' and status == 'void' then
+      results[#results + 1] = {code=code,ok=true,skipped=true,reason='already_void'}
+    else
+      results[#results + 1] = {code=code,ok=false,skipped=true,reason='unavailable'}
+    end
+  end
+end
+if ARGV[1] ~= 'void' and ARGV[1] ~= 'delete' then
+  return cjson.encode({ok=false,error='invalid_action'})
+end
+
+local result = nil
+local encodedBatch = nil
+if ARGV[1] == 'void' then
+  local wasVoid = tostring(currentBatch.status or '') == 'void'
+  currentBatch.status = 'void'
+  currentBatch.updatedAt = ARGV[4]
+  currentBatch.updatedAtBeijing = ARGV[5]
+  currentBatch.voidedAt = ARGV[4]
+  currentBatch.voidedAtBeijing = ARGV[5]
+  currentBatch.voidedByStaffId = tonumber(actor.staffId or 1) or 1
+  currentBatch.voidedByStaffUsername = tostring(actor.staffUsername or 'admin')
+  local encodedOk
+  encodedOk, encodedBatch = pcall(cjson.encode, currentBatch)
+  if not encodedOk then return cjson.encode({ok=false,error='storage_failed'}) end
+  result = {ok=true,batch=currentBatch,results=results,changedCount=changed,preservedUsed=preservedUsed}
+  if wasVoid and changed == 0 then result.idempotent = true end
+else
+  result = {ok=true,deletedCount=changed,deletedCodes={},preservedUsed=preservedUsed,results=results}
+  for deletionIndex = 1, #deletions do
+    result.deletedCodes[#result.deletedCodes + 1] = deletions[deletionIndex].code
+  end
+end
+
+audit.detail = {
+  total=#codes,
+  changed=changed,
+  deleted=ARGV[1] == 'delete' and changed or 0,
+  preservedUsed=#preservedUsed,
+  type=tostring(currentBatch.type or currentBatch.kind or 'balance'),
+  amount=tonumber(currentBatch.amount or 0) or 0
+}
+local auditEncodedOk, encodedAudit = pcall(cjson.encode, audit)
+local resultEncodedOk, encodedResult = pcall(cjson.encode, result)
+if not auditEncodedOk or not resultEncodedOk then
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+
+if result.idempotent == true then return encodedResult end
+if ARGV[1] == 'void' then
+  for updateIndex = 1, #updates do
+    redis.call('SET', updates[updateIndex].key, updates[updateIndex].value)
+  end
+  redis.call('SET', KEYS[1], encodedBatch)
+else
+  for deletionIndex = 1, #deletions do
+    redis.call('DEL', deletions[deletionIndex].key)
+    redis.call('LREM', KEYS[3], 0, deletions[deletionIndex].code)
+  end
+  redis.call('DEL', KEYS[1])
+  redis.call('LREM', KEYS[2], 0, ARGV[2])
+end
+redis.call('LPUSH', KEYS[4], encodedAudit)
+redis.call('LTRIM', KEYS[4], 0, 499)
+return encodedResult`;
+  const keys = [
+    redeemBatchKey(id),
+    REDEEM_BATCH_LIST_KEY,
+    REDEEM_LIST_KEY,
+    ADMIN_ACTION_LOG_KEY,
+    ...codes.map((code) => redeemCodeKey(code)),
+  ];
+  const args = [
+    action,
+    id,
+    batchRaw,
+    now.toISOString(),
+    formatBeijingTime(now),
+    JSON.stringify(actorInfo),
+    JSON.stringify(audit),
+    JSON.stringify(codes),
+  ];
+  let execution = await redisEvalAtomic(script, keys, args);
+  if (!execution.ok) {
+    execution = await redisEvalAtomic(script, keys, args);
+    if (execution.ok && action === "delete" && execution.value?.error === "batch_not_found") {
+      return {
+        ok: true,
+        deletedCount: 0,
+        deletedCodes: [],
+        preservedUsed: [],
+        results: [],
+        idempotent: true,
+        recovered: true,
+      };
+    }
+    if (execution.ok && action === "void" && execution.value?.error === "batch_conflict") {
+      const recoveredRaw = await redisCmd(["GET", redeemBatchKey(id)]);
+      try {
+        const recoveredBatch = JSON.parse(recoveredRaw);
+        if (recoveredBatch?.status === "void") {
+          return { ok: true, batch: recoveredBatch, results: [], idempotent: true, recovered: true };
+        }
+      } catch (e) {}
+    }
   }
-  await setJsonKey(redeemBatchKey(id), next);
-  await pushAdminActionLog({
-    action: "redeem_batch_" + status,
-    actor: actorInfo,
-    target: "redeem-batch:" + id,
-    detail: { total: codes.length, changed: results.filter((r) => r.ok).length },
-  });
-  return { ok: true, batch: next, results };
+  return execution.ok ? execution.value : { ok: false, error: "storage_failed" };
 }
 
 export async function deleteRedeemBatch(batchId, actor = null) {
-  const id = clean(batchId, 80);
-  const batch = await getJsonKey(redeemBatchKey(id));
-  if (!batch) return { ok: false, error: "batch_not_found" };
-  const codes = Array.isArray(batch.codes) ? batch.codes : [];
-  const codeItems = await Promise.all(codes.map(async (code) => ({
-    code,
-    item: await getJsonKey(redeemCodeKey(code)),
-  })));
-  const deletableCodes = codeItems
-    .filter(({ item }) => !item || (item.status || "active") !== "used")
-    .map(({ code }) => code);
-  const preservedCodes = codeItems
-    .filter(({ item }) => item && (item.status || "active") === "used")
-    .map(({ code }) => code);
-  const r = redisConfig();
-  if (!r) return { ok: false, error: "storage_failed" };
-  const commands = [
-    ...deletableCodes.flatMap((code) => [
-      ["DEL", redeemCodeKey(code)],
-      ["LREM", REDEEM_LIST_KEY, "0", code],
-    ]),
-    ["DEL", redeemBatchKey(id)],
-    ["LREM", REDEEM_BATCH_LIST_KEY, "0", id],
-  ];
-  try {
-    const res = await fetch(r.url + "/pipeline", {
-      method: "POST",
-      headers: { Authorization: "Bearer " + r.token, "Content-Type": "application/json" },
-      body: JSON.stringify(commands),
-    });
-    const actorInfo = actor ? adminActorFromSession(actor) : null;
-    await pushAdminActionLog({
-      action: "redeem_batch_delete",
-      actor: actorInfo,
-      target: "redeem-batch:" + id,
-      detail: {
-        total: codes.length,
-        deleted: deletableCodes.length,
-        preservedUsed: preservedCodes.length,
-        type: redeemCodeType(batch),
-        amount: batch.amount || 0,
-      },
-    });
-    return { ok: res.ok };
-  } catch (e) { return { ok: false, error: "delete_failed" }; }
+  return mutateRedeemBatchAtomic(batchId, "delete", actor);
 }
 
-export async function redeemCodeForUser(email, codeValue, meta = {}) {
-  const lower = String(email || "").trim().toLowerCase();
-  const code = normalizeRedeemCode(codeValue);
-  const item = await getJsonKey(redeemCodeKey(code));
-  if (!item) return { ok: false, error: "code_not_found" };
-  if (item.status !== "active") return { ok: false, error: "code_unavailable" };
-  if (redeemCodeType(item) !== "balance") return { ok: false, error: "service_code_checkout_required" };
-  const amount = roundMoney(item.amount);
-  if (amount <= 0) return { ok: false, error: "invalid_amount" };
-  const user = await getUser(lower);
-  if (!user) return { ok: false, error: "user_not_found" };
-  const prev = roundMoney(user.balance);
-  user.balance = roundMoney(prev + amount);
-  const now = new Date();
-  const updatedCode = {
-    ...item,
-    status: "used",
-    usedBy: lower,
-    usedIp: clean(meta.ip || "", 80),
-    usedUserAgent: clean(meta.userAgent || "", 500),
-    usedAt: now.toISOString(),
-    usedAtBeijing: formatBeijingTime(now),
-  };
-  const savedUser = await setUser(lower, user);
-  const savedCode = await setJsonKey(redeemCodeKey(code), updatedCode);
-  if (!savedUser || !savedCode) return { ok: false, error: "save_failed" };
-  const tx = {
-    id: makeId("TX"),
-    amount,
-    reason: "兑换码充值 " + code,
-    balanceAfter: user.balance,
-    source: "redeem",
-    redeemCode: code,
-    createdAt: now.toISOString(),
-    createdAtBeijing: formatBeijingTime(now),
-  };
-  await addBalanceTx(lower, tx);
-  await pushAdminBalanceLog({ ...tx, email: lower, balanceBefore: prev });
-  return { ok: true, balance: user.balance, amount };
+export async function redeemCodeForUser(email, codeValue, meta = {}, options = {}) {
+  return redeemBalanceCodeAtomic(email, codeValue, meta, options);
 }
 
 export async function validateServiceRedeemCode(codeValue, orderServices) {
@@ -3774,138 +5039,265 @@ export async function validateServiceRedeemCode(codeValue, orderServices) {
   if (item.status !== "active") return { ok: false, error: "code_unavailable" };
   if (redeemCodeType(item) !== "service") return { ok: false, error: "not_service_code" };
   const codeServices = normalizeRedeemServices(item.services || []);
-  const submitted = normalizeRedeemServices(orderServices);
-  if (codeServices.length === 0 || !servicesEqual(codeServices, submitted)) {
+  const rawSubmitted = Array.isArray(orderServices) ? orderServices : [];
+  const submitted = normalizeRedeemServices(rawSubmitted);
+  // Service codes describe one entitlement per service/plan. The normalizer
+  // deliberately de-duplicates catalog input, so compare lengths as well to
+  // prevent a direct API caller from buying duplicate items with one code.
+  if (submitted.length !== rawSubmitted.length || codeServices.length === 0 || !servicesEqual(codeServices, submitted)) {
     return { ok: false, error: "service_mismatch", services: serviceSummaries(codeServices) };
   }
   return { ok: true, code, item: { ...item, type: "service", services: serviceSummaries(codeServices) } };
 }
 
-export async function consumeServiceRedeemCode(codeValue, email, orderId, meta = {}) {
-  const code = normalizeRedeemCode(codeValue);
-  const item = await getJsonKey(redeemCodeKey(code));
-  if (!item || item.status !== "active" || redeemCodeType(item) !== "service") return { ok: false, error: "code_unavailable" };
-  const now = new Date();
-  const next = {
-    ...item,
-    type: "service",
-    status: "used",
-    usedBy: clean(email, 200),
-    usedOrderId: clean(orderId, 80),
-    usedIp: clean(meta.ip || "", 80),
-    usedUserAgent: clean(meta.userAgent || "", 500),
-    usedAt: now.toISOString(),
-    usedAtBeijing: formatBeijingTime(now),
-  };
-  const saved = await setJsonKey(redeemCodeKey(code), next);
-  if (!saved) return { ok: false, error: "save_failed" };
-  return { ok: true, code: next };
+export async function consumeServiceRedeemCode(codeValue, email, orderId, meta = {}, options = {}) {
+  return consumeServiceCodeAtomic(codeValue, email, orderId, meta, options);
 }
 
 export async function restoreServiceRedeemCode(codeValue, orderId) {
-  const code = normalizeRedeemCode(codeValue);
-  const item = await getJsonKey(redeemCodeKey(code));
-  if (!item || item.status !== "used" || item.usedOrderId !== orderId) return false;
-  const next = { ...item, status: "active" };
-  delete next.usedBy;
-  delete next.usedOrderId;
-  delete next.usedIp;
-  delete next.usedUserAgent;
-  delete next.usedAt;
-  delete next.usedAtBeijing;
-  return setJsonKey(redeemCodeKey(code), next);
+  const restored = await restoreServiceCodeAtomic(codeValue, orderId);
+  return Boolean(restored.ok);
 }
 
-export async function createWithdrawal(email, amount, alipayAccount, realName) {
-  const lower = String(email || "").trim().toLowerCase();
-  const value = roundMoney(amount);
-  const alipay = clean(alipayAccount, 160);
-  const name = clean(realName, 80);
-  if (value <= 0 || value > 100000 || !alipay || !name) return { ok: false, error: "missing_required_fields" };
-  const user = await getUser(lower);
-  if (!user) return { ok: false, error: "user_not_found" };
-  const prev = roundMoney(user.balance);
-  if (prev < value) return { ok: false, error: "insufficient_balance", currentBalance: prev };
-  const now = new Date();
-  const withdrawalId = makeId("WD");
-  const txId = makeId("TX");
-  const withdrawal = {
-    id: withdrawalId,
-    userEmail: lower,
-    username: user.username || "",
-    amount: value,
-    alipayAccount: alipay,
-    realName: name,
-    status: "pending",
-    statusLabel: WITHDRAWAL_STATUS_LABEL.pending,
-    txId,
-    createdAt: now.toISOString(),
-    createdAtBeijing: formatBeijingTime(now),
-    updatedAt: now.toISOString(),
-    updatedAtBeijing: formatBeijingTime(now),
-  };
-  user.balance = roundMoney(prev - value);
-  const savedUser = await setUser(lower, user);
-  if (!savedUser) return { ok: false, error: "save_failed" };
-  const tx = {
-    id: txId,
-    amount: -value,
-    reason: "提现申请",
-    balanceAfter: user.balance,
-    source: "withdrawal",
-    withdrawalId,
-    status: "pending",
-    statusLabel: WITHDRAWAL_STATUS_LABEL.pending,
-    createdAt: now.toISOString(),
-    createdAtBeijing: formatBeijingTime(now),
-  };
-  await addBalanceTx(lower, tx);
-  await pushAdminBalanceLog({ ...tx, email: lower, balanceBefore: prev });
-  const stored = await redisPipeline([
-    ["SET", withdrawalKey(withdrawalId), JSON.stringify(withdrawal)],
-    ["LPUSH", WITHDRAWAL_LIST_KEY, withdrawalId],
-    ["LTRIM", WITHDRAWAL_LIST_KEY, "0", "499"],
-  ]);
-  if (!stored) return { ok: false, error: "withdrawal_storage_failed" };
-  return { ok: true, withdrawal, balance: user.balance };
+export async function createWithdrawal(email, amount, alipayAccount, realName, options = {}) {
+  return createWithdrawalAtomic(email, amount, alipayAccount, realName, options);
 }
 
 export async function listWithdrawals() {
-  const ids = await redisCmd(["LRANGE", WITHDRAWAL_LIST_KEY, "0", "499"]);
+  const ids = await redisCmd(["LRANGE", WITHDRAWAL_LIST_KEY, "0", "-1"]);
   if (!Array.isArray(ids)) return [];
   const unique = Array.from(new Set(ids));
-  const items = await Promise.all(unique.map((id) => getJsonKey(withdrawalKey(id))));
-  return items.filter(Boolean);
+  const items = [];
+  for (let offset = 0; offset < unique.length; offset += 100) {
+    const batchIds = unique.slice(offset, offset + 100);
+    const response = await redisPipeline(batchIds.map((id) => ["GET", withdrawalKey(id)]));
+    const rows = pipelineResults(response);
+    if (rows.length !== batchIds.length || rows.some((row) => row?.error)) {
+      throw new Error("withdrawal_record_batch_unavailable");
+    }
+    for (const row of rows) {
+      const raw = pipelineResultValue(row);
+      if (!raw) throw new Error("withdrawal_record_invalid");
+      try {
+        const item = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("withdrawal_record_invalid");
+        items.push(item);
+      } catch (error) {
+        throw new Error("withdrawal_record_invalid");
+      }
+    }
+  }
+  return items;
 }
 
-export async function deleteWithdrawals(ids, actor = null) {
+export async function deleteWithdrawals(ids, actor = null, options = {}) {
   const idSet = new Set((Array.isArray(ids) ? ids : [])
     .map((id) => clean(id, 120))
-    .filter(Boolean));
+    .filter(Boolean)
+    .slice(0, 200));
   if (idSet.size === 0) return { ok: false, error: "no_ids" };
-  const rawIds = await redisCmd(["LRANGE", WITHDRAWAL_LIST_KEY, "0", "499"]);
-  const currentIds = Array.isArray(rawIds) ? rawIds.map((id) => clean(id, 120)).filter(Boolean) : [];
-  const removedIds = Array.from(new Set(currentIds.filter((id) => idSet.has(id))));
-  if (removedIds.length === 0) return { ok: false, error: "not_found" };
-  const remainingIds = currentIds.filter((id) => !idSet.has(id));
-  const commands = [
-    ["DEL", WITHDRAWAL_LIST_KEY],
-    ...remainingIds.map((id) => ["RPUSH", WITHDRAWAL_LIST_KEY, id]),
-    ...removedIds.map((id) => ["DEL", withdrawalKey(id)]),
-  ];
-  const saved = await redisPipeline(commands);
-  if (!saved) return { ok: false, error: "storage_failed" };
-  await pushAdminActionLog({
-    action: "withdrawal_delete",
-    actor,
-    target: "withdrawals:" + removedIds.length,
-    detail: { ids: Array.from(idSet), deletedCount: removedIds.length },
-  });
-  return {
+
+  const archivedIds = Array.from(idSet).sort();
+  const now = new Date();
+  const archivedAt = now.toISOString();
+  const archiveActor = adminActorFromSession(actor);
+  const rawOperationId = String(options?.operationId || "").trim();
+  if (rawOperationId && !validAdminOperationId(rawOperationId)) {
+    return { ok: false, error: "invalid_idempotency_key" };
+  }
+  const requestHash = idempotencyPayloadHash({ ids: archivedIds });
+  // A retry may be resumed by another authorised root session. Keep the
+  // durable identity on the archive domain while the first actor is retained
+  // in the archived records and audit entry written by the atomic script.
+  const operationKey = rawOperationId
+    ? durableAdminOperationKey("withdrawal-archive", rawOperationId)
+    : durableAdminOperationKey("withdrawal-archive-target", requestHash);
+  const resultValue = {
     ok: true,
-    deletedCount: removedIds.length,
-    notFound: Array.from(idSet).filter((id) => !removedIds.includes(id)),
+    archivedCount: archivedIds.length,
+    // Keep the legacy response field while the admin UI still calls this a
+    // delete action. The records themselves remain as archived evidence.
+    deletedCount: archivedIds.length,
+    archivedIds,
   };
+  const operationRecord = {
+    version: 1,
+    requestHash,
+    resultJson: JSON.stringify(resultValue),
+    retryResultJson: JSON.stringify({ ...resultValue, idempotent: true, recovered: true }),
+  };
+  const audit = adminActionEntry(
+    "withdrawal_archive",
+    archiveActor,
+    "withdrawals:" + archivedIds.length,
+    { ids: archivedIds, archivedCount: archivedIds.length },
+    now,
+  );
+  // WITHDRAWAL_ARCHIVE_DURABLE_V2: validate and pre-encode every record before
+  // the first write, then atomically commit records, index removals, audit, and
+  // the permanent operation result. An existing operation result is returned
+  // before touching business keys; an already-achieved complete target state
+  // also recreates the operation record and succeeds idempotently.
+  const archiveScript = `
+local function keyType(key)
+  local reply = redis.call('TYPE', key)
+  return type(reply) == 'table' and reply.ok or reply
+end
+
+local opType = keyType(KEYS[1])
+if opType == 'string' then
+  local opRaw = redis.call('GET', KEYS[1])
+  local opOk, existing = pcall(cjson.decode, opRaw)
+  if not opOk or type(existing) ~= 'table' or type(existing.retryResultJson) ~= 'string' then
+    return cjson.encode({ok=false,error='storage_failed'})
+  end
+  if tostring(existing.requestHash or '') ~= ARGV[1] then
+    return cjson.encode({ok=false,error='idempotency_conflict'})
+  end
+  local resultOk, storedResult = pcall(cjson.decode, existing.retryResultJson)
+  if not resultOk or type(storedResult) ~= 'table' or storedResult.ok ~= true then
+    return cjson.encode({ok=false,error='storage_failed'})
+  end
+  return existing.retryResultJson
+elseif opType ~= 'none' then
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+
+local actorOk, archiveActor = pcall(cjson.decode, ARGV[3])
+local idsOk, ids = pcall(cjson.decode, ARGV[4])
+local resultOk, result = pcall(cjson.decode, ARGV[5])
+local operationOk, operation = pcall(cjson.decode, ARGV[6])
+local auditOk, audit = pcall(cjson.decode, ARGV[7])
+if not actorOk or type(archiveActor) ~= 'table'
+  or not idsOk or type(ids) ~= 'table' or #ids ~= (#KEYS - 3)
+  or not resultOk or type(result) ~= 'table' or result.ok ~= true
+  or not operationOk or type(operation) ~= 'table' or tostring(operation.requestHash or '') ~= ARGV[1]
+    or type(operation.resultJson) ~= 'string' or type(operation.retryResultJson) ~= 'string'
+  or not auditOk or type(audit) ~= 'table' then
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+
+local replacements = {}
+local resultIds = {}
+local archivedCount = 0
+local firstArchivedId = ''
+for recordIndex = 1, #ids do
+  local id = tostring(ids[recordIndex] or '')
+  local recordKey = KEYS[recordIndex + 3]
+  local recordType = keyType(recordKey)
+  if recordType == 'none' then
+    return cjson.encode({ok=false,error='withdrawal_not_found',id=id})
+  end
+  if recordType ~= 'string' then
+    return cjson.encode({ok=false,error='storage_failed',id=id})
+  end
+
+  local raw = redis.call('GET', recordKey)
+  local decodeOk, withdrawal = pcall(cjson.decode, raw)
+  if not decodeOk or type(withdrawal) ~= 'table' then
+    return cjson.encode({ok=false,error='storage_failed',id=id})
+  end
+  if withdrawal.archived == true then
+    archivedCount = archivedCount + 1
+    if firstArchivedId == '' then firstArchivedId = id end
+  else
+    local status = tostring(withdrawal.status or '')
+    if status ~= 'success' and status ~= 'failed' then
+      return cjson.encode({ok=false,error='withdrawal_active',id=id,status=status})
+    end
+
+    withdrawal.archived = true
+    withdrawal.archivedAt = ARGV[2]
+    withdrawal.actor = archiveActor
+    local revision = tonumber(withdrawal.revision or 0)
+    if not revision or revision < 0 or revision ~= math.floor(revision) or revision > 9007199254740990 then
+      return cjson.encode({ok=false,error='storage_failed',id=id})
+    end
+    withdrawal.revision = revision + 1
+    local encodeOk, encoded = pcall(cjson.encode, withdrawal)
+    if not encodeOk then
+      return cjson.encode({ok=false,error='storage_failed',id=id})
+    end
+    replacements[#replacements + 1] = recordKey
+    replacements[#replacements + 1] = encoded
+    resultIds[#resultIds + 1] = id
+  end
+end
+
+if archivedCount == #ids then
+  local retryOk, retryResult = pcall(cjson.decode, operation.retryResultJson)
+  if not retryOk or type(retryResult) ~= 'table' or retryResult.ok ~= true then
+    return cjson.encode({ok=false,error='storage_failed'})
+  end
+  redis.call('SET', KEYS[1], ARGV[6])
+  return operation.retryResultJson
+elseif archivedCount > 0 then
+  return cjson.encode({ok=false,error='withdrawal_already_archived',id=firstArchivedId})
+end
+
+local listType = keyType(KEYS[2])
+local auditType = keyType(KEYS[3])
+if listType ~= 'list' then
+  if listType == 'none' then
+    return cjson.encode({ok=false,error='withdrawal_not_indexed',id=tostring(ids[1] or '')})
+  end
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+if auditType ~= 'none' and auditType ~= 'list' then
+  return cjson.encode({ok=false,error='storage_failed'})
+end
+
+local indexed = {}
+local currentIds = redis.call('LRANGE', KEYS[2], 0, -1)
+for _, currentId in ipairs(currentIds) do indexed[tostring(currentId)] = true end
+for idIndex = 1, #ids do
+  local id = tostring(ids[idIndex] or '')
+  if not indexed[id] then
+    return cjson.encode({ok=false,error='withdrawal_not_indexed',id=id})
+  end
+end
+local encodedAuditOk, encodedAudit = pcall(cjson.encode, audit)
+if not encodedAuditOk then return cjson.encode({ok=false,error='storage_failed'}) end
+
+redis.call('MSET', unpack(replacements))
+for idIndex = 1, #resultIds do
+  redis.call('LREM', KEYS[2], 0, resultIds[idIndex])
+end
+redis.call('LPUSH', KEYS[3], encodedAudit)
+redis.call('LTRIM', KEYS[3], 0, 499)
+redis.call('SET', KEYS[1], ARGV[6])
+return ARGV[5]`;
+
+  const execution = await redisEvalAtomic(
+    archiveScript,
+    [
+      operationKey,
+      WITHDRAWAL_LIST_KEY,
+      ADMIN_ACTION_LOG_KEY,
+      ...archivedIds.map((id) => withdrawalKey(id)),
+    ],
+    [
+      requestHash,
+      archivedAt,
+      JSON.stringify(archiveActor),
+      JSON.stringify(archivedIds),
+      JSON.stringify(resultValue),
+      JSON.stringify(operationRecord),
+      JSON.stringify(audit),
+    ],
+  );
+  let result = execution.ok ? execution.value : null;
+  if (!result) result = await recoverDurableAdminOperation(operationKey, requestHash);
+  if (!result) return { ok: false, error: "storage_failed" };
+  if (result.ok !== true) {
+    return {
+      ok: false,
+      error: clean(result.error, 80) || "storage_failed",
+      id: clean(result.id, 120),
+      status: clean(result.status, 40),
+    };
+  }
+  return result;
 }
 
 export async function getWithdrawalDetail(id) {
@@ -3938,75 +5330,6 @@ export function decorateWithdrawalTransactions(transactions, focusedWithdrawal =
   });
 }
 
-export async function updateWithdrawalStatus(id, status, note = "", actor = null) {
-  const nextStatus = clean(status, 30);
-  if (!WITHDRAWAL_STATUS_LABEL[nextStatus]) return { ok: false, error: "invalid_status" };
-  const withdrawal = await getJsonKey(withdrawalKey(id));
-  if (!withdrawal) return { ok: false, error: "withdrawal_not_found" };
-  const oldStatus = withdrawal.status || "pending";
-  const user = await getUser(withdrawal.userEmail);
-  if (!user) return { ok: false, error: "user_not_found" };
-  const now = new Date();
-  const prev = roundMoney(user.balance);
-  const actorInfo = actor ? adminActorFromSession(actor) : null;
-  let balanceChanged = false;
-  if (oldStatus !== "failed" && nextStatus === "failed") {
-    user.balance = roundMoney(prev + Number(withdrawal.amount || 0));
-    balanceChanged = true;
-    const tx = {
-      id: makeId("TX"),
-      amount: Number(withdrawal.amount || 0),
-      reason: "提现审核失败退回",
-      balanceAfter: user.balance,
-      source: "withdrawal",
-      withdrawalId: withdrawal.id,
-      status: "failed",
-      statusLabel: WITHDRAWAL_STATUS_LABEL.failed,
-      createdAt: now.toISOString(),
-      createdAtBeijing: formatBeijingTime(now),
-    };
-    await addBalanceTx(withdrawal.userEmail, tx);
-    await pushAdminBalanceLog({ ...tx, email: withdrawal.userEmail, balanceBefore: prev, staffId: actorInfo?.staffId || 1, staffUsername: actorInfo?.staffUsername || "admin" });
-  } else if (oldStatus === "failed" && nextStatus !== "failed") {
-    const amount = Number(withdrawal.amount || 0);
-    if (prev < amount) return { ok: false, error: "insufficient_balance" };
-    user.balance = roundMoney(prev - amount);
-    balanceChanged = true;
-    const tx = {
-      id: makeId("TX"),
-      amount: -amount,
-      reason: "提现重新审核冻结",
-      balanceAfter: user.balance,
-      source: "withdrawal",
-      withdrawalId: withdrawal.id,
-      status: nextStatus,
-      statusLabel: WITHDRAWAL_STATUS_LABEL[nextStatus],
-      createdAt: now.toISOString(),
-      createdAtBeijing: formatBeijingTime(now),
-    };
-    await addBalanceTx(withdrawal.userEmail, tx);
-    await pushAdminBalanceLog({ ...tx, email: withdrawal.userEmail, balanceBefore: prev, staffId: actorInfo?.staffId || 1, staffUsername: actorInfo?.staffUsername || "admin" });
-  }
-  if (balanceChanged) await setUser(withdrawal.userEmail, user);
-  const next = {
-    ...withdrawal,
-    status: nextStatus,
-    statusLabel: WITHDRAWAL_STATUS_LABEL[nextStatus],
-    reviewNote: clean(note, 400),
-    updatedAt: now.toISOString(),
-    updatedAtBeijing: formatBeijingTime(now),
-  };
-  if (actorInfo) {
-    next.updatedByStaffId = actorInfo.staffId;
-    next.updatedByStaffUsername = actorInfo.staffUsername;
-  }
-  const saved = await setJsonKey(withdrawalKey(id), next);
-  if (!saved) return { ok: false, error: "save_failed" };
-  await pushAdminActionLog({
-    action: "withdrawal_status",
-    actor: actorInfo,
-    target: "withdrawal:" + withdrawal.id,
-    detail: { from: oldStatus, to: nextStatus, amount: withdrawal.amount || 0, email: withdrawal.userEmail },
-  });
-  return { ok: true, withdrawal: next, balance: roundMoney(user.balance) };
+export async function updateWithdrawalStatus(id, status, note = "", actor = null, options = {}) {
+  return transitionWithdrawalAtomic(id, status, note, actor, options);
 }

@@ -1,9 +1,9 @@
 import {
-  validEmail, getUser, setUser, hashPassword,
-  getResetCode, deleteResetCode,
-  signSession, setCookieValue,
-  checkRateLimit, rateLimitResponse,
+  validEmail, hashPassword,
+  setCookieValue,
+  checkCriticalRateLimit, rateLimitResponse,
 } from "../../_utils.js";
+import { createUserSession, resetPasswordAndRevokeSessions } from "../../_auth-session.js";
 
 export async function POST(request) {
   let body = {};
@@ -15,9 +15,10 @@ export async function POST(request) {
   if (!validEmail(email)) {
     return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
   }
-  const guard = await checkRateLimit(request, {
+  const guard = await checkCriticalRateLimit(request, {
     namespace: "auth:reset",
-    limit: 8,
+    identityLimit: 8,
+    ipLimit: 40,
     windowSec: 15 * 60,
     identity: email,
   });
@@ -29,27 +30,23 @@ export async function POST(request) {
     return Response.json({ ok: false, error: "password_length" }, { status: 400 });
   }
 
-  const stored = await getResetCode(email);
-  if (!stored || stored !== code) {
-    return Response.json({ ok: false, error: "code_invalid_or_expired" }, { status: 400 });
+  // The password field update and session-version bump are one Redis commit.
+  // Login pins the version read with the password, so an old password checked
+  // concurrently can never receive the newly issued version.
+  const revoked = await resetPasswordAndRevokeSessions(email, hashPassword(newPassword), code);
+  if (!revoked.ok) {
+    const status = revoked.error === "code_invalid_or_expired" ? 400
+      : revoked.error === "user_not_found" ? 404 : 503;
+    return Response.json({ ok: false, error: revoked.error || "auth_store_unavailable" }, { status });
   }
-
-  const user = await getUser(email);
-  if (!user) {
-    return Response.json({ ok: false, error: "user_not_found" }, { status: 404 });
-  }
-
-  user.passwordHash = hashPassword(newPassword);
-  user.passwordResetAt = new Date().toISOString();
-  const saved = await setUser(email, user);
-  if (!saved) {
-    return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
-  }
-  await deleteResetCode(email);
 
   // Log the user in directly after reset
-  const token = signSession({ email, exp: Date.now() + 14 * 24 * 60 * 60 * 1000 });
-  return Response.json({ ok: true, email }, {
-    headers: { "Set-Cookie": setCookieValue("lm_user", token) },
+  const session = await createUserSession(email, Date.now(), revoked.authVersion);
+  if (!session.ok) {
+    const status = session.error === "session_state_changed" || session.error === "user_not_found" ? 409 : 503;
+    return Response.json({ ok: false, error: session.error || "auth_store_unavailable" }, { status });
+  }
+  return Response.json({ ok: true, email, accountLifecycleId: session.accountLifecycleId }, {
+    headers: { "Set-Cookie": setCookieValue("lm_user", session.token) },
   });
 }

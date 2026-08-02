@@ -49,20 +49,30 @@ export default function NetflixCodePanel({ canEdit = false }) {
   const [selectedMailIds, setSelectedMailIds] = useState([]);
   const [selectedAccessIds, setSelectedAccessIds] = useState([]);
   const requestRef = useRef(0);
+  const abortRef = useRef(null);
 
-  const load = useCallback(async ({ silent = false, query: nextQuery = "" } = {}) => {
+  const load = useCallback(async ({ silent = false, query: nextQuery = "", scope = "mail" } = {}) => {
     const requestId = ++requestRef.current;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     if (!silent) setLoading(true);
     try {
       const params = new URLSearchParams();
       if (nextQuery.trim()) params.set("q", nextQuery.trim());
-      const response = await fetch(`/api/admin/netflix-code${params.size ? `?${params}` : ""}`, { credentials: "same-origin", cache: "no-store" });
+      params.set("scope", scope);
+      const response = await fetch(`/api/admin/netflix-code?${params}`, {
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      });
       const next = await response.json();
       if (!response.ok || !next?.ok) throw new Error(next?.error || "load_failed");
       if (requestId !== requestRef.current) return;
       setData(next);
       setNotice("");
-    } catch {
+    } catch (error) {
+      if (error?.name === "AbortError") return;
       if (requestId !== requestRef.current) return;
       setNotice("接码记录读取失败，请稍后重试");
     } finally {
@@ -71,9 +81,12 @@ export default function NetflixCodePanel({ canEdit = false }) {
   }, []);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => load({ silent: true, query }), query ? 260 : 0);
-    return () => window.clearTimeout(timer);
-  }, [load, query]);
+    const timer = window.setTimeout(() => load({ silent: true, query, scope: tab }), query ? 260 : 0);
+    return () => {
+      window.clearTimeout(timer);
+      abortRef.current?.abort();
+    };
+  }, [load, query, tab]);
 
   const acceptedCount = useMemo(() => Number(data?.recentAcceptedCount ?? (data?.events || []).filter((event) => event.accepted).length), [data]);
   const mailRows = useMemo(() => data?.events || [], [data]);
@@ -128,7 +141,7 @@ export default function NetflixCodePanel({ canEdit = false }) {
       });
       const result = await response.json();
       if (!response.ok || !result?.ok) throw new Error(result?.error || "save_failed");
-      await load({ silent: true, query });
+      await load({ silent: true, query, scope: tab });
     } catch {
       setNotice("操作未保存，请稍后重试");
     } finally {
@@ -164,7 +177,7 @@ export default function NetflixCodePanel({ canEdit = false }) {
     } catch {
       errorMessage = displayCount > 1 ? "部分记录可能未删除，请刷新后重试" : "记录未删除，请稍后重试";
     } finally {
-      await load({ silent: true, query });
+      await load({ silent: true, query, scope: tab });
       if (errorMessage) setNotice(errorMessage);
       setBusyKey("");
     }
@@ -185,7 +198,7 @@ export default function NetflixCodePanel({ canEdit = false }) {
     <section className={styles.panel}>
       <header className={styles.header}>
         <div><span><KeyRound size={14} />Netflix 自助接码</span><h1>收件与接码记录</h1><p>核对邮件解析、账号匹配与成功接码记录。</p></div>
-        <button type="button" onClick={() => load({ query })} disabled={loading}><RefreshCw size={14} />刷新</button>
+        <button type="button" onClick={() => load({ query, scope: tab })} disabled={loading}><RefreshCw size={14} />刷新</button>
       </header>
 
       <div className={styles.meta}>
@@ -240,7 +253,13 @@ export default function NetflixCodePanel({ canEdit = false }) {
               <div className={styles.accounts}>{accountEmails.length ? accountEmails.map((email) => <span key={email} title={email}>{email}</span>) : <span>未匹配</span>}</div>
               <div className={styles.orders}>{(event.orders || []).length ? event.orders.map((order) => (
                 <div key={order.orderId}>
-                  <span><b>{order.orderId}</b><small>{order.email}</small></span>
+                  <span>
+                    <b>{order.orderId}</b>
+                    <small>收件邮箱：{order.deliveryEmail || order.email || "--"}</small>
+                    {order.ownerEmail && order.ownerEmail !== (order.deliveryEmail || order.email) && (
+                      <small>购买账号：{order.ownerEmail}</small>
+                    )}
+                  </span>
                   {canEdit && <details className={styles.actionMenu}>
                     <summary>管理</summary>
                     <div className={styles.actions}>
@@ -257,7 +276,7 @@ export default function NetflixCodePanel({ canEdit = false }) {
                   {event.accepted && event.kind === "code" && event.result && <div className={styles.parsedCode}><code>{event.result}</code><button type="button" onClick={() => copyParsedResult(event.result, event.eventId)}><Copy size={11} />{copiedResult === event.eventId ? "已复制" : "复制"}</button></div>}
                   {event.accepted && (event.kind === "link" || event.kind === "household") && event.result && <div className={styles.parsedActions}><a href={event.result} target="_blank" rel="noopener noreferrer"><ExternalLink size={11} />打开链接</a><button type="button" onClick={() => copyParsedResult(event.result, event.eventId)}><Copy size={11} />{copiedResult === event.eventId ? "已复制" : "复制链接"}</button></div>}
                 </div>
-                {canEdit && <button type="button" className={styles.deleteButton} onClick={() => removeRecords("delete_mail_records", event.eventIds?.length ? event.eventIds : [event.eventId], "收件记录")} disabled={Boolean(busyKey)} aria-label="删除收件记录" title="删除收件记录"><Trash2 size={13} /></button>}
+                {canEdit && <button type="button" className={styles.deleteButton} onClick={() => removeRecords("delete_mail_records", [event.eventId], "收件记录")} disabled={Boolean(busyKey)} aria-label="删除收件记录" title="删除收件记录"><Trash2 size={13} /></button>}
               </div>
             </article>;
           }) : <div className={styles.empty}>{query ? "没有符合条件的收件记录" : "暂无收件记录"}</div>}

@@ -5520,6 +5520,22 @@ summary:focus-visible {
   font-weight: 600;
   margin-bottom: 16px;
 }
+.checkout-alert > span { display: block; }
+.checkout-alert-action {
+  margin-top: 10px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: rgba(255, 255, 255, 0.72);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.checkout-alert-action:hover { background: #fff; }
+.checkout-alert-action:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
 .checkout-alert.error {
   background: #fef2f2;
   border: 1px solid #fecaca;
@@ -6584,6 +6600,13 @@ summary:focus-visible {
   --faint: #94a3b8;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+/* Keep root horizontal clipping without creating a scroll container that
+   disables the admin header and panel position:sticky behavior. */
+html:has(.admin-page),
+body:has(.admin-page) {
+  overflow-x: clip;
+  overflow-y: visible;
+}
 .admin-header {
   position: sticky; top: 0; z-index: 30;
   display: flex; justify-content: space-between; align-items: center;
@@ -6694,7 +6717,7 @@ summary:focus-visible {
 }
 .aiq-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
 .aiq-tab:hover { background: #eef2f7 !important; color: #0f172a !important; }
-@media (max-width: 900px) { .aiq-sticky { top: 49px; } }
+@media (max-width: 900px) { .aiq-sticky { top: 60px; } }
 
 /* ===== 状态总览 · 紧凑数据面板 ===== */
 .admin-overview-page {
@@ -6866,6 +6889,30 @@ summary:focus-visible {
     -webkit-tap-highlight-color: transparent;
     animation: adminScrimIn 0.2s ease;
   }
+}
+
+/* Keep the compact admin header readable on narrow phones. */
+@media (max-width: 480px) {
+  .admin-header {
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding-inline: 12px;
+  }
+  .admin-header-left {
+    flex: 0 0 auto;
+    min-width: 0;
+    gap: 8px;
+  }
+  .admin-logo { max-width: 92px; }
+  .admin-tag,
+  .admin-logout {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .admin-logout { margin-left: auto; }
+}
+@media (max-width: 360px) {
+  .admin-logo-link { display: none; }
 }
 @keyframes adminScrimIn { from { opacity: 0; } to { opacity: 1; } }
 
@@ -14476,8 +14523,24 @@ summary:focus-visible {
     padding: 12px !important;
   }
 
-  .order-query-field span {
-    display: none !important;
+  .service-query-head {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    justify-content: flex-start !important;
+  }
+
+  .service-query-head > div:first-child,
+  .service-query-head .service-head-links {
+    width: 100%;
+  }
+
+  .service-query-head .section-title {
+    word-break: keep-all;
+    text-wrap: balance;
+  }
+
+  .service-query-head .service-head-links {
+    justify-content: flex-start;
   }
 
   .assurance-section {

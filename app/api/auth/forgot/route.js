@@ -1,6 +1,6 @@
 import {
   validEmail, getUser, setResetCode, sendSimpleEmail,
-  checkRateLimit, rateLimitResponse, generateNumericCode, getCookieFromRequest,
+  checkCriticalRateLimit, rateLimitResponse, generateNumericCode, getCookieFromRequest,
 } from "../../_utils.js";
 import { buildEmailBrandHeader } from "../../email-brand.js";
 import { getSettings } from "../../_settings.js";
@@ -19,9 +19,10 @@ export async function POST(request) {
   if (!validEmail(email)) {
     return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
   }
-  const guard = await checkRateLimit(request, {
+  const guard = await checkCriticalRateLimit(request, {
     namespace: "auth:forgot",
-    limit: 4,
+    identityLimit: 4,
+    ipLimit: 20,
     windowSec: 15 * 60,
     identity: email,
   });
@@ -34,7 +35,11 @@ export async function POST(request) {
   const L = (zh, e) => (en ? e : zh);
   if (user) {
     const code = generateCode();
-    await setResetCode(email, code, 600);
+    const codeStored = await setResetCode(email, code, 600);
+    if (!codeStored) {
+      console.error("[forgot] reset code storage unavailable");
+      return Response.json({ ok: true, sent: true });
+    }
     // 品牌名以站点设置为准(与全站显示一致)
     const settings = await getSettings();
     const brandName = (en ? settings.brand.nameEn : settings.brand.name) || BRAND_NAME;

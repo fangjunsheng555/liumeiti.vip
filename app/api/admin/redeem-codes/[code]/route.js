@@ -9,7 +9,10 @@ export async function PATCH(request, { params }) {
   if (!adminPermissionProfile(session).canManageCodes) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const { code } = await params;
   const result = await updateRedeemCodeStatus(code, "void", adminActorFromSession(session));
-  if (!result.ok) return Response.json({ ok: false, error: clean(result.error, 80) }, { status: 400 });
+  if (!result.ok) {
+    const error = clean(result.error, 80);
+    return Response.json({ ok: false, error }, { status: error === "code_already_used" ? 409 : (error === "storage_failed" ? 503 : 400) });
+  }
   const { codes, batches } = await listManageableRedeemCodesAndBatches();
   return Response.json({ ok: true, code: result.code, codes, batches });
 }
@@ -20,7 +23,10 @@ export async function DELETE(request, { params }) {
   if (!isRootAdminSession(session)) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const { code } = await params;
   const result = await deleteRedeemCode(code, adminActorFromSession(session));
-  if (!result.ok) return Response.json({ ok: false, error: clean(result.error, 80) }, { status: 400 });
+  if (!result.ok) {
+    const error = clean(result.error, 80);
+    return Response.json({ ok: false, error }, { status: error === "code_already_used" ? 409 : (error === "storage_failed" ? 503 : 400) });
+  }
   const { codes, batches } = await listManageableRedeemCodesAndBatches();
   return Response.json({ ok: true, codes, batches });
 }

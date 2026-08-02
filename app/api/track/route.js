@@ -11,8 +11,9 @@ import { after } from "next/server";
 import { runMaintenanceTick } from "../_keeper.js";
 import {
   clientIpFromRequest, clientUserAgentFromRequest,
-  getCookieFromRequest, verifySession, validEmail, redisCmd, redisPipeline,
+  validEmail, redisCmd, redisPipeline,
 } from "../_utils.js";
+import { authenticateUserRequest } from "../_auth-session.js";
 
 export const runtime = "nodejs";
 // keeper(链上确认/续费提醒)经 after() 在本路由生命周期内执行,预留足够时长防中途被杀
@@ -62,9 +63,11 @@ function cleanPath(p) {
   }
   return ((pathname || "/") + search).slice(0, MAX_PATH) || "/";
 }
-function authedEmail(request) {
-  try { const s = verifySession(getCookieFromRequest(request, "lm_user")); return s && validEmail(s.email) ? String(s.email).toLowerCase() : ""; }
-  catch (e) { return ""; }
+async function authedEmail(request) {
+  try {
+    const auth = await authenticateUserRequest(request);
+    return auth.ok && validEmail(auth.email) ? String(auth.email).toLowerCase() : "";
+  } catch (error) { return ""; }
 }
 function safeAttr(a) {
   if (!a || typeof a !== "object") return null;
@@ -90,7 +93,7 @@ export async function POST(request) {
     const now = Date.now();
     const id = vid(ip, ua);
     const vkey = PREFIX + "v:" + id;
-    const email = authedEmail(request);
+    const email = await authedEmail(request);
     const attr = safeAttr(body.attr);
 
     // ── 通用事件 ──

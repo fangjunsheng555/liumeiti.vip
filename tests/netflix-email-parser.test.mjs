@@ -74,6 +74,27 @@ test("parses a direct four-digit Netflix sign-in code for an external account", 
   assert.deepEqual(parsed.accountEmails, ["member@example.com"]);
 });
 
+test("derives the same delivery fingerprint only from a Netflix SRC footer UUID", async () => {
+  const uuid = "f73ec386-ca05-4d35-9317-dce0338b88c3";
+  const first = await parseNetflixEmail(mime({
+    subject: "Your Netflix sign-in code",
+    text: `Use this login code to sign in to Netflix: 4827.\nSRC: netflix_email_${uuid}_en`,
+  }));
+  const forwardedCopy = await parseNetflixEmail(mime({
+    subject: "Fwd: Your Netflix sign-in code",
+    text: `Forwarded by an inbox rule.\nUse this login code to sign in to Netflix: 4827.\nSRC: wrapped_${uuid}_copy`,
+    extraHeaders: ["X-Forwarded-By: test-provider"],
+  }));
+  assert.match(first.deliveryFingerprint, /^[a-f0-9]{64}$/);
+  assert.equal(forwardedCopy.deliveryFingerprint, first.deliveryFingerprint);
+
+  const unrelatedUuid = await parseNetflixEmail(mime({
+    subject: "Your Netflix sign-in code",
+    text: `Use this login code to sign in to Netflix: 7314.\nRequest-ID: ${uuid}`,
+  }));
+  assert.equal(unrelatedUuid.deliveryFingerprint, "");
+});
+
 test("preserves the complete Netflix travel verify URL from the Traditional Chinese template", async () => {
   const expected = "https://www.netflix.com/account/travel/verify?token=ANHP9mtXT1FUDR57mCB9262dhhIEz25Ia-3lCLb5WFU&flow=travel_verification&locale=zh-TW";
   const parsed = await parseNetflixEmail(mime({

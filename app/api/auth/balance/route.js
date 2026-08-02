@@ -1,23 +1,28 @@
 import {
-  getCookieFromRequest, verifySession, getUser, getBalanceTxs,
+  getBalanceTxs,
   publicCoupons, listWithdrawals, WITHDRAWAL_STATUS_LABEL,
   publicReferral, ensureUserReferralProfile,
 } from "../../_utils.js";
+import { authenticateUserRequest, userAuthErrorResponse } from "../../_auth-session.js";
 
 export async function GET(request) {
-  const token = getCookieFromRequest(request, "lm_user");
-  const session = verifySession(token);
-  if (!session || !session.email) {
-    return Response.json({ ok: false, error: "not_logged_in" }, { status: 401 });
+  const auth = await authenticateUserRequest(request);
+  if (!auth.ok) return userAuthErrorResponse(auth);
+  const user = await ensureUserReferralProfile(auth.email, auth.user, {
+    expectedAuthVersion: auth.authVersion,
+    expectedAccountLifecycleId: auth.accountLifecycleId,
+    updateOnly: true,
+  });
+  if (!user) {
+    return Response.json({ ok: false, error: "session_state_changed" }, { status: 409 });
   }
-  const user = await ensureUserReferralProfile(session.email, await getUser(session.email));
   const balance = Number(user?.balance || 0);
-  const txs = await getBalanceTxs(session.email);
-  const withdrawals = (await listWithdrawals()).filter((w) => w.userEmail === session.email);
+  const txs = await getBalanceTxs(auth.email);
+  const withdrawals = (await listWithdrawals()).filter((w) => w.userEmail === auth.email);
   const withdrawalMap = new Map(withdrawals.map((w) => [w.id, w]));
   return Response.json({
     ok: true,
-    email: session.email,
+    email: auth.email,
     username: user?.username || "",
     balance,
     coupons: publicCoupons(user),

@@ -18,6 +18,13 @@ import {
   X,
 } from "lucide-react";
 import ReferenceNoticeDialog from "./ReferenceNoticeDialog";
+import {
+  clearAdminMutationJournal,
+  prepareAdminMutationJournal,
+  readAdminMutationJournals,
+} from "../lib/admin-mutation-journal";
+import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
+import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
 
 function compactTime(value) {
   const match = String(value || "").match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/);
@@ -38,6 +45,7 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
   const [detailLoading, setDetailLoading] = useState("");
   const [staffNote, setStaffNote] = useState("");
   const [completing, setCompleting] = useState(false);
+  const [completionRecoveryPending, setCompletionRecoveryPending] = useState(false);
   const [relatedOrderLoading, setRelatedOrderLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [referenceNoticeOpen, setReferenceNoticeOpen] = useState(false);
@@ -88,6 +96,20 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
       setShownPasswords({});
       setStaffNote(data.ticket.staffNote || "");
       setResult(null);
+      setCompletionRecoveryPending(false);
+      if (typeof window !== "undefined") {
+        const pending = readAdminMutationJournals(window.localStorage, "after-sales-complete", data.ticket.ticketId);
+        if (pending.ok && pending.records.length === 1) {
+          const payload = pending.records[0].record.payload || {};
+          setCredentialItems((Array.isArray(payload.items) ? payload.items : []).map((item) => ({ ...item, editable: true })));
+          setStaffNote(String(payload.staffNote || ""));
+          setCompletionRecoveryPending(true);
+          setResult({ type: "warning", message: "已恢复上次结果未确认的完成操作，请重试以确认邮件与审计副作用。" });
+        } else if (!pending.ok || pending.records.length > 1) {
+          setCompletionRecoveryPending(true);
+          setResult({ type: "error", message: "检测到无法确认的完成操作；为避免重复通知，已暂停新的变更。" });
+        }
+      }
     } catch {
       setError("工单详情加载失败，请稍后再试");
     } finally {
@@ -114,7 +136,7 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
   }
 
   async function completeTicket() {
-    if (!active || active.status !== "pending" || completing || !canEdit) return;
+    if (!active || (active.status !== "pending" && !completionRecoveryPending) || completing || !canEdit) return;
     if (credentialItems.some((item) => item.editable && (!item.account.trim() || !item.password.trim()))) {
       setResult({ type: "error", message: "请完整填写该服务的账号和密码后再完成工单" });
       return;
@@ -122,18 +144,31 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
     setCompleting(true);
     setResult(null);
     try {
+      await withCheckoutSubmissionCoordination(async () => {
+      const payload = {
+        status: "completed",
+        staffNote,
+        items: credentialItems.filter((item) => item.editable).map(({ index, account, password }) => ({ index, account, password })),
+      };
+      const pending = prepareAdminMutationJournal(window.localStorage, "after-sales-complete", active.ticketId, payload);
+      const operation = pending.record.idempotencyRequest;
       const response = await fetch(`/api/admin/after-sales/${encodeURIComponent(active.ticketId)}`, {
         method: "PATCH",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          status: "completed",
-          staffNote,
-          items: credentialItems.filter((item) => item.editable).map(({ index, account, password }) => ({ index, account, password })),
-        }),
+        headers: { "Content-Type": "application/json", "Idempotency-Key": operation.key },
+        body: JSON.stringify(pending.record.payload),
       });
       const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || "complete_failed");
+      if (!response.ok || !data.ok) {
+        if (isExplicitTerminalIdempotencyResponse(response.status, data)) {
+          clearAdminMutationJournal(window.localStorage, pending.storageKey, operation.key);
+        }
+        const requestError = new Error(data.error || "complete_failed");
+        requestError.manualReview = Boolean(data.manualReview);
+        throw requestError;
+      }
+      clearAdminMutationJournal(window.localStorage, pending.storageKey, operation.key);
+      setCompletionRecoveryPending(false);
       setActive(data.ticket);
       setCredentialItems((data.ticket.items || []).map((item, index) => ({
         index: Number.isFinite(Number(item.index)) ? Number(item.index) : index,
@@ -150,7 +185,12 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
           });
       await loadTickets({ silent: true });
       onChanged?.();
-    } catch {
+      });
+    } catch (error) {
+      if (error?.manualReview) {
+        setResult({ type: "warning", message: "邮件结果不确定，系统已停止自动重发；请先在邮件服务商记录中人工核对。" });
+        return;
+      }
       setResult({ type: "error", message: "完成工单失败，请稍后再试" });
     } finally {
       setCompleting(false);
@@ -314,7 +354,7 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
 
               {result && <div className={`admin-after-sales-alert ${result.type}`}>{result.type === "success" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}{result.message}</div>}
             </div>
-            {active.status === "pending" && (
+            {(active.status === "pending" || completionRecoveryPending) && (
               <footer className="admin-after-sales-modal-actions">
                 <div><ShieldCheck size={14} /><span>完成后解除该订单的待处理限制，并向用户发送结果邮件</span></div>
                 <button type="button" onClick={completeTicket} disabled={!canEdit || completing}>

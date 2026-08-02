@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { executeOrderCasEval } from "./helpers/order-cas-redis-mock.mjs";
 
 process.env.AUTH_SECRET = "renewal-test-secret-at-least-32-characters!!";
 process.env.KV_REST_API_URL = "http://redis.test";
@@ -12,8 +13,10 @@ delete process.env.TELEGRAM_BOT_TOKEN;
 const values = new Map();
 const lists = new Map();
 const sortedSets = new Map();
+const sets = new Map();
 const sentEmails = [];
 const originalFetch = globalThis.fetch;
+let nextEmailHook = null;
 
 function sortedSet(key) {
   if (!sortedSets.has(key)) sortedSets.set(key, new Map());
@@ -32,7 +35,11 @@ function execute(command) {
   }
   if (name === "DEL") {
     let removed = 0;
-    args.forEach((key) => { if (values.delete(key)) removed += 1; });
+    args.forEach((key) => {
+      if (values.delete(key)) removed += 1;
+      if (lists.delete(key)) removed += 1;
+      if (sets.delete(key)) removed += 1;
+    });
     return removed;
   }
   if (name === "INCR") {
@@ -42,10 +49,79 @@ function execute(command) {
   }
   if (name === "EXPIRE" || name === "TTL") return 1;
   if (name === "EVAL") {
-    const key = args[2];
-    if (values.get(key) !== args[3]) return 0;
-    values.delete(key);
-    return 1;
+    const cas = executeOrderCasEval(command, { values, lists, sortedSets, sets });
+    if (cas.handled) return cas.result;
+    const script = String(args[0] || "");
+    const keyCount = Number(args[1] || 0);
+    const keys = args.slice(2, 2 + keyCount);
+    const argv = args.slice(2 + keyCount);
+    if (script.includes("state='started'") && script.includes("isNew=true")) {
+      const existing = values.get(keys[0]);
+      if (existing) {
+        const record = JSON.parse(existing);
+        if (record.requestHash !== argv[0]) return JSON.stringify({ ok: false, error: "idempotency_conflict" });
+        return JSON.stringify({ ok: true, state: record.state || "started", record, isNew: false });
+      }
+      const record = {
+        version: 1,
+        state: "started",
+        operationId: argv[1],
+        requestHash: argv[0],
+        createdAt: argv[2],
+      };
+      values.set(keys[0], JSON.stringify(record));
+      return JSON.stringify({ ok: true, state: "started", record, isNew: true });
+    }
+    if (script.includes("record.state='done'") && script.includes("completedAt=ARGV[3]")) {
+      const raw = values.get(keys[0]);
+      if (!raw) return JSON.stringify({ ok: false, error: "operation_record_missing" });
+      const record = JSON.parse(raw);
+      if (record.requestHash !== argv[0]) return JSON.stringify({ ok: false, error: "idempotency_conflict" });
+      if (record.state === "done") return JSON.stringify({ ok: true, state: "done", record, idempotent: true });
+      record.state = "done";
+      record.result = JSON.parse(argv[1]);
+      record.completedAt = argv[2];
+      values.set(keys[0], JSON.stringify(record));
+      return JSON.stringify({ ok: true, state: "done", record, idempotent: false });
+    }
+    if (script.includes("local marked=redis.call('SET',KEYS[1],'1','NX')")) {
+      if (values.has(keys[0])) return 0;
+      values.set(keys[0], "1");
+      const list = lists.get(keys[1]) || [];
+      list.unshift(argv[0]);
+      lists.set(keys[1], list.slice(0, Number(argv[1] || 500)));
+      return 1;
+    }
+    if (script.includes("local added=redis.call('SADD',KEYS[1],ARGV[1])")) {
+      const membershipKey = args[2];
+      const listKey = args[3];
+      const orderId = args[4];
+      if (!sets.has(membershipKey)) sets.set(membershipKey, new Set());
+      const added = sets.get(membershipKey).has(orderId) ? 0 : 1;
+      sets.get(membershipKey).add(orderId);
+      if (added) {
+        const list = lists.get(listKey) || [];
+        list.push(orderId);
+        lists.set(listKey, list);
+      }
+      return JSON.stringify({ ok: true, added });
+    }
+    if (script.includes("return 'acquired'")) {
+      const raw = values.get(keys[0]);
+      if (raw) {
+        if (raw === "done") return "done";
+        try {
+          const state = JSON.parse(raw);
+          if (["done", "sending", "uncertain"].includes(state?.status)) return state.status;
+          if (state?.status !== "retryable") return "uncertain";
+        } catch {
+          return "uncertain";
+        }
+      }
+      values.set(keys[0], argv[1]);
+      return "acquired";
+    }
+    throw new Error("unexpected EVAL script");
   }
   if (name === "ZADD") { sortedSet(args[0]).set(args[2], Number(args[1])); return 1; }
   if (name === "ZREM") {
@@ -97,7 +173,17 @@ function execute(command) {
     list[index] = args[2];
     return "OK";
   }
-  if (name === "HSET" || name === "HDEL" || name === "SADD" || name === "HSETNX" || name === "HINCRBY") return 1;
+  if (name === "SADD") {
+    if (!sets.has(args[0])) sets.set(args[0], new Set());
+    let added = 0;
+    for (const member of args.slice(1)) {
+      if (!sets.get(args[0]).has(member)) added += 1;
+      sets.get(args[0]).add(member);
+    }
+    return added;
+  }
+  if (name === "SMEMBERS") return Array.from(sets.get(args[0]) || []);
+  if (name === "HSET" || name === "HDEL" || name === "HSETNX" || name === "HINCRBY") return 1;
   if (name === "HVALS") return [];
   return null;
 }
@@ -114,6 +200,9 @@ globalThis.fetch = async (input, options = {}) => {
   }
   if (url.origin === "https://api.resend.com") {
     sentEmails.push(JSON.parse(options.body || "{}"));
+    const hook = nextEmailHook;
+    nextEmailHook = null;
+    if (hook) hook();
     return Response.json({ id: "test-mail-" + sentEmails.length });
   }
   return originalFetch(input, options);
@@ -207,6 +296,37 @@ test("sendDueRenewalReminders emails once per expiry and is idempotent", async (
   assert.equal(second.sent, 0); // 同一到期点不重复发
 });
 
+test("renewal delivery is not repeated when the order marker CAS loses a race", async () => {
+  const now = Date.now();
+  const completedAt = new Date(now - 28 * 86400000).toISOString();
+  seedOrder({
+    orderId: "LMRENEWCAS",
+    revision: 0,
+    status: "completed",
+    locale: "en",
+    email: "renew-cas@example.com",
+    createdAt: completedAt,
+    completedAt,
+    items: [{ service: "rocket", label: "VPN", cycle: "30天", plan: "basic", amount: 128 }],
+  });
+  const emailsBefore = sentEmails.length;
+  nextEmailHook = () => {
+    const key = "liumeiti:orders:record:LMRENEWCAS";
+    const concurrent = JSON.parse(values.get(key));
+    values.set(key, JSON.stringify({ ...concurrent, revision: 1, staffNotes: "concurrent update" }));
+  };
+
+  const first = await renewal.sendDueRenewalReminders({ now });
+  assert.equal(first.sent, 0);
+  assert.equal(sentEmails.length, emailsBefore + 1);
+  assert.equal((await utils.getOrderById("LMRENEWCAS")).renewalReminderForExpiresAt, undefined);
+
+  const replay = await renewal.sendDueRenewalReminders({ now });
+  assert.equal(replay.sent, 1, "the journaled delivery should only repair the order marker");
+  assert.equal(sentEmails.length, emailsBefore + 1, "the accepted email must not be sent twice");
+  assert.ok((await utils.getOrderById("LMRENEWCAS")).renewalReminderForExpiresAt);
+});
+
 test("due proxy-payment quotes are persisted as expired and removed from the due index", async () => {
   const now = Date.now();
   seedOrder({
@@ -260,11 +380,15 @@ test("an expired proxy-payment quote can only resume through a fresh quote and e
   const mailsBefore = sentEmails.length;
   const response = await adminOrderRoute.PATCH(new Request("https://www.liumeiti.vip/api/admin/orders/LMQUOTERENEW1", {
     method: "PATCH",
-    headers: { "Content-Type": "application/json", Cookie: `lm_admin=${adminToken}` },
+    headers: {
+      "Content-Type": "application/json",
+      Cookie: `lm_admin=${adminToken}`,
+      "Idempotency-Key": "admin-quote-renew-test-0001",
+    },
     body: JSON.stringify({ quoteAmount: 450, quoteValidDays: 3, staffNotes: "" }),
   }), { params: Promise.resolve({ orderId: "LMQUOTERENEW1" }) });
-  assert.equal(response.status, 200);
   const payload = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(payload));
   assert.equal(payload.ok, true);
   assert.equal(payload.order.status, "pending_payment");
   assert.equal(payload.quote.validDays, 3);
@@ -324,7 +448,7 @@ test("password correction resend rotates token and requires verified session", a
   const mailsBefore = sentEmails.length;
   const okResponse = await resendRoute.POST(new Request("https://www.liumeiti.vip/api/order-password-update/resend", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "spotify-resend-test-0001" },
     body: JSON.stringify({ orderId: "LMRESEND1", token }),
   }));
   assert.equal(okResponse.status, 200);
@@ -335,6 +459,16 @@ test("password correction resend rotates token and requires verified session", a
   assert.notEqual(stored.items[0].passwordCorrectionTokenHash, oldHash); // token 已轮换
   assert.equal(stored.items[0].passwordCorrectionResendCount, 1);
   assert.equal(stored.items[0].passwordCorrectionEmailOk, true);
+
+  const replay = await resendRoute.POST(new Request("https://www.liumeiti.vip/api/order-password-update/resend", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "spotify-resend-test-0001" },
+    body: JSON.stringify({ orderId: "LMRESEND1", token }),
+  }));
+  assert.equal(replay.status, 200);
+  assert.equal(sentEmails.length, mailsBefore + 1, "the same operation must not send a second email");
+  const replayed = await utils.getOrderById("LMRESEND1");
+  assert.equal(replayed.items[0].passwordCorrectionResendCount, 1);
 });
 
 test("getOrderEntryById prefers record and falls back to legacy with index handle", async () => {

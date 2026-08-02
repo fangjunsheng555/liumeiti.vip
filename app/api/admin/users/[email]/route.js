@@ -1,8 +1,9 @@
 import {
   getCookieFromRequest, verifySession, adminActorFromRequest, pushAdminActionLog, isRootAdminSession,
-  getUser, setUser, deleteUser,
+  deleteUser,
   validEmail, adminPermissionProfile,
 } from "../../../_utils.js";
+import { setUserBanStateAndRevokeSessions } from "../../../_auth-session.js";
 
 function adminSession(request) {
   const token = getCookieFromRequest(request, "lm_admin");
@@ -30,16 +31,11 @@ export async function PATCH(request, { params }) {
   try { body = await request.json(); } catch (e) {}
   const banned = !!body.banned;
 
-  const user = await getUser(email);
-  if (!user) {
-    return Response.json({ ok: false, error: "user_not_found" }, { status: 404 });
+  const updated = await setUserBanStateAndRevokeSessions(email, banned, actor);
+  if (!updated.ok) {
+    const status = updated.error === "user_not_found" ? 404 : 503;
+    return Response.json({ ok: false, error: updated.error || "auth_store_unavailable" }, { status });
   }
-  user.banned = banned;
-  user.bannedAt = banned ? new Date().toISOString() : null;
-  user.bannedByStaffId = banned ? actor.staffId : null;
-  user.unbannedByStaffId = banned ? null : actor.staffId;
-  const saved = await setUser(email, user);
-  if (!saved) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
   await pushAdminActionLog({
     action: banned ? "user_ban" : "user_unban",
     actor,
@@ -50,7 +46,8 @@ export async function PATCH(request, { params }) {
 }
 
 // DELETE /api/admin/users/:email
-// Permanently removes user record + transaction list + email from set.
+// Atomically removes the user/balance/transactions/index membership and
+// advances the durable auth-version tombstone, revoking every old lifecycle.
 export async function DELETE(request, { params }) {
   const session = adminSession(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
@@ -61,15 +58,16 @@ export async function DELETE(request, { params }) {
   if (!validEmail(email)) {
     return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
   }
-  const user = await getUser(email);
-  if (!user) return Response.json({ ok: false, error: "user_not_found" }, { status: 404 });
-  const ok = await deleteUser(email);
-  if (!ok) return Response.json({ ok: false, error: "delete_failed" }, { status: 500 });
+  const deleted = await deleteUser(email);
+  if (!deleted.ok) {
+    const status = deleted.error === "user_not_found" ? 404 : 503;
+    return Response.json({ ok: false, error: deleted.error || "delete_failed" }, { status });
+  }
   await pushAdminActionLog({
     action: "user_delete",
     actor,
     target: "user:" + email,
-    detail: { email, username: user.username || "" },
+    detail: { email, username: deleted.user?.username || "", authVersion: deleted.authVersion },
   });
   return Response.json({ ok: true, deleted: email });
 }

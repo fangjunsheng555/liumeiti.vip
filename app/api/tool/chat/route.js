@@ -8,10 +8,10 @@
 
 import { createHash } from "node:crypto";
 import {
-  getCookieFromRequest, verifySession, validEmail,
   checkRateLimit, rateLimitResponse, redisCmd, clientIpFromRequest,
 } from "../../_utils.js";
-import { getOverride, UNLIMITED, recordAiUsage } from "../_quota.js";
+import { authenticateUserRequest, userAuthErrorResponse } from "../../_auth-session.js";
+import { getOverrideState, UNLIMITED, recordAiUsage } from "../_quota.js";
 
 export const runtime = "nodejs";
 
@@ -40,11 +40,6 @@ const SYSTEM = [
   "直接给出最终答案，不要输出思考过程或自我分析。",
   "遇到超长、超复杂或需要专门工具的任务（大型代码工程、长文档处理等），礼貌说明你是轻量助手，建议用户使用更专业的工具或服务，不要勉强长篇输出。",
 ].join("");
-
-function authedEmail(request) {
-  const s = verifySession(getCookieFromRequest(request, "lm_user"));
-  return s && validEmail(s.email) ? String(s.email).toLowerCase() : null;
-}
 
 function beijingDay() {
   return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, "");
@@ -145,10 +140,13 @@ async function refundQuota(qk, ik) {
 
 // GET — return today's quota for the UI (no increment).
 export async function GET(request) {
-  const email = authedEmail(request);
-  if (!email) return json({ ok: false, error: "not_logged_in" }, 401);
+  const auth = await authenticateUserRequest(request);
+  if (!auth.ok) return userAuthErrorResponse(auth);
+  const email = auth.email;
   const used = Number((await redisCmd(["GET", quotaKey(email)])) || 0);
-  const ov = await getOverride("chat", email);
+  const overrideState = await getOverrideState("chat", email);
+  if (!overrideState.ok) return json({ ok: false, error: overrideState.error }, 503);
+  const ov = overrideState.override;
   const unlimited = !!(ov && ov.daily === UNLIMITED);
   const limit = unlimited ? -1 : (ov && typeof ov.daily === "number" ? ov.daily : DAILY);
   return json({ ok: true, limit, used, remaining: unlimited ? -1 : Math.max(0, limit - used), unlimited, model: MODEL });
@@ -156,8 +154,9 @@ export async function GET(request) {
 
 // POST — stream a chat completion from the relay. Body: { messages: [{role, content}] }.
 export async function POST(request) {
-  const email = authedEmail(request);
-  if (!email) return json({ ok: false, error: "not_logged_in" }, 401);
+  const auth = await authenticateUserRequest(request);
+  if (!auth.ok) return userAuthErrorResponse(auth);
+  const email = auth.email;
   if (!BASE || !KEY) return json({ ok: false, error: "chat_not_configured" }, 500);
 
   const guard = await checkRateLimit(request, { namespace: "tool:chat", limit: 20, windowSec: 60, identity: email });
@@ -187,7 +186,9 @@ export async function POST(request) {
   }
 
   // ── 每用户配额覆盖(后台可设自定义/不限额、不限 token) ──
-  const ov = await getOverride("chat", email);
+  const overrideState = await getOverrideState("chat", email);
+  if (!overrideState.ok) return json({ ok: false, error: overrideState.error }, 503);
+  const ov = overrideState.override;
   const unlimited = !!(ov && ov.daily === UNLIMITED);
   const accLimit = unlimited ? Number.MAX_SAFE_INTEGER : (ov && typeof ov.daily === "number" ? ov.daily : DAILY);
   const ipLimitEff = unlimited ? Number.MAX_SAFE_INTEGER : IP_LIMIT;

@@ -682,6 +682,33 @@ function saveCartBundle(cart, plans) {
   emitCartUpdate();
 }
 
+export function reduceCartBundle(currentCart, currentPlans, action = {}) {
+  const current = Array.isArray(currentCart) ? currentCart : [];
+  const storedPlans = currentPlans && typeof currentPlans === "object" ? currentPlans : {};
+  const key = String(action.key || "");
+  if (!key) return { cart: [...current], plans: { ...storedPlans } };
+  const isQuoteOnly = key === "proxy-pay";
+  const removing = action.type === "remove" || (action.type === "toggle" && current.includes(key));
+  const base = isQuoteOnly ? [] : current.filter((item) => item !== "proxy-pay");
+  const cart = removing
+    ? current.filter((item) => item !== key)
+    : base.includes(key) ? base : [...base, key];
+  const plans = isQuoteOnly ? {} : { ...storedPlans };
+  delete plans["proxy-pay"];
+  if (hasProductPlans(key)) {
+    if (removing) {
+      delete plans[key];
+    } else {
+      const requestedPlan = action.type === "add"
+        ? action.plan || plans[key] || getDefaultProductPlan(key)
+        : action.plan || getDefaultProductPlan(key);
+      const plan = getProductPlan(key, requestedPlan);
+      if (plan) plans[key] = plan.id;
+    }
+  }
+  return { cart, plans };
+}
+
 export function useCart() {
   const [cart, setCartState] = useState([]);
   const [cartPlans, setCartPlansState] = useState({});
@@ -713,53 +740,24 @@ export function useCart() {
   }
 
   function addToCart(key, options = {}) {
-    setCartState((current) => {
-      const isQuoteOnly = key === "proxy-pay";
-      const base = isQuoteOnly ? [] : current.filter((item) => item !== "proxy-pay");
-      const next = base.includes(key) ? base : [...base, key];
-      const nextPlans = isQuoteOnly ? {} : { ...loadCartPlans() };
-      delete nextPlans["proxy-pay"];
-      if (hasProductPlans(key)) {
-        const plan = getProductPlan(key, options.plan || nextPlans[key] || getDefaultProductPlan(key));
-        if (plan) nextPlans[key] = plan.id;
-      }
-      setCartPlansState(nextPlans);
-      saveCartBundle(next, nextPlans);
-      return next;
-    });
+    const next = reduceCartBundle(loadCart(), loadCartPlans(), { type: "add", key, plan: options.plan });
+    setCartState(next.cart);
+    setCartPlansState(next.plans);
+    saveCartBundle(next.cart, next.plans);
   }
 
   function removeFromCart(key) {
-    setCartState((current) => {
-      const next = current.filter((k) => k !== key);
-      const nextPlans = { ...loadCartPlans() };
-      if (hasProductPlans(key)) delete nextPlans[key];
-      setCartPlansState(nextPlans);
-      saveCartBundle(next, nextPlans);
-      return next;
-    });
+    const next = reduceCartBundle(loadCart(), loadCartPlans(), { type: "remove", key });
+    setCartState(next.cart);
+    setCartPlansState(next.plans);
+    saveCartBundle(next.cart, next.plans);
   }
 
   function toggleCart(key, options = {}) {
-    setCartState((current) => {
-      const removing = current.includes(key);
-      const isQuoteOnly = key === "proxy-pay";
-      const base = isQuoteOnly ? [] : current.filter((item) => item !== "proxy-pay");
-      const next = removing ? current.filter((k) => k !== key) : [...base, key];
-      const nextPlans = isQuoteOnly ? {} : { ...loadCartPlans() };
-      delete nextPlans["proxy-pay"];
-      if (hasProductPlans(key)) {
-        if (removing) {
-          delete nextPlans[key];
-        } else {
-          const plan = getProductPlan(key, options.plan || getDefaultProductPlan(key));
-          if (plan) nextPlans[key] = plan.id;
-        }
-      }
-      setCartPlansState(nextPlans);
-      saveCartBundle(next, nextPlans);
-      return next;
-    });
+    const next = reduceCartBundle(loadCart(), loadCartPlans(), { type: "toggle", key, plan: options.plan });
+    setCartState(next.cart);
+    setCartPlansState(next.plans);
+    saveCartBundle(next.cart, next.plans);
   }
 
   function replaceCart(keys) {

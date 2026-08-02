@@ -1,13 +1,13 @@
 import {
   validEmail, hashPassword, getUser, setUser,
-  signSession, setCookieValue, formatBeijingTime,
-  generateRandomUsername, registerUserEmail, attachRegisterCoupon,
+  setCookieValue, formatBeijingTime,
+  generateRandomUsername, attachRegisterCoupon,
   generateRandomUserAvatarId,
   getCookieFromRequest, inviteCodeFromRequest, normalizeInviteCode,
   prepareNewUserReferralProfile,
-  checkRateLimit, rateLimitResponse,
-  verifyRegisterCaptcha,
+  checkCriticalRateLimit, consumeRegisterCaptcha, rateLimitResponse,
 } from "../../_utils.js";
+import { createUserSession } from "../../_auth-session.js";
 
 export async function POST(request) {
   let body = {};
@@ -20,9 +20,10 @@ export async function POST(request) {
   if (!validEmail(email)) {
     return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
   }
-  const guard = await checkRateLimit(request, {
+  const guard = await checkCriticalRateLimit(request, {
     namespace: "auth:register",
-    limit: 5,
+    identityLimit: 5,
+    ipLimit: 30,
     windowSec: 30 * 60,
     identity: email,
   });
@@ -30,13 +31,14 @@ export async function POST(request) {
   if (password.length < 6 || password.length > 64) {
     return Response.json({ ok: false, error: "password_length" }, { status: 400 });
   }
-  if (!verifyRegisterCaptcha(captchaToken, captchaAnswer)) {
-    return Response.json({ ok: false, error: "captcha_failed" }, { status: 400 });
-  }
-
   const existing = await getUser(email);
   if (existing) {
     return Response.json({ ok: false, error: "email_taken" }, { status: 409 });
+  }
+  const captcha = await consumeRegisterCaptcha(captchaToken, captchaAnswer);
+  if (!captcha.ok) {
+    const unavailable = captcha.error === "captcha_store_unavailable";
+    return Response.json({ ok: false, error: captcha.error }, { status: unavailable ? 503 : 400 });
   }
 
   const now = new Date();
@@ -50,14 +52,24 @@ export async function POST(request) {
     createdAt: now.toISOString(),
     createdAtBeijing: formatBeijingTime(now),
   }, now), inviteCode);
-  const saved = await setUser(email, user);
-  if (!saved) {
-    return Response.json({ ok: false, error: "storage_failed" }, { status: 500 });
+  const saved = await setUser(email, user, { createOnly: true, returnResult: true });
+  if (!saved?.ok) {
+    if (saved?.error === "user_exists") {
+      return Response.json({ ok: false, error: "email_taken" }, { status: 409 });
+    }
+    return Response.json({ ok: false, error: saved?.error || "storage_failed" }, { status: 503 });
   }
-  await registerUserEmail(email);
-
-  const token = signSession({ email, exp: Date.now() + 14 * 24 * 60 * 60 * 1000 });
-  return Response.json({ ok: true, email }, {
-    headers: { "Set-Cookie": setCookieValue("lm_user", token) },
+  // Pin issuance to the lifecycle that won the create-only profile write. If
+  // an admin deletes and the address is re-registered before this line runs,
+  // the tombstone version has advanced and no cookie is minted for that newer
+  // account.
+  const session = await createUserSession(email, Date.now(), saved.authVersion);
+  if (!session.ok) {
+    const status = session.error === "account_banned" ? 403
+      : (session.error === "user_not_found" || session.error === "session_state_changed" ? 409 : 503);
+    return Response.json({ ok: false, error: session.error || "auth_store_unavailable" }, { status });
+  }
+  return Response.json({ ok: true, email, accountLifecycleId: session.accountLifecycleId }, {
+    headers: { "Set-Cookie": setCookieValue("lm_user", session.token) },
   });
 }

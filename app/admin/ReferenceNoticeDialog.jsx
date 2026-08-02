@@ -3,6 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, LoaderCircle, Mail, Search, X } from "lucide-react";
 import styles from "./ReferenceNoticeDialog.module.css";
+import {
+  clearAdminMutationJournal,
+  prepareAdminMutationJournal,
+  readAdminMutationJournals,
+} from "../lib/admin-mutation-journal";
+import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
+import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
 
 export default function ReferenceNoticeDialog({ open, onClose, onSent }) {
   const [reference, setReference] = useState("");
@@ -36,6 +43,18 @@ export default function ReferenceNoticeDialog({ open, onClose, onSent }) {
       if (!response.ok || !data.ok) throw new Error(data.error || "search_failed");
       setPreview(data);
       setSelected(new Set((data.orders || []).map((order) => order.orderId)));
+      if ((data.orders || []).length && typeof window !== "undefined") {
+        const pending = readAdminMutationJournals(window.localStorage, "reference-notice", data.reference);
+        if (pending.ok && pending.records.length === 1) {
+          const payload = pending.records[0].record.payload || {};
+          setSelected(new Set(Array.isArray(payload.orderIds) ? payload.orderIds : []));
+          setSubject(String(payload.subject || ""));
+          setMessage(String(payload.message || ""));
+          setNotice({ type: "info", text: "已恢复上次结果未确认的发送内容，请直接重试。" });
+        } else if (!pending.ok || pending.records.length > 1) {
+          setNotice({ type: "error", text: "检测到无法确认的发送记录；为避免重复群发，提交已暂停。" });
+        }
+      }
       if (!(data.orders || []).length) setNotice({ type: "info", text: "未找到可通知的有效订单" });
     } catch {
       setPreview(null);
@@ -60,16 +79,32 @@ export default function ReferenceNoticeDialog({ open, onClose, onSent }) {
     setBusy(true);
     setNotice(null);
     try {
+      await withCheckoutSubmissionCoordination(async () => {
+      const payload = {
+        reference: preview.reference,
+        orderIds: Array.from(selected).sort(),
+        subject: subject.trim(),
+        message: message.trim(),
+      };
+      const pending = prepareAdminMutationJournal(window.localStorage, "reference-notice", preview.reference, payload);
+      const operation = pending.record.idempotencyRequest;
       const response = await fetch("/api/admin/after-sales/notify-by-reference", {
         method: "POST",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reference: preview.reference, orderIds: Array.from(selected), subject, message }),
+        headers: { "Content-Type": "application/json", "Idempotency-Key": operation.key },
+        body: JSON.stringify(pending.record.payload),
       });
       const data = await response.json();
-      if (!response.ok || (!data.ok && !data.partial)) throw new Error(data.error || "send_failed");
+      if (!response.ok || (!data.ok && !data.partial)) {
+        if (isExplicitTerminalIdempotencyResponse(response.status, data)) {
+          clearAdminMutationJournal(window.localStorage, pending.storageKey, operation.key);
+        }
+        throw new Error(data.error || "send_failed");
+      }
+      clearAdminMutationJournal(window.localStorage, pending.storageKey, operation.key);
       setNotice({ type: data.partial ? "info" : "success", text: `已送达 ${data.delivered} / ${data.total} 个邮箱` });
       onSent?.();
+      });
     } catch {
       setNotice({ type: "error", text: "邮件发送失败，请检查发信状态后重试" });
     } finally {

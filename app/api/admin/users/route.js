@@ -1,11 +1,16 @@
 import {
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
-  pushAdminActionLog, getUser, setUser,
-  addBalanceTx, getBalanceTxs, pushAdminBalanceLog,
-  validEmail, formatBeijingTime, clean,
+  pushAdminActionLog, getUser, getBalanceTxs,
+  validEmail, clean,
   adminSessionFromRequest, adminPermissionProfile,
   getReferralDownlineRecords, normalizeInviteCode,
 } from "../../_utils.js";
+import { applyBalanceEffectAtomic, requiredIdempotencyKey } from "../../_money.js";
+import { readUserAuthState } from "../../_auth-session.js";
+import {
+  isRetryableMoneyOperationFailure,
+  retryableMoneyOperationFields,
+} from "../../../lib/money-operation-failure.js";
 
 function adminSession(request) {
   return adminSessionFromRequest(request);
@@ -88,56 +93,55 @@ export async function POST(request) {
   if (!reason) {
     return Response.json({ ok: false, error: "reason_required" }, { status: 400 });
   }
-
-  const user = await getUser(email);
-  if (!user) {
-    return Response.json({ ok: false, error: "user_not_found" }, { status: 404 });
+  const idempotency = requiredIdempotencyKey(request);
+  if (!idempotency.ok) return Response.json({ ok: false, error: idempotency.error }, { status: 400 });
+  // Pin the adjustment to the exact account lifecycle observed by this
+  // request. The money Lua script checks it again atomically before either an
+  // old idempotent result or a balance mutation can be returned.
+  const targetState = await readUserAuthState(email);
+  if (!targetState.ok) {
+    return Response.json({ ok: false, error: targetState.error || "user_not_found" }, {
+      status: targetState.status === 401 ? 404 : 503,
+    });
   }
-
-  const prev = Number(user.balance || 0);
-  const next = Math.round((prev + amount) * 100) / 100;
-  if (next < 0) {
-    return Response.json({ ok: false, error: "insufficient_balance", currentBalance: prev }, { status: 400 });
-  }
-
-  user.balance = next;
-  const saved = await setUser(email, user);
-  if (!saved) {
-    return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
-  }
-
-  const now = new Date();
-  const tx = {
-    id: "TX" + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase(),
-    amount,
+  const adjusted = await applyBalanceEffectAtomic({
+    email,
+    delta: amount,
+    effectId: `admin-adjust:${idempotency.key}`,
+    idempotencyReason: reason,
     reason: reason + " · " + adminActorLabel(actor),
-    balanceAfter: next,
     source: "admin",
     staffId: actor.staffId,
     staffUsername: actor.staffUsername,
-    createdAt: now.toISOString(),
-    createdAtBeijing: formatBeijingTime(now),
-  };
-  await addBalanceTx(email, tx);
-  // Also append to the global admin ledger so the admin dashboard
-  // can display every adjustment across all users in one place.
-  await pushAdminBalanceLog({
-    ...tx,
-    email,
-    balanceBefore: prev,
+    detail: { reason },
+    expectedAccountLifecycleId: targetState.accountLifecycleId,
   });
-  await pushAdminActionLog({
+  if (!adjusted.ok) {
+    const retryableFailure = isRetryableMoneyOperationFailure(adjusted);
+    const status = retryableFailure ? 503
+      : adjusted.error === "user_not_found" ? 404
+      : adjusted.error === "idempotency_conflict" ? 409
+        : adjusted.error === "account_lifecycle_changed" || adjusted.error === "account_lifecycle_required" ? 409 : 400;
+    return Response.json({
+      ok: false,
+      error: adjusted.error || "storage_unavailable",
+      currentBalance: adjusted.currentBalance,
+      ...(retryableFailure ? retryableMoneyOperationFields(adjusted) : {}),
+    }, { status });
+  }
+  if (!adjusted.idempotent) await pushAdminActionLog({
     action: "user_balance_adjust",
     actor,
     target: "user:" + email,
-    detail: { amount, balanceBefore: prev, balanceAfter: next },
+    detail: { amount, balanceBefore: adjusted.balanceBefore, balanceAfter: adjusted.balance },
   });
 
   return Response.json({
     ok: true,
     email,
-    balance: next,
+    balance: adjusted.balance,
     delta: amount,
-    transaction: tx,
+    transaction: adjusted.transaction,
+    idempotent: Boolean(adjusted.idempotent),
   });
 }

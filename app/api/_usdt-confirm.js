@@ -1,23 +1,39 @@
 import { randomBytes } from "node:crypto";
 import {
+  confirmUsdtOrderAtomic,
+  USDT_CONFIRM_EFFECT_INDEX_KEY,
+  USDT_CONFIRM_EFFECT_RECORDS_KEY,
+  usdtConfirmationEffectKey,
+} from "./_money.js";
+import {
   clean,
-  formatBeijingTime,
   getOrderById,
   getPendingUsdtOrderEntries,
   pushAdminActionLog,
   redisCmd,
-  setOrderAt,
 } from "./_utils.js";
+import { deliverOnce } from "./_delivery-once.js";
 
 export const USDT_TRC20_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
 const CHECK_LOCK_KEY = "lm:usdt:confirm-lock";
 const TX_CLAIM_PREFIX = "lm:usdt:confirmed-tx:";
 const LOCK_TTL_SECONDS = 45;
-const TX_CLAIM_TTL_SECONDS = 180 * 24 * 60 * 60;
 const CLOCK_SKEW_MS = 2 * 60 * 1000;
 const QUOTE_GRACE_MS = 5 * 60 * 1000;
 const MAX_CHAIN_PAGES = 5;
+const MAX_EFFECTS_PER_PASS = 100;
+
+const COMPLETE_EFFECT_SCRIPT = `
+local raw=redis.call('HGET',KEYS[1],ARGV[1])
+if not raw then
+  redis.call('ZREM',KEYS[2],ARGV[1])
+  return 'missing'
+end
+if raw~=ARGV[2] then return 'changed' end
+redis.call('HDEL',KEYS[1],ARGV[1])
+redis.call('ZREM',KEYS[2],ARGV[1])
+return 'removed'`;
 
 function sameTronAddress(left, right) {
   const a = String(left || "").trim();
@@ -129,17 +145,149 @@ async function fetchConfirmedIncoming(address, minTimestamp, fetchImpl = fetch) 
 async function sendTelegram(text) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) return null;
+  if (!token || !chatId) return { ok: true, skipped: true, reason: "telegram_not_configured" };
   try {
     const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
     });
-    return response.ok;
-  } catch (e) {
-    return false;
+    if (response.ok) return { ok: true };
+    if (response.status >= 500 || [408, 425, 429].includes(response.status)) {
+      return { ok: false, uncertain: true, error: `telegram_${response.status}` };
+    }
+    return { ok: false, error: `telegram_${response.status}` };
+  } catch (error) {
+    return { ok: false, uncertain: true, error: clean(error?.message || "telegram_transport_uncertain", 160) };
   }
+}
+
+function parseConfirmationEffect(raw, expectedKey) {
+  let effect;
+  try { effect = JSON.parse(raw); } catch { return null; }
+  const effectKey = clean(effect?.effectKey, 80);
+  const orderId = clean(effect?.orderId, 80).replace(/\s+/g, "").toUpperCase();
+  const txId = clean(effect?.txId, 96);
+  const amount = Number(effect?.amount);
+  let amountMicros;
+  try { amountMicros = BigInt(String(effect?.amountMicros || "0")); } catch { amountMicros = 0n; }
+  if (
+    Number(effect?.version) !== 1 || !/^[a-f0-9]{64}$/.test(effectKey)
+    || effectKey !== clean(expectedKey, 80)
+    || effectKey !== usdtConfirmationEffectKey(orderId, txId)
+    || !orderId || !txId || !Number.isFinite(amount) || amount <= 0 || amountMicros <= 0n
+    || amountMicros > BigInt(Number.MAX_SAFE_INTEGER)
+    || Math.round(amount * 1_000_000) !== Number(amountMicros)
+  ) return null;
+  const actorId = Number(effect.actor?.staffId);
+  return {
+    ...effect,
+    effectKey,
+    orderId,
+    txId,
+    amount,
+    amountMicros: String(amountMicros),
+    email: clean(effect.email, 200),
+    actor: {
+      staffId: Number.isSafeInteger(actorId) && actorId >= 0 ? actorId : 0,
+      staffUsername: clean(effect.actor?.staffUsername || "system", 60) || "system",
+    },
+  };
+}
+
+function effectDeliverySettled(result) {
+  return result?.ok === true || (result?.uncertain === true && result?.pending !== true);
+}
+
+function confirmationNotice(effect) {
+  return [
+    "USDT 到账自动确认",
+    `订单: ${effect.orderId}`,
+    `金额: ${effect.amount} USDT`,
+    `邮箱: ${effect.email || ""}`,
+    `交易: ${effect.txId}`,
+  ].join("\n");
+}
+
+async function completeConfirmationEffect(effectKey, raw) {
+  const result = await redisCmd([
+    "EVAL",
+    COMPLETE_EFFECT_SCRIPT,
+    "2",
+    USDT_CONFIRM_EFFECT_RECORDS_KEY,
+    USDT_CONFIRM_EFFECT_INDEX_KEY,
+    effectKey,
+    raw,
+  ]);
+  return result === "removed" || result === "missing";
+}
+
+export async function dispatchUsdtConfirmationEffect(effectKeyValue, settings = {}) {
+  const effectKey = clean(effectKeyValue, 80);
+  if (!/^[a-f0-9]{64}$/.test(effectKey)) return { ok: false, error: "invalid_confirmation_effect" };
+  const raw = await redisCmd(["HGET", USDT_CONFIRM_EFFECT_RECORDS_KEY, effectKey]);
+  if (typeof raw !== "string" || !raw) {
+    return { ok: false, missing: raw == null, error: "confirmation_effect_unavailable" };
+  }
+  const effect = parseConfirmationEffect(raw, effectKey);
+  if (!effect) return { ok: false, error: "invalid_confirmation_effect" };
+
+  const prefix = `usdt-confirm:${effect.orderId}:${effect.txId}`;
+  const adminLog = await deliverOnce(`${prefix}:admin-log`, async () => {
+    const written = await pushAdminActionLog({
+      action: "usdt_auto_confirm",
+      actor: effect.actor,
+      target: `order:${effect.orderId}`,
+      detail: { amount: effect.amount, txId: effect.txId },
+    });
+    // A failed REST response cannot prove whether the Redis log pipeline
+    // committed, so stop automatic retries instead of risking a duplicate row.
+    return written
+      ? { ok: true }
+      : { ok: false, uncertain: true, error: "admin_log_result_uncertain" };
+  });
+  const telegram = await deliverOnce(`${prefix}:telegram`, () => (
+    settings.notify?.telegramEnabled === false
+      ? { ok: true, skipped: true, reason: "telegram_disabled" }
+      : sendTelegram(confirmationNotice(effect))
+  ));
+
+  const settled = effectDeliverySettled(adminLog) && effectDeliverySettled(telegram);
+  if (!settled) return { ok: false, pending: true, effect, adminLog, telegram };
+  const removed = await completeConfirmationEffect(effectKey, raw);
+  const uncertain = Boolean(adminLog?.uncertain || telegram?.uncertain);
+  return {
+    ok: removed && !uncertain,
+    settled: removed,
+    uncertain,
+    effect,
+    adminLog,
+    telegram,
+    ...(removed ? {} : { error: "confirmation_effect_finalize_failed" }),
+  };
+}
+
+export async function drainUsdtConfirmationEffects({ settings = {}, limit = MAX_EFFECTS_PER_PASS } = {}) {
+  const requestedLimit = Number(limit);
+  const boundedLimit = Number.isFinite(requestedLimit)
+    ? Math.max(1, Math.min(MAX_EFFECTS_PER_PASS, Math.floor(requestedLimit)))
+    : MAX_EFFECTS_PER_PASS;
+  const keys = await redisCmd(["ZRANGE", USDT_CONFIRM_EFFECT_INDEX_KEY, "0", String(boundedLimit - 1)]);
+  if (!Array.isArray(keys)) {
+    return { ok: false, scanned: 0, settled: 0, failed: 1, error: "confirmation_effect_index_unavailable" };
+  }
+  let settled = 0;
+  let failed = 0;
+  for (const key of keys) {
+    const result = await dispatchUsdtConfirmationEffect(key, settings);
+    if (result.settled) settled += 1;
+    if (!result.ok) failed += 1;
+  }
+  return { ok: failed === 0, scanned: keys.length, settled, failed };
+}
+
+export function isFreshUsdtConfirmation(confirmation) {
+  return confirmation?.ok === true && confirmation.idempotent !== true;
 }
 
 async function releaseLock(token) {
@@ -147,23 +295,36 @@ async function releaseLock(token) {
   await redisCmd(["EVAL", script, "1", CHECK_LOCK_KEY, token]);
 }
 
-async function releaseTransactionClaim(txId, orderId) {
-  const script = "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end";
-  await redisCmd(["EVAL", script, "1", TX_CLAIM_PREFIX + txId, orderId]);
-}
-
 export async function confirmPendingUsdtPayments({ settings, actor, fetchImpl = fetch } = {}) {
-  if (!settings?.usdt?.autoConfirm) return { ok: true, disabled: true, scanned: 0, matched: 0, pending: 0 };
+  // The outbox is created in the same Lua commit as the payment confirmation.
+  // Drain it even when scanning is disabled or no pending orders remain.
+  const recoveredEffects = await drainUsdtConfirmationEffects({ settings });
+  if (!settings?.usdt?.autoConfirm) {
+    return {
+      ok: recoveredEffects.ok,
+      disabled: true,
+      scanned: 0,
+      matched: 0,
+      pending: 0,
+      effects: recoveredEffects,
+    };
+  }
   const address = String(settings.usdt.address || "").trim();
-  if (!address) return { ok: false, error: "no_usdt_address" };
+  if (!address) return { ok: false, error: "no_usdt_address", effects: recoveredEffects };
 
   const lockToken = randomBytes(16).toString("hex");
+  // This short lock only avoids duplicate scans and chain API traffic. Payment
+  // correctness is enforced by confirmUsdtOrderAtomic's Redis Lua transaction.
   const locked = await redisCmd(["SET", CHECK_LOCK_KEY, lockToken, "EX", String(LOCK_TTL_SECONDS), "NX"]);
-  if (locked !== "OK") return { ok: true, busy: true, scanned: 0, matched: 0, pending: 0 };
+  if (locked !== "OK") {
+    return { ok: recoveredEffects.ok, busy: true, scanned: 0, matched: 0, pending: 0, effects: recoveredEffects };
+  }
 
   try {
     const pending = await getPendingUsdtOrderEntries(500);
-    if (!pending.length) return { ok: true, scanned: 0, matched: 0, pending: 0, ambiguous: 0 };
+    if (!pending.length) {
+      return { ok: recoveredEffects.ok, scanned: 0, matched: 0, pending: 0, ambiguous: 0, effects: recoveredEffects };
+    }
     const minTimestamp = pending.reduce((min, entry) => {
       const issued = new Date(entry.order.paymentQuoteIssuedAt || 0).getTime();
       return Number.isFinite(issued) && issued > 0 ? Math.min(min, issued - CLOCK_SKEW_MS) : min;
@@ -174,75 +335,67 @@ export async function confirmPendingUsdtPayments({ settings, actor, fetchImpl = 
     const matched = [];
     const claimedOrders = new Set();
     let ambiguous = 0;
+    let dispatchedEffects = 0;
+    let settledEffects = 0;
+    let effectFailures = 0;
     for (const tx of chain.transactions) {
-      if (await redisCmd(["GET", TX_CLAIM_PREFIX + tx.txId])) continue;
-      const candidates = pending.filter((entry) =>
-        !claimedOrders.has(entry.order.orderId)
-        && transactionMatchesUsdtOrder(entry.order, tx)
-      );
-      if (candidates.length !== 1) {
-        if (candidates.length > 1) ambiguous += 1;
-        continue;
+      const claimKey = TX_CLAIM_PREFIX + tx.txId;
+      const existingOwner = clean(await redisCmd(["GET", claimKey]), 80).toUpperCase();
+      let orderId = existingOwner;
+      if (!orderId) {
+        const candidates = pending.filter((entry) =>
+          !claimedOrders.has(entry.order.orderId)
+          && transactionMatchesUsdtOrder(entry.order, tx)
+        );
+        if (candidates.length !== 1) {
+          if (candidates.length > 1) ambiguous += 1;
+          continue;
+        }
+        orderId = candidates[0].order.orderId;
       }
 
-      const candidate = candidates[0];
-      const orderId = candidate.order.orderId;
-      const txClaimed = await redisCmd([
-        "SET", TX_CLAIM_PREFIX + tx.txId, orderId,
-        "EX", String(TX_CLAIM_TTL_SECONDS), "NX",
-      ]);
-      if (txClaimed !== "OK") continue;
-
       const latest = await getOrderById(orderId);
+      if (latest?.usdtTxId === tx.txId && latest?.usdtConfirmedAt) {
+        claimedOrders.add(orderId);
+        continue;
+      }
       if (
         !latest || latest.status !== "received" || latest.paidCurrency !== "USDT"
         || latest.usdtConfirmedAt || !transactionMatchesUsdtOrder(latest, tx)
       ) {
-        await releaseTransactionClaim(tx.txId, orderId);
         continue;
       }
 
-      const confirmedAt = new Date();
-      const updated = {
-        ...latest,
-        usdtConfirmedAt: confirmedAt.toISOString(),
-        usdtConfirmedAtBeijing: formatBeijingTime(confirmedAt),
-        usdtTxId: tx.txId,
-        usdtConfirmedAmount: tx.amount,
-        usdtChainTimestamp: new Date(tx.ts).toISOString(),
-      };
-      const saved = await setOrderAt({ orderId, legacyIndex: null }, updated);
-      if (!saved) {
-        await releaseTransactionClaim(tx.txId, orderId);
-        continue;
-      }
+      const confirmation = await confirmUsdtOrderAtomic({
+        order: latest,
+        transaction: tx,
+        confirmedAt: new Date(),
+        effectActor: actor,
+      });
+      if (!confirmation?.ok) continue;
 
       claimedOrders.add(orderId);
-      matched.push({ orderId, amount: tx.amount, txId: tx.txId });
-      await pushAdminActionLog({
-        action: "usdt_auto_confirm",
-        actor: actor || { staffId: 0, staffUsername: "system" },
-        target: `order:${orderId}`,
-        detail: { amount: tx.amount, txId: tx.txId },
-      });
-      if (settings.notify?.telegramEnabled !== false) {
-        await sendTelegram([
-          "USDT 到账自动确认",
-          `订单: ${orderId}`,
-          `金额: ${tx.amount} USDT`,
-          `邮箱: ${updated.email || ""}`,
-          `交易: ${tx.txId}`,
-        ].join("\n"));
-      }
+      if (isFreshUsdtConfirmation(confirmation)) matched.push({ orderId, amount: tx.amount, txId: tx.txId });
+      const effectKey = confirmation.effect?.effectKey || usdtConfirmationEffectKey(orderId, tx.txId);
+      const effectResult = await dispatchUsdtConfirmationEffect(effectKey, settings);
+      dispatchedEffects += 1;
+      if (effectResult.settled) settledEffects += 1;
+      if (!effectResult.ok) effectFailures += 1;
     }
 
     return {
-      ok: true,
+      ok: recoveredEffects.ok && effectFailures === 0,
       scanned: chain.transactions.length,
       matched: matched.length,
       orders: matched,
       pending: Math.max(0, pending.length - matched.length),
       ambiguous,
+      effects: {
+        ok: recoveredEffects.ok && effectFailures === 0,
+        scanned: recoveredEffects.scanned + dispatchedEffects,
+        settled: recoveredEffects.settled + settledEffects,
+        failed: recoveredEffects.failed + effectFailures,
+      },
     };
   } finally {
     await releaseLock(lockToken);

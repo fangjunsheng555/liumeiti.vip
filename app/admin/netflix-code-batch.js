@@ -26,7 +26,7 @@ export function selectedMailDeletionIds(events, selectedEventIds) {
   const selected = new Set(unique(selectedEventIds));
   return unique((Array.isArray(events) ? events : [])
     .filter((event) => selected.has(event?.eventId))
-    .flatMap((event) => event?.eventIds?.length ? event.eventIds : [event?.eventId]));
+    .map((event) => event?.eventId));
 }
 
 export function recordDeleteBatches(recordIds) {

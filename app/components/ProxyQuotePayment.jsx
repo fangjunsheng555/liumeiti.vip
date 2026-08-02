@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -16,6 +16,17 @@ import {
 import FloatingSupport from "./FloatingSupport";
 import { copyText, useSiteSettings } from "../lib/store";
 import { useLocale } from "./LocaleProvider";
+import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
+import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
+import { clearSinglePendingOperation, prepareSinglePendingOperation } from "../lib/single-pending-journal";
+
+async function quoteTokenDigest(token) {
+  if (!globalThis.crypto?.subtle || typeof TextEncoder !== "function") {
+    throw new Error("quote_payment_token_binding_unavailable");
+  }
+  const bytes = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(token || "")));
+  return Array.from(new Uint8Array(bytes), (value) => value.toString(16).padStart(2, "0")).join("");
+}
 
 export default function ProxyQuotePayment({ orderId }) {
   const { locale } = useLocale();
@@ -30,6 +41,7 @@ export default function ProxyQuotePayment({ orderId }) {
   const [usdtRate, setUsdtRate] = useState(0);
   const [copied, setCopied] = useState(false);
   const [qrReady, setQrReady] = useState(false);
+  const paymentRequestRef = useRef(null);
   const alipayQrSrc = settings.payment.alipayQr || "/payment/alipay.jpg";
   const usdtQrSrc = settings.payment.usdtQr || "/payment/usdt.png";
 
@@ -106,26 +118,60 @@ export default function ProxyQuotePayment({ orderId }) {
     setSubmitting(true);
     setState((current) => ({ ...current, notice: "" }));
     try {
-      const response = await fetch(`/api/quote-orders/${encodeURIComponent(orderId)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, paymentMethod: payMethod }),
+      await withCheckoutSubmissionCoordination(async () => {
+        const storageKey = `lm:idempotency:quote-payment:${String(orderId || "").toUpperCase()}`;
+        const payload = {
+          paymentMethod: payMethod,
+          expectedRevision: Number(order.revision || 0),
+        };
+        // The bearer token stays out of persistent browser storage. Its
+        // SHA-256 digest is part of the immutable journal identity, so the
+        // live token used below is provably the same bearer value as the
+        // original request (otherwise journal restore fails before fetch).
+        const tokenHash = await quoteTokenDigest(token);
+        const pending = prepareSinglePendingOperation(
+          window.localStorage,
+          storageKey,
+          "quote-payment-submit",
+          payload,
+          { identity: { orderId: String(orderId || "").toUpperCase(), tokenHash } },
+        );
+        paymentRequestRef.current = pending;
+        const operation = pending.idempotencyRequest;
+        const response = await fetch(`/api/quote-orders/${encodeURIComponent(orderId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Idempotency-Key": operation.key },
+          body: JSON.stringify({ token, ...pending.payload }),
+        });
+        let data = null;
+        try { data = await response.json(); } catch {}
+        if (!response.ok || !data?.ok) {
+          if (isExplicitTerminalIdempotencyResponse(response.status, data)) {
+            clearSinglePendingOperation(window.localStorage, storageKey, operation.key);
+            paymentRequestRef.current = null;
+          }
+          const message = {
+            quote_expired: L("本次报价已失效。重新报价后，我们会向您发送新的付款邮件。", "This quote has expired. We will email a new payment link after the quote is renewed."),
+            order_invalid: L("订单已失效", "This order is no longer valid"),
+            invalid_payment_link: L("付款链接无效", "Invalid payment link"),
+            payment_processing: L("付款信息正在提交，请稍后刷新订单状态", "Payment is being submitted. Check the order status shortly."),
+            payment_method_conflict: L("该订单已按另一种付款方式提交，请刷新订单状态并联系客服核对", "This order was submitted with a different payment method. Refresh and contact support to verify it."),
+            idempotency_conflict: L("待提交付款记录与当前内容不一致，请勿重复提交并联系客服核对", "The pending payment record conflicts with this request. Do not resubmit it; contact support."),
+            usdt_rate_unavailable: L("暂时无法锁定 USDT 汇率，请勿转账并稍后重试", "The USDT rate cannot be locked right now. Do not transfer; try again later."),
+          }[data?.error] || data?.error || L("提交失败，原付款请求已保留，请勿更换付款方式后重试", "Submission failed. The original payment request is preserved; do not switch methods before retrying.");
+          const error = new Error(message);
+          error.code = data?.error || "payment_submit_failed";
+          throw error;
+        }
+        clearSinglePendingOperation(window.localStorage, storageKey, operation.key);
+        paymentRequestRef.current = null;
+        setOrder(data.order);
       });
-      const data = await response.json();
-      if (!response.ok || !data.ok) {
-        const message = {
-          quote_expired: L("本次报价已失效。重新报价后，我们会向您发送新的付款邮件。", "This quote has expired. We will email a new payment link after the quote is renewed."),
-          order_invalid: L("订单已失效", "This order is no longer valid"),
-          invalid_payment_link: L("付款链接无效", "Invalid payment link"),
-          payment_processing: L("付款信息正在提交，请稍后刷新订单状态", "Payment is being submitted. Check the order status shortly."),
-        }[data.error] || data.error || L("提交失败，请稍后再试", "Couldn't submit. Try again shortly.");
-        const error = new Error(message);
-        error.code = data.error || "payment_submit_failed";
-        throw error;
-      }
-      setOrder(data.order);
     } catch (error) {
-      setState((current) => ({ ...current, error: error.message, errorCode: error.code || "payment_submit_failed" }));
+      const message = error?.message === "quote_payment_token_binding_unavailable"
+        ? L("当前浏览器无法安全保存付款请求，请勿重复提交并更换受支持的浏览器", "This browser cannot safely bind the payment request. Do not resubmit it; use a supported browser.")
+        : error.message;
+      setState((current) => ({ ...current, error: message, errorCode: error.code || "payment_submit_failed" }));
     } finally {
       setSubmitting(false);
     }

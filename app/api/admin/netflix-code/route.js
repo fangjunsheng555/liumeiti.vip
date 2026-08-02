@@ -5,17 +5,22 @@ import {
   clean,
   formatBeijingTime,
   getAllOrders,
+  getOrderListRevision,
   getOrderEntryById,
-  getUser,
   pushAdminActionLog,
+  redisCmd,
+  redisPipeline,
   setOrderAt,
   setUser,
+  USERS_KEY,
 } from "../../_utils.js";
 import {
   clearNetflixCodeLock,
   deleteNetflixCodeAccessRecords,
   deleteNetflixMailEvents,
   latestNetflixMailReceipts,
+  listAllNetflixCodeAccess,
+  listAllNetflixMailEvents,
   listNetflixCodeAccess,
   listNetflixMailEvents,
   netflixAccountHash,
@@ -23,14 +28,37 @@ import {
   revealNetflixMailAccountEmails,
   revealNetflixMailResult,
 } from "../../netflix-code/_store.js";
+import { netflixOrderIdentity } from "../../netflix-code/_ownership.js";
 import {
   compactNetflixMailEvents,
   filterNetflixAccessRecords,
   filterNetflixMailEvents,
+  netflixMailSearchValues,
   normalizeNetflixRecordQuery,
 } from "./_records.js";
+import { readUserAuthState } from "../../_auth-session.js";
 
 export const runtime = "nodejs";
+
+const NETFLIX_ORDER_DIRECTORY_CACHE_KEY = "liumeiti:admin:netflix-order-directory:v1";
+
+function parseJson(value) {
+  if (!value) return null;
+  if (typeof value === "object") return value;
+  try { return JSON.parse(value); } catch { return null; }
+}
+
+function pipelineRows(value) {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.result)) return value.result;
+  return [];
+}
+
+function pipelineValue(entry) {
+  return entry && typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, "result")
+    ? entry.result
+    : entry;
+}
 
 function netflixItem(order) {
   return (Array.isArray(order?.items) ? order.items : []).find((item) => item?.service === "netflix")
@@ -40,6 +68,61 @@ function netflixItem(order) {
 function accountFor(order) {
   const item = netflixItem(order);
   return String(item?.staffAccount || item?.account || order?.staffAccount || order?.account || "").trim().toLowerCase();
+}
+
+function directoryOrder(order) {
+  const item = netflixItem(order);
+  if (!item) return null;
+  return {
+    orderId: order.orderId,
+    email: order.email,
+    userEmail: order.userEmail,
+    status: order.status,
+    service: "netflix",
+    serviceLabel: order.serviceLabel,
+    netflixSelfServiceEnabled: order.netflixSelfServiceEnabled,
+    staffAccount: item.staffAccount || order.staffAccount || "",
+    account: item.account || order.account || "",
+    items: [{
+      service: "netflix",
+      staffAccount: item.staffAccount || "",
+      account: item.account || "",
+    }],
+  };
+}
+
+async function netflixOrdersFromDirectory() {
+  const revision = await getOrderListRevision();
+  const signature = revision
+    ? `${revision.revision}:${revision.total}:${revision.latestOrderId}`
+    : "";
+  if (signature) {
+    const cached = parseJson(await redisCmd(["GET", NETFLIX_ORDER_DIRECTORY_CACHE_KEY]));
+    if (cached?.signature === signature && Array.isArray(cached.orders)) return cached.orders;
+  }
+  const orders = (await getAllOrders()).map(directoryOrder).filter(Boolean);
+  if (signature) {
+    // Use the POST pipeline endpoint so a large directory never lands in a
+    // request URL (or exceeds intermediary URL limits).
+    await redisPipeline([[
+      "SET", NETFLIX_ORDER_DIRECTORY_CACHE_KEY, JSON.stringify({ signature, orders }),
+      "EX", String(24 * 60 * 60),
+    ]]);
+  }
+  return orders;
+}
+
+async function usersByEmail(emails) {
+  const normalized = Array.from(new Set((Array.isArray(emails) ? emails : [])
+    .map((email) => String(email || "").trim().toLowerCase())
+    .filter(Boolean)));
+  const users = new Map();
+  for (let offset = 0; offset < normalized.length; offset += 200) {
+    const batch = normalized.slice(offset, offset + 200);
+    const rows = pipelineRows(await redisPipeline(batch.map((email) => ["GET", `${USERS_KEY}:${email}`])));
+    batch.forEach((email, index) => users.set(email, parseJson(pipelineValue(rows[index]))));
+  }
+  return users;
 }
 
 function requireAdmin(request, permission) {
@@ -64,13 +147,16 @@ function operationalAccountHints(values) {
 export async function GET(request) {
   const auth = requireAdmin(request, "canViewOrders");
   if (auth.response) return auth.response;
-  const query = normalizeNetflixRecordQuery(new URL(request.url).searchParams.get("q"));
+  const params = new URL(request.url).searchParams;
+  const query = normalizeNetflixRecordQuery(params.get("q"));
+  const requestedScope = clean(params.get("scope"), 20).toLowerCase();
+  const scope = ["mail", "access", "accounts"].includes(requestedScope) ? requestedScope : "mail";
   const queryHash = query.includes("@") ? netflixAccountHash(query) : "";
-  const orders = (await getAllOrders()).filter((order) => netflixItem(order));
-  const userByEmail = new Map();
-  const uniqueEmails = Array.from(new Set(orders.map((order) => String(order.email || "").trim().toLowerCase()).filter(Boolean)));
-  const users = await Promise.all(uniqueEmails.map(async (email) => [email, await getUser(email)]));
-  for (const [email, user] of users) userByEmail.set(email, user);
+  const orders = await netflixOrdersFromDirectory();
+  const uniqueEmails = Array.from(new Set(orders
+    .map((order) => netflixOrderIdentity(order).ownerEmail)
+    .filter(Boolean)));
+  const userByEmail = await usersByEmail(uniqueEmails);
   const byHash = new Map();
   const accountByHash = new Map();
   const orderControls = new Map();
@@ -81,11 +167,16 @@ export async function GET(request) {
     const hash = netflixAccountHash(account);
     if (!accountByHash.has(hash)) accountByHash.set(hash, account);
     if (!byHash.has(hash)) byHash.set(hash, []);
-    const buyerEmail = String(order.email || "").trim().toLowerCase();
-    const user = userByEmail.get(buyerEmail) || null;
+    const { ownerEmail, deliveryEmail, linkedUserEmail } = netflixOrderIdentity(order);
+    const user = userByEmail.get(ownerEmail) || null;
     const control = {
       orderId: order.orderId,
-      email: buyerEmail,
+      // Keep `email` for existing panel consumers, but make its delivery-only
+      // meaning explicit and never use it as the user-control principal.
+      email: deliveryEmail,
+      deliveryEmail,
+      ownerEmail,
+      linkedUserEmail,
       status: order.status || "received",
       serviceLabel: order.serviceLabel || "Netflix",
       enabled: order.netflixSelfServiceEnabled !== false,
@@ -106,7 +197,9 @@ export async function GET(request) {
     const controls = byHash.get(hash) || [];
     if (query && !(
       account.includes(query)
-      || controls.some((control) => control.orderId.toLowerCase().includes(query) || control.email.includes(query))
+      || controls.some((control) => control.orderId.toLowerCase().includes(query)
+        || control.deliveryEmail.includes(query)
+        || control.ownerEmail.includes(query))
     )) continue;
     const lastMailAt = Number(receipts[hash] || 0);
     accountRows.push({
@@ -118,7 +211,10 @@ export async function GET(request) {
   }
   accountRows.sort((left, right) => (Date.parse(left.lastMailAt) || 0) - (Date.parse(right.lastMailAt) || 0));
 
-  const accessRows = await listNetflixCodeAccess({ limit: 200 });
+  const [accessRows, storedEventRows] = await Promise.all([
+    query && (scope === "access" || scope === "mail") ? listAllNetflixCodeAccess() : listNetflixCodeAccess({ limit: 200 }),
+    query && scope === "mail" ? listAllNetflixMailEvents() : listNetflixMailEvents({ limit: 100 }),
+  ]);
   const access = filterNetflixAccessRecords(accessRows.map((entry) => ({
     id: entry.id,
     orderId: entry.orderId,
@@ -127,14 +223,14 @@ export async function GET(request) {
     outcome: entry.outcome,
     eventId: entry.eventId,
     createdAtBeijing: entry.createdAtBeijing,
-  })), query);
+  })), scope === "access" ? query : "").slice(0, 200);
   const accessedOrdersByEvent = new Map();
   for (const entry of accessRows) {
     if (!entry.eventId || !entry.orderId) continue;
     if (!accessedOrdersByEvent.has(entry.eventId)) accessedOrdersByEvent.set(entry.eventId, new Set());
     accessedOrdersByEvent.get(entry.eventId).add(entry.orderId);
   }
-  const eventRows = (await listNetflixMailEvents({ limit: 100 })).map((event) => {
+  const eventRows = storedEventRows.map((event) => {
     const matchedAccountHashes = Array.from(event.accountHashes || [])
       .filter((hash) => byHash.has(hash))
       .sort();
@@ -154,6 +250,10 @@ export async function GET(request) {
     const exactOrders = Array.from(accessedOrderIds)
       .map((orderId) => orderControls.get(orderId))
       .filter(Boolean);
+    const searchOrders = [...exactOrders, ...matchedOrders].map((order) => ({
+      ...order,
+      accountEmail: accountByOrderId.get(order.orderId),
+    }));
     return {
       eventId: event.eventId,
       accepted: event.accepted,
@@ -173,18 +273,17 @@ export async function GET(request) {
       accountEmails,
       accountHints: operationalAccountHints(event.accountHints),
       searchHashes: Array.from(event.accountHashes || []),
-      searchValues: matchedOrders.flatMap((order) => [
-        order.orderId,
-        order.email,
-        accountByOrderId.get(order.orderId),
-      ]).concat(fullAccountEmails),
+      // Direct access history remains authoritative even after staff replace
+      // the Netflix account on an order. Include both that historical link and
+      // current account-hash matches so an old order stays searchable.
+      searchValues: netflixMailSearchValues(searchOrders).concat(fullAccountEmails),
       matchedOrderCount: matchedOrders.length,
       orders: exactOrders.length ? exactOrders : matchedOrders.length === 1 ? matchedOrders : [],
     };
   });
-  const compactedEvents = compactNetflixMailEvents(eventRows);
-  const recentAcceptedCount = compactedEvents.filter((event) => event.accepted).length;
-  const events = filterNetflixMailEvents(compactedEvents, query, queryHash)
+  const normalizedEvents = compactNetflixMailEvents(eventRows);
+  const recentAcceptedCount = normalizedEvents.filter((event) => event.accepted).length;
+  const events = filterNetflixMailEvents(normalizedEvents, scope === "mail" ? query : "", queryHash)
     .slice(0, 40)
     .map(({ accountKey, stamp, searchHashes, searchValues, ...event }) => event);
   return Response.json({
@@ -240,20 +339,38 @@ export async function PATCH(request) {
 
   if (action === "toggle_order") {
     if (!netflixItem(entry.order)) return Response.json({ ok: false, error: "netflix_order_required" }, { status: 400 });
+    const expectedRevision = Number(entry.order.revision ?? 0);
     entry.order.netflixSelfServiceEnabled = body.enabled !== false;
-    if (!await setOrderAt(entry.index, entry.order)) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
+    if (!await setOrderAt(entry.index, entry.order, { expectedRevision })) {
+      return Response.json({ ok: false, error: "stale_revision" }, { status: 409 });
+    }
     await pushAdminActionLog({ action: "netflix_code_order_toggle", actor, target: `order:${orderId}`, detail: { enabled: entry.order.netflixSelfServiceEnabled } });
     return Response.json({ ok: true, enabled: entry.order.netflixSelfServiceEnabled });
   }
 
   if (action === "toggle_user") {
-    const email = String(entry.order.email || "").toLowerCase();
-    const user = await getUser(email);
-    if (!user) return Response.json({ ok: false, error: "user_not_found" }, { status: 404 });
+    const { ownerEmail } = netflixOrderIdentity(entry.order);
+    if (!ownerEmail) return Response.json({ ok: false, error: "user_not_found" }, { status: 404 });
+    const state = await readUserAuthState(ownerEmail);
+    if (!state.ok) {
+      return Response.json({ ok: false, error: state.error || "user_not_found" }, {
+        status: state.status === 401 ? 404 : 503,
+      });
+    }
+    const user = state.user;
     user.netflixSelfServiceDisabled = body.enabled === false;
-    if (!await setUser(email, user)) return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
-    await pushAdminActionLog({ action: "netflix_code_user_toggle", actor, target: `user:${email}`, detail: { enabled: !user.netflixSelfServiceDisabled } });
-    return Response.json({ ok: true, enabled: !user.netflixSelfServiceDisabled });
+    const saved = await setUser(ownerEmail, user, {
+      expectedAuthVersion: state.authVersion,
+      expectedAccountLifecycleId: state.accountLifecycleId,
+      updateOnly: true,
+      returnResult: true,
+    });
+    if (!saved?.ok) {
+      const conflict = saved?.error === "session_state_changed" || saved?.error === "account_lifecycle_changed";
+      return Response.json({ ok: false, error: saved?.error || "save_failed" }, { status: conflict ? 409 : 500 });
+    }
+    await pushAdminActionLog({ action: "netflix_code_user_toggle", actor, target: `user:${ownerEmail}`, detail: { enabled: !user.netflixSelfServiceDisabled } });
+    return Response.json({ ok: true, enabled: !user.netflixSelfServiceDisabled, ownerEmail });
   }
 
   if (action === "clear_lock") {

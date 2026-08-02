@@ -4,6 +4,12 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { getCatalogProducts, getProductPlan, getProductPlanOptions, hasProductPlans, useCatalogSync, useSiteSettings, getSiteSettings } from "../lib/store";
 import { getSpotifyPasswordAttention } from "../lib/order-attention";
+import {
+  clearAdminMutationJournal,
+  prepareAdminMutationJournal,
+} from "../lib/admin-mutation-journal";
+import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
+import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
 import VisitorsPanel from "./VisitorsPanel";
 import AbandonedPanel from "./AbandonedPanel";
 import InsightsPanel from "./InsightsPanel";
@@ -1197,6 +1203,8 @@ export default function AdminPage() {
   const [currentStaff, setCurrentStaff] = useState(null);
   const [loginError, setLoginError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
+  const [logoutBusy, setLogoutBusy] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
 
   useSiteSettings(); // 站点设置(PDF 凭证品牌/版权等随设置)
   useCatalogSync(); // 兑换码商品与规格价格同步后台目录
@@ -1345,11 +1353,50 @@ export default function AdminPage() {
   const [newOrderAlert, setNewOrderAlert] = useState(null);
   const [highlightOrderIds, setHighlightOrderIds] = useState(new Set());
   const overviewRef = useRef(null);
+  const mutationRequestsRef = useRef(new Map());
   // 全局搜索(⌘K)
   const [searchOpen, setSearchOpen] = useState(false);
   const [gQuery, setGQuery] = useState("");
   const [gResults, setGResults] = useState({ orders: [], users: [], codes: [] });
   const [gLoading, setGLoading] = useState(false);
+
+  function adminMutationFailureMessage(error, fallback = "网络错误") {
+    const code = String(error?.message || "");
+    if (code.startsWith("admin_mutation_") || code.startsWith("checkout_")) {
+      return "检测到尚未确认结果的后台操作。为避免重复扣款、退款或重复变更，请保持当前内容并重试原操作；如仍失败请先核对记录。";
+    }
+    return error?.message || fallback;
+  }
+
+  function prepareAdminMutation(scope, target, payload) {
+    if (typeof window === "undefined") throw new Error("admin_mutation_journal_unavailable");
+    const pending = prepareAdminMutationJournal(window.localStorage, scope, target, payload);
+    mutationRequestsRef.current.set(pending.storageKey, pending.record);
+    return {
+      operation: pending.record.idempotencyRequest,
+      payload: pending.record.payload,
+      storageKey: pending.storageKey,
+    };
+  }
+
+  function withAdminMutationCoordination(callback) {
+    return withCheckoutSubmissionCoordination(callback);
+  }
+
+  function completeAdminMutation(storageKey, operation) {
+    if (mutationRequestsRef.current.get(storageKey)?.idempotencyRequest?.key === operation.key) {
+      mutationRequestsRef.current.delete(storageKey);
+    }
+    if (typeof window !== "undefined") {
+      clearAdminMutationJournal(window.localStorage, storageKey, operation.key);
+    }
+  }
+
+  function clearTerminalAdminMutation(pending, response, data) {
+    if (isExplicitTerminalIdempotencyResponse(response?.status, data)) {
+      completeAdminMutation(pending.storageKey, pending.operation);
+    }
+  }
 
   const isRootStaff = Boolean(currentStaff?.root || Number(currentStaff?.id || 0) === 1);
   const staffPermissions = currentStaff?.permissions || null;
@@ -1925,22 +1972,27 @@ export default function AdminPage() {
     setBalBusy(true);
     setBalResult(null);
     try {
+      await withAdminMutationCoordination(async () => {
+      const payload = {
+        email: userInfo.user.email,
+        amount: sign * num,
+        reason: balForm.reason.trim(),
+      };
+      const pending = prepareAdminMutation("balance", userInfo.user.email, payload);
       const res = await fetch("/api/admin/users", {
         method: "POST",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: userInfo.user.email,
-          amount: sign * num,
-          reason: balForm.reason.trim(),
-        }),
+        headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
+        body: JSON.stringify(pending.payload),
       });
       const data = await res.json();
       if (data.ok) {
+        completeAdminMutation(pending.storageKey, pending.operation);
         setBalResult({ type: "success", message: `已${sign > 0 ? "增加" : "扣除"} ¥${num.toFixed(2)} · 当前余额 ¥${data.balance.toFixed(2)}` });
         setBalForm({ amount: "", reason: "" });
         refreshAfterAdjust();
       } else {
+        clearTerminalAdminMutation(pending, res, data);
         const msg = {
           insufficient_balance: "余额不足,无法扣除",
           user_not_found: "用户不存在",
@@ -1949,8 +2001,9 @@ export default function AdminPage() {
         }[data.error] || data.error || "操作失败";
         setBalResult({ type: "error", message: msg });
       }
+      });
     } catch (e) {
-      setBalResult({ type: "error", message: "网络错误" });
+      setBalResult({ type: "error", message: adminMutationFailureMessage(e) });
     } finally {
       setBalBusy(false);
     }
@@ -1975,19 +2028,35 @@ export default function AdminPage() {
     e.preventDefault();
     if (!activeWithdrawal || withdrawalBusy) return;
     setWithdrawalBusy(true);
+    setWithdrawalDeleteResult(null);
     try {
-      const res = await fetch(`/api/admin/withdrawals/${encodeURIComponent(activeWithdrawal.withdrawal.id)}`, {
+      await withAdminMutationCoordination(async () => {
+      const withdrawalId = activeWithdrawal.withdrawal.id;
+      const payload = {
+        status: withdrawalStatus,
+        reviewNote: withdrawalNote,
+        expectedRevision: Number(activeWithdrawal.withdrawal.revision || 0),
+      };
+      const pending = prepareAdminMutation("withdrawal", withdrawalId, payload);
+      const res = await fetch(`/api/admin/withdrawals/${encodeURIComponent(withdrawalId)}`, {
         method: "PATCH",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: withdrawalStatus, reviewNote: withdrawalNote }),
+        headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
+        body: JSON.stringify(pending.payload),
       });
       const data = await res.json();
       if (data.ok) {
+        completeAdminMutation(pending.storageKey, pending.operation);
         setActiveWithdrawal(data);
         await loadWithdrawals();
+      } else {
+        clearTerminalAdminMutation(pending, res, data);
+        setWithdrawalDeleteResult({ type: "error", message: data.error || "更新失败" });
       }
-    } catch (e) {} finally {
+      });
+    } catch (e) {
+      setWithdrawalDeleteResult({ type: "error", message: adminMutationFailureMessage(e) });
+    } finally {
       setWithdrawalBusy(false);
     }
   }
@@ -2016,25 +2085,31 @@ export default function AdminPage() {
     setWithdrawalDeleteBusy(true);
     setWithdrawalDeleteResult(null);
     try {
-      const ids = Array.from(selectedWithdrawalIds);
+      await withAdminMutationCoordination(async () => {
+      const ids = Array.from(selectedWithdrawalIds).sort();
+      const payload = { ids };
+      const pending = prepareAdminMutation("withdrawal-archive", ids.join("|"), payload);
       const res = await fetch("/api/admin/withdrawals", {
         method: "DELETE",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids }),
+        headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
+        body: JSON.stringify(pending.payload),
       });
       const data = await res.json();
       if (data.ok) {
+        completeAdminMutation(pending.storageKey, pending.operation);
         setSelectedWithdrawalIds(new Set());
         setWithdrawalBatchMode(false);
         if (activeWithdrawal && ids.includes(activeWithdrawal.withdrawal.id)) setActiveWithdrawal(null);
         setWithdrawalDeleteResult({ type: "success", message: `已删除 ${data.deletedCount || ids.length} 条提现记录` });
         await loadWithdrawals();
       } else {
+        clearTerminalAdminMutation(pending, res, data);
         setWithdrawalDeleteResult({ type: "error", message: data.error === "forbidden" ? "仅主账号可批量删除" : (data.error || "删除失败") });
       }
+      });
     } catch (e) {
-      setWithdrawalDeleteResult({ type: "error", message: "网络错误" });
+      setWithdrawalDeleteResult({ type: "error", message: adminMutationFailureMessage(e) });
     } finally {
       setWithdrawalDeleteBusy(false);
     }
@@ -2542,22 +2617,29 @@ export default function AdminPage() {
     }
     setCodeBusy("create");
     setCodeResult(null);
+    const payload = {
+      type: codeType,
+      amount: codeAmount,
+      services: codeServices,
+      quantity: codeQuantity,
+      remark: codeRemark,
+      customCode: codeCustom,
+    };
     try {
+      await withAdminMutationCoordination(async () => {
+      const pending = prepareAdminMutation("redeem-create", "batch", payload);
       const res = await fetch("/api/admin/redeem-codes", {
         method: "POST",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: codeType,
-          amount: codeAmount,
-          services: codeServices,
-          quantity: codeQuantity,
-          remark: codeRemark,
-          customCode: codeCustom,
-        }),
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": pending.operation.key,
+        },
+        body: JSON.stringify(pending.payload),
       });
       const data = await res.json();
       if (data.ok) {
+        completeAdminMutation(pending.storageKey, pending.operation);
         setCodes(data.codes || []);
         setCodeBatches(data.batches || []);
         setCodeAmount("");
@@ -2569,6 +2651,7 @@ export default function AdminPage() {
         }
         setCodeResult({ type: "success", message: `已生成 ${data.generatedCodes?.length || 1} 个兑换码` });
       } else {
+        clearTerminalAdminMutation(pending, res, data);
         const msg = {
           missing_services: "请选择至少一个服务",
           invalid_custom_code: "自定义代码需为4-40位字母或数字",
@@ -2576,8 +2659,9 @@ export default function AdminPage() {
         }[data.error] || "生成失败,请检查金额或服务";
         setCodeResult({ type: "error", message: msg });
       }
+      });
     } catch (e) {
-      setCodeResult({ type: "error", message: "网络错误" });
+      setCodeResult({ type: "error", message: adminMutationFailureMessage(e) });
     } finally {
       setCodeBusy("");
     }
@@ -3393,17 +3477,32 @@ export default function AdminPage() {
   }
 
   async function doLogout() {
-    await fetch("/api/admin/login", { method: "DELETE" });
-    setAuthed(false);
-    setCurrentStaff(null);
-    setOrders([]);
-    ordersCacheRef.current.clear();
-    orderListRevisionRef.current = "0";
-    orderLoadEffectSignatureRef.current = "";
-    overviewRef.current = null;
-    setOverview(null);
-    setSeenAbnormalCount(null);
-    setNewOrderAlert(null);
+    if (logoutBusy) return;
+    setLogoutBusy(true);
+    setLogoutError("");
+    try {
+      const response = await fetch("/api/admin/login", { method: "DELETE", credentials: "same-origin" });
+      let data = null;
+      try { data = await response.json(); } catch {}
+      const alreadyInvalid = response.status === 401 && ["unauthorized", "session_revoked"].includes(data?.error);
+      if ((!response.ok || !data?.ok || data.revoked !== true) && !alreadyInvalid) {
+        throw new Error("无法持久撤销后台会话，请稍后重试；当前后台仍保持登录。");
+      }
+      setAuthed(false);
+      setCurrentStaff(null);
+      setOrders([]);
+      ordersCacheRef.current.clear();
+      orderListRevisionRef.current = "0";
+      orderLoadEffectSignatureRef.current = "";
+      overviewRef.current = null;
+      setOverview(null);
+      setSeenAbnormalCount(null);
+      setNewOrderAlert(null);
+    } catch (error) {
+      setLogoutError(error.message || "安全退出失败，请稍后重试");
+    } finally {
+      setLogoutBusy(false);
+    }
   }
 
   async function openOrder(order) {
@@ -3489,14 +3588,22 @@ export default function AdminPage() {
     setAssignmentBusy(true);
     setSaveResult(null);
     try {
+      await withAdminMutationCoordination(async () => {
+      const payload = {
+        action,
+        assignedStaffId,
+        expectedRevision: Number(activeOrder.revision || 0),
+      };
+      const pending = prepareAdminMutation("order-assignment", activeOrder.orderId, payload);
       const response = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
         credentials: "same-origin",
-        body: JSON.stringify({ action, assignedStaffId }),
+        body: JSON.stringify(pending.payload),
       });
       const data = await response.json();
       if (!response.ok || !data.ok) {
+        clearTerminalAdminMutation(pending, response, data);
         const message = data.error === "order_already_assigned"
           ? `该订单已由 ${data.assignment?.username || "其他工作人员"} 负责`
           : data.error === "assignment_busy"
@@ -3507,6 +3614,7 @@ export default function AdminPage() {
         setSaveResult({ type: "error", message });
         return;
       }
+      completeAdminMutation(pending.storageKey, pending.operation);
       const assignment = data.assignment || {};
       const fields = {
         assignedStaffId: Number(assignment.staffId || 0),
@@ -3517,8 +3625,9 @@ export default function AdminPage() {
       setActiveOrder((current) => current ? { ...current, ...fields } : current);
       setOrders((current) => current.map((order) => order.orderId === activeOrder.orderId ? { ...order, ...fields } : order));
       setSaveResult({ type: "success", message: fields.assignedStaffId ? `负责人已更新为 ${fields.assignedStaffUsername}` : "已取消负责人" });
+      });
     } catch (e) {
-      setSaveResult({ type: "error", message: "网络错误，请稍后重试" });
+      setSaveResult({ type: "error", message: adminMutationFailureMessage(e, "网络错误，请稍后重试") });
     } finally {
       setAssignmentBusy(false);
     }
@@ -3578,17 +3687,21 @@ export default function AdminPage() {
     setBatchBusy(true);
     setBatchResult(null);
     try {
+      await withAdminMutationCoordination(async () => {
+      const payload = {
+        orderIds: Array.from(selectedIds).sort(),
+        action,
+      };
+      const pending = prepareAdminMutation("order-batch", action, payload);
       const res = await fetch("/api/admin/orders/batch", {
         method: "POST",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          orderIds: Array.from(selectedIds),
-          action,
-        }),
+        headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
+        body: JSON.stringify(pending.payload),
       });
       const data = await res.json();
       if (data.ok) {
+        completeAdminMutation(pending.storageKey, pending.operation);
         const verb = action === "delete" ? "删除" : "标记为无效";
         setBatchResult({
           type: "success",
@@ -3599,10 +3712,12 @@ export default function AdminPage() {
         loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
         loadOverview({ silent: true });
       } else {
+        clearTerminalAdminMutation(pending, res, data);
         setBatchResult({ type: "error", message: data.error || "批量操作失败" });
       }
+      });
     } catch (e) {
-      setBatchResult({ type: "error", message: "网络错误" });
+      setBatchResult({ type: "error", message: adminMutationFailureMessage(e) });
     } finally {
       setBatchBusy(false);
     }
@@ -3618,22 +3733,29 @@ export default function AdminPage() {
     setDeleting(true);
     setSaveResult(null);
     try {
+      await withAdminMutationCoordination(async () => {
+      const payload = { orderId: activeOrder.orderId };
+      const pending = prepareAdminMutation("order-delete", activeOrder.orderId, payload);
       const res = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
         method: "DELETE",
         credentials: "same-origin",
+        headers: { "Idempotency-Key": pending.operation.key },
       });
       const data = await res.json();
       if (data.ok) {
+        completeAdminMutation(pending.storageKey, pending.operation);
         setActiveOrder(null);
         setEditForm(null);
         setConfirmDelete(false);
         loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
         loadOverview({ silent: true });
       } else {
+        clearTerminalAdminMutation(pending, res, data);
         setSaveResult({ type: "error", message: data.error || "删除失败" });
       }
+      });
     } catch (e) {
-      setSaveResult({ type: "error", message: "网络错误" });
+      setSaveResult({ type: "error", message: adminMutationFailureMessage(e) });
     } finally {
       setDeleting(false);
     }
@@ -3708,18 +3830,23 @@ export default function AdminPage() {
     setSpotifyPasswordMailBusy(true);
     setSaveResult(null);
     try {
+      await withAdminMutationCoordination(async () => {
+      const payload = {
+        expectedRevision: Number(activeOrder.revision || 0),
+        action: "spotify_password_error",
+        itemIndex: item.index,
+        staffNote: spotifyPasswordMail?.index === itemPosition ? spotifyPasswordMail.note : "",
+      };
+      const pending = prepareAdminMutation("spotify-password", activeOrder.orderId, payload);
       const response = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
         method: "PATCH",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "spotify_password_error",
-          itemIndex: item.index,
-          staffNote: spotifyPasswordMail?.index === itemPosition ? spotifyPasswordMail.note : "",
-        }),
+        headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
+        body: JSON.stringify(pending.payload),
       });
       const data = await response.json();
       if (!response.ok || !data.ok) {
+        clearTerminalAdminMutation(pending, response, data);
         const message = {
           spotify_item_not_found: "未找到对应的 Spotify 商品",
           order_email_missing: "订单邮箱无效，无法发送邮件",
@@ -3727,6 +3854,7 @@ export default function AdminPage() {
         }[data.error] || data.error || "发送失败";
         throw new Error(message);
       }
+      completeAdminMutation(pending.storageKey, pending.operation);
       const returnedItem = data.order?.items?.[item.index] || {};
       setActiveOrder(data.order);
       setEditForm((current) => ({
@@ -3740,8 +3868,9 @@ export default function AdminPage() {
         setSaveResult({ type: "error", message: "更新链接已生成，但邮件发送失败，请检查发信服务后重试" });
       }
       loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
+      });
     } catch (sendError) {
-      setSaveResult({ type: "error", message: sendError.message || "网络错误" });
+      setSaveResult({ type: "error", message: adminMutationFailureMessage(sendError) });
     } finally {
       setSpotifyPasswordMailBusy(false);
     }
@@ -3760,35 +3889,40 @@ export default function AdminPage() {
     setSaving(true);
     setSaveResult(null);
     try {
+      await withAdminMutationCoordination(async () => {
       const customerMessage = applyThirdPartyNotice(
         editForm.staffNotes,
         editForm.thirdPartyPlatformNotice,
         activeOrder.locale === "en" ? "en" : "zh",
       );
+      const payload = {
+        expectedRevision: Number(activeOrder.revision || 0),
+        status: editForm.status,
+        staffNotes: customerMessage,
+        internalNotes: editForm.internalNotes,
+        internalReference: editForm.internalReference,
+        netflixSelfServiceEnabled: editForm.netflixSelfServiceEnabled,
+        thirdPartyPlatformNotice: editForm.thirdPartyPlatformNotice,
+        deliveryMessageMode: editForm.deliveryMessageMode,
+        items: editForm.items.map((it) => ({
+          index: it.index,
+          account: it.account,
+          password: it.password,
+          staffAccount: it.staffAccount,
+          staffPassword: it.staffPassword,
+          fulfillment: it.fulfillment,
+        })),
+      };
+      const pending = prepareAdminMutation("order", activeOrder.orderId, payload);
       const res = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
         credentials: "same-origin",
-        body: JSON.stringify({
-          status: editForm.status,
-          staffNotes: customerMessage,
-          internalNotes: editForm.internalNotes,
-          internalReference: editForm.internalReference,
-          netflixSelfServiceEnabled: editForm.netflixSelfServiceEnabled,
-          thirdPartyPlatformNotice: editForm.thirdPartyPlatformNotice,
-          deliveryMessageMode: editForm.deliveryMessageMode,
-          items: editForm.items.map((it) => ({
-            index: it.index,
-            account: it.account,
-            password: it.password,
-            staffAccount: it.staffAccount,
-            staffPassword: it.staffPassword,
-            fulfillment: it.fulfillment,
-          })),
-        }),
+        body: JSON.stringify(pending.payload),
       });
       const data = await res.json();
       if (data.ok) {
+        completeAdminMutation(pending.storageKey, pending.operation);
         const completionMessage = data.completion?.email?.ok ? " · 完成邮件已发送" : data.completion ? " · 完成邮件发送失败" : "";
         const invalidMessage = data.invalidNotice?.email?.ok ? " · 无效通知已发送" : data.invalidNotice ? " · 无效通知发送失败" : "";
         setSaveResult({ type: "success", message: "已保存" + completionMessage + invalidMessage });
@@ -3819,6 +3953,7 @@ export default function AdminPage() {
           }),
         }));
       } else {
+        clearTerminalAdminMutation(pending, res, data);
         const message = {
           quote_required: "请先填写报价并发送付款邮件",
           payment_not_received: "订单尚未收到付款，不能直接标记完成",
@@ -3826,8 +3961,9 @@ export default function AdminPage() {
         }[data.error] || data.error || "保存失败";
         setSaveResult({ type: "error", message });
       }
+      });
     } catch (e) {
-      setSaveResult({ type: "error", message: "网络错误" });
+      setSaveResult({ type: "error", message: adminMutationFailureMessage(e) });
     } finally {
       setSaving(false);
     }
@@ -3843,24 +3979,30 @@ export default function AdminPage() {
     setSaving(true);
     setSaveResult(null);
     try {
+      await withAdminMutationCoordination(async () => {
+      const payload = {
+        expectedRevision: Number(activeOrder.revision || 0),
+        quoteAmount: amount,
+        quoteValidDays: Number(editForm.quoteValidDays || 7),
+        staffNotes: editForm.staffNotes,
+      };
+      const pending = prepareAdminMutation("quote", activeOrder.orderId, payload);
       const res = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
         credentials: "same-origin",
-        body: JSON.stringify({
-          quoteAmount: amount,
-          quoteValidDays: Number(editForm.quoteValidDays || 7),
-          staffNotes: editForm.staffNotes,
-        }),
+        body: JSON.stringify(pending.payload),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
+        clearTerminalAdminMutation(pending, res, data);
         const message = {
           invalid_quote_amount: "报价金额无效",
           quote_status_locked: "当前订单状态不能重新报价",
         }[data.error] || data.error || "报价发送失败";
         throw new Error(message);
       }
+      completeAdminMutation(pending.storageKey, pending.operation);
       const mailText = data.quote?.email?.ok ? "报价邮件已发送" : "报价已保存，但邮件发送失败，请检查邮件配置后重新发送";
       setSaveResult({ type: data.quote?.email?.ok ? "success" : "error", message: mailText });
       setActiveOrder(data.order);
@@ -3872,8 +4014,9 @@ export default function AdminPage() {
       }));
       loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
       loadOverview({ silent: true });
+      });
     } catch (error) {
-      setSaveResult({ type: "error", message: error.message || "网络错误" });
+      setSaveResult({ type: "error", message: adminMutationFailureMessage(error) });
     } finally {
       setSaving(false);
     }
@@ -4072,15 +4215,18 @@ export default function AdminPage() {
           >
             <Menu size={18} />
           </button>
-          <Link href="/"><img src="/logo.png" alt="冒央会社" className="admin-logo" /></Link>
+          <Link href="/" className="admin-logo-link" aria-label="返回首页">
+            <img src="/logo.png" alt="冒央会社" className="admin-logo" />
+          </Link>
           <span className="admin-tag">工作后台{currentStaff?.id ? ` · #${currentStaff.id}` : ""}</span>
         </div>
-        <button type="button" className="admin-logout" onClick={doLogout}>
-          <LogOut size={14} />退出
+        <button type="button" className="admin-logout" onClick={doLogout} disabled={logoutBusy}>
+          {logoutBusy ? <LoaderCircle size={14} className="spin-icon" /> : <LogOut size={14} />}退出
         </button>
       </header>
 
       <main className="admin-main">
+        {logoutError && <div className="admin-alert error" role="alert" style={{ marginBottom: 10 }}>{logoutError}</div>}
         <div className={`admin-shell${navOpen ? " nav-open" : ""}`}>
           <button type="button" className="admin-nav-scrim" aria-label="关闭菜单" onClick={() => setNavOpen(false)} />
           <nav className="admin-sidebar" id="admin-sidebar-nav" aria-label="后台导航">

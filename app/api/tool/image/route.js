@@ -9,10 +9,10 @@
 
 import { createHash } from "node:crypto";
 import {
-  getCookieFromRequest, verifySession, validEmail,
   checkRateLimit, rateLimitResponse, redisCmd, clientIpFromRequest,
 } from "../../_utils.js";
-import { getOverride, UNLIMITED, recordAiUsage } from "../_quota.js";
+import { authenticateUserRequest, userAuthErrorResponse } from "../../_auth-session.js";
+import { getOverrideState, UNLIMITED, recordAiUsage } from "../_quota.js";
 
 export const runtime = "nodejs";
 export const maxDuration = 300; // gpt-image-2 实测：简单图 ~30s，复杂图 60–80s+。给足时间别让函数掐断（需 Vercel 套餐允许，或开启 Fluid Compute）
@@ -41,10 +41,6 @@ function decodeImage(im) {
   return { blob: new Blob([buf], { type: mt }), size: buf.length };
 }
 
-function authedEmail(request) {
-  const s = verifySession(getCookieFromRequest(request, "lm_user"));
-  return s && validEmail(s.email) ? String(s.email).toLowerCase() : null;
-}
 function beijingDay() {
   return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, "");
 }
@@ -84,10 +80,13 @@ async function refundQuota(qk, ik) {
 
 // GET — today's account quota for the UI (no increment, no IP info leaked).
 export async function GET(request) {
-  const email = authedEmail(request);
-  if (!email) return json({ ok: false, error: "not_logged_in" }, 401);
+  const auth = await authenticateUserRequest(request);
+  if (!auth.ok) return userAuthErrorResponse(auth);
+  const email = auth.email;
   const used = Number((await redisCmd(["GET", quotaKey(email)])) || 0);
-  const ov = await getOverride("image", email);
+  const overrideState = await getOverrideState("image", email);
+  if (!overrideState.ok) return json({ ok: false, error: overrideState.error }, 503);
+  const ov = overrideState.override;
   const unlimited = !!(ov && ov.daily === UNLIMITED);
   const limit = unlimited ? -1 : (ov && typeof ov.daily === "number" ? ov.daily : DAILY);
   return json({ ok: true, limit, used, remaining: unlimited ? -1 : Math.max(0, limit - used), unlimited, model: MODEL });
@@ -95,8 +94,9 @@ export async function GET(request) {
 
 // POST — generate one image. Body: { prompt: string }.
 export async function POST(request) {
-  const email = authedEmail(request);
-  if (!email) return json({ ok: false, error: "not_logged_in" }, 401);
+  const auth = await authenticateUserRequest(request);
+  if (!auth.ok) return userAuthErrorResponse(auth);
+  const email = auth.email;
   if (!BASE || !KEY) return json({ ok: false, error: "image_not_configured" }, 500);
 
   const guard = await checkRateLimit(request, { namespace: "tool:image", limit: 6, windowSec: 60, identity: email });
@@ -123,7 +123,9 @@ export async function POST(request) {
   const isEdit = editBlobs.length > 0;
 
   // ── 每用户配额覆盖(后台可设自定义/不限额) ──
-  const ov = await getOverride("image", email);
+  const overrideState = await getOverrideState("image", email);
+  if (!overrideState.ok) return json({ ok: false, error: overrideState.error }, 503);
+  const ov = overrideState.override;
   const unlimited = !!(ov && ov.daily === UNLIMITED);
   const accLimit = unlimited ? Number.MAX_SAFE_INTEGER : (ov && typeof ov.daily === "number" ? ov.daily : DAILY);
   const ipLimitEff = unlimited ? Number.MAX_SAFE_INTEGER : IP_LIMIT;

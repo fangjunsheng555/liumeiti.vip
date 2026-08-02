@@ -1,8 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Copy, Gift, LoaderCircle, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { useLocale } from "./LocaleProvider";
+import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
+import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
+import {
+  clearSinglePendingOperation,
+  prepareSinglePendingOperation,
+  readSinglePendingOperation,
+} from "../lib/single-pending-journal";
 
 function GoogleIcon() {
   return (
@@ -31,6 +38,7 @@ function normalizeRedeemCode(value) {
 export default function RedeemCard({ autoFillFromQuery = false }) {
   const { t, locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
+  const redeemRequestRef = useRef(null);
   const [authUser, setAuthUser] = useState(null);
   const [authModal, setAuthModal] = useState(null);
   const [pendingRedeem, setPendingRedeem] = useState(false);
@@ -46,7 +54,7 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
   useEffect(() => {
     fetch("/api/auth/me", { credentials: "same-origin" })
       .then((r) => r.json())
-      .then((d) => setAuthUser(d.ok ? { email: d.email, username: d.username, balance: Number(d.balance || 0) } : false))
+      .then((d) => setAuthUser(d.ok ? { email: d.email, accountLifecycleId: d.accountLifecycleId || "", username: d.username, balance: Number(d.balance || 0) } : false))
       .catch(() => setAuthUser(false));
   }, []);
 
@@ -123,15 +131,34 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
     setRedeemBusy(true);
     setRedeemStatus({ type: "info", message: L("正在识别兑换码...", "Checking the code...") });
     try {
-      const infoRes = await fetch(`/api/redeem-code?code=${encodeURIComponent(code)}`, { cache: "no-store" });
-      const info = await infoRes.json();
-      if (!infoRes.ok || !info.ok || info.status !== "active") {
-        setRedeemStatus({ type: "error", message: info.message || L("兑换码不存在、已使用或已作废", "Code doesn't exist, is used, or is voided") });
-        return;
-      }
-      if (info.type === "service") {
-        window.location.href = `/checkout?redeem=${encodeURIComponent(code)}`;
-        return;
+      await withCheckoutSubmissionCoordination(async () => {
+      const storageKey = "liumeiti:idempotency:balance-redeem";
+      const accountEmail = authUser && authUser !== false ? String(authUser.email || "").trim().toLowerCase() : "";
+      const accountLifecycleId = authUser && authUser !== false ? String(authUser.accountLifecycleId || "").trim().toLowerCase() : "";
+      const payload = { code };
+      const identity = { accountEmail, accountLifecycleId };
+      const legacyPayload = { accountEmail, code };
+      let pending = authUser && authUser !== false
+        ? readSinglePendingOperation(
+            window.localStorage,
+            storageKey,
+            "balance-redeem",
+            payload,
+            { identity, legacyPayload, requireAccountLifecycle: true },
+          ).record
+        : null;
+      const retryingCommittedRequest = Boolean(pending);
+      if (!retryingCommittedRequest) {
+        const infoRes = await fetch(`/api/redeem-code?code=${encodeURIComponent(code)}`, { cache: "no-store" });
+        const info = await infoRes.json();
+        if (!infoRes.ok || !info.ok || info.status !== "active") {
+          setRedeemStatus({ type: "error", message: info.message || L("兑换码不存在、已使用或已作废", "Code doesn't exist, is used, or is voided") });
+          return;
+        }
+        if (info.type === "service") {
+          window.location.href = `/checkout?redeem=${encodeURIComponent(code)}`;
+          return;
+        }
       }
       if (!authUser || authUser === false) {
         setPendingRedeem(true); // 登录成功后自动重试兑换
@@ -140,21 +167,54 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
         setRedeemStatus({ type: "error", message: L("余额兑换码需要登录账号后兑换", "Please sign in to redeem a balance code") });
         return;
       }
+      pending = prepareSinglePendingOperation(
+        window.localStorage,
+        storageKey,
+        "balance-redeem",
+        payload,
+        { identity, legacyPayload, requireAccountLifecycle: true },
+      );
+      redeemRequestRef.current = pending;
+      const operation = pending.idempotencyRequest;
       const res = await fetch("/api/auth/redeem", {
         method: "POST",
         credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": operation.key,
+          "X-Operation-Expected-Account": String(pending.identity?.accountEmail || "").trim().toLowerCase(),
+          "X-Operation-Expected-Lifecycle": String(pending.identity?.accountLifecycleId || "").trim().toLowerCase(),
+        },
+        body: JSON.stringify(pending.payload),
       });
-      const data = await res.json();
+      let data = null;
+      try { data = await res.json(); } catch {}
       if (!data.ok) {
+        if (isExplicitTerminalIdempotencyResponse(res.status, data)) {
+          redeemRequestRef.current = null;
+          clearSinglePendingOperation(window.localStorage, storageKey, operation.key);
+        }
         setRedeemStatus({ type: "error", message: data.message || L("兑换失败,请联系客服", "Redeem failed, please contact support") });
         return;
       }
+      redeemRequestRef.current = null;
+      clearSinglePendingOperation(window.localStorage, storageKey, operation.key);
       setAuthUser((cur) => cur && cur !== false ? { ...cur, balance: Number(data.balance || cur.balance || 0) } : cur);
       setRedeemInput("");
       setRedeemStatus({ type: "success", message: L(`兑换成功，余额已到账，当前余额 ¥${Number(data.balance || 0).toFixed(2)}`, `Redeemed! Balance updated — current balance ¥${Number(data.balance || 0).toFixed(2)}`) });
-    } catch {
+      });
+    } catch (error) {
+      if (String(error?.message || "").includes("pending_operation")
+        || String(error?.message || "").startsWith("checkout_")) {
+        setRedeemStatus({
+          type: "error",
+          message: L(
+            "检测到未确认结果的兑换请求，请勿更换兑换码或重复提交，请联系客服核对。",
+            "An earlier redeem request is unresolved. Do not change the code or resubmit it; contact support to verify it.",
+          ),
+        });
+        return;
+      }
       setRedeemStatus({ type: "error", message: L("兑换失败,请稍后再试", "Redeem failed, please try again") });
     } finally {
       setRedeemBusy(false);
@@ -196,7 +256,7 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
         return;
       }
       if (data.ok) {
-        setAuthUser({ email: data.email, username: data.username || "", balance: Number(data.balance || 0) });
+        setAuthUser({ email: data.email, accountLifecycleId: data.accountLifecycleId || "", username: data.username || "", balance: Number(data.balance || 0) });
         setAuthModal(null);
         return;
       }
