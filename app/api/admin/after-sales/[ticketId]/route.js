@@ -16,8 +16,9 @@ import { appendOrderTimelineOnce } from "../../../_order-timeline.js";
 import { deliverOnce } from "../../../_delivery-once.js";
 import { claimDurableOperation, completeDurableOperation } from "../../../_durable-operation.js";
 import { idempotencyPayloadHash, requiredIdempotencyKey } from "../../../_money.js";
+import { withApiTelemetry } from "../../../_observability.js";
 
-export async function GET(request, { params }) {
+async function getAfterSalesHandler(request, { params }) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   if (!adminPermissionProfile(session).canViewOrders) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
@@ -27,7 +28,7 @@ export async function GET(request, { params }) {
   return Response.json({ ok: true, ticket: await hydrateAfterSalesTicketCredentials(ticket) });
 }
 
-export async function PATCH(request, { params }) {
+async function completeAfterSalesHandler(request, { params }) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   if (!adminPermissionProfile(session).canEditOrders) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
@@ -39,8 +40,24 @@ export async function PATCH(request, { params }) {
   const { ticketId: rawTicketId } = await params;
   const ticketId = clean(rawTicketId, 100).toUpperCase();
   const actor = adminActorFromSession(session);
+  const credentialOrderHash = clean(body.credentialOrderHash, 80).toLowerCase();
+  const currentTicket = await getAfterSalesTicket(ticketId);
+  if (!currentTicket) return Response.json({ ok: false, error: "ticket_not_found" }, { status: 404 });
+  if (currentTicket.status === "pending") {
+    if (!/^[a-f0-9]{64}$/.test(credentialOrderHash)) {
+      return Response.json({ ok: false, error: "credential_snapshot_required" }, { status: 400 });
+    }
+    const hydrated = await hydrateAfterSalesTicketCredentials(currentTicket);
+    if (!hydrated?.credentialOrderHash) {
+      return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
+    }
+    if (hydrated.credentialOrderHash !== credentialOrderHash) {
+      return Response.json({ ok: false, error: "stale_order_credentials" }, { status: 409 });
+    }
+  }
   const completion = {
     staffNote: clean(body.staffNote, 2000),
+    credentialOrderHash,
     items: (Array.isArray(body.items) ? body.items : []).map((item) => ({
       index: Number(item?.index),
       account: clean(item?.account, 200),
@@ -72,7 +89,7 @@ export async function PATCH(request, { params }) {
   if (!result.ok) {
     const status = ["ticket_not_found", "order_not_found", "order_item_not_found"].includes(result.error)
       ? 404
-      : result.error === "ticket_busy" || result.error === "idempotency_conflict"
+      : result.error === "ticket_busy" || result.error === "idempotency_conflict" || result.error === "stale_order_credentials"
         ? 409
         : result.error === "order_sync_failed" || result.error === "storage_failed"
           ? 500
@@ -86,9 +103,14 @@ export async function PATCH(request, { params }) {
       `after-sales-completed:${result.ticket.ticketId}:${operation.operationId}:email`,
       (stableId) => sendAfterSalesEmail(result.ticket, "completed", { idempotencyKey: stableId }),
     );
-    notice = delivery.value && typeof delivery.value === "object"
-      ? delivery.value
-      : { ok: Boolean(delivery.ok && (delivery.idempotent || !delivery.skipped)) };
+    const providerNotice = delivery.value && typeof delivery.value === "object" ? delivery.value : {};
+    notice = {
+      ...providerNotice,
+      ok: Boolean(delivery.ok),
+      handled: Boolean(delivery.ok && (delivery.delivered || delivery.terminal || delivery.suppressed || delivery.skipped)),
+      delivered: delivery.delivered === true,
+      suppressed: Boolean(delivery.suppressed || providerNotice.suppressed),
+    };
     const timelineOk = await appendOrderTimelineOnce(result.ticket.orderId, `${operation.operationId}:timeline`, {
       type: "after_sales_completed",
       visibility: "public",
@@ -97,11 +119,11 @@ export async function PATCH(request, { params }) {
       actor: actor.staffUsername,
       meta: { ticketId: result.ticket.ticketId },
     });
-    const logOk = !notice?.ok || await pushAdminActionLog({
+    const logOk = !notice.handled || await pushAdminActionLog({
       action: "after_sales_complete",
       actor,
       target: `after-sales:${result.ticket.ticketId}`,
-      detail: { orderId: result.ticket.orderId, email: result.ticket.email, emailed: Boolean(notice?.ok) },
+      detail: { orderId: result.ticket.orderId, email: result.ticket.email, emailed: notice.delivered, suppressed: notice.suppressed },
       operationId: `${operation.operationId}:admin-log`,
     });
     if (!timelineOk || !logOk) {
@@ -114,7 +136,7 @@ export async function PATCH(request, { params }) {
         manualReview: Boolean(delivery.uncertain),
       }, { status: delivery.uncertain ? 409 : 503 });
     }
-    if (!notice?.ok) {
+    if (!notice.handled) {
       return Response.json({ ok: false, error: "completion_email_retryable", retryable: true }, { status: 503 });
     }
     if (!await markAfterSalesCompletionEffectsDone(result.ticket.ticketId, operation.operationId)) {
@@ -125,9 +147,12 @@ export async function PATCH(request, { params }) {
     ok: true,
     ticket: result.ticket,
     changed: ownedCompletion,
-    notice: ownedCompletion ? { email: Boolean(notice?.ok) } : null,
+    notice: ownedCompletion ? { email: Boolean(notice?.delivered), suppressed: Boolean(notice?.suppressed) } : null,
   };
   const completed = await completeDurableOperation(operation, responsePayload);
   if (!completed.ok) return Response.json({ ok: false, error: completed.error }, { status: 503 });
   return Response.json(responsePayload);
 }
+
+export const GET = withApiTelemetry("admin_after_sales", getAfterSalesHandler);
+export const PATCH = withApiTelemetry("admin_after_sales", completeAfterSalesHandler);

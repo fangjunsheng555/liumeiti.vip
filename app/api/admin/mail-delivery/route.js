@@ -13,9 +13,10 @@ export async function GET(request) {
   const url = new URL(request.url);
   const id = clean(url.searchParams.get("id"), 120);
   if (id) {
-    const record = await getEmailDelivery(id);
-    return record
-      ? Response.json({ ok: true, record }, { headers: { "Cache-Control": "no-store" } })
+    const result = await getEmailDelivery(id);
+    if (!result.ok) return Response.json({ ok: false, error: "storage_unavailable" }, { status: 503 });
+    return result.record
+      ? Response.json({ ok: true, record: result.record }, { headers: { "Cache-Control": "no-store" } })
       : Response.json({ ok: false, error: "not_found" }, { status: 404 });
   }
   const status = DELIVERY_STATUSES.includes(url.searchParams.get("status")) ? url.searchParams.get("status") : "all";
@@ -26,5 +27,6 @@ export async function GET(request) {
     category,
     limit: Number(url.searchParams.get("limit") || 120),
   });
-  return Response.json({ ok: true, ...data }, { headers: { "Cache-Control": "no-store" } });
+  if (!data.ok) return Response.json({ ok: false, error: "storage_unavailable" }, { status: 503 });
+  return Response.json(data, { headers: { "Cache-Control": "no-store" } });
 }

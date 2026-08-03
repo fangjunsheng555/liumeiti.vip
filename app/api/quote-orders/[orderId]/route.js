@@ -156,7 +156,7 @@ async function deliverQuotePaymentNotifications(order, knownSettings = null) {
       locale: order.locale === "en" ? "en" : "zh",
     })).then((result) => ({ channel: "email", ...result })),
   ]);
-  return attempts.filter((item) => !item.skipped);
+  return attempts;
 }
 
 function orderConflict(error = "stale_revision") {

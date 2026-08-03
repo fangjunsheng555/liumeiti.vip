@@ -1,11 +1,9 @@
 import { createHash } from "node:crypto";
-import { clean, formatBeijingTime, redisCmd, redisPipeline } from "./_utils.js";
+import { formatBeijingTime, redisCmd, redisPipeline } from "./_utils.js";
 import { recordHealthStatus } from "./_health.js";
 
 const RESTORE_PREFIX = "lm:restore-drill:";
-const WEEKLY_DONE_PREFIX = "lm:backup:weekly:done:";
-const WEEKLY_LOCK_PREFIX = "lm:backup:weekly:lock:";
-const TELEGRAM_FILE_LIMIT = 40 * 1024 * 1024;
+const DEFAULT_BACKUP_PART_LIMIT = 40 * 1024 * 1024;
 const SUPPORTED_TYPES = new Set(["string", "list", "set", "zset", "hash", "stream"]);
 
 function pipelineRows(value) {
@@ -94,7 +92,11 @@ async function readEntries(keys) {
   const entries = [];
   for (let offset = 0; offset < keys.length; offset += 120) {
     const chunk = keys.slice(offset, offset + 120);
-    const metadata = pipelineRows(await redisPipeline(chunk.flatMap((key) => [["TYPE", key], ["PTTL", key]])));
+    const metadataCommands = chunk.flatMap((key) => [["TYPE", key], ["PTTL", key]]);
+    const metadata = pipelineRows(await redisPipeline(metadataCommands));
+    if (metadata.length !== metadataCommands.length || metadata.some((item) => item == null)) {
+      throw new Error("backup_metadata_incomplete");
+    }
     const readable = [];
     chunk.forEach((key, index) => {
       const type = String(metadata[index * 2] || "none").toLowerCase();
@@ -103,7 +105,11 @@ async function readEntries(keys) {
       if (!SUPPORTED_TYPES.has(type)) throw new Error(`unsupported_redis_type:${type}:${key}`);
       readable.push({ key, type, pttl: Number.isFinite(pttl) ? pttl : -1 });
     });
-    const values = pipelineRows(await redisPipeline(readable.map((entry) => readCommand(entry.key, entry.type))));
+    const valueCommands = readable.map((entry) => readCommand(entry.key, entry.type));
+    const values = pipelineRows(await redisPipeline(valueCommands));
+    if (values.length !== valueCommands.length || values.some((item) => item == null)) {
+      throw new Error("backup_values_incomplete");
+    }
     readable.forEach((entry, index) => {
       entries.push({ ...entry, value: normalizeValue(entry.type, values[index]) });
     });
@@ -115,6 +121,7 @@ export async function createCompleteBackup() {
   const startedAt = new Date();
   const keys = await scanAllKeys();
   const entries = await readEntries(keys);
+  if (entries.length !== keys.length) throw new Error("backup_snapshot_incomplete");
   const typeCounts = entries.reduce((out, entry) => {
     out[entry.type] = (out[entry.type] || 0) + 1;
     return out;
@@ -123,6 +130,7 @@ export async function createCompleteBackup() {
     site: "liumeiti.vip",
     version: 2,
     format: "redis-logical-snapshot",
+    complete: true,
     generatedAt: startedAt.toISOString(),
     generatedAtBeijing: formatBeijingTime(startedAt),
     keyCount: entries.length,
@@ -151,7 +159,32 @@ function restoreCommands(entry, targetKey) {
   return commands;
 }
 
+function validateCompleteSnapshot(snapshot) {
+  if (!snapshot || snapshot.complete !== true || snapshot.version !== 2 || snapshot.format !== "redis-logical-snapshot") {
+    return { ok: false, error: "restore_snapshot_incomplete" };
+  }
+  if (!Array.isArray(snapshot.entries) || !Number.isSafeInteger(snapshot.keyCount) || snapshot.keyCount !== snapshot.entries.length) {
+    return { ok: false, error: "restore_snapshot_incomplete" };
+  }
+  if (!snapshot.checksum || snapshot.checksum !== canonicalHash(snapshot.entries)) {
+    return { ok: false, error: "restore_snapshot_checksum_mismatch" };
+  }
+  const validEntries = snapshot.entries.every((entry) => (
+    entry && typeof entry.key === "string" && entry.key.length > 0 && SUPPORTED_TYPES.has(entry.type)
+  ));
+  return validEntries ? { ok: true } : { ok: false, error: "restore_snapshot_incomplete" };
+}
+
 export async function runRestoreDrill(snapshot) {
+  const validation = validateCompleteSnapshot(snapshot);
+  if (!validation.ok) {
+    return {
+      ok: false,
+      verified: 0,
+      total: Array.isArray(snapshot?.entries) ? snapshot.entries.length : 0,
+      mismatches: [validation.error],
+    };
+  }
   const runId = Date.now().toString(36);
   let verified = 0;
   const mismatches = [];
@@ -162,7 +195,11 @@ export async function runRestoreDrill(snapshot) {
     chunk.forEach((entry, index) => restore.push(...restoreCommands(entry, targets[index])));
     const restored = pipelineRows(await redisPipeline(restore));
     if (restored.length !== restore.length || restored.some((item) => item == null)) throw new Error("restore_write_failed");
-    const values = pipelineRows(await redisPipeline(chunk.map((entry, index) => readCommand(targets[index], entry.type))));
+    const readCommands = chunk.map((entry, index) => readCommand(targets[index], entry.type));
+    const values = pipelineRows(await redisPipeline(readCommands));
+    if (values.length !== readCommands.length || values.some((item) => item == null)) {
+      throw new Error("restore_verify_read_failed");
+    }
     chunk.forEach((entry, index) => {
       const expected = canonicalHash({ type: entry.type, value: normalizeValue(entry.type, entry.value) });
       const actual = canonicalHash({ type: entry.type, value: normalizeValue(entry.type, values[index]) });
@@ -181,7 +218,7 @@ function datedFilename(snapshot, suffix = "") {
   return `liumeiti-complete-backup-${stamp}${suffix}.json`;
 }
 
-export function buildBackupFiles(snapshot, maxBytes = TELEGRAM_FILE_LIMIT) {
+export function buildBackupFiles(snapshot, maxBytes = DEFAULT_BACKUP_PART_LIMIT) {
   const fullText = JSON.stringify(snapshot);
   if (Buffer.byteLength(fullText) <= maxBytes) return [{ name: datedFilename(snapshot), text: fullText, checksum: canonicalHash(fullText), entries: snapshot.keyCount }];
 
@@ -229,21 +266,6 @@ export function buildBackupFiles(snapshot, maxBytes = TELEGRAM_FILE_LIMIT) {
   return [{ name: datedFilename(snapshot, "-manifest"), text: JSON.stringify(manifest), checksum: canonicalHash(manifest), entries: 0 }, ...parts];
 }
 
-async function sendTelegramFile(file, caption = "") {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chatId) throw new Error("telegram_not_configured");
-  const form = new FormData();
-  form.set("chat_id", chatId);
-  form.set("document", new Blob([file.text], { type: "application/json" }), file.name);
-  if (caption) form.set("caption", caption.slice(0, 1000));
-  const response = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, { method: "POST", body: form });
-  if (!response.ok) throw new Error(`telegram_send_failed:${response.status}`);
-  const payload = await response.json().catch(() => null);
-  if (!payload?.ok) throw new Error("telegram_send_rejected");
-  return payload.result?.document?.file_id || "";
-}
-
 function beijingWeekKey(now = Date.now()) {
   const shifted = new Date(now + 8 * 60 * 60 * 1000);
   const date = new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()));
@@ -256,39 +278,27 @@ function beijingWeekKey(now = Date.now()) {
 
 export async function runWeeklyTelegramBackup({ force = false } = {}) {
   const week = beijingWeekKey();
-  if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) {
-    await recordHealthStatus("telegram_backup", { status: "disabled", summary: "Telegram 备份未配置", metrics: { week } });
-    return { ok: true, skipped: true, reason: "telegram_not_configured", week };
-  }
-  const doneKey = WEEKLY_DONE_PREFIX + week;
-  if (!force && await redisCmd(["GET", doneKey])) return { ok: true, skipped: true, reason: "already_completed", week };
-  const lockKey = WEEKLY_LOCK_PREFIX + week;
-  if ((await redisCmd(["SET", lockKey, "1", "NX", "EX", "1800"])) !== "OK") return { ok: true, skipped: true, reason: "in_progress", week };
-  try {
-    const snapshot = await createCompleteBackup();
-    const drill = await runRestoreDrill(snapshot);
-    if (!drill.ok) throw new Error(`restore_drill_mismatch:${drill.mismatches.join(",")}`);
-    const files = buildBackupFiles(snapshot);
-    const caption = [
-      "冒央会社 · 每周完整备份",
-      `时间: ${snapshot.generatedAtBeijing}`,
-      `Redis 键: ${snapshot.keyCount}`,
-      `恢复演练: ${drill.verified}/${drill.total} 通过`,
-      `SHA-256: ${snapshot.checksum}`,
-    ].join("\n");
-    for (let index = 0; index < files.length; index += 1) await sendTelegramFile(files[index], index === 0 ? caption : "");
-    const result = { ok: true, week, keyCount: snapshot.keyCount, checksum: snapshot.checksum, fileCount: files.length, drill };
-    await redisCmd(["SET", doneKey, JSON.stringify({ ...result, completedAt: new Date().toISOString() }), "EX", String(180 * 86400)]);
-    await recordHealthStatus("telegram_backup", { status: "ok", summary: "每周完整备份已发送", metrics: { week, keyCount: snapshot.keyCount, fileCount: files.length, checksum: snapshot.checksum.slice(0, 16) } });
-    await recordHealthStatus("restore_drill", { status: "ok", summary: "恢复演练通过", metrics: { verified: drill.verified, total: drill.total } });
-    return result;
-  } catch (error) {
-    await recordHealthStatus("telegram_backup", { status: "error", summary: "每周备份失败", error: error?.message || "backup_failed", metrics: { week } });
-    if (String(error?.message || "").startsWith("restore_")) {
-      await recordHealthStatus("restore_drill", { status: "error", summary: "恢复演练失败", error: error.message });
-    }
-    return { ok: false, week, error: clean(error?.message || "backup_failed", 300) };
-  }
+  // Telegram is a notification channel, never a backup destination. Redis can
+  // contain users, orders, sessions and provider tokens, so automatic exports
+  // remain disabled until encrypted object storage is explicitly configured.
+  await recordHealthStatus("telegram_backup", {
+    status: "disabled",
+    summary: "安全对象存储未配置，自动备份已停用",
+    metrics: { week },
+  });
+  await recordHealthStatus("restore_drill", {
+    status: "disabled",
+    summary: "没有完整的安全快照，恢复演练已停用",
+    metrics: { week },
+  });
+  return {
+    ok: true,
+    disabled: true,
+    skipped: true,
+    reason: "secure_backup_storage_not_configured",
+    week,
+    forceIgnored: Boolean(force),
+  };
 }
 
 export const backupInternals = {
@@ -299,5 +309,6 @@ export const backupInternals = {
   normalizeStream,
   normalizeValue,
   restoreCommands,
+  validateCompleteSnapshot,
   beijingWeekKey,
 };

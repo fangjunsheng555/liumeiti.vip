@@ -1,11 +1,14 @@
 // 后台商品/价格管理(仅超级管理员)。读:默认+覆盖+合并结果;写:保存覆盖到 Redis。
 import {
   adminSessionFromRequest, isRootAdminSession, adminActorFromRequest,
-  pushAdminActionLog, roundMoney, clean, getCatalogStockMap, setStock,
+  pushAdminActionLog, roundMoney, clean, getCatalogStockMap,
 } from "../../_utils.js";
+import { setStockAndMaybeEnqueueRestock } from "../../_push.js";
+import { normalizeStockValue } from "../../_stock-input.js";
 import { getMergedCatalog, getCatalogOverrides } from "../../_catalog.js";
 import { commitCatalogVersion, ensureCatalogBaseline, listCatalogVersions } from "../../_catalog-versions.js";
 import { recordHealthStatus } from "../../_health.js";
+import { withApiTelemetry } from "../../_observability.js";
 import { CATALOG_DEFAULTS } from "../../../lib/catalog-defaults.js";
 import { getCatalogDisplayPrice } from "../../../lib/catalog-price.js";
 
@@ -26,7 +29,7 @@ async function catalogWithStock(overrides) {
   }));
 }
 
-export async function GET(request) {
+async function getCatalogHandler(request) {
   const session = gate(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const overrides = await getCatalogOverrides();
@@ -79,10 +82,27 @@ function diffToOverrides(edited) {
   return out;
 }
 
-export async function PUT(request) {
+async function updateCatalogHandler(request) {
   if (!gate(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   let body = {};
   try { body = await request.json(); } catch (e) {}
+  const stockEdits = (body.stockEdits && typeof body.stockEdits === "object" && !Array.isArray(body.stockEdits))
+    ? body.stockEdits
+    : {};
+  const editedCatalog = Array.isArray(body.catalog) ? body.catalog : [];
+  const normalizedStockEdits = [];
+  for (const [key, rawValue] of Object.entries(stockEdits)) {
+    const separator = String(key).indexOf(":");
+    const service = separator > 0 ? clean(String(key).slice(0, separator), 40) : "";
+    const planId = separator > 0 ? clean(String(key).slice(separator + 1), 40) : "";
+    const product = editedCatalog.find((item) => item?.key === service);
+    const plan = product?.plans?.find((item) => item?.id === planId);
+    const normalized = normalizeStockValue(rawValue);
+    if (!service || !planId || !product || !plan || !normalized.ok) {
+      return Response.json({ ok: false, error: "invalid_stock_edit", target: clean(key, 100) }, { status: 400 });
+    }
+    normalizedStockEdits.push({ service, planId, value: normalized.value, product, plan });
+  }
   const previousOverrides = await getCatalogOverrides();
   const overrides = diffToOverrides(body.catalog);
   const actor = adminActorFromRequest(request);
@@ -100,27 +120,52 @@ export async function PUT(request) {
   if (!committed.ok) return Response.json({ ok: false, error: committed.error || "save_failed" }, { status: 500 });
 
   // 库存编辑(只对面板里实际改过的规格生效,key 形如 "<service>:<planId>",值 ""=不限/整数≥0)
-  const stockEdits = (body.stockEdits && typeof body.stockEdits === "object") ? body.stockEdits : {};
   let stockChanged = 0;
-  for (const [k, v] of Object.entries(stockEdits)) {
-    const i = String(k).indexOf(":");
-    if (i <= 0) continue;
-    const svc = clean(k.slice(0, i), 40);
-    const pid = clean(k.slice(i + 1), 40);
-    const val = (v === "" || v == null) ? "" : Math.max(0, Math.floor(Number(v)));
-    if (v !== "" && v != null && !Number.isFinite(Number(v))) continue;
-    if (await setStock(svc, pid, val)) stockChanged += 1;
+  const stockFailures = [];
+  for (const { service: svc, planId: pid, value: val, product, plan } of normalizedStockEdits) {
+    const result = await setStockAndMaybeEnqueueRestock(
+      svc,
+      pid,
+      val,
+      `catalog:${committed.currentVersion}:${svc}:${pid}`,
+      {
+        serviceLabelZh: product?.title || svc,
+        serviceLabelEn: product?.title || svc,
+        planLabelZh: plan?.label || pid,
+        planLabelEn: plan?.label || pid,
+      },
+    );
+    if (result.ok) stockChanged += 1;
+    else stockFailures.push({ service: svc, plan: pid, error: result.error || "stock_update_failed" });
   }
 
   await pushAdminActionLog({
     action: "catalog_update", actor, target: "catalog",
-    detail: { changedProducts: Object.keys(overrides.products), stockChanged, version: committed.currentVersion },
+    detail: { changedProducts: Object.keys(overrides.products), stockChanged, stockFailures, version: committed.currentVersion },
   });
   await recordHealthStatus("catalog", {
-    status: "ok",
-    summary: "商品目录已发布",
-    metrics: { version: committed.currentVersion, products: Object.keys(overrides.products).length, stockChanged },
+    status: stockFailures.length ? "error" : "ok",
+    summary: stockFailures.length ? "商品目录已发布，但部分库存更新失败" : "商品目录已发布",
+    error: stockFailures.length ? "stock_update_failed" : "",
+    metrics: { version: committed.currentVersion, products: Object.keys(overrides.products).length, stockChanged, stockFailed: stockFailures.length },
   }).catch(() => {});
   const catalog = await catalogWithStock(overrides);
+  if (stockFailures.length) {
+    return Response.json({
+      ok: false,
+      error: "stock_update_failed",
+      catalogCommitted: true,
+      partial: stockChanged > 0,
+      stockChanged,
+      failedStock: stockFailures,
+      overrides,
+      catalog,
+      currentVersion: committed.currentVersion,
+      version: committed.version,
+    }, { status: 503 });
+  }
   return Response.json({ ok: true, overrides, catalog, currentVersion: committed.currentVersion, version: committed.version });
 }
+
+export const GET = withApiTelemetry("admin_catalog", getCatalogHandler);
+export const PUT = withApiTelemetry("admin_catalog", updateCatalogHandler);

@@ -178,7 +178,8 @@ export function buildMarketingMailHtml({ brandName, siteDomain, siteUrl, product
         <tr><td align="center" style="padding:25px 28px 27px;background:#ffffff;border-top:1px solid #dce5f3;">
           <div style="color:#101c36;font-size:13px;line-height:1.5;font-weight:800;">${safeBrand} · Maoyang Taiwan Inc.</div>
           ${buildSupportLine(support)}
-          <div style="margin-top:10px;color:#8290a5;font-size:11px;line-height:1.7;">价格与库存以网站实时页面为准。如无需继续接收服务资讯，可直接回复“退订”。</div>
+          <!-- LM_MARKETING_PREFERENCES_SLOT_V1 -->
+          <div style="margin-top:10px;color:#8290a5;font-size:11px;line-height:1.7;">价格与库存以网站实时页面为准。实际发送邮件提供邮件偏好与一键退订入口。</div>
         </td></tr>
       </table>
     </td></tr>
@@ -203,6 +204,6 @@ export function buildMarketingMailText({ brandName, siteUrl, products } = {}) {
     `服务目录：${origin}/shop`,
     `服务中心：${origin}/service-center`,
     "",
-    "价格与库存以网站实时页面为准。如无需继续接收服务资讯，可直接回复“退订”。",
+    "价格与库存以网站实时页面为准。",
   ].join("\n");
 }

@@ -9,8 +9,9 @@ import {
   readUserAuthState,
   revokeUserSessions,
 } from "../../_auth-session.js";
+import { withApiTelemetry } from "../../_observability.js";
 
-export async function POST(request) {
+async function loginHandler(request) {
   let body = {};
   try { body = await request.json(); } catch (e) {}
   const email = String(body.email || "").trim().toLowerCase();
@@ -56,7 +57,7 @@ export async function POST(request) {
   });
 }
 
-export async function DELETE(request) {
+async function logoutHandler(request) {
   const auth = await authenticateUserRequest(request);
   if (!auth.ok) {
     // An absent, expired or already-revoked cookie is safe to clear locally.
@@ -83,3 +84,6 @@ export async function DELETE(request) {
     headers: { "Set-Cookie": clearCookieValue("lm_user") },
   });
 }
+
+export const POST = withApiTelemetry("auth_login", loginHandler);
+export const DELETE = withApiTelemetry("auth_logout", logoutHandler);

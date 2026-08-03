@@ -7,6 +7,7 @@ import {
 } from "../../_utils.js";
 import { buildRecoveryEmailHtml, buildRecoveryEmailText } from "./recovery-email.js";
 import { getSettings } from "../../_settings.js";
+import { deliverOnce } from "../../_delivery-once.js";
 
 export const runtime = "nodejs";
 const CART_INDEX = "lm:cart:index";
@@ -63,12 +64,14 @@ export async function POST(request) {
 
   // 处理完从弃单索引移除该记录(召回过或已成交,不再显示在列表)
   async function removeRecord() {
-    await redisCmd(["ZREM", CART_INDEX, id]);
-    await redisCmd(["DEL", ckey]);
+    const result = await redisPipeline([["ZREM", CART_INDEX, id], ["DEL", ckey]]);
+    return Array.isArray(result)
+      && result.length === 2
+      && result.every((entry) => entry && typeof entry === "object" && entry.result != null);
   }
 
   if (action === "converted") {
-    await removeRecord();
+    if (!await removeRecord()) return Response.json({ ok: false, error: "storage_failed" }, { status: 503 });
     return Response.json({ ok: true, removed: true });
   }
   if (action === "email") {
@@ -84,12 +87,34 @@ export async function POST(request) {
     const subject = en ? `Your ${brandName} order is one step away 🛒` : `您的订单还差一步就完成啦 🛒 · ${brandName}`;
     const html = buildRecoveryEmailHtml(params);
     const text = buildRecoveryEmailText(params);
-    let sent = false;
-    try { const r = await sendSimpleEmail({ to, subject, text, html, category: "marketing", relatedType: "abandoned", relatedId: id, fromName: brandName, support: settings.support, locale }); sent = !!(r && (r.messageId || r.ok !== false)); }
-    catch (e) { sent = false; }
-    if (!sent) return Response.json({ ok: false, error: "send_failed" }, { status: 502 });
+    const delivery = await deliverOnce(`abandoned:${id}:email`, (stableId) => sendSimpleEmail({
+      to,
+      subject,
+      text,
+      html,
+      category: "marketing",
+      marketing: true,
+      relatedType: "abandoned",
+      relatedId: id,
+      fromName: brandName,
+      support: settings.support,
+      locale,
+      idempotencyKey: stableId,
+    }));
+    const sent = delivery.ok === true
+      && delivery.uncertain !== true
+      && delivery.delivered === true;
+    if (!sent) {
+      return Response.json({
+        ok: false,
+        error: delivery.uncertain ? "delivery_result_uncertain" : "send_failed",
+        retryable: !delivery.uncertain,
+      }, { status: delivery.uncertain ? 503 : 502 });
+    }
     // 召回邮件已发出 → 从列表移除
-    await removeRecord();
+    if (!await removeRecord()) return Response.json({ ok: false, error: "storage_failed", sent: true }, { status: 503 });
+    // Only remove the cart after a definitively recorded provider success.
+    if (!await removeRecord()) return Response.json({ ok: false, error: "storage_failed", sent: true }, { status: 503 });
     return Response.json({ ok: true, removed: true });
   }
   return Response.json({ ok: false, error: "bad_action" }, { status: 400 });

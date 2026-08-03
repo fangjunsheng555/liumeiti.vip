@@ -15,6 +15,7 @@ const lists = new Map();
 const sortedSets = new Map();
 const sets = new Map();
 const sentEmails = [];
+const queuedEmailResponses = [];
 const originalFetch = globalThis.fetch;
 let nextEmailHook = null;
 
@@ -23,9 +24,20 @@ function sortedSet(key) {
   return sortedSets.get(key);
 }
 
+function clearDeliveryIndexes(keys, member) {
+  keys.slice(1, 4).forEach((key) => sortedSet(key).delete(member));
+}
+
+function indexDelivery(keys, status, score, member) {
+  clearDeliveryIndexes(keys, member);
+  const index = status === "sending" ? 1 : status === "uncertain" ? 2 : status === "retryable" ? 3 : 0;
+  if (index) sortedSet(keys[index]).set(member, Number(score));
+}
+
 function execute(command) {
   const [rawName, ...args] = command;
   const name = String(rawName || "").toUpperCase();
+  if (name === "PING") return "PONG";
   if (name === "GET") return values.get(args[0]) ?? null;
   if (name === "SET") {
     const [key, value, ...options] = args;
@@ -55,6 +67,25 @@ function execute(command) {
     const keyCount = Number(args[1] || 0);
     const keys = args.slice(2, 2 + keyCount);
     const argv = args.slice(2 + keyCount);
+    if (script.includes("local next = cjson.decode(ARGV[1])") && script.includes("LPUSH")) {
+      values.set(keys[0], String(argv[0]));
+      return String(argv[0]);
+    }
+    if (script.includes("PEXPIRE") && script.includes("redis.call('GET',KEYS[1])")) {
+      return values.get(keys[0]) === argv[0] ? 1 : 0;
+    }
+    if (script.includes("redis.call('GET',KEYS[1])==ARGV[1]") && script.includes("redis.call('DEL',KEYS[1])")) {
+      if (values.get(keys[0]) !== argv[0]) return 0;
+      values.delete(keys[0]);
+      return 1;
+    }
+    if (script.includes("current=tonumber(doc.revision or 0)")) {
+      const existing = values.get(keys[0]);
+      const revision = existing ? Number(JSON.parse(existing).revision || 0) : 0;
+      if (revision !== Number(argv[0])) return 0;
+      values.set(keys[0], argv[1]);
+      return 1;
+    }
     if (script.includes("state='started'") && script.includes("isNew=true")) {
       const existing = values.get(keys[0]);
       if (existing) {
@@ -106,20 +137,51 @@ function execute(command) {
       }
       return JSON.stringify({ ok: true, added });
     }
-    if (script.includes("return 'acquired'")) {
+    if (script.includes("return 'acquired'") && script.includes("indexStatus")) {
       const raw = values.get(keys[0]);
       if (raw) {
-        if (raw === "done") return "done";
+        if (raw === "done") {
+          clearDeliveryIndexes(keys, argv[3]);
+          return "done";
+        }
         try {
           const state = JSON.parse(raw);
-          if (["done", "sending", "uncertain"].includes(state?.status)) return state.status;
+          if (state?.status === "done") {
+            clearDeliveryIndexes(keys, argv[3]);
+            return "done";
+          }
+          if (["sending", "uncertain"].includes(state?.status)) {
+            indexDelivery(keys, state.status, state.score || argv[2], argv[3]);
+            return state.status;
+          }
           if (state?.status !== "retryable") return "uncertain";
         } catch {
+          indexDelivery(keys, "uncertain", argv[2], argv[3]);
           return "uncertain";
         }
       }
       values.set(keys[0], argv[1]);
+      indexDelivery(keys, "sending", argv[2], argv[3]);
       return "acquired";
+    }
+    if (script.includes("ARGV[3]=='sending'") && script.includes("return 1")) {
+      const current = JSON.parse(values.get(keys[0]) || "null");
+      if (!current || current.token !== argv[0]) return 0;
+      values.set(keys[0], argv[1]);
+      indexDelivery(keys, argv[2], argv[3], argv[4]);
+      return 1;
+    }
+    if (script.includes("redis.call('SET',KEYS[1],'done')")) {
+      const raw = values.get(keys[0]);
+      if (raw === "done") {
+        clearDeliveryIndexes(keys, argv[1]);
+        return 1;
+      }
+      const current = JSON.parse(raw || "null");
+      if (!current || current.token !== argv[0]) return 0;
+      values.set(keys[0], "done");
+      clearDeliveryIndexes(keys, argv[1]);
+      return 1;
     }
     throw new Error("unexpected EVAL script");
   }
@@ -131,13 +193,13 @@ function execute(command) {
     return removed;
   }
   if (name === "ZCARD") return sortedSet(args[0]).size;
-  if (name === "ZREVRANGE" || name === "ZRANGEBYSCORE" || name === "ZREMRANGEBYSCORE") {
+  if (name === "ZRANGE" || name === "ZREVRANGE" || name === "ZRANGEBYSCORE" || name === "ZREMRANGEBYSCORE") {
     if (name === "ZREMRANGEBYSCORE") return 0;
     const entries = [...sortedSet(args[0]).entries()];
     if (name === "ZRANGEBYSCORE") return entries.map(([member]) => member);
     const start = Number(args[1]);
     const stop = Number(args[2]);
-    return entries.sort((a, b) => b[1] - a[1]).slice(start, stop < 0 ? undefined : stop + 1).map(([member]) => member);
+    return entries.sort((a, b) => name === "ZREVRANGE" ? b[1] - a[1] : a[1] - b[1]).slice(start, stop < 0 ? undefined : stop + 1).map(([member]) => member);
   }
   if (name === "LPUSH") {
     const list = lists.get(args[0]) || [];
@@ -203,6 +265,8 @@ globalThis.fetch = async (input, options = {}) => {
     const hook = nextEmailHook;
     nextEmailHook = null;
     if (hook) hook();
+    const queued = queuedEmailResponses.shift();
+    if (queued) return Response.json(queued.body || { message: "provider rejected" }, { status: queued.status });
     return Response.json({ id: "test-mail-" + sentEmails.length });
   }
   return originalFetch(input, options);
@@ -469,6 +533,159 @@ test("password correction resend rotates token and requires verified session", a
   assert.equal(sentEmails.length, mailsBefore + 1, "the same operation must not send a second email");
   const replayed = await utils.getOrderById("LMRESEND1");
   assert.equal(replayed.items[0].passwordCorrectionResendCount, 1);
+});
+
+test("password correction resend never hides a partial multi-item delivery failure and retries only the failed item", async () => {
+  const requestedAt = new Date().toISOString();
+  seedOrder({
+    orderId: "LMRESENDMULTI1",
+    status: "received",
+    locale: "zh",
+    email: "multi-buyer@example.com",
+    items: [0, 1].map((index) => ({
+      service: "spotify",
+      label: `Spotify 成员 ${index + 1}`,
+      account: `member-${index + 1}@example.com`,
+      password: `password-${index + 1}`,
+      passwordCorrectionRequestedAt: requestedAt,
+      passwordCorrectionExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    })),
+  });
+  const token = utils.signSession({
+    type: "after-sales-order",
+    orderId: "LMRESENDMULTI1",
+    email: "multi-buyer@example.com",
+    exp: Date.now() + 60_000,
+  });
+  const request = () => new Request("https://www.liumeiti.vip/api/order-password-update/resend", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "spotify-resend-multi-test-0001" },
+    body: JSON.stringify({ orderId: "LMRESENDMULTI1", token }),
+  });
+
+  const sendsBefore = sentEmails.length;
+  queuedEmailResponses.push(
+    { status: 200, body: { id: "multi-first-ok" } },
+    { status: 422, body: { message: "provider rejected this attempt" } },
+    { status: 422, body: { message: "provider rejected this attempt" } },
+  );
+  const partial = await resendRoute.POST(request());
+  const partialBody = await partial.json();
+  assert.equal(partial.status, 502);
+  assert.equal(partialBody.ok, false);
+  assert.equal(partialBody.retryable, true);
+  assert.deepEqual(partialBody.failedItemIndexes, [1]);
+  assert.equal(sentEmails.length, sendsBefore + 3, "the provider retry must also fail for the second item");
+
+  queuedEmailResponses.push({ status: 200, body: { id: "multi-second-retry-ok" } });
+  const retry = await resendRoute.POST(request());
+  const retryBody = await retry.json();
+  assert.equal(retry.status, 200, JSON.stringify(retryBody));
+  assert.equal(retryBody.ok, true);
+  assert.equal(retryBody.deliveredCount, 2);
+  assert.equal(sentEmails.length, sendsBefore + 4, "the completed first item must not be sent again");
+
+  const stored = await utils.getOrderById("LMRESENDMULTI1");
+  assert.equal(stored.items[0].passwordCorrectionEmailOk, true);
+  assert.equal(stored.items[1].passwordCorrectionEmailOk, true);
+  assert.equal(stored.items[0].passwordCorrectionResendCount, 1);
+  assert.equal(stored.items[1].passwordCorrectionResendCount, 1);
+});
+
+test("password correction resend processes every one of three pending Spotify items", async () => {
+  const requestedAt = new Date().toISOString();
+  seedOrder({
+    orderId: "LMRESENDTHREE1",
+    status: "received",
+    locale: "zh",
+    email: "three-buyer@example.com",
+    items: [0, 1, 2].map((index) => ({
+      service: "spotify",
+      label: `Spotify member ${index + 1}`,
+      account: `three-${index + 1}@example.com`,
+      password: `password-${index + 1}`,
+      passwordCorrectionRequestedAt: requestedAt,
+      passwordCorrectionExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    })),
+  });
+  const token = utils.signSession({
+    type: "after-sales-order",
+    orderId: "LMRESENDTHREE1",
+    email: "three-buyer@example.com",
+    exp: Date.now() + 60_000,
+  });
+  const sendsBefore = sentEmails.length;
+  queuedEmailResponses.push(
+    { status: 200, body: { id: "three-1-ok" } },
+    { status: 200, body: { id: "three-2-ok" } },
+    { status: 200, body: { id: "three-3-ok" } },
+  );
+
+  const response = await resendRoute.POST(new Request("https://www.liumeiti.vip/api/order-password-update/resend", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "spotify-resend-three-test-0001" },
+    body: JSON.stringify({ orderId: "LMRESENDTHREE1", token }),
+  }));
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  assert.equal(body.ok, true);
+  assert.equal(body.deliveredCount, 3);
+  assert.equal(body.handledCount, 3);
+  assert.equal(sentEmails.length, sendsBefore + 3);
+
+  const stored = await utils.getOrderById("LMRESENDTHREE1");
+  assert.deepEqual(stored.items.map((item) => item.passwordCorrectionEmailOk), [true, true, true]);
+  assert.deepEqual(stored.items.map((item) => item.passwordCorrectionResendCount), [1, 1, 1]);
+});
+
+test("password correction resend quarantines an uncertain item instead of risking a duplicate", async () => {
+  const requestedAt = new Date().toISOString();
+  seedOrder({
+    orderId: "LMRESENDUNCERTAIN1",
+    status: "received",
+    locale: "zh",
+    email: "uncertain-buyer@example.com",
+    items: [0, 1].map((index) => ({
+      service: "spotify",
+      label: `Spotify 不确定投递 ${index + 1}`,
+      account: `uncertain-${index + 1}@example.com`,
+      password: `password-${index + 1}`,
+      passwordCorrectionRequestedAt: requestedAt,
+      passwordCorrectionExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    })),
+  });
+  const token = utils.signSession({
+    type: "after-sales-order",
+    orderId: "LMRESENDUNCERTAIN1",
+    email: "uncertain-buyer@example.com",
+    exp: Date.now() + 60_000,
+  });
+  const request = () => new Request("https://www.liumeiti.vip/api/order-password-update/resend", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "spotify-resend-uncertain-test-0001" },
+    body: JSON.stringify({ orderId: "LMRESENDUNCERTAIN1", token }),
+  });
+
+  const sendsBefore = sentEmails.length;
+  queuedEmailResponses.push(
+    { status: 200, body: { id: "uncertain-first-ok" } },
+    { status: 503, body: { message: "provider result unknown" } },
+    { status: 503, body: { message: "provider result unknown" } },
+  );
+  const uncertain = await resendRoute.POST(request());
+  const uncertainBody = await uncertain.json();
+  assert.equal(uncertain.status, 409);
+  assert.equal(uncertainBody.error, "email_delivery_uncertain");
+  assert.equal(uncertainBody.retryable, false);
+  assert.equal(uncertainBody.manualReview, true);
+  assert.deepEqual(uncertainBody.failedItemIndexes, [1]);
+  assert.equal(sentEmails.length, sendsBefore + 3);
+
+  const repeated = await resendRoute.POST(request());
+  const repeatedBody = await repeated.json();
+  assert.equal(repeated.status, 409);
+  assert.equal(repeatedBody.manualReview, true);
+  assert.equal(sentEmails.length, sendsBefore + 3, "an uncertain provider result must not be sent again automatically");
 });
 
 test("getOrderEntryById prefers record and falls back to legacy with index handle", async () => {

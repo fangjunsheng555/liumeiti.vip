@@ -102,13 +102,17 @@ function normalizeSearchText(value) {
 // blocks (the code and the "15 minutes" expiry, footer years, dates) can never
 // merge into one run. Source-formatting newlines inside the HTML are noise.
 function htmlToText(value) {
-  return decodeEntities(value)
+  // Strip real markup before decoding entities. Decoding first turns a
+  // visible forwarded address such as `Netflix &lt;info@netflix.com&gt;`
+  // into an apparent HTML tag and silently removes the trusted sender.
+  return decodeEntities(String(value || "")
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
     .replace(/[\r\n]+/g, " ")
     .replace(/<br\s*\/?\s*>/gi, "\n")
     .replace(/<\/(p|div|td|th|tr|table|thead|tbody|tfoot|li|ul|ol|h[1-6]|blockquote|section|article|header|footer|main)\s*>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
+    .replace(/<[^>]+>/g, " "))
     .replace(/[ \t]+/g, " ")
     .replace(/\s*\n\s*/g, "\n")
     .trim();
@@ -161,6 +165,142 @@ async function parseMessages(raw) {
     } catch {}
   }
   return messages;
+}
+
+const QUOTED_HISTORY_BOUNDARY = /^\s*(?:quoted\s+(?:earlier|previous|original)\b.*(?:message|mail)|-{2,}\s*original\s+message\s*-{2,}|on\s+.+\s+wrote|(?:begin\s+)?forwarded\s+message)\s*:?\s*$/i;
+
+function quotedHistoryBoundaryOffset(value, { structuredNetflix = false } = {}) {
+  const lines = String(value || "").replace(/\r\n?/g, "\n").split("\n");
+  let meaningfulLines = 0;
+  let netflixHeaderBlocks = 0;
+  let offset = 0;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const netflixFromHeader = /^\s*from\s*[:：].+@[a-z0-9.-]*netflix\.com\b/i.test(line);
+    if (netflixFromHeader) {
+      netflixHeaderBlocks += 1;
+      // A structured Netflix MIME body starts with current content. A later
+      // From: Netflix block therefore begins quoted history. For flattened
+      // forwards the first such block identifies the current original; only a
+      // second block is historical.
+      if ((structuredNetflix && meaningfulLines > 0) || netflixHeaderBlocks > 1) return offset;
+    }
+    if (QUOTED_HISTORY_BOUNDARY.test(trimmed)) {
+      // In a flattened forward the first "Forwarded message" line is merely
+      // the wrapper before the current Netflix content. Once current content
+      // has started, the same marker safely denotes an older quoted message.
+      if (structuredNetflix || meaningfulLines > 1 || netflixHeaderBlocks > 0) return offset;
+      offset += line.length + 1;
+      continue;
+    }
+    if (trimmed && !FORWARD_HEADER_LINE.test(trimmed)) meaningfulLines += 1;
+    offset += line.length + 1;
+  }
+  return -1;
+}
+
+function withoutQuotedHistory(value, options = {}) {
+  const source = String(value || "").replace(/\r\n?/g, "\n");
+  const boundary = quotedHistoryBoundaryOffset(source, options);
+  return (boundary >= 0 ? source.slice(0, boundary) : source).trim();
+}
+
+function withoutQuotedHtml(value, options = {}) {
+  const source = String(value || "");
+  // CSS, scripts and comments are not visible mail content. Mask them with
+  // equal-length whitespace (preserving line breaks) so they cannot inflate
+  // meaningful-line counts or contain fake quote markers, while all source
+  // offsets still point at the original HTML.
+  const masked = source.replace(
+    /<!--[\s\S]*?-->|<style\b[^>]*>[\s\S]*?<\/style>|<script\b[^>]*>[\s\S]*?<\/script>/gi,
+    (segment) => segment.replace(/[^\r\n]/g, " "),
+  );
+  const quotedContainer = /<(?:blockquote\b|(?:div|section)\b[^>]*(?:class|id)=["'][^"']*(?:gmail_quote|protonmail_quote|yahoo_quoted|moz-cite-prefix|divrplyfwdmsg|appendonsend)[^"']*["'])/i.exec(masked);
+  const containerBoundary = quotedContainer?.index ?? -1;
+  const candidate = containerBoundary >= 0 ? source.slice(0, containerBoundary) : source;
+  const candidateMasked = containerBoundary >= 0 ? masked.slice(0, containerBoundary) : masked;
+  // Project block tags to newlines and all remaining markup to equal-length
+  // spaces. This preserves source offsets while letting the same text boundary
+  // detector protect hrefs that appear in an ordinary HTML paragraph after a
+  // quoted-history marker.
+  const projected = candidateMasked
+    .replace(/<(?:br\b[^>]*|\/(?:p|div|section|article|header|footer|li|tr|table|h[1-6])\s*)>/gi, (tag) => `\n${" ".repeat(Math.max(0, tag.length - 1))}`)
+    .replace(/<[^>]+>/g, (tag) => " ".repeat(tag.length));
+  const textualBoundary = quotedHistoryBoundaryOffset(projected, options);
+  const boundary = textualBoundary >= 0 ? textualBoundary : candidate.length;
+  return candidate.slice(0, boundary);
+}
+
+function contentForNetflixMessage(message, structuredNetflix) {
+  const html = withoutQuotedHtml(message?.html || "", { structuredNetflix });
+  const text = withoutQuotedHistory(message?.text || htmlToText(html), { structuredNetflix });
+  const htmlText = withoutQuotedHistory(htmlToText(html), { structuredNetflix });
+  return { message, structuredNetflix, html, text, htmlText };
+}
+
+function currentNetflixContent(messages) {
+  const rows = Array.isArray(messages) ? messages : [];
+  const root = rows[0] || {};
+  const rootStructuredNetflix = addressValues(root?.from).some(isNetflixAddress);
+  const rootContent = contentForNetflixMessage(root, rootStructuredNetflix);
+  // Outlook may flatten the current Netflix original into the outer body and
+  // attach an older quoted .eml. If the current, quote-trimmed outer segment
+  // contains a Netflix From header, it is authoritative; blindly preferring a
+  // structured nested message would replay the old attachment's code/link.
+  const flattenedRootIsCurrent = forwardedHeaderAddresses([rootContent.text, rootContent.htmlText]
+    .filter(Boolean)
+    .join("\n"))
+    .some(isNetflixAddress);
+  if (rootStructuredNetflix || flattenedRootIsCurrent) return rootContent;
+
+  const nested = rows.slice(1).find((entry) => addressValues(entry?.from).some(isNetflixAddress));
+  if (!nested) return rootContent;
+
+  // A nested EML is authoritative only when the outer body is a transport
+  // wrapper. If the outer body contains any business content, choosing a
+  // nested Netflix message could replay an older attached code/link.
+  const outerBusinessLines = [rootContent.text, rootContent.htmlText]
+    .filter(Boolean)
+    .join("\n")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !QUOTED_HISTORY_BOUNDARY.test(line))
+    .filter((line) => !FORWARD_HEADER_LINE.test(line))
+    .filter((line) => !/^(?:return-path|received|delivered-to|message-id|mime-version|content-type|content-transfer-encoding|x-[a-z0-9-]+)\s*:/i.test(line));
+  return outerBusinessLines.length ? rootContent : contentForNetflixMessage(nested, true);
+}
+
+function canonicalNetflixMessageBody(value) {
+  const source = String(value || "")
+    // Forwarding wrappers add these presentation headers independently for
+    // each copy. They are transport noise, not part of the Netflix request.
+    .replace(/^\s*(?:from|to|cc|bcc|date|sent|subject|reply-to)\s*[:：].*$/gim, " ")
+    .replace(/^\s*(?:-{2,}\s*)?(?:begin\s+)?forwarded message(?:\s*-{2,})?\s*$/gim, " ")
+    // One Outlook forwarding path may omit the visible SRC footer entirely.
+    // The SRC UUID is already retained as separate strong evidence below, so
+    // remove its whole line from the content identity before hashing.
+    .replace(/^\s*src\s*[:：].*$/gim, " ");
+  const normalized = normalizeSearchText(source);
+  return normalized.length >= 32 && normalized.includes("netflix") ? normalized : "";
+}
+
+// Correlating a rejected copy with an older accepted copy is safe only when
+// both carry positive evidence from the same original Netflix message. Keep a
+// set because Outlook may preserve the original Message-ID in one wrapper and
+// only the canonical original body in another. These values exist only in the
+// in-memory parsed object; _store HMACs them before persistence.
+function netflixRequestEvidence(current) {
+  const evidence = new Set();
+  if (current?.structuredNetflix) {
+    const messageId = String(current?.message?.messageId || "").trim().toLowerCase();
+    if (messageId && messageId.length <= 500) evidence.add(`message-id:${messageId}`);
+  }
+  const body = canonicalNetflixMessageBody(current?.text || current?.htmlText || "");
+  if (body) {
+    evidence.add(`content-sha256:${createHash("sha256").update(body).digest("hex")}`);
+  }
+  return Array.from(evidence).slice(0, 12);
 }
 
 function detectLanguage(text, html) {
@@ -263,21 +403,22 @@ const NETFLIX_SRC_UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 // Netflix repeats one delivery UUID in its visible `SRC:` footer. Only that
 // source-scoped identifier is strong enough to correlate two differently
 // wrapped copies. An arbitrary UUID elsewhere in a forwarded message is not a
-// delivery identity, and multiple distinct SRC UUIDs are deliberately treated
-// as ambiguous so separate Netflix messages can never be folded together.
+// delivery identity. Quoted forwarding chains may contain older SRC footers,
+// so the first UUID in the first visible SRC line is the current message.
 function netflixDeliveryFingerprint(values) {
-  const uuids = [];
   for (const value of (Array.isArray(values) ? values : [values])) {
     const source = decodeEntities(String(value || ""));
     for (const match of source.matchAll(/\bsrc\s*:\s*([^\r\n]{0,512})/gi)) {
-      uuids.push(...Array.from(String(match[1] || "").matchAll(NETFLIX_SRC_UUID_PATTERN), (entry) => entry[0].toLowerCase()));
+      NETFLIX_SRC_UUID_PATTERN.lastIndex = 0;
+      const uuid = NETFLIX_SRC_UUID_PATTERN.exec(String(match[1] || ""))?.[0]?.toLowerCase() || "";
+      if (uuid) {
+        return createHash("sha256")
+          .update(`netflix-src-v1\0${uuid}`)
+          .digest("hex");
+      }
     }
   }
-  const distinct = unique(uuids);
-  if (distinct.length !== 1) return "";
-  return createHash("sha256")
-    .update(`netflix-src-v1\0${distinct[0]}`)
-    .digest("hex");
+  return "";
 }
 
 // Netflix repeats its delivery UUID in visible footer metadata (for example
@@ -384,6 +525,38 @@ function forwardedHeaderAddresses(text) {
   return lines.filter((line) => labels.test(line.trim())).flatMap(emailsIn);
 }
 
+function forwardedNetflixSentAt(text) {
+  let insideNetflixHeaders = false;
+  for (const rawLine of String(text || "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (/^(?:from|de|von|da|发件人|寄件者)\s*[:：]/i.test(line)) {
+      insideNetflixHeaders = emailsIn(line).some(isNetflixAddress);
+      continue;
+    }
+    if (!insideNetflixHeaders) continue;
+    const match = /^(?:date|sent|datum|gesendet|fecha|enviado|enviada|data|inviato|verzonden|wysłano|wyslano|日期|发送时间|寄件日期)\s*[:：]\s*(.+)$/i.exec(line);
+    if (!match) continue;
+    const timestamp = new Date(match[1]).getTime();
+    if (Number.isFinite(timestamp) && timestamp > 0) return timestamp;
+  }
+  return 0;
+}
+
+function normalizedNetflixRequestSentAt(current, currentPlain, receivedAt) {
+  const received = new Date(receivedAt || Date.now()).getTime();
+  const structured = current?.structuredNetflix ? new Date(current.message?.date || 0).getTime() : 0;
+  const candidate = Number.isFinite(structured) && structured > 0
+    ? structured
+    : forwardedNetflixSentAt(currentPlain);
+  // A forwarded sign-in email is useful for only minutes, but allow generous
+  // provider delay while rejecting a malformed/future body date that could
+  // otherwise pin an old request above every subsequent code.
+  if (!Number.isFinite(candidate) || candidate <= 0
+    || candidate < received - 7 * 24 * 60 * 60 * 1000
+    || candidate > received + 10 * 60 * 1000) return "";
+  return new Date(candidate).toISOString();
+}
+
 function originalRecipientHeaders(raw) {
   let source = "";
   try {
@@ -427,21 +600,28 @@ export async function parseNetflixEmail(raw, envelope = {}) {
   let messages;
   try { messages = await parseMessages(raw); } catch { return { accepted: false, reason: "mime_parse_failed" }; }
 
-  const subjects = messages.map((message) => message.subject || "").filter(Boolean);
-  const html = messages.map((message) => message.html || "").filter(Boolean).join("\n");
-  const plain = messages.map((message) => message.text || htmlToText(message.html || "")).filter(Boolean).join("\n");
-  const text = normalizeDigits(`${subjects.join("\n")}\n${plain}\n${htmlToText(html)}`).replace(/\s+/g, " ").trim();
+  const current = currentNetflixContent(messages);
+  const currentSubject = String(current.message?.subject || messages[0]?.subject || "Netflix");
+  const currentPlain = [current.text, current.htmlText].filter(Boolean).join("\n");
+  const text = normalizeDigits(`${currentSubject}\n${currentPlain}`).replace(/\s+/g, " ").trim();
   const lower = text.toLowerCase();
 
-  const structuredFrom = messages.flatMap((message) => addressValues(message.from));
-  const structuredRecipients = messages.flatMap((message) => [
-    ...addressValues(message.to), ...addressValues(message.cc), ...addressValues(message.bcc), ...addressValues(message.replyTo),
-  ]);
-  const forwarded = forwardedHeaderAddresses(plain);
+  // Every identity signal that can originate in the MIME body must be bound
+  // to the same current message segment as the returned code/link. Otherwise
+  // a quoted historical .eml or membership footer could lend its account to a
+  // newer request and expose one customer's code to another customer's order.
+  const structuredFrom = addressValues(current.message?.from);
+  const structuredRecipients = [
+    ...addressValues(current.message?.to),
+    ...addressValues(current.message?.cc),
+    ...addressValues(current.message?.bcc),
+    ...addressValues(current.message?.replyTo),
+  ];
+  const forwarded = forwardedHeaderAddresses(currentPlain);
   const originalRecipients = originalRecipientHeaders(raw);
   // Outlook and other providers may flatten an automatically forwarded email
   // and leave the original Netflix account only in the membership footer.
-  const bodyAddresses = [...emailsIn(plain), ...emailsIn(htmlToText(html))];
+  const bodyAddresses = emailsIn(currentPlain);
   const envelopeFromAddresses = emailsIn(envelope.from);
   const envelopeAddresses = [...envelopeFromAddresses, ...emailsIn(envelope.to), ...emailsIn(envelope.inboxAddress)];
   const routingRecipients = new Set([...emailsIn(envelope.to), ...emailsIn(envelope.inboxAddress)]);
@@ -453,7 +633,12 @@ export async function parseNetflixEmail(raw, envelope = {}) {
     ...bodyAddresses,
     ...envelopeAddresses,
   ]);
-  const netflixSender = unique([...structuredFrom, ...forwarded, ...emailsIn(plain.slice(0, 3000))]).find(isNetflixAddress) || "";
+  const netflixSender = unique([
+    ...structuredFrom,
+    ...forwarded,
+    ...envelopeFromAddresses,
+    ...emailsIn(currentPlain.slice(0, 3000)),
+  ]).find(isNetflixAddress) || "";
   if (!netflixSender) return { accepted: false, reason: "untrusted_sender" };
 
   // The dedicated codes subdomain is only an inbound route. Never index one of
@@ -475,22 +660,27 @@ export async function parseNetflixEmail(raw, envelope = {}) {
 
   // Line-structured text for digit extraction. Sections are separated by a
   // blank line, which breaks digit-run merging across message parts.
-  const codeText = normalizeDigits(withoutTrackingIdentifiers(withoutUrls(decodeEntities([subjects.join("\n"), plain, htmlToText(html)]
+  const codeText = normalizeDigits(withoutTrackingIdentifiers(withoutUrls(decodeEntities([[currentSubject, current.text].filter(Boolean).join("\n"), current.htmlText]
     .filter(Boolean)
     .join("\n\n")))))
     .normalize("NFKC");
-  const language = detectLanguage(text, html);
+  const language = detectLanguage(text, current.html);
   const receivedAt = new Date(envelope.receivedAt || Date.now()).toISOString();
   const expiresAt = new Date(new Date(receivedAt).getTime() + 15 * 60 * 1000).toISOString();
   const base = {
     accepted: true,
     accountEmails,
     sender: netflixSender,
-    subject: String(subjects[0] || "Netflix").slice(0, 240),
+    subject: currentSubject.slice(0, 240),
     language,
     receivedAt,
+    requestSentAt: normalizedNetflixRequestSentAt(current, currentPlain, receivedAt),
     expiresAt,
-    deliveryFingerprint: netflixDeliveryFingerprint([plain, htmlToText(html)]),
+    // Multipart text/html alternatives can format quoted history differently.
+    // Never let a quoted SRC that survives only in the secondary alternative
+    // override a clean primary text part; use HTML only when text is absent.
+    deliveryFingerprint: netflixDeliveryFingerprint(current.text || current.htmlText),
+    requestEvidence: netflixRequestEvidence(current),
   };
 
   const runs = extractDigitRuns(codeText).filter((run) => !FORWARD_HEADER_LINE.test(run.line || ""));
@@ -517,14 +707,14 @@ export async function parseNetflixEmail(raw, envelope = {}) {
 
   // A trusted Netflix sign-in subject plus one unique four-digit value is a
   // safe fallback for forwarded HTML whose layout inserts large spacer blocks.
-  const subjectText = normalizeSearchText(subjects.join(" "));
+  const subjectText = normalizeSearchText(currentSubject);
   const subjectIsLoginCode = hintPhrases.some((phrase) => subjectText.includes(normalizeSearchText(phrase)));
   const subjectCodes = unique(fourDigitRuns.map((run) => run.value));
   if (subjectIsLoginCode && subjectCodes.length === 1) {
     return { ...base, kind: "code", value: subjectCodes[0], template: `${language}:login-code` };
   }
 
-  const links = collectNetflixLinks(html, plain);
+  const links = collectNetflixLinks(current.html, current.text);
   const travelLink = travelVerifyLink(links);
   if (travelLink) return { ...base, kind: "link", value: travelLink, template: `${language}:temporary-code-link` };
 

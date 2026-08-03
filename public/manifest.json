@@ -2,11 +2,29 @@
   "name": "冒央会社",
   "short_name": "冒央会社",
   "description": "流媒体会员与机场节点一站选购，覆盖 Spotify、Netflix、机场节点、Disney、hbomax等...稳定渠道、专业团队、快速处理、隐私保护",
+  "id": "/",
+  "lang": "zh-CN",
+  "dir": "ltr",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#f6fffd",
   "theme_color": "#0f766e",
+  "categories": ["shopping", "utilities"],
+  "shortcuts": [
+    {
+      "name": "我的订单",
+      "short_name": "订单",
+      "url": "/account",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "选购服务",
+      "short_name": "商城",
+      "url": "/shop",
+      "icons": [{ "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ],
   "icons": [
     {
       "src": "/icon-192.png",

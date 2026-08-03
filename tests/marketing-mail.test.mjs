@@ -5,6 +5,10 @@ import {
   buildMarketingMailHtml,
   buildMarketingMailText,
 } from "../app/api/admin/mail/marketing-template.js";
+import {
+  buildMarketingMailV7Html,
+  buildMarketingMailV7Text,
+} from "../app/api/admin/mail/marketing-template-v7.js";
 
 const products = [
   ["spotify", "Spotify", "¥128/年起", "spotify.jpg", "spotify"],
@@ -35,4 +39,36 @@ test("plain text fallback contains all service links without stale prices", () =
   assert.match(text, /HBO Max｜¥148\/年起/);
   assert.match(text, /全球代付｜3折起/);
   assert.doesNotMatch(text, /¥198\/三个月起/);
+});
+
+test("v7 promotional template keeps offer fields in compatible HTML and plain text", () => {
+  const offer = {
+    badge: "八月精选",
+    headline: "会员服务限时优惠",
+    description: "活动价格和适用范围一次看清。",
+    originalPrice: "¥199",
+    currentPrice: "¥129",
+    savingText: "立省 ¥70",
+    couponCode: "AUG70",
+    deadlineText: "8 月 31 日 23:59 截止",
+    ctaLabel: "查看优惠详情",
+    ctaPath: "/shop?offer=august",
+    serviceKeys: ["spotify", "netflix"],
+  };
+  const html = buildMarketingMailV7Html({ brandName: "冒央会社", siteUrl: "https://www.liumeiti.vip", products, offer });
+  const text = buildMarketingMailV7Text({ brandName: "冒央会社", siteUrl: "https://www.liumeiti.vip", products, offer });
+
+  assert.match(html, /^<!doctype html>/i);
+  assert.match(html, /<table role="presentation"/);
+  assert.match(html, /style="[^"]+"/);
+  assert.equal((html.match(/<table\b/g) || []).length, (html.match(/<table\b[^>]*\bcellspacing="0"[^>]*\bcellpadding="0"[^>]*\bborder="0"/g) || []).length);
+  assert.doesNotMatch(html, /<script|<form|<input|\son[a-z]+=/i);
+  assert.doesNotMatch(html, /<style\b/i);
+  for (const value of ["八月精选", "会员服务限时优惠", "¥199", "¥129", "立省 ¥70", "AUG70", "8 月 31 日 23:59 截止"]) {
+    assert.match(html, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(text, new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  assert.match(html, /href="https:\/\/www\.liumeiti\.vip\/shop\?offer=august"/);
+  assert.match(text, /https:\/\/www\.liumeiti\.vip\/shop\?offer=august/);
+  assert.doesNotMatch(text, /<[^>]+>/);
 });

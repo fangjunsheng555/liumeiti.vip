@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 
 import {
   USERS_KEY,
+  clearCookieValue,
   getCookieFromRequest,
   redisCmd,
   signSession,
@@ -181,19 +182,41 @@ function verifyLegacyUserSession(token, now = Date.now()) {
   return { ...claim, email };
 }
 
-async function ensureLegacyUserDeadline(now) {
-  const configured = process.env.LEGACY_USER_SESSION_UNTIL;
-  if (configured) {
-    const asNumber = Number(configured);
-    const parsed = Number.isFinite(asNumber) && asNumber > 0 ? asNumber : Date.parse(configured);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+function absoluteTimestamp(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : Date.parse(raw);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
+export function configuredLegacyUserDeadline(env = process.env) {
+  const absoluteUntil = String(env?.LEGACY_USER_SESSION_UNTIL || "").trim();
+  if (absoluteUntil) return absoluteTimestamp(absoluteUntil);
+
+  const deployedAtRaw = String(env?.LEGACY_USER_SESSION_DEPLOYED_AT || "").trim();
+  if (!deployedAtRaw) return 0;
+  const deployedAt = absoluteTimestamp(deployedAtRaw);
+  if (!deployedAt || !Number.isSafeInteger(deployedAt + USER_SESSION_TTL_MS)) return 0;
+  return deployedAt + USER_SESSION_TTL_MS;
+}
+
+async function ensureLegacyUserDeadline() {
+  const hasExplicitConfiguration = Boolean(
+    String(process.env.LEGACY_USER_SESSION_UNTIL || "").trim()
+    || String(process.env.LEGACY_USER_SESSION_DEPLOYED_AT || "").trim(),
+  );
+  if (hasExplicitConfiguration) {
+    // Both supported settings are absolute deployment configuration. Unlike
+    // the previous `now + 14 days` fallback, their value cannot be extended by
+    // a user's first visit or by a cold start. LEGACY_USER_SESSION_UNTIL takes
+    // precedence so operators can publish one auditable migration deadline.
+    return configuredLegacyUserDeadline();
   }
 
-  const candidate = now + USER_SESSION_TTL_MS;
-  const setResult = await redisCmd(["SET", LEGACY_USER_DEADLINE_KEY, String(candidate), "NX"]);
-  if (setResult === "OK") return candidate;
-  const stored = finiteTimestamp(await redisCmd(["GET", LEGACY_USER_DEADLINE_KEY]));
-  return stored;
+  // A deployment may pre-initialize this key before serving traffic. Runtime
+  // authentication only reads it: a legacy user's first request must never be
+  // able to start (or restart) the migration window.
+  return finiteTimestamp(await redisCmd(["GET", LEGACY_USER_DEADLINE_KEY]));
 }
 
 const READ_SESSION_ISSUANCE_STATE_SCRIPT = `
@@ -521,9 +544,9 @@ export async function authenticateUserRequest(request, options = {}) {
     if (state.authVersion !== 1) {
       return { ok: false, status: 401, error: "session_revoked" };
     }
-    const deadline = await ensureLegacyUserDeadline(now);
+    const deadline = await ensureLegacyUserDeadline();
     if (!deadline) return { ok: false, status: 503, error: "auth_store_unavailable" };
-    if (now > deadline) return { ok: false, status: 401, error: "legacy_session_expired" };
+    if (now >= deadline) return { ok: false, status: 401, error: "legacy_session_expired" };
   }
 
   return {
@@ -544,7 +567,21 @@ export function refreshedUserSessionToken(auth, now = Date.now()) {
 
 export function userAuthErrorResponse(auth) {
   const status = Number(auth?.status) || 401;
-  return Response.json({ ok: false, error: auth?.error || "not_logged_in" }, { status });
+  const error = auth?.error || "not_logged_in";
+  if (error === "legacy_session_expired") {
+    return Response.json({
+      ok: false,
+      error,
+      message: "登录状态已过期，请重新登录",
+    }, {
+      status: 401,
+      headers: {
+        "Cache-Control": "no-store",
+        "Set-Cookie": clearCookieValue("lm_user"),
+      },
+    });
+  }
+  return Response.json({ ok: false, error }, { status });
 }
 
 /**

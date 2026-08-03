@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { after } from "next/server";
 import {
   checkIdentityRateLimit,
   checkRateLimit,
@@ -30,6 +31,13 @@ import {
   isRetryableMoneyOperationFailure,
   retryableMoneyOperationFields,
 } from "../../lib/money-operation-failure.js";
+import { marketingAttributionFromRequest } from "../_mail-preferences.js";
+import {
+  appendBusinessTraceEvent,
+  businessTraceIdForOrder,
+  makeTraceId,
+  withApiTelemetry,
+} from "../_observability.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
@@ -112,10 +120,38 @@ async function deliverQuoteApplicationNotifications(order, knownSettings = null)
       locale,
     })).then((result) => ({ channel: "email", ...result })),
   ]);
-  return attempts.filter((item) => !item.skipped);
+  return attempts;
 }
 
-export async function POST(request) {
+function queueOrderTrace(order, event = {}) {
+  if (!order?.orderId) return;
+  const task = () => appendBusinessTraceEvent(order.orderId, {
+    businessTraceId: order.businessTraceId,
+    traceId: order.requestTraceId,
+    ...event,
+  }).catch(() => null);
+  try {
+    after(task);
+  } catch {
+    queueMicrotask(task);
+  }
+}
+
+function traceOrderDeliveries(order, deliveries = []) {
+  for (const delivery of deliveries) {
+    queueOrderTrace(order, {
+      stage: `notification_${delivery.channel || "unknown"}`,
+      component: delivery.channel || "notification",
+      outcome: delivery.ok === false
+        ? (delivery.uncertain ? "uncertain" : "error")
+        : delivery.delivered === false || delivery.suppressed || delivery.skipped ? "skipped" : "ok",
+      errorCode: delivery.reason || delivery.error || delivery.code || "",
+      operationId: `quote-application:${order.orderId}:${delivery.channel || "unknown"}`,
+    });
+  }
+}
+
+async function handler(request) {
   let body = {};
   try { body = await request.json(); } catch {}
   const idempotency = requiredIdempotencyKey(request);
@@ -210,13 +246,22 @@ export async function POST(request) {
     });
   }
   if (previousAttempt.found) {
-    const deliveries = await deliverQuoteApplicationNotifications(previousAttempt.order);
+    const existing = previousAttempt.order;
+    const deliveries = await deliverQuoteApplicationNotifications(existing);
+    queueOrderTrace(existing, {
+      stage: "order_commit_replay",
+      component: "quote_order",
+      outcome: "ok",
+      operationId: serverOperationId,
+    });
+    traceOrderDeliveries(existing, deliveries);
     return Response.json({
       ok: true,
-      orderId: previousAttempt.order.orderId,
-      status: previousAttempt.order.status,
+      orderId: existing.orderId,
+      status: existing.status,
       deliveries,
       idempotent: true,
+      traceId: existing.businessTraceId || businessTraceIdForOrder(existing.orderId),
     });
   }
 
@@ -252,6 +297,10 @@ export async function POST(request) {
       if (!Object.keys(attribution).length) attribution = null;
     }
   } catch {}
+  let marketingAttribution = null;
+  try {
+    marketingAttribution = marketingAttributionFromRequest(request);
+  } catch {}
 
   const now = new Date();
   const orderId = orderIdForIdempotencyKey(serverOperationId);
@@ -267,6 +316,8 @@ export async function POST(request) {
   };
   const order = {
     orderId,
+    businessTraceId: businessTraceIdForOrder(orderId),
+    requestTraceId: makeTraceId(),
     revision: 1,
     orderType: "proxy_payment",
     status: "awaiting_quote",
@@ -275,6 +326,7 @@ export async function POST(request) {
     accountLifecycleId: userAccountLifecycleId || null,
     referral,
     attribution,
+    marketingAttribution,
     createdAt: now.toISOString(),
     createdAtBeijing: formatBeijingTime(now),
     clientIp: ip,
@@ -320,6 +372,13 @@ export async function POST(request) {
   });
   if (!committed.ok) {
     const retryableFailure = isRetryableMoneyOperationFailure(committed);
+    queueOrderTrace(order, {
+      stage: "order_commit",
+      component: "quote_order",
+      outcome: retryableFailure ? "retry" : "error",
+      operationId: serverOperationId,
+      errorCode: committed.error || "storage_failed",
+    });
     const conflict = ["idempotency_conflict", "order_exists", "out_of_stock", "account_lifecycle_changed"].includes(committed.error);
     return Response.json({
       ok: false,
@@ -330,9 +389,16 @@ export async function POST(request) {
     });
   }
   Object.assign(order, committed.order || {});
+  queueOrderTrace(order, {
+    stage: committed.idempotent ? "order_commit_replay" : "order_committed",
+    component: "quote_order",
+    outcome: "ok",
+    operationId: serverOperationId,
+  });
   if (committed.idempotent) {
     const deliveries = await deliverQuoteApplicationNotifications(order);
-    return Response.json({ ok: true, orderId, status: order.status, deliveries, idempotent: true });
+    traceOrderDeliveries(order, deliveries);
+    return Response.json({ ok: true, orderId, status: order.status, deliveries, idempotent: true, traceId: order.businessTraceId });
   }
 
   try {
@@ -349,6 +415,9 @@ export async function POST(request) {
   });
 
   const deliveries = await deliverQuoteApplicationNotifications(order);
+  traceOrderDeliveries(order, deliveries);
 
-  return Response.json({ ok: true, orderId, status: order.status, deliveries });
+  return Response.json({ ok: true, orderId, status: order.status, deliveries, traceId: order.businessTraceId });
 }
+
+export const POST = withApiTelemetry("quote_order_create", handler);

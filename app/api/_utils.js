@@ -461,6 +461,54 @@ export async function getOrderById(orderId) {
   return found?.order && !found.order.deleted ? found.order : null;
 }
 
+// Strict variant for administrative/operational reads. A missing order is a
+// valid result, but a Redis outage or malformed stored record must not be
+// mistaken for that absence.
+export async function getOrderByIdStrict(orderId) {
+  const id = normalizeOrderIdForStorage(orderId);
+  if (!id) return null;
+  const rows = pipelineResults(await redisPipeline([
+    ["GET", orderRecordKey(id)],
+    ["LRANGE", ORDERS_KEY, "0", "-1"],
+    ["PING"],
+  ]));
+  const failed = rows.length !== 3 || rows.some((entry) => (
+    entry && typeof entry === "object" && Object.hasOwn(entry, "error")
+  ));
+  if (failed || pipelineResultValue(rows[2]) !== "PONG") {
+    const error = new Error("order_store_unavailable");
+    error.code = "order_store_unavailable";
+    throw error;
+  }
+  const raw = pipelineResultValue(rows[0]);
+  if (raw != null) {
+    const stored = parseOrderJson(raw);
+    if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+      const error = new Error("order_store_corrupt");
+      error.code = "order_store_corrupt";
+      throw error;
+    }
+    return stored.deleted ? null : stored;
+  }
+  const legacyRows = pipelineResultValue(rows[1]);
+  if (!Array.isArray(legacyRows)) {
+    const error = new Error("order_store_unavailable");
+    error.code = "order_store_unavailable";
+    throw error;
+  }
+  let found = null;
+  for (const legacyRaw of legacyRows) {
+    const order = parseOrderJson(legacyRaw);
+    if (!order || typeof order !== "object" || Array.isArray(order)) {
+      const error = new Error("order_store_corrupt");
+      error.code = "order_store_corrupt";
+      throw error;
+    }
+    if (normalizeOrderIdForStorage(order.orderId) === id) found = order;
+  }
+  return found && !found.deleted ? found : null;
+}
+
 // 单条订单 + 更新句柄:新记录 O(1) 直读(legacyIndex=null);仅旧列表订单才回退
 // 扫有界 legacy 列表并带回 legacyIndex,保证 setOrderAt 时旧槽位同步(LSET)。
 // 用于需要「按订单号找一单然后回写」的路由,避免 getAllOrdersWithIndex 全量扫描。
@@ -556,6 +604,62 @@ export async function getAllOrders() {
     const order = entry.order;
     const id = normalizeOrderIdForStorage(order?.orderId);
     if (!order || !id || order.deleted || seen.has(id)) continue;
+    seen.add(id);
+    merged.push(order);
+  }
+  return merged.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+}
+
+// Fail-closed full-order reader for reporting and audience selection. The
+// legacy getAllOrders() remains intentionally tolerant for customer-facing
+// compatibility paths, but a marketing segment must never turn a Redis fault
+// into a plausible empty audience or zero attributed revenue.
+export async function getAllOrdersStrict() {
+  if (!redisConfig()) throw new Error("order_store_unavailable");
+  if (!await ensureLegacyOrderIndex() || !await ensureStandaloneOrderIndex()) {
+    throw new Error("order_store_unavailable");
+  }
+  const probe = pipelineResults(await redisPipeline([
+    ["LRANGE", ORDER_INDEX_KEY, "0", "-1"],
+    ["LRANGE", ORDERS_KEY, "0", "-1"],
+    ["PING"],
+  ]));
+  if (probe.length !== 3 || probe.some((entry) => entry && typeof entry === "object" && Object.hasOwn(entry, "error"))) {
+    throw new Error("order_store_unavailable");
+  }
+  const indexedRaw = pipelineResultValue(probe[0]);
+  const legacyRaw = pipelineResultValue(probe[1]);
+  const pong = pipelineResultValue(probe[2]);
+  if (!Array.isArray(indexedRaw) || !Array.isArray(legacyRaw) || pong !== "PONG") {
+    throw new Error("order_store_unavailable");
+  }
+  const ids = Array.from(new Set(indexedRaw.map(normalizeOrderIdForStorage).filter(Boolean)));
+  const indexed = [];
+  for (let offset = 0; offset < ids.length; offset += 100) {
+    const batchIds = ids.slice(offset, offset + 100);
+    const rows = pipelineResults(await redisPipeline(batchIds.map((id) => ["GET", orderRecordKey(id)])));
+    if (rows.length !== batchIds.length || rows.some((entry) => entry && typeof entry === "object" && Object.hasOwn(entry, "error"))) {
+      throw new Error("order_store_unavailable");
+    }
+    rows.forEach((entry, index) => {
+      const raw = pipelineResultValue(entry);
+      const order = parseOrderJson(raw);
+      if (raw == null || !order || typeof order !== "object" || Array.isArray(order)) {
+        throw new Error("order_store_corrupt");
+      }
+      indexed.push({ orderId: batchIds[index], order });
+    });
+  }
+  const legacy = legacyRaw.map((raw) => {
+    const order = parseOrderJson(raw);
+    if (!order || typeof order !== "object" || Array.isArray(order)) throw new Error("order_store_corrupt");
+    return order;
+  });
+  const seen = new Set();
+  const merged = [];
+  for (const order of [...indexed.map((entry) => entry.order), ...legacy]) {
+    const id = normalizeOrderIdForStorage(order?.orderId);
+    if (!id || order.deleted || seen.has(id)) continue;
     seen.add(id);
     merged.push(order);
   }
@@ -1181,7 +1285,7 @@ export function adminRoleFromSession(session) {
 
 // 可按员工逐项覆盖的权限键(root 专属的 canManageStaff/canDeleteRecords 等不开放覆盖)。
 export const STAFF_PERMISSION_KEYS = [
-  "canEditOrders", "canViewUsers", "canBanUsers", "canAdjustBalance", "canViewBalanceLog",
+  "canViewOrders", "canEditOrders", "canViewUsers", "canBanUsers", "canAdjustBalance", "canViewBalanceLog",
   "canViewCodes", "canManageCodes", "canSendRedeemCodes", "canReviewWithdrawals",
   "canSendMail", "canManageStock",
 ];
@@ -1728,6 +1832,21 @@ export async function listAllUserEmails() {
   } catch (e) { return []; }
 }
 
+export async function listAllUserEmailsStrict() {
+  if (!redisConfig()) throw new Error("user_store_unavailable");
+  const rows = pipelineResults(await redisPipeline([
+    ["SMEMBERS", USER_EMAIL_SET_KEY],
+    ["PING"],
+  ]));
+  if (rows.length !== 2 || rows.some((entry) => entry && typeof entry === "object" && Object.hasOwn(entry, "error"))) {
+    throw new Error("user_store_unavailable");
+  }
+  const emails = pipelineResultValue(rows[0]);
+  const pong = pipelineResultValue(rows[1]);
+  if (!Array.isArray(emails) || pong !== "PONG") throw new Error("user_store_unavailable");
+  return emails;
+}
+
 export async function deleteUser(email) {
   if (!redisConfig()) return { ok: false, error: "storage_unavailable" };
   const lower = String(email).toLowerCase().trim();
@@ -2231,14 +2350,20 @@ function resendTag(value, fallback = "") {
 
 async function sendViaResend({
   to, subject, text, html, fromName, marketing = false, category = "", relatedType = "", relatedId = "",
-  scheduledAt = "", idempotencyKey = "",
+  scheduledAt = "", idempotencyKey = "", oneClickUnsubscribeUrl = "",
 }) {
   const apiKey = process.env.RESEND_API_KEY;
   const from = mailFromAddress();
   if (!apiKey || !from || !to) return { ok: false, reason: "resend_or_to_missing" };
   if (!validEmail(from)) return { ok: false, reason: "invalid_mail_from" };
   const recipients = Array.isArray(to) ? to : [to];
-  const headers = marketing ? { "List-Unsubscribe": `<mailto:${from}?subject=unsubscribe>` } : undefined;
+  const headers = marketing ? {
+    "List-Unsubscribe": [
+      oneClickUnsubscribeUrl ? `<${oneClickUnsubscribeUrl}>` : "",
+      `<mailto:${from}?subject=unsubscribe>`,
+    ].filter(Boolean).join(", "),
+    ...(oneClickUnsubscribeUrl ? { "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } : {}),
+  } : undefined;
   const payload = {
     from: formatMailFrom(fromName, from),
     to: recipients,
@@ -2351,7 +2476,9 @@ export function shouldFallbackToBackupSmtp(args, result) {
     || detail.includes("rate_limit");
 }
 
-async function sendViaSmtp({ to, subject, text, html, fromName, marketing = false, idempotencyKey = "" }, config = smtpTransportConfig()) {
+async function sendViaSmtp({
+  to, subject, text, html, fromName, marketing = false, idempotencyKey = "", oneClickUnsubscribeUrl = "",
+}, config = smtpTransportConfig()) {
   const { host, user, pass, port, from, provider } = config;
   const brandName = fromName || process.env.BRAND_NAME || "冒央会社";
   if (!host || !user || !pass || !from || !to) {
@@ -2368,7 +2495,13 @@ async function sendViaSmtp({ to, subject, text, html, fromName, marketing = fals
   // 群发/营销邮件:普通优先级(高优先级=垃圾信号)+ List-Unsubscribe 头(Gmail/Yahoo 对群发的进箱硬要求)。
   // 事务邮件(验证码/订单)保持 high 以求快达。
   const priority = marketing ? "normal" : "high";
-  const extraHeaders = marketing ? { "List-Unsubscribe": `<mailto:${from}?subject=unsubscribe>` } : undefined;
+  const extraHeaders = marketing ? {
+    "List-Unsubscribe": [
+      oneClickUnsubscribeUrl ? `<${oneClickUnsubscribeUrl}>` : "",
+      `<mailto:${from}?subject=unsubscribe>`,
+    ].filter(Boolean).join(", "),
+    ...(oneClickUnsubscribeUrl ? { "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } : {}),
+  } : undefined;
 
   async function attemptSend(attempt) {
     const transporter = nodemailer.createTransport({
@@ -2450,11 +2583,74 @@ function settleWithin(promise, timeoutMs) {
 }
 
 export async function sendSimpleEmail(args) {
-  const prepared = {
+  let prepared = {
     ...applyEmailSupportContacts(args, args?.support || await currentEmailSupport()),
     // One key is reused by both Resend attempts and the fallback transport.
     idempotencyKey: clean(args?.idempotencyKey, 256) || `lm-${Date.now().toString(36)}-${randomBytes(12).toString("hex")}`,
   };
+  try {
+    const {
+      getMailSendDecision,
+      mailPurpose,
+      prepareMarketingEmail,
+    } = await import("./_mail-preferences.js");
+    const recipient = Array.isArray(prepared.to) ? prepared.to[0] : prepared.to;
+    const purpose = mailPurpose(prepared);
+    // Marketing may only proceed after a durable contact plus signed RFC 8058
+    // links have been created. This also turns a missing policy secret/store
+    // into a retryable failure instead of an untracked send.
+    if (purpose === "marketing") {
+      prepared = await prepareMarketingEmail({ ...prepared, marketing: true, category: "marketing" });
+    }
+    const decision = await getMailSendDecision({
+      email: recipient,
+      purpose,
+      category: prepared.category,
+      marketing: prepared.marketing,
+    });
+    if (!decision.allowed) {
+      const retryable = Boolean(decision.retryable || decision.policyUnavailable);
+      const result = {
+        ok: false,
+        suppressed: !retryable,
+        retryable,
+        policyUnavailable: Boolean(decision.policyUnavailable),
+        status: retryable ? "failed" : "suppressed",
+        provider: "policy",
+        reason: decision.policyUnavailable ? "policy_unavailable" : (decision.reason || "recipient_suppressed"),
+        messageId: prepared.idempotencyKey,
+      };
+      if (!args?.skipDeliveryTracking) {
+        try {
+          const { registerEmailDelivery } = await import("./_mail-delivery.js");
+          await registerEmailDelivery({ args: prepared, result });
+        } catch (e) {}
+      }
+      return result;
+    }
+  } catch (error) {
+    // Preference storage is defense-in-depth around the provider call. Invalid
+    // addresses still fail closed above; a transient policy-store exception is
+    // surfaced instead of silently bypassing an explicit opt-out.
+    const result = {
+      ok: false,
+      suppressed: false,
+      retryable: true,
+      policyUnavailable: true,
+      status: "failed",
+      provider: "policy",
+      reason: "policy_unavailable",
+      detail: clean(error?.message || "mail_policy_unavailable", 160),
+      messageId: prepared.idempotencyKey,
+    };
+    if (!args?.skipDeliveryTracking) {
+      try {
+        const { registerEmailDelivery } = await import("./_mail-delivery.js");
+        await registerEmailDelivery({ args: prepared, result });
+      } catch {}
+    }
+    return result;
+  }
   const provider = String(process.env.EMAIL_PROVIDER || "resend").toLowerCase();
   let result;
   let primaryResult = null;
@@ -4011,8 +4207,7 @@ export async function listAdminStaff() {
   ];
 }
 
-export async function listAssignableAdminStaff() {
-  const records = await adminStaffRecords();
+function assignableAdminStaff(records) {
   return [
     {
       id: 1,
@@ -4033,6 +4228,20 @@ export async function listAssignableAdminStaff() {
     staffRole: item.role,
     staffPerms: item.perms,
   }).canEditOrders).map(({ perms, ...item }) => item);
+}
+
+export async function listAssignableAdminStaff() {
+  return assignableAdminStaff(await adminStaffRecords());
+}
+
+export async function listAssignableAdminStaffStrict() {
+  const snapshot = await adminStaffSnapshot();
+  if (!snapshot.ok) {
+    const error = new Error(snapshot.error || "admin_staff_store_unavailable");
+    error.code = snapshot.error || "admin_staff_store_unavailable";
+    throw error;
+  }
+  return assignableAdminStaff(snapshot.records);
 }
 
 export async function createAdminStaff(input, actor) {
@@ -4259,6 +4468,11 @@ export async function pushAdminMailLog(entry) {
     ok: Boolean(entry?.ok),
     reason: clean(entry?.reason || entry?.error || "", 200),
     messageId: clean(entry?.messageId, 180),
+    category: clean(entry?.category, 40).toLowerCase(),
+    relatedType: clean(entry?.relatedType, 40),
+    relatedId: clean(entry?.relatedId, 120),
+    campaignId: clean(entry?.campaignId || entry?.relatedId, 80),
+    template: clean(entry?.template, 80),
     scheduledAt: clean(entry?.scheduledAt, 80),
     scheduledAtBeijing: entry?.scheduledAt ? formatBeijingTime(entry.scheduledAt) : "",
     staffId: actor.staffId,

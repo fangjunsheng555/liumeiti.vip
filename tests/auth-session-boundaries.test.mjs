@@ -8,6 +8,7 @@ process.env.KV_REST_API_TOKEN = "test-token";
 
 const utils = await import("../app/api/_utils.js");
 const authSessions = await import("../app/api/_auth-session.js");
+const meRoute = await import("../app/api/auth/me/route.js");
 const loginRoute = await import("../app/api/auth/login/route.js");
 const registerRoute = await import("../app/api/auth/register/route.js");
 const resetRoute = await import("../app/api/auth/reset/route.js");
@@ -20,6 +21,7 @@ const VERSION_KEY = "lm:user:authver:test@example.com";
 const LIFECYCLE_KEY = "lm:user:lifecycle:test@example.com";
 const BALANCE_KEY = "liumeiti:users:test@example.com:balance:cents";
 const RESET_KEY = "liumeiti:reset:test@example.com";
+const LEGACY_DEADLINE_KEY = "lm:auth:legacy-user-until:v2";
 
 function requestWithToken(token) {
   return new Request("https://www.liumeiti.vip/api/auth/me", {
@@ -367,7 +369,16 @@ test("legacy sessions are bounded and cannot survive a revocation", async (t) =>
   const now = Date.now();
   process.env.LEGACY_USER_SESSION_UNTIL = String(now + 60_000);
   const redis = installFakeRedis({
-    [USER_KEY]: JSON.stringify({ email: "test@example.com", banned: false }),
+    [USER_KEY]: JSON.stringify({
+      email: "test@example.com",
+      username: "legacy-active",
+      avatarId: "avatar-01",
+      inviteCode: "LEGACY01",
+      coupons: [],
+      referralStats: {},
+      balance: 0,
+      banned: false,
+    }),
   });
   t.after(() => redis.restore());
 
@@ -378,6 +389,41 @@ test("legacy sessions are bounded and cannot survive a revocation", async (t) =>
   const accepted = await authSessions.authenticateUserRequest(requestWithToken(legacy), { now });
   assert.equal(accepted.ok, true);
   assert.equal(accepted.legacy, true);
+  // /api/auth/me uses this refresh token whenever auth.legacy is true. Prove
+  // that an active legacy visitor can be upgraded to the typed, revocable
+  // session format before the 14-day migration deadline.
+  const refreshed = authSessions.refreshedUserSessionToken(accepted, now);
+  const refreshedClaim = authSessions.verifyUserSessionCapability(refreshed, now);
+  assert.equal(refreshedClaim.email, "test@example.com");
+  assert.equal(refreshedClaim.sv, 1);
+  assert.equal(refreshedClaim.typ, "user-session");
+
+  const meResponse = await meRoute.GET(requestWithToken(legacy));
+  assert.equal(meResponse.status, 200);
+  const meCookie = meResponse.headers.get("set-cookie") || "";
+  assert.match(meCookie, /lm_user=/);
+  const meToken = decodeURIComponent(meCookie.match(/lm_user=([^;]+)/)?.[1] || "");
+  assert.equal(authSessions.verifyUserSessionCapability(meToken, now)?.typ, "user-session");
+
+  const toolMeResponse = await meRoute.GET(new Request("https://www.liumeiti.vip/api/auth/me", {
+    headers: {
+      cookie: `lm_user=${encodeURIComponent(legacy)}`,
+      origin: "https://tool.liumeiti.vip",
+    },
+  }));
+  assert.equal(toolMeResponse.status, 200);
+  const toolMe = await toolMeResponse.json();
+  assert.equal(toolMe.email, "test@example.com");
+  assert.equal(toolMe.username, "legacy-active");
+  assert.equal(toolMe.balance, 0);
+  for (const privateField of ["orders", "coupons", "referral", "referralDownlines"]) {
+    assert.equal(Object.hasOwn(toolMe, privateField), false, privateField);
+  }
+  const toolMeCookie = toolMeResponse.headers.get("set-cookie") || "";
+  assert.equal(authSessions.verifyUserSessionCapability(
+    decodeURIComponent(toolMeCookie.match(/lm_user=([^;]+)/)?.[1] || ""),
+    now,
+  )?.typ, "user-session");
 
   const legacyAfterSales = utils.signSession({
     type: "after-sales-order",
@@ -420,7 +466,77 @@ test("legacy sessions are bounded and cannot survive a revocation", async (t) =>
   redis.store.set(VERSION_KEY, "1");
   const expiredWindow = await authSessions.authenticateUserRequest(requestWithToken(legacy), { now: now + 61_000 });
   assert.equal(expiredWindow.ok, false);
+  assert.equal(expiredWindow.status, 401);
   assert.equal(expiredWindow.error, "legacy_session_expired");
+  const expiredResponse = authSessions.userAuthErrorResponse(expiredWindow);
+  assert.equal(expiredResponse.status, 401);
+  assert.match(expiredResponse.headers.get("set-cookie") || "", /lm_user=.*Max-Age=0/i);
+  assert.deepEqual(await expiredResponse.json(), {
+    ok: false,
+    error: "legacy_session_expired",
+    message: "登录状态已过期，请重新登录",
+  });
+});
+
+test("legacy migration deadline is anchored to deployment and never starts on first visit", async (t) => {
+  const now = Date.now();
+  const previousUntil = process.env.LEGACY_USER_SESSION_UNTIL;
+  const previousDeployedAt = process.env.LEGACY_USER_SESSION_DEPLOYED_AT;
+  delete process.env.LEGACY_USER_SESSION_UNTIL;
+  process.env.LEGACY_USER_SESSION_DEPLOYED_AT = new Date(now - authSessions.USER_SESSION_TTL_MS - 60_000).toISOString();
+  t.after(() => {
+    if (previousUntil == null) delete process.env.LEGACY_USER_SESSION_UNTIL;
+    else process.env.LEGACY_USER_SESSION_UNTIL = previousUntil;
+    if (previousDeployedAt == null) delete process.env.LEGACY_USER_SESSION_DEPLOYED_AT;
+    else process.env.LEGACY_USER_SESSION_DEPLOYED_AT = previousDeployedAt;
+  });
+  const redis = installFakeRedis({
+    [USER_KEY]: JSON.stringify({ email: "test@example.com", banned: false }),
+  });
+  t.after(() => redis.restore());
+
+  const legacy = utils.signSession({ email: "test@example.com", exp: now + 120_000 });
+  const deadline = authSessions.configuredLegacyUserDeadline();
+  assert.ok(deadline < now, "the fixed deployment window must already be expired");
+  const result = await authSessions.authenticateUserRequest(requestWithToken(legacy), { now });
+  assert.equal(result.status, 401);
+  assert.equal(result.error, "legacy_session_expired");
+  assert.equal(redis.store.has(LEGACY_DEADLINE_KEY), false, "a visitor must not create a new rolling deadline");
+});
+
+test("legacy migration accepts an explicit absolute deadline or a pre-initialized Redis anchor only", async (t) => {
+  const now = Date.now();
+  const previousUntil = process.env.LEGACY_USER_SESSION_UNTIL;
+  const previousDeployedAt = process.env.LEGACY_USER_SESSION_DEPLOYED_AT;
+  delete process.env.LEGACY_USER_SESSION_UNTIL;
+  delete process.env.LEGACY_USER_SESSION_DEPLOYED_AT;
+  t.after(() => {
+    if (previousUntil == null) delete process.env.LEGACY_USER_SESSION_UNTIL;
+    else process.env.LEGACY_USER_SESSION_UNTIL = previousUntil;
+    if (previousDeployedAt == null) delete process.env.LEGACY_USER_SESSION_DEPLOYED_AT;
+    else process.env.LEGACY_USER_SESSION_DEPLOYED_AT = previousDeployedAt;
+  });
+  const redis = installFakeRedis({
+    [USER_KEY]: JSON.stringify({ email: "test@example.com", banned: false }),
+  });
+  t.after(() => redis.restore());
+  const legacy = utils.signSession({ email: "test@example.com", exp: now + 120_000 });
+
+  const uninitialized = await authSessions.authenticateUserRequest(requestWithToken(legacy), { now });
+  assert.equal(uninitialized.status, 503);
+  assert.equal(uninitialized.error, "auth_store_unavailable");
+  assert.equal(redis.store.has(LEGACY_DEADLINE_KEY), false);
+
+  redis.store.set(LEGACY_DEADLINE_KEY, String(now + 30_000));
+  const accepted = await authSessions.authenticateUserRequest(requestWithToken(legacy), { now });
+  assert.equal(accepted.ok, true);
+  const expired = await authSessions.authenticateUserRequest(requestWithToken(legacy), { now: now + 30_000 });
+  assert.equal(expired.status, 401);
+  assert.equal(expired.error, "legacy_session_expired");
+
+  process.env.LEGACY_USER_SESSION_UNTIL = new Date(now + 45_000).toISOString();
+  process.env.LEGACY_USER_SESSION_DEPLOYED_AT = new Date(now - authSessions.USER_SESSION_TTL_MS).toISOString();
+  assert.equal(authSessions.configuredLegacyUserDeadline(), Date.parse(process.env.LEGACY_USER_SESSION_UNTIL));
 });
 
 test("banned and deleted users fail closed", async (t) => {

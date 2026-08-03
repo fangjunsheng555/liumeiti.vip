@@ -568,10 +568,15 @@ export default function ServiceCenterPage() {
       setResendCorrection({ busy: false, done: true, error: "" });
       });
     } catch (error) {
+      const code = String(error?.message || "");
       setResendCorrection({
         busy: false,
         done: false,
-        error: L("重发失败，请稍后再试或联系客服", "Couldn't resend — try again later or contact support"),
+        error: code === "email_delivery_uncertain"
+          ? L("邮件投递结果无法确认。为避免重复发送，请勿重复点击并联系客服核对", "Delivery could not be confirmed. To avoid duplicates, do not click again; contact support to verify it")
+          : code === "email_send_failed"
+            ? L("部分密码修正邮件未发送成功，请稍后重试；已发送的邮件不会重复发送", "Some correction emails were not sent. Retry later; completed deliveries will not be sent again")
+            : L("重发失败，请稍后再试或联系客服", "Couldn't resend — try again later or contact support"),
       });
     }
   }

@@ -3,12 +3,12 @@ import {
   checkRateLimit,
   clean,
   getOrderById,
-  getUser,
   rateLimitResponse,
   redisCmd,
 } from "../_utils.js";
 import {
   authenticateUserRequest,
+  readUserAuthState,
   signNetflixCodeSession,
   verifyAfterSalesToken,
   verifyNetflixCodeSession,
@@ -16,12 +16,14 @@ import {
 import { orderExpirySummary } from "../../lib/order-expiry.js";
 import { shouldAwaitAcceptedSibling } from "./_policy.js";
 import { isNetflixOrderOwner, netflixOrderIdentity } from "./_ownership.js";
+import { withApiTelemetry } from "../_observability.js";
 import {
   findLatestNetflixMailState,
   maskNetflixEmail,
   netflixAccountHash,
   netflixCodeLockKey,
   netflixCodeStoreConfigured,
+  markNetflixCodeResultReturned,
   recordNetflixCodeAccess,
 } from "./_store.js";
 
@@ -66,7 +68,7 @@ async function accessForOrder(request, order, providedToken = "") {
   return { ok: false };
 }
 
-async function eligibility(order) {
+export async function eligibility(order) {
   if (!order || !["received", "completed"].includes(order.status)) return { ok: false, error: "order_not_eligible" };
   if (!netflixItem(order)) return { ok: false, error: "netflix_order_required" };
   if (order.netflixSelfServiceEnabled === false) return { ok: false, error: "self_service_disabled" };
@@ -75,7 +77,14 @@ async function eligibility(order) {
   const expiry = orderExpirySummary(order);
   if (expiry?.expired) return { ok: false, error: "service_expired" };
   const { ownerEmail } = netflixOrderIdentity(order);
-  const owner = ownerEmail ? await getUser(ownerEmail) : null;
+  const ownerState = ownerEmail ? await readUserAuthState(ownerEmail) : null;
+  // An order can legitimately outlive its account record, which historically
+  // remained eligible. Store faults and corrupt records are different: do not
+  // silently bypass an explicit per-user disable when its state cannot be read.
+  if (ownerState && !ownerState.ok && ownerState.status !== 401) {
+    return { ok: false, error: ownerState.error || "auth_store_unavailable", status: 503 };
+  }
+  const owner = ownerState?.ok ? ownerState.user : null;
   if (owner?.netflixSelfServiceDisabled) return { ok: false, error: "self_service_disabled" };
   return { ok: true, account };
 }
@@ -121,7 +130,19 @@ async function logSuccessfulAccess(order, account, claim, outcome, eventId) {
   });
 }
 
-export async function POST(request) {
+async function persistResultSafetyMarker(order, eventId) {
+  return markNetflixCodeResultReturned(order?.orderId, eventId);
+}
+
+export function netflixMailStateErrorResponse(mailState) {
+  if (mailState?.state !== "error") return null;
+  return Response.json({ ok: false, error: mailState.error || "storage_unavailable" }, {
+    status: 503,
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+
+async function postHandler(request) {
   if (!netflixCodeStoreConfigured()) return Response.json({ ok: false, error: "service_not_configured" }, { status: 503 });
   const body = await readBody(request);
   const action = body.action === "retrieve" ? "retrieve" : "authorize";
@@ -133,7 +154,7 @@ export async function POST(request) {
     const access = await accessForOrder(request, order, body.token);
     if (!access.ok) return Response.json({ ok: false, error: "verification_required" }, { status: 401 });
     const eligible = await eligibility(order);
-    if (!eligible.ok) return Response.json({ ok: false, error: eligible.error }, { status: 409 });
+    if (!eligible.ok) return Response.json({ ok: false, error: eligible.error }, { status: eligible.status || 409 });
     const guard = await checkRateLimit(request, {
       namespace: "netflix-code:authorize",
       limit: 12,
@@ -166,7 +187,8 @@ export async function POST(request) {
   const order = await getOrderById(claim.orderId);
   if (!order) return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
   const eligible = await eligibility(order);
-  if (!eligible.ok || netflixAccountHash(eligible.account) !== claim.accountHash) return Response.json({ ok: false, error: eligible.error || "account_changed" }, { status: 409 });
+  if (!eligible.ok) return Response.json({ ok: false, error: eligible.error }, { status: eligible.status || 409 });
+  if (netflixAccountHash(eligible.account) !== claim.accountHash) return Response.json({ ok: false, error: "account_changed" }, { status: 409 });
   const lockKey = netflixCodeLockKey(order.orderId);
   if (await redisCmd(["GET", lockKey]) === "blocked") return Response.json({ ok: false, error: "temporarily_locked" }, { status: 429 });
   const cycleId = createHash("sha256")
@@ -199,7 +221,10 @@ export async function POST(request) {
   const mailState = await findLatestNetflixMailState(eligible.account, {
     since: Number(claim.startedAt || 0),
     excludeEventIds: seenEventIdsFrom(body),
+    orderId: order.orderId,
   });
+  const storageError = netflixMailStateErrorResponse(mailState);
+  if (storageError) return storageError;
   if (mailState.state === "rejected") {
     if (shouldAwaitAcceptedSibling(mailState)) {
       return Response.json({ ok: true, pending: true, mailReceived: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
@@ -214,6 +239,9 @@ export async function POST(request) {
   const result = mailState.state === "result" ? mailState.result : null;
   if (!result) return Response.json({ ok: true, pending: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
   if (result.kind === "code" && /^\d{4}$/.test(result.value)) {
+    if (!await persistResultSafetyMarker(order, result.eventId)) {
+      return Response.json({ ok: false, error: "result_safety_marker_unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } });
+    }
     await redisCmd(["DEL", attemptsKey]);
     await logSuccessfulAccess(order, eligible.account, claim, "code_returned", result.eventId);
     return Response.json({ ok: true, kind: "code", code: result.value, expiresAt: result.expiresAt, receivedAtBeijing: result.receivedAtBeijing }, { headers: { "Cache-Control": "no-store" } });
@@ -221,6 +249,9 @@ export async function POST(request) {
   if (result.kind === "link" || result.kind === "household") {
     const link = safeResultLink(result.kind, result.value);
     if (link) {
+      if (!await persistResultSafetyMarker(order, result.eventId)) {
+        return Response.json({ ok: false, error: "result_safety_marker_unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } });
+      }
       await redisCmd(["DEL", attemptsKey]);
       const outcome = result.kind === "household" ? "household_link_returned" : "travel_link_returned";
       await logSuccessfulAccess(order, eligible.account, claim, outcome, result.eventId);
@@ -230,6 +261,9 @@ export async function POST(request) {
   return Response.json({ ok: true, pending: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
 }
 
-export async function GET() {
+async function getHandler() {
   return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
 }
+
+export const POST = withApiTelemetry("netflix_code", postHandler);
+export const GET = withApiTelemetry("netflix_code", getHandler);

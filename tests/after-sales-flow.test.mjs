@@ -18,15 +18,29 @@ const resendRequests = [];
 const resendFailuresRemaining = new Map();
 const resendUncertainFailuresRemaining = new Map();
 let failNextCompletionCommit = false;
+let failNextTimelineWrite = false;
+let failNextAdminActionWrite = false;
+let dropNextDurableCompletionResponse = false;
 
 function sortedSet(key) {
   if (!sortedSets.has(key)) sortedSets.set(key, new Map());
   return sortedSets.get(key);
 }
 
+function clearDeliveryIndexes(keys, member) {
+  keys.slice(1, 4).forEach((key) => sortedSet(key).delete(member));
+}
+
+function indexDelivery(keys, status, score, member) {
+  clearDeliveryIndexes(keys, member);
+  const index = status === "sending" ? 1 : status === "uncertain" ? 2 : status === "retryable" ? 3 : 0;
+  if (index) sortedSet(keys[index]).set(member, Number(score));
+}
+
 function execute(command) {
   const [rawName, ...args] = command;
   const name = String(rawName || "").toUpperCase();
+  if (name === "PING") return "PONG";
   if (name === "GET") return values.get(args[0]) ?? null;
   if (name === "SET") {
     const [key, value, ...options] = args;
@@ -56,6 +70,48 @@ function execute(command) {
     const keyCount = Number(args[1] || 0);
     const keys = args.slice(2, 2 + keyCount);
     const argv = args.slice(2 + keyCount);
+    if (script.includes("identityCount=redis.call('INCR'") && script.includes("ipCount=redis.call('INCR'")) {
+      const identityCount = Number(values.get(keys[0]) || 0) + 1;
+      const ipCount = Number(values.get(keys[1]) || 0) + 1;
+      values.set(keys[0], String(identityCount));
+      values.set(keys[1], String(ipCount));
+      return JSON.stringify({ ok: true, identityCount, ipCount, identityTtl: Number(argv[0]), ipTtl: Number(argv[0]) });
+    }
+    if (script.includes("return 'matched'") && script.includes("tostring(record.code or '')")) {
+      const raw = values.get(keys[0]);
+      if (!raw) return "missing";
+      let record = null;
+      try { record = JSON.parse(raw); } catch {}
+      if (!record || String(record.email || "") !== argv[0]
+        || String(record.query || "") !== argv[1]
+        || String(record.code || "") !== argv[2]) return "invalid";
+      values.delete(keys[0]);
+      return "matched";
+    }
+    if (script.includes("READ_USER_AUTH_STATE_V2")) {
+      const userRaw = values.get(keys[0]);
+      if (!userRaw) return JSON.stringify({ ok: false, error: "session_revoked" });
+      const authVersion = Number(values.get(keys[1]) || 1);
+      let lifecycle = values.get(keys[3]);
+      if (!lifecycle) {
+        lifecycle = argv[0];
+        values.set(keys[3], lifecycle);
+      }
+      return JSON.stringify({
+        ok: true,
+        userRaw,
+        authVersion,
+        accountLifecycleId: lifecycle,
+        balanceCents: values.get(keys[2]) ?? null,
+      });
+    }
+    if (script.includes("current=tonumber(doc.revision or 0)")) {
+      const existing = values.get(keys[0]);
+      const revision = existing ? Number(JSON.parse(existing).revision || 0) : 0;
+      if (revision !== Number(argv[0])) return 0;
+      values.set(keys[0], argv[1]);
+      return 1;
+    }
     if (script.includes("ticket_id_conflict") && script.includes("storagePending=true")) {
       const activeId = values.get(keys[1]);
       if (activeId) {
@@ -70,6 +126,7 @@ function execute(command) {
       sortedSet(keys[2]).set(argv[2], Number(argv[1]));
       sortedSet(keys[3]).set(argv[2], Number(argv[1]));
       sortedSet(keys[4]).delete(argv[2]);
+      sortedSet(keys[5]).set(argv[2], Number(argv[1]));
       values.set(keys[1], argv[2]);
       return JSON.stringify({ ok: true });
     }
@@ -92,6 +149,7 @@ function execute(command) {
       ticket.creationEffectsPending = false;
       ticket.creationEffectsCompletedAt = argv[1];
       values.set(keys[0], JSON.stringify(ticket));
+      sortedSet(keys[1]).delete(argv[0]);
       return 1;
     }
     if (script.includes("ticket.completionEffectsPending=false")) {
@@ -110,6 +168,8 @@ function execute(command) {
       if (argv[2] === "1") sortedSet(keys[3]).set(argv[1], Number(argv[3]));
       else sortedSet(keys[3]).delete(argv[1]);
       if (values.get(keys[4]) === argv[1]) values.delete(keys[4]);
+      if (argv[4] === "1") sortedSet(keys[5]).set(argv[1], Number(argv[0]));
+      else sortedSet(keys[5]).delete(argv[1]);
       return 1;
     }
     if (script.includes("state='started'") && script.includes("createdAt=ARGV[3]")) {
@@ -158,6 +218,14 @@ function execute(command) {
       return JSON.stringify({ ok: true, state: "done", record, idempotent: false });
     }
     if (script.includes("local marked=redis.call('SET',KEYS[1],'1','NX')")) {
+      if (failNextTimelineWrite && String(keys[1]).startsWith("liumeiti:order-timeline:")) {
+        failNextTimelineWrite = false;
+        return null;
+      }
+      if (failNextAdminActionWrite && String(keys[1]) === "liumeiti:admin:action-log") {
+        failNextAdminActionWrite = false;
+        return null;
+      }
       if (values.has(keys[0])) return 0;
       values.set(keys[0], "1");
       const list = lists.get(keys[1]) || [];
@@ -166,18 +234,48 @@ function execute(command) {
       lists.set(keys[1], list.slice(0, max));
       return 1;
     }
-    if (script.includes("if raw=='done' then return 'done' end") && script.includes("return 'acquired'")) {
+    if (script.includes("return 'acquired'") && script.includes("indexStatus")) {
       const raw = values.get(keys[0]);
-      if (raw === "done") return "done";
+      if (raw === "done") {
+        clearDeliveryIndexes(keys, argv[3]);
+        return "done";
+      }
       if (raw) {
         let state = null;
         try { state = JSON.parse(raw); } catch {}
         const status = String(state?.status || "");
-        if (["done", "sending", "uncertain"].includes(status)) return status;
+        if (status === "done") {
+          clearDeliveryIndexes(keys, argv[3]);
+          return "done";
+        }
+        if (["sending", "uncertain"].includes(status)) {
+          indexDelivery(keys, status, state?.score || argv[2], argv[3]);
+          return status;
+        }
         if (status !== "retryable") return "uncertain";
       }
       values.set(keys[0], argv[1]);
+      indexDelivery(keys, "sending", argv[2], argv[3]);
       return "acquired";
+    }
+    if (script.includes("ARGV[3]=='sending'") && script.includes("return 1")) {
+      const current = JSON.parse(values.get(keys[0]) || "null");
+      if (!current || current.token !== argv[0]) return 0;
+      values.set(keys[0], argv[1]);
+      indexDelivery(keys, argv[2], argv[3], argv[4]);
+      return 1;
+    }
+    if (script.includes("redis.call('SET',KEYS[1],'done')")) {
+      const raw = values.get(keys[0]);
+      if (raw === "done") {
+        clearDeliveryIndexes(keys, argv[1]);
+        return 1;
+      }
+      const current = JSON.parse(raw || "null");
+      if (!current || current.token !== argv[0]) return 0;
+      values.set(keys[0], "done");
+      clearDeliveryIndexes(keys, argv[1]);
+      return 1;
     }
     if (script.includes("local added=redis.call('SADD',KEYS[1],ARGV[1])")) {
       const membershipKey = args[2];
@@ -215,6 +313,14 @@ function execute(command) {
     const stop = Number(args[2]);
     return [...sortedSet(args[0]).entries()]
       .sort((a, b) => b[1] - a[1])
+      .slice(start, stop < 0 ? undefined : stop + 1)
+      .map(([member]) => member);
+  }
+  if (name === "ZRANGE") {
+    const start = Number(args[1]);
+    const stop = Number(args[2]);
+    return [...sortedSet(args[0]).entries()]
+      .sort((a, b) => a[1] - b[1])
       .slice(start, stop < 0 ? undefined : stop + 1)
       .map(([member]) => member);
   }
@@ -289,7 +395,15 @@ globalThis.fetch = async (input, options = {}) => {
   if (url.origin !== "http://redis.test") return originalFetch(input, options);
   if (url.pathname === "/pipeline") {
     const commands = JSON.parse(options.body || "[]");
-    return Response.json(commands.map((command) => ({ result: execute(command) })));
+    const rows = commands.map((command) => ({ result: execute(command) }));
+    if (dropNextDurableCompletionResponse
+      && commands.some((command) => String(command?.[1] || "").includes("record.state='done'"))) {
+      dropNextDurableCompletionResponse = false;
+      // The completion Lua script committed, but the Upstash HTTP response was
+      // lost. The route must read back the journal and still report success.
+      return Response.json({ error: "simulated lost completion response" }, { status: 503 });
+    }
+    return Response.json(rows);
   }
   const command = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
   return Response.json({ result: execute(command) });
@@ -306,6 +420,10 @@ const adminOrdersRoute = await import("../app/api/admin/orders/route.js");
 const passwordUpdateRoute = await import("../app/api/order-password-update/[orderId]/route.js");
 const passwordUpdateEmail = await import("../app/api/order-password-update/email.js");
 const completionEffects = await import("../app/api/after-sales/_completion-effects.js");
+const orderQueryRoute = await import("../app/api/order-query/route.js");
+const authMeRoute = await import("../app/api/auth/me/route.js");
+const authSession = await import("../app/api/_auth-session.js");
+const completionEmail = await import("../app/api/order/completion-email.js");
 const orderAttention = await import("../app/lib/order-attention.js");
 const settingsDefaults = await import("../app/lib/settings-defaults.js");
 
@@ -396,7 +514,7 @@ test("after-sales ticket lifecycle enforces one pending ticket per order", async
     new Request(`https://www.liumeiti.vip/api/admin/after-sales/${created.ticket.ticketId}`, {
       method: "PATCH",
       headers: { ...adminHeaders, "Idempotency-Key": "after-sales-incomplete-test-0001" },
-      body: JSON.stringify({ status: "completed", items: [{ index: 0, account: "", password: "resolved-password" }] }),
+      body: JSON.stringify({ status: "completed", credentialOrderHash: detail.ticket.credentialOrderHash, items: [{ index: 0, account: "", password: "resolved-password" }] }),
     }),
     { params: Promise.resolve({ ticketId: created.ticket.ticketId }) },
   );
@@ -411,6 +529,7 @@ test("after-sales ticket lifecycle enforces one pending ticket per order", async
       body: JSON.stringify({
         status: "completed",
         staffNote: "已重新配置，请重新登录。",
+        credentialOrderHash: detail.ticket.credentialOrderHash,
         items: [{ index: 0, account: "resolved-account@example.com", password: "resolved-password" }],
       }),
     }),
@@ -516,11 +635,13 @@ test("after-sales completion resumes the same operation without duplicating cred
     createdAt: new Date().toISOString(),
   };
   assert.equal((await store.createAfterSalesTicket(ticket)).ok, true);
+  const credentialOrderHash = (await store.hydrateAfterSalesTicketCredentials(ticket)).credentialOrderHash;
   const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
   const secondAdminToken = utils.signSession({ role: "admin", staffId: 2, staffUsername: "operator-two", staffRole: "operator", exp: Date.now() + 60_000 });
   const body = {
     status: "completed",
     staffNote: "已重新配置",
+    credentialOrderHash,
     items: [{ index: 0, account: "new@example.com", password: "new-password" }],
   };
   const request = (sessionToken = adminToken) => new Request(`https://www.liumeiti.vip/api/admin/after-sales/${ticket.ticketId}`, {
@@ -617,6 +738,19 @@ test("a ticket commit failure cannot apply credential synchronization twice", as
   const revision = afterFailedCommit.revision;
   assert.equal(afterFailedCommit.staffAudit.filter((entry) => entry.action === "after_sales_credentials_sync").length, 1);
 
+  // A later legitimate order edit must win over the stale ticket snapshot
+  // when the same completion is recovered.
+  afterFailedCommit.items[0].account = "newer-order-account@example.com";
+  afterFailedCommit.items[0].password = "newer-order-password";
+  afterFailedCommit.account = "newer-order-account@example.com";
+  afterFailedCommit.password = "newer-order-password";
+  assert.equal(await utils.setOrderAt(
+    { orderId: order.orderId, legacyIndex: null },
+    afterFailedCommit,
+    { expectedRevision: revision },
+  ), true);
+  const revisionAfterLaterEdit = afterFailedCommit.revision;
+
   const recovered = await store.completeAfterSalesTicket(ticket.ticketId, {
     ...completion,
     operationId: "c".repeat(64),
@@ -624,9 +758,17 @@ test("a ticket commit failure cannot apply credential synchronization twice", as
   assert.equal(recovered.ok, true);
   assert.equal(recovered.changed, true);
   const afterRecovery = await utils.getOrderById(order.orderId);
-  assert.equal(afterRecovery.revision, revision);
+  assert.equal(afterRecovery.revision, revisionAfterLaterEdit);
   assert.equal(afterRecovery.staffAudit.filter((entry) => entry.action === "after_sales_credentials_sync").length, 1);
-  assert.equal(afterRecovery.items[0].password, "fixed-password");
+  assert.equal(afterRecovery.items[0].account, "newer-order-account@example.com");
+  assert.equal(afterRecovery.items[0].password, "newer-order-password");
+  const sendsBeforeRecovery = resendRequests.length;
+  const effects = await completionEffects.settleAfterSalesCompletionEffects(recovered.ticket, recovered.ticket.completedBy);
+  assert.equal(effects.email, true);
+  const recoveryMail = resendRequests.slice(sendsBeforeRecovery).find((entry) => entry.email === order.email);
+  assert.match(recoveryMail?.text || "", /newer-order-account@example\.com/);
+  assert.match(recoveryMail?.text || "", /newer-order-password/);
+  assert.doesNotMatch(recoveryMail?.text || "", /fixed-password/);
 });
 
 test("reference notices resume only failed recipients from one immutable delivery plan", async () => {
@@ -675,7 +817,17 @@ test("reference notices resume only failed recipients from one immutable deliver
     .find((record) => record?.plan?.reference === reference);
   assert.equal(plannedOperation?.state, "started");
 
-  const mutated = { ...secondOrder, remark: "MUTATED CONTENT MUST NOT LEAK INTO RETRY" };
+  const mutated = {
+    ...secondOrder,
+    remark: "MUTATED CONTENT MUST NOT LEAK INTO RETRY",
+    account: "latest-reference-account@example.com",
+    password: "latest-reference-password",
+    items: [{
+      ...secondOrder.items[0],
+      account: "latest-reference-account@example.com",
+      password: "latest-reference-password",
+    }],
+  };
   values.set(`liumeiti:orders:record:${secondOrder.orderId}`, JSON.stringify(mutated));
   const retry = await referenceNoticeRoute.POST(request(secondAdminToken));
   assert.equal(retry.status, 200);
@@ -688,6 +840,9 @@ test("reference notices resume only failed recipients from one immutable deliver
   assert.equal(new Set(secondRecipientAttempts.map((entry) => entry.idempotencyKey)).size, 1);
   assert.match(secondRecipientAttempts.at(-1).text, /second immutable note/);
   assert.doesNotMatch(secondRecipientAttempts.at(-1).text, /MUTATED CONTENT/);
+  assert.match(secondRecipientAttempts.at(-1).text, /latest-reference-account@example\.com/);
+  assert.match(secondRecipientAttempts.at(-1).text, /latest-reference-password/);
+  assert.doesNotMatch(secondRecipientAttempts.at(-1).text, /original-password/);
 
   const replay = await referenceNoticeRoute.POST(request());
   assert.equal(replay.status, 200);
@@ -771,12 +926,22 @@ test("Spotify password correction updates the original order without exposing th
     email: "buyer@example.com",
     contact: "original-contact",
     remark: "original-note",
+    account: "old-account@example.com",
+    password: "old-password",
+    staffAccount: "stale-staff-account@example.com",
+    staffPassword: "stale-staff-password",
     items: [{
       service: "spotify",
       label: "Spotify · 家庭成员",
       account: "old-account@example.com",
       password: "old-password",
       amount: 128,
+    }, {
+      service: "netflix",
+      label: "Netflix",
+      account: "second-item@example.com",
+      password: "second-item-password",
+      amount: 68,
     }],
   };
   lists.set("liumeiti:orders", [JSON.stringify(order)]);
@@ -885,6 +1050,9 @@ test("Spotify password correction updates the original order without exposing th
     }
     return previousFetch(input, options);
   };
+  failNextTimelineWrite = true;
+  failNextAdminActionWrite = true;
+  dropNextDurableCompletionResponse = true;
   let patchResponse;
   try {
     patchResponse = await passwordUpdateRoute.PATCH(
@@ -913,10 +1081,17 @@ test("Spotify password correction updates the original order without exposing th
   assert.equal(patchResponse.status, 200);
   const patched = await patchResponse.json();
   assert.equal(patched.ok, true);
+  assert.deepEqual(patched.audit, { timelineRecorded: false, adminLogRecorded: false });
   // 用规范读路径断言(record 优先),与全站读取行为一致。
   const finalOrder = await utils.getOrderById(order.orderId);
   assert.equal(finalOrder.items[0].account, "correct-account@example.com");
   assert.equal(finalOrder.items[0].password, "correct-password");
+  assert.equal(finalOrder.account, "correct-account@example.com");
+  assert.equal(finalOrder.password, "correct-password");
+  assert.equal(finalOrder.staffAccount, "");
+  assert.equal(finalOrder.staffPassword, "");
+  assert.equal(finalOrder.items[1].account, "second-item@example.com");
+  assert.equal(finalOrder.items[1].password, "second-item-password");
   assert.equal(finalOrder.email, "updated@example.com");
   assert.equal(finalOrder.contact, "updated-contact");
   assert.equal(finalOrder.remark, "updated-note");
@@ -950,12 +1125,179 @@ test("Spotify password correction updates the original order without exposing th
   assert.match(telegramMessages[0].text, /updated-note/);
   assert.match(telegramMessages[0].text, /密码: correct-password/);
 
+  const replayResponse = await passwordUpdateRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/order-password-update/${order.orderId}`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": "spotify-customer-update-test-0001",
+      },
+      body: JSON.stringify({
+        account: "correct-account@example.com",
+        password: "correct-password",
+        email: "updated@example.com",
+        contact: "updated-contact",
+        remark: "updated-note",
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(replayResponse.status, 200);
+  assert.equal((await replayResponse.json()).idempotent, true);
+
+  const reusedLinkResponse = await passwordUpdateRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/order-password-update/${order.orderId}`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": "spotify-customer-update-test-0002",
+      },
+      body: JSON.stringify({
+        account: "silently-dropped@example.com",
+        password: "must-not-be-reported-as-saved",
+        email: "updated@example.com",
+        contact: "updated-contact",
+        remark: "second submission",
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(reusedLinkResponse.status, 410);
+  assert.equal((await reusedLinkResponse.json()).error, "update_link_used");
+  const rejectedPrincipal = `${order.orderId}:${createHash("sha256").update(token).digest("hex")}`;
+  const rejectedOperationId = createHash("sha256")
+    .update(`spotify-password-update\0${rejectedPrincipal}\0spotify-customer-update-test-0002`)
+    .digest("hex");
+  assert.equal(
+    values.has(`liumeiti:durable-operation:v1:${rejectedOperationId}`),
+    false,
+    "a terminal update_link_used response must not create a permanent started operation",
+  );
+  const afterRejectedReuse = await utils.getOrderById(order.orderId);
+  assert.equal(afterRejectedReuse.items[0].account, "correct-account@example.com");
+  assert.equal(afterRejectedReuse.items[0].password, "correct-password");
+
   const resolvedResponse = await adminOrdersRoute.GET(new Request(
     "https://www.liumeiti.vip/api/admin/orders?status=abnormal",
     { headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}` } },
   ));
   const resolvedResult = await resolvedResponse.json();
   assert.equal(resolvedResult.orders.some((item) => item.orderId === order.orderId), false);
+});
+
+test("admin credential edits keep bundled order primary credential fields synchronized", async () => {
+  const order = {
+    orderId: "LMADMINCREDENTIALSYNC1",
+    status: "received",
+    revision: 0,
+    createdAt: new Date().toISOString(),
+    locale: "zh",
+    email: "admin-edit-buyer@example.com",
+    account: "legacy-old@example.com",
+    password: "legacy-old-password",
+    staffAccount: "legacy-staff-old@example.com",
+    staffPassword: "legacy-staff-old-password",
+    items: [{
+      service: "spotify",
+      label: "Spotify · 家庭成员",
+      account: "item-old@example.com",
+      password: "item-old-password",
+      staffAccount: "item-staff-old@example.com",
+      staffPassword: "item-staff-old-password",
+      amount: 128,
+    }, {
+      service: "netflix",
+      label: "Netflix",
+      account: "untouched-second@example.com",
+      password: "untouched-second-password",
+      amount: 68,
+    }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const response = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: {
+        cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": "admin-credential-sync-test-0001",
+      },
+      body: JSON.stringify({
+        expectedRevision: 0,
+        items: [{
+          index: 0,
+          account: "admin-new@example.com",
+          password: "admin-new-password",
+          staffAccount: "",
+          staffPassword: "",
+        }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(response.status, 200);
+  const persisted = await utils.getOrderById(order.orderId);
+  assert.equal(persisted.items[0].account, "admin-new@example.com");
+  assert.equal(persisted.items[0].password, "admin-new-password");
+  assert.equal(persisted.account, "admin-new@example.com");
+  assert.equal(persisted.password, "admin-new-password");
+  assert.equal(persisted.staffAccount, "");
+  assert.equal(persisted.staffPassword, "");
+  assert.equal(persisted.items[1].account, "untouched-second@example.com");
+  assert.equal(persisted.items[1].password, "untouched-second-password");
+});
+
+test("admin cannot complete a staff-credential service with blank delivery credentials", async () => {
+  const order = {
+    orderId: "LMADMINMISSINGCREDENTIAL1",
+    status: "received",
+    revision: 0,
+    createdAt: new Date().toISOString(),
+    locale: "zh",
+    email: "missing-credential-buyer@example.com",
+    items: [{
+      service: "netflix",
+      label: "Netflix",
+      account: "",
+      password: "",
+      staffAccount: "",
+      staffPassword: "",
+      amount: 168,
+    }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const operationCountBefore = [...values.keys()]
+    .filter((key) => key.startsWith("liumeiti:durable-operation:v1:") && !key.endsWith(":lock")).length;
+  const response = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: {
+        cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": "admin-missing-credential-test-0001",
+      },
+      body: JSON.stringify({
+        expectedRevision: 0,
+        status: "completed",
+        items: [{ index: 0, staffAccount: "", staffPassword: "" }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  const result = await response.json();
+  assert.equal(response.status, 400, JSON.stringify(result));
+  assert.equal(result.error, "completion_credentials_required");
+  assert.equal(result.itemIndex, 0);
+  assert.equal((await utils.getOrderById(order.orderId)).status, "received");
+  assert.equal(
+    [...values.keys()].filter((key) => key.startsWith("liumeiti:durable-operation:v1:") && !key.endsWith(":lock")).length,
+    operationCountBefore,
+    "invalid completion input is rejected before creating a durable operation",
+  );
 });
 
 test("shared email delivery adds the three configured clickable support contacts once", () => {
@@ -997,6 +1339,10 @@ test("legacy staff-provided service tickets hydrate and sync latest credentials"
     locale: "zh",
     email: "ai-buyer@example.com",
     serviceLabel: "AI 会员 · GPT Plus",
+    account: "",
+    password: "",
+    staffAccount: "current-ai-account@example.com",
+    staffPassword: "current-ai-password",
     items: [{
       service: "ai",
       label: "AI 会员 · GPT Plus",
@@ -1006,6 +1352,12 @@ test("legacy staff-provided service tickets hydrate and sync latest credentials"
       password: "",
       staffAccount: "current-ai-account@example.com",
       staffPassword: "current-ai-password",
+    }, {
+      service: "netflix",
+      label: "Netflix",
+      amount: 68,
+      account: "second-after-sales@example.com",
+      password: "second-after-sales-password",
     }],
   };
   values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
@@ -1044,6 +1396,7 @@ test("legacy staff-provided service tickets hydrate and sync latest credentials"
       body: JSON.stringify({
         status: "completed",
         staffNote: "账号已更新",
+        credentialOrderHash: detail.ticket.credentialOrderHash,
         items: [{ index: 0, account: "new-ai-account@example.com", password: "new-ai-password" }],
       }),
     }),
@@ -1053,4 +1406,315 @@ test("legacy staff-provided service tickets hydrate and sync latest credentials"
   const syncedOrder = await utils.getOrderById(order.orderId);
   assert.equal(syncedOrder.items[0].staffAccount, "new-ai-account@example.com");
   assert.equal(syncedOrder.items[0].staffPassword, "new-ai-password");
+  assert.equal(syncedOrder.staffAccount, "new-ai-account@example.com");
+  assert.equal(syncedOrder.staffPassword, "new-ai-password");
+  assert.equal(syncedOrder.account, "");
+  assert.equal(syncedOrder.password, "");
+  assert.equal(syncedOrder.items[1].account, "second-after-sales@example.com");
+  assert.equal(syncedOrder.items[1].password, "second-after-sales-password");
+});
+
+test("legacy no-items credentials stay consistent across customer, admin, after-sales, and email flows", async () => {
+  const order = {
+    orderId: "LMLEGACYNITEMS1",
+    status: "completed",
+    locale: "en",
+    email: "legacy-no-items@example.com",
+    service: "ai",
+    serviceLabel: "AI membership · GPT Plus",
+    plan: "gpt-plus",
+    cycle: "1year",
+    finalAmount: 229,
+    account: "buyer-legacy@example.com",
+    password: "buyer-legacy-password",
+    staffAccount: "staff-legacy@example.com",
+    staffPassword: "staff-legacy-password",
+    createdAt: new Date().toISOString(),
+    revision: 0,
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  lists.set("liumeiti:orders:index", [
+    order.orderId,
+    ...(lists.get("liumeiti:orders:index") || []).filter((id) => id !== order.orderId),
+  ]);
+  lists.set(`liumeiti:orders:email:${order.email}`, [order.orderId]);
+
+  const emailStart = resendRequests.length;
+  const sendCodeResponse = await orderQueryRoute.POST(new Request("https://www.liumeiti.vip/api/order-query", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: "locale=en" },
+    body: JSON.stringify({ query: order.orderId }),
+  }));
+  assert.equal(sendCodeResponse.status, 200);
+  const verificationMail = resendRequests.slice(emailStart).find((entry) => entry.email === order.email);
+  assert.ok(verificationMail);
+  const verificationCode = verificationMail.text.match(/\b(\d{6})\b/)?.[1];
+  assert.match(verificationCode || "", /^\d{6}$/);
+  const queryResponse = await orderQueryRoute.POST(new Request("https://www.liumeiti.vip/api/order-query", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: "locale=en" },
+    body: JSON.stringify({ query: order.orderId, code: verificationCode }),
+  }));
+  const queried = await queryResponse.json();
+  assert.equal(queryResponse.status, 200, JSON.stringify(queried));
+  assert.equal(queried.orders[0].items[0].account, order.staffAccount);
+  assert.equal(queried.orders[0].items[0].password, order.staffPassword);
+  assert.equal(queried.orders[0].account, order.staffAccount);
+  assert.equal(queried.orders[0].password, order.staffPassword);
+
+  const lifecycleId = "1234567890abcdef1234567890abcdef";
+  values.set(`liumeiti:users:${order.email}`, JSON.stringify({
+    email: order.email,
+    username: "legacy-user",
+    avatarId: "avatar-01",
+    inviteCode: "MYLEGACY01",
+    coupons: [],
+    balance: 0,
+  }));
+  values.set(`lm:user:authver:${order.email}`, "1");
+  values.set(`lm:user:lifecycle:${order.email}`, lifecycleId);
+  values.set(`liumeiti:users:${order.email}:balance:cents`, "0");
+  const userToken = authSession.signUserSessionForVersion(order.email, 1);
+  const meResponse = await authMeRoute.GET(new Request("https://www.liumeiti.vip/api/auth/me", {
+    headers: { cookie: `lm_user=${encodeURIComponent(userToken)}; locale=en` },
+  }));
+  const me = await meResponse.json();
+  assert.equal(meResponse.status, 200, JSON.stringify(me));
+  assert.equal(me.orders[0].items[0].account, order.staffAccount);
+  assert.equal(me.orders[0].items[0].password, order.staffPassword);
+
+  const html = completionEmail.buildCompletionEmailHtml({
+    order,
+    brandName: "Maoyang",
+    siteDomain: "www.liumeiti.vip",
+    siteUrl: "https://www.liumeiti.vip",
+    locale: "en",
+  });
+  const text = completionEmail.buildCompletionEmailText({
+    order,
+    brandName: "Maoyang",
+    siteDomain: "www.liumeiti.vip",
+    siteUrl: "https://www.liumeiti.vip",
+    locale: "en",
+  });
+  assert.match(html, /staff-legacy@example\.com/);
+  assert.match(html, /staff-legacy-password/);
+  assert.doesNotMatch(html, /buyer-legacy-password/);
+  assert.match(text, /staff-legacy@example\.com/);
+  assert.match(text, /staff-legacy-password/);
+  assert.doesNotMatch(text, /buyer-legacy-password/);
+
+  const afterSalesToken = utils.signSession({
+    type: "after-sales-order",
+    orderId: order.orderId,
+    email: order.email,
+    exp: Date.now() + 60_000,
+  });
+  const ticketResponse = await customerRoute.POST(new Request("https://www.liumeiti.vip/api/after-sales", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      orderId: order.orderId,
+      token: afterSalesToken,
+      issue: "The legacy AI account cannot sign in and needs support.",
+      items: [{ index: 0 }],
+    }),
+  }));
+  const ticket = await ticketResponse.json();
+  assert.equal(ticketResponse.status, 200, JSON.stringify(ticket));
+  const storedTicket = await store.getAfterSalesTicket(ticket.ticket.ticketId);
+  assert.equal(storedTicket.items[0].account, order.staffAccount);
+  assert.equal(storedTicket.items[0].password, order.staffPassword);
+
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const adminCookie = `lm_admin=${encodeURIComponent(adminToken)}`;
+  const listResponse = await adminOrdersRoute.GET(new Request(
+    `https://www.liumeiti.vip/api/admin/orders?q=${encodeURIComponent(order.staffPassword)}&limit=50`,
+    { headers: { cookie: adminCookie } },
+  ));
+  const listed = await listResponse.json();
+  assert.equal(listResponse.status, 200, JSON.stringify(listed));
+  const listedOrder = listed.orders.find((entry) => entry.orderId === order.orderId);
+  assert.ok(listedOrder);
+  assert.equal(listedOrder.items.length, 1);
+  assert.equal(listedOrder.items[0].service, order.service);
+  assert.equal(listedOrder.items[0].plan, order.plan);
+
+  const detailResponse = await adminOrderRoute.GET(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, { headers: { cookie: adminCookie } }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  const detail = await detailResponse.json();
+  assert.equal(detailResponse.status, 200, JSON.stringify(detail));
+  assert.equal(detail.order.items.length, 1);
+  assert.equal(detail.order.items[0].account, order.account);
+  assert.equal(detail.order.items[0].password, order.password);
+  assert.equal(detail.order.items[0].staffAccount, order.staffAccount);
+  assert.equal(detail.order.items[0].staffPassword, order.staffPassword);
+
+  const editResponse = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: {
+        cookie: adminCookie,
+        "content-type": "application/json",
+        "idempotency-key": "legacy-no-items-edit-0001",
+      },
+      body: JSON.stringify({
+        expectedRevision: 0,
+        items: [{
+          index: 0,
+          account: "buyer-materialized@example.com",
+          password: "buyer-materialized-password",
+          staffAccount: "staff-materialized@example.com",
+          staffPassword: "staff-materialized-password",
+        }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  const edited = await editResponse.json();
+  assert.equal(editResponse.status, 200, JSON.stringify(edited));
+  assert.equal(edited.order.items.length, 1);
+  const persisted = await utils.getOrderById(order.orderId);
+  assert.equal(persisted.items.length, 1);
+  assert.equal(persisted.items[0].account, "buyer-materialized@example.com");
+  assert.equal(persisted.items[0].password, "buyer-materialized-password");
+  assert.equal(persisted.items[0].staffAccount, "staff-materialized@example.com");
+  assert.equal(persisted.items[0].staffPassword, "staff-materialized-password");
+  assert.equal(persisted.account, "buyer-materialized@example.com");
+  assert.equal(persisted.password, "buyer-materialized-password");
+  assert.equal(persisted.staffAccount, "staff-materialized@example.com");
+  assert.equal(persisted.staffPassword, "staff-materialized-password");
+});
+
+test("non-Spotify ticket snapshots cannot roll back newer order credentials", async () => {
+  const order = {
+    orderId: "LMAFTERSALESSTALEAI1",
+    status: "completed",
+    revision: 0,
+    locale: "zh",
+    email: "stale-ai-buyer@example.com",
+    serviceLabel: "AI 会员",
+    account: "",
+    password: "",
+    staffAccount: "ai-old@example.com",
+    staffPassword: "ai-old-password",
+    items: [{
+      service: "ai",
+      label: "AI 会员",
+      account: "",
+      password: "",
+      staffAccount: "ai-old@example.com",
+      staffPassword: "ai-old-password",
+    }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const ticket = {
+    ticketId: "ASSTALEAI1",
+    orderId: order.orderId,
+    status: "pending",
+    locale: "zh",
+    email: order.email,
+    issue: "创建工单后订单凭据被其他管理员更新",
+    items: [{ index: 0, service: "ai", label: "AI 会员", credentialManaged: true, account: "ai-old@example.com", password: "ai-old-password" }],
+    createdAt: new Date().toISOString(),
+  };
+  assert.equal((await store.createAfterSalesTicket(ticket)).ok, true);
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const headers = { cookie: `lm_admin=${encodeURIComponent(adminToken)}`, "Content-Type": "application/json" };
+  const detailResponse = await adminDetailRoute.GET(
+    new Request(`https://www.liumeiti.vip/api/admin/after-sales/${ticket.ticketId}`, { headers }),
+    { params: Promise.resolve({ ticketId: ticket.ticketId }) },
+  );
+  const detail = await detailResponse.json();
+  assert.equal(detail.ticket.items[0].account, "ai-old@example.com");
+  assert.equal(detail.ticket.items[0].applyCredentialsByDefault, false);
+
+  const current = await utils.getOrderEntryById(order.orderId);
+  current.order.items[0].staffAccount = "ai-newer@example.com";
+  current.order.items[0].staffPassword = "ai-newer-password";
+  current.order.staffAccount = "ai-newer@example.com";
+  current.order.staffPassword = "ai-newer-password";
+  assert.equal(await utils.setOrderAt(current.index, current.order, { expectedRevision: 0 }), true);
+
+  const staleResponse = await adminDetailRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/after-sales/${ticket.ticketId}`, {
+      method: "PATCH",
+      headers: { ...headers, "Idempotency-Key": "after-sales-stale-ai-0001" },
+      body: JSON.stringify({
+        status: "completed",
+        staffNote: "should refresh",
+        credentialOrderHash: detail.ticket.credentialOrderHash,
+        items: [{ index: 0, account: "ai-old@example.com", password: "ai-old-password" }],
+      }),
+    }),
+    { params: Promise.resolve({ ticketId: ticket.ticketId }) },
+  );
+  assert.equal(staleResponse.status, 409);
+  assert.equal((await staleResponse.json()).error, "stale_order_credentials");
+  assert.equal((await utils.getOrderById(order.orderId)).items[0].staffPassword, "ai-newer-password");
+
+  const refreshedResponse = await adminDetailRoute.GET(
+    new Request(`https://www.liumeiti.vip/api/admin/after-sales/${ticket.ticketId}`, { headers }),
+    { params: Promise.resolve({ ticketId: ticket.ticketId }) },
+  );
+  const refreshed = await refreshedResponse.json();
+  assert.equal(refreshed.ticket.items[0].account, "ai-newer@example.com");
+  assert.equal(refreshed.ticket.items[0].password, "ai-newer-password");
+  assert.equal(refreshed.ticket.items[0].applyCredentialsByDefault, false);
+
+  const sendsBefore = resendRequests.length;
+  const completedResponse = await adminDetailRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/after-sales/${ticket.ticketId}`, {
+      method: "PATCH",
+      headers: { ...headers, "Idempotency-Key": "after-sales-stale-ai-0002" },
+      body: JSON.stringify({
+        status: "completed",
+        staffNote: "verified current credentials",
+        credentialOrderHash: refreshed.ticket.credentialOrderHash,
+        items: [],
+      }),
+    }),
+    { params: Promise.resolve({ ticketId: ticket.ticketId }) },
+  );
+  assert.equal(completedResponse.status, 200);
+  const persisted = await utils.getOrderById(order.orderId);
+  assert.equal(persisted.items[0].staffAccount, "ai-newer@example.com");
+  assert.equal(persisted.items[0].staffPassword, "ai-newer-password");
+  assert.equal((persisted.staffAudit || []).filter((entry) => entry.action === "after_sales_credentials_sync").length, 0);
+  const email = resendRequests.slice(sendsBefore).find((entry) => entry.email === order.email);
+  assert.match(email?.text || "", /ai-newer@example\.com/);
+  assert.match(email?.text || "", /ai-newer-password/);
+  assert.doesNotMatch(email?.text || "", /ai-old-password/);
+});
+
+test("creation outbox drains oldest failures beyond the former latest-30 window", async () => {
+  values.clear();
+  lists.clear();
+  sortedSets.clear();
+  sets.clear();
+  const tickets = [];
+  for (let index = 0; index < 45; index += 1) {
+    const suffix = String(index).padStart(2, "0");
+    const ticket = {
+      ticketId: `ASCREATIONOUTBOX${suffix}`,
+      orderId: `LMCREATIONOUTBOX${suffix}`,
+      status: "pending",
+      email: `creation-${suffix}@example.com`,
+      issue: "验证创建副作用不会因新工单持续进入而饿死",
+      items: [],
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+    };
+    tickets.push(ticket);
+    assert.equal((await store.createAfterSalesTicket(ticket)).ok, true);
+  }
+
+  const first = await store.getAfterSalesCreationOutbox(30);
+  assert.deepEqual(first.map((ticket) => ticket.ticketId), tickets.slice(0, 30).map((ticket) => ticket.ticketId));
+  for (const ticket of first) assert.equal(await store.markAfterSalesCreationEffectsDone(ticket.ticketId), true);
+
+  const remaining = await store.getAfterSalesCreationOutbox(30);
+  assert.deepEqual(remaining.map((ticket) => ticket.ticketId), tickets.slice(30).map((ticket) => ticket.ticketId));
+  assert.equal(sortedSet("liumeiti:after-sales:creation-outbox").size, 15);
 });

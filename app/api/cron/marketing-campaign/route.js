@@ -1,4 +1,5 @@
 import { dispatchDueMarketingCampaigns } from "../../_marketing-campaign-queue.js";
+import { withApiTelemetry } from "../../_observability.js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,13 +11,15 @@ function authorized(request) {
   return request.headers.get("authorization") === `Bearer ${secret}`;
 }
 
-export async function GET(request) {
+async function handler(request) {
   if (!authorized(request)) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
   const result = await dispatchDueMarketingCampaigns({ limit: 40 });
   return Response.json(result, {
-    status: result?.ok === false && !result?.submitted ? 503 : 200,
+    status: result?.ok === false ? 503 : 200,
     headers: { "cache-control": "no-store" },
   });
 }
+
+export const GET = withApiTelemetry("cron_marketing_campaign", handler);

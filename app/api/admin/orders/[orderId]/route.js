@@ -20,6 +20,8 @@ import { getOrderSla } from "../../../../lib/order-sla.js";
 import { deliverOnce } from "../../../_delivery-once.js";
 import { idempotencyPayloadHash, requiredIdempotencyKey } from "../../../_money.js";
 import { claimDurableOperation, completeDurableOperation } from "../../../_durable-operation.js";
+import { enqueueOrderPushEvent } from "../../../_push.js";
+import { appendBusinessTraceEvent, withApiTelemetry } from "../../../_observability.js";
 import {
   applyThirdPartyNotice,
   buildDeliveryMessage,
@@ -29,19 +31,109 @@ import {
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
 const SITE_URL = process.env.SITE_URL || `https://${SITE_DOMAIN}`;
+const STAFF_CREDENTIAL_SERVICES = new Set(["ai", "netflix", "disney", "max"]);
+
+async function enqueueOrderUpdatePush(order, effects, operationId) {
+  const jobs = [];
+  if (effects?.credentialsChanged) {
+    jobs.push(enqueueOrderPushEvent(order, "order.credentials_updated", operationId));
+  }
+  if (effects?.statusChanged) {
+    jobs.push(enqueueOrderPushEvent(order, `order.${order.status}`, operationId));
+  }
+  if (!jobs.length) return [];
+  try {
+    return await Promise.all(jobs);
+  } catch (error) {
+    return [{ ok: false, error: clean(error?.message || "push_enqueue_failed", 120) }];
+  }
+}
+
+async function traceAdminOrderBestEffort(order, event) {
+  if (!order?.orderId) return;
+  try {
+    await appendBusinessTraceEvent(order.orderId, {
+      businessTraceId: order.businessTraceId,
+      ...event,
+    });
+  } catch {}
+}
 const SUPPORT_CONTACT = process.env.SUPPORT_CONTACT || "请通过 QQ 2802632995 / WhatsApp +34 671143339 / Telegram @MaoyangSupport 联系在线客服";
 const SUPPORT_CONTACT_EN = process.env.SUPPORT_CONTACT_EN
   || ("Reach our online support via " + SUPPORT_CONTACT.replace(/^请通过\s*/, "").replace(/\s*联系在线客服\s*$/, "").trim());
 
 async function deliverEmailOnce(key, sender) {
   const delivery = await deliverOnce(key, sender);
-  return delivery.value && typeof delivery.value === "object"
-    ? delivery.value
-    : { ok: Boolean(delivery.ok), idempotent: Boolean(delivery.idempotent), pending: Boolean(delivery.pending), error: delivery.error || "" };
+  const provider = delivery.value && typeof delivery.value === "object" ? delivery.value : {};
+  return {
+    ...provider,
+    ok: Boolean(delivery.ok),
+    delivered: delivery.delivered === true,
+    handled: Boolean(delivery.ok && (delivery.delivered || delivery.terminal || delivery.suppressed || delivery.skipped)),
+    suppressed: Boolean(delivery.suppressed || provider.suppressed),
+    terminal: Boolean(delivery.terminal),
+    idempotent: Boolean(delivery.idempotent),
+    pending: Boolean(delivery.pending),
+    uncertain: Boolean(delivery.uncertain),
+    error: delivery.error || provider.error || "",
+  };
 }
 
 function mutationLinkToken(kind, orderId, mutationId, mutationHash, itemIndex = -1) {
   return signSession({ typ: kind, orderId: normalizedOrderId(orderId), mutationId, mutationHash, itemIndex });
+}
+
+function legacyOrderItem(order) {
+  const account = order?.account || "";
+  const staffAccount = order?.staffAccount || "";
+  return {
+    service: order?.service || "",
+    label: order?.serviceLabel || "",
+    cycle: order?.cycle || "",
+    amount: Number(order?.finalAmount || 0),
+    plan: order?.plan || order?.rocketPlan || "",
+    planLabel: order?.planLabel || order?.rocketPlanLabel || "",
+    platformUrl: order?.platformUrl || "",
+    productPrice: order?.productPrice || "",
+    account,
+    password: order?.password || "",
+    staffAccount,
+    staffPassword: order?.staffPassword || "",
+    subscriptionLinks: order?.service === "rocket" && (staffAccount || account)
+      ? subscriptionLinks(staffAccount || account)
+      : null,
+  };
+}
+
+function orderItemsForAdmin(order) {
+  const source = Array.isArray(order?.items) && order.items.length > 0
+    ? order.items
+    : [legacyOrderItem(order)];
+  return source.map(({ passwordCorrectionTokenHash, ...item }) => item);
+}
+
+function missingCompletionCredential(order, itemUpdates = []) {
+  const items = Array.isArray(order?.items) && order.items.length > 0
+    ? order.items
+    : [legacyOrderItem(order)];
+  const updates = new Map();
+  for (const update of Array.isArray(itemUpdates) ? itemUpdates : []) {
+    const index = Number(update?.index);
+    if (Number.isInteger(index) && index >= 0) updates.set(index, update);
+  }
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (!STAFF_CREDENTIAL_SERVICES.has(String(item?.service || "").trim().toLowerCase())) continue;
+    const update = updates.get(index);
+    const staffAccount = clean(typeof update?.staffAccount === "string" ? update.staffAccount : item?.staffAccount, 80);
+    const staffPassword = clean(typeof update?.staffPassword === "string" ? update.staffPassword : item?.staffPassword, 120);
+    if (staffAccount && staffPassword) continue;
+    return {
+      index,
+      label: clean(item?.label || item?.service || `#${index + 1}`, 180),
+    };
+  }
+  return null;
 }
 
 function orderForAdminResponse(order) {
@@ -50,9 +142,7 @@ function orderForAdminResponse(order) {
     ...order,
     status,
     sla: getOrderSla({ ...order, status }),
-    items: Array.isArray(order?.items)
-      ? order.items.map(({ passwordCorrectionTokenHash, ...item }) => item)
-      : [],
+    items: orderItemsForAdmin(order),
   };
   delete response.quotePaymentTokenHash;
   return response;
@@ -90,7 +180,17 @@ async function sendCompletionEmail(order) {
       const content = buildProxyOrderEmail({
         kind: "completed", order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale: emailLocale, support: settings.support,
       });
-      return sendSimpleEmail({ to: order.email, idempotencyKey: `order-completed:${order.orderId}:${order.revision || 0}`, ...content, fromName: brandName, support: settings.support, locale: emailLocale });
+      return sendSimpleEmail({
+        to: order.email,
+        idempotencyKey: `order-completed:${order.orderId}:${order.revision || 0}`,
+        ...content,
+        category: "order_update",
+        relatedType: "order",
+        relatedId: order.orderId,
+        fromName: brandName,
+        support: settings.support,
+        locale: emailLocale,
+      });
     }
     const supportContact = supportText(settings.support, emailLocale);
     const html = buildCompletionEmailHtml({
@@ -108,6 +208,9 @@ async function sendCompletionEmail(order) {
       subject,
       text,
       html,
+      category: "order_update",
+      relatedType: "order",
+      relatedId: order.orderId,
       fromName: brandName,
       support: settings.support,
       locale: emailLocale,
@@ -136,6 +239,9 @@ async function sendProxyQuoteEmail(order, paymentUrl) {
     to: order.email,
     idempotencyKey: `order-quote:${order.orderId}:${order.revision || 0}`,
     ...content,
+    category: "quote",
+    relatedType: "quote",
+    relatedId: order.orderId,
     fromName: brandName,
     support: settings.support,
     locale: order.locale === "en" ? "en" : "zh",
@@ -157,7 +263,7 @@ async function sendTelegramNotice(text) {
     : { ok: false, retryable: true, error: `telegram_http_${res.status}` };
 }
 
-export async function GET(request, { params }) {
+async function getOrderHandler(request, { params }) {
   const session = adminSession(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   if (!adminPermissionProfile(session).canViewOrders) {
@@ -176,7 +282,7 @@ export async function GET(request, { params }) {
 // PATCH /api/admin/orders/:orderId
 // body: { status, staffNotes, internalNotes, deliveryMessageMode,
 //   thirdPartyPlatformNotice, items: [{index, account, password, staffAccount, staffPassword, fulfillment}] }
-export async function PATCH(request, { params }) {
+async function updateOrderHandler(request, { params }) {
   const session = adminSession(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   if (!adminPermissionProfile(session).canEditOrders) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
@@ -272,7 +378,7 @@ export async function PATCH(request, { params }) {
         return Response.json({ ...replayPayload, idempotent: true });
       }
       if (body.expectedRevision != null && Number(body.expectedRevision) !== expectedRevision) {
-        return Response.json({ ok: false, error: "stale_revision", currentRevision: expectedRevision }, { status: 409 });
+        return Response.json({ ok: false, error: "stale_revision", mutationApplied: false, currentRevision: expectedRevision }, { status: 409 });
       }
       const previousStaffId = Number(order.assignedStaffId || 0);
       const previousStaffUsername = order.assignedStaffUsername || "";
@@ -342,7 +448,7 @@ export async function PATCH(request, { params }) {
       ].slice(0, 100);
 
       const saved = await setOrderAt(entry.index, order, { expectedRevision });
-      if (!saved) return Response.json({ ok: false, error: "stale_revision" }, { status: 409 });
+      if (!saved) return Response.json({ ok: false, error: "stale_revision", mutationApplied: false }, { status: 409 });
       const timelineOk = await appendOrderTimelineOnce(order.orderId, `${operation.operationId}:assignment-timeline`, {
         type: target ? "assigned" : "unassigned",
         visibility: "internal",
@@ -419,7 +525,24 @@ export async function PATCH(request, { params }) {
   const index = currentEntry.index;
   const originalOrder = currentEntry.order;
   let order = JSON.parse(JSON.stringify(originalOrder));
+  if ((!Array.isArray(order.items) || order.items.length === 0)
+    && itemUpdates.some((update) => Number(update?.index) === 0)) {
+    // Legacy orders stored credentials only at the top level. Materialize the
+    // synthetic item inside this same optimistic CAS before applying index 0.
+    order.items = [legacyOrderItem(order)];
+  }
   const currentRevision = Math.max(0, Number(order.revision || 0));
+  if (newStatus === "completed" && order.status !== "completed") {
+    const missing = missingCompletionCredential(order, itemUpdates);
+    if (missing) {
+      return Response.json({
+        ok: false,
+        error: "completion_credentials_required",
+        itemIndex: missing.index,
+        itemLabel: missing.label,
+      }, { status: 400 });
+    }
+  }
   const operation = await claimDurableOperation({
     scope: "admin-order-patch",
     principal: operationPrincipal,
@@ -466,6 +589,9 @@ export async function PATCH(request, { params }) {
           () => sendSimpleEmail({
             to: order.email, ...email,
             idempotencyKey: `spotify-password-error:${order.orderId}:${operation.operationId}`,
+            category: "password_update",
+            relatedType: "order",
+            relatedId: order.orderId,
             fromName: brandName, support: settings.support,
             locale: order.locale === "en" ? "en" : "zh",
           }),
@@ -532,6 +658,22 @@ export async function PATCH(request, { params }) {
         meta: { status: order.status },
       }) && internalEffectsOk;
     }
+    const pushResults = await enqueueOrderUpdatePush(order, effects, operation.operationId);
+    if (effects.statusChanged) {
+      await traceAdminOrderBestEffort(order, {
+        stage: "admin_order_status_update",
+        component: "admin_order",
+        outcome: "ok",
+        operationId: operation.operationId,
+      });
+    }
+    await traceAdminOrderBestEffort(order, {
+      stage: "push_enqueue_order",
+      component: "push",
+      outcome: pushResults.some((item) => item?.ok === false) ? "error" : pushResults.length ? "ok" : "skipped",
+      operationId: operation.operationId,
+      errorCode: pushResults.find((item) => item?.ok === false)?.error || "",
+    });
     const logOk = await pushAdminActionLog({
       action: effects.adminAction || (body.action === "spotify_password_error" ? "spotify_password_error" : "order_update"),
       actor,
@@ -554,6 +696,7 @@ export async function PATCH(request, { params }) {
     return Response.json({
       ok: false,
       error: "stale_revision",
+      mutationApplied: false,
       currentRevision,
       order: orderForAdminResponse(order),
     }, { status: 409 });
@@ -611,7 +754,7 @@ export async function PATCH(request, { params }) {
     ].slice(0, 100);
 
     const saved = await setOrderAt(index, order, { expectedRevision: currentRevision });
-    if (!saved) return Response.json({ ok: false, error: "stale_revision" }, { status: 409 });
+    if (!saved) return Response.json({ ok: false, error: "stale_revision", mutationApplied: false }, { status: 409 });
 
     const settings = await getSettings();
     const brandName = settings.brand.name || BRAND_NAME;
@@ -630,18 +773,25 @@ export async function PATCH(request, { params }) {
         to: order.email,
         ...email,
         idempotencyKey: `spotify-password-error:${order.orderId}:${operation.operationId}`,
+        category: "password_update",
+        relatedType: "order",
+        relatedId: order.orderId,
         fromName: brandName,
         support: settings.support,
         locale: order.locale === "en" ? "en" : "zh",
       }),
     );
     const emailedAt = new Date();
-    item.passwordCorrectionEmailSentAt = emailedAt.toISOString();
-    item.passwordCorrectionEmailSentAtBeijing = formatBeijingTime(emailedAt);
-    item.passwordCorrectionEmailOk = Boolean(emailResult?.ok);
-    item.passwordCorrectionEmailError = emailResult?.ok
+    item.passwordCorrectionEmailHandledAt = emailedAt.toISOString();
+    item.passwordCorrectionEmailSuppressed = Boolean(emailResult?.suppressed);
+    if (emailResult?.delivered) {
+      item.passwordCorrectionEmailSentAt = emailedAt.toISOString();
+      item.passwordCorrectionEmailSentAtBeijing = formatBeijingTime(emailedAt);
+    }
+    item.passwordCorrectionEmailOk = Boolean(emailResult?.delivered);
+    item.passwordCorrectionEmailError = emailResult?.delivered
       ? ""
-      : clean(emailResult?.reason || emailResult?.error || "send_failed", 120);
+      : clean(emailResult?.reason || emailResult?.error || (emailResult?.suppressed ? "suppressed" : "send_failed"), 120);
 
     order.staffAudit = Array.isArray(order.staffAudit) ? order.staffAudit : [];
     order.staffAudit.unshift({
@@ -662,6 +812,7 @@ export async function PATCH(request, { params }) {
       return Response.json({
         ok: false,
         error: "stale_revision",
+        mutationApplied: true,
         order: latestEntry?.order ? orderForAdminResponse(latestEntry.order) : null,
         passwordCorrection: { itemIndex, expiresAt: item.passwordCorrectionExpiresAt, email: emailResult },
       }, { status: 409 });
@@ -670,7 +821,7 @@ export async function PATCH(request, { params }) {
       action: "spotify_password_error",
       actor,
       target: "order:" + canonicalOrderId,
-      detail: { itemIndex, emailOk: Boolean(emailResult?.ok) },
+      detail: { itemIndex, emailOk: Boolean(emailResult?.delivered), suppressed: Boolean(emailResult?.suppressed) },
       operationId: `${operation.operationId}:admin-log`,
     });
     if (!logOk) return Response.json({ ok: false, error: "operation_effect_journal_unavailable" }, { status: 503 });
@@ -854,6 +1005,16 @@ export async function PATCH(request, { params }) {
     staffPassword: item?.staffPassword || "",
   })));
   const credentialsChanged = previousCredentials !== nextCredentials;
+  if (credentialsChanged && Array.isArray(order.items) && order.items.length > 0) {
+    const primaryItem = order.items[0];
+    // Order creation defines the top-level compatibility fields as a mirror of
+    // items[0] even for bundles. Preserve that invariant whenever credentials
+    // change; edits to later items leave the first item (and mirror) unchanged.
+    order.account = primaryItem?.account || "";
+    order.password = primaryItem?.password || "";
+    order.staffAccount = primaryItem?.staffAccount || "";
+    order.staffPassword = primaryItem?.staffPassword || "";
+  }
   const statusChanged = Boolean(newStatus && previousStatus !== order.status);
 
   order.staffAudit = Array.isArray(order.staffAudit) ? order.staffAudit : [];
@@ -908,7 +1069,7 @@ export async function PATCH(request, { params }) {
       { mutationId: operation.operationId, mutationHash, actor },
     );
     if (!transitioned.ok) {
-      return Response.json({ ok: false, error: transitioned.error || "order_transition_failed" }, {
+      return Response.json({ ok: false, error: transitioned.error || "order_transition_failed", ...(transitioned.error === "stale_revision" ? { mutationApplied: false } : {}) }, {
         status: transitioned.error === "out_of_stock" || transitioned.error === "stale_revision" ? 409 : 503,
       });
     }
@@ -918,7 +1079,7 @@ export async function PATCH(request, { params }) {
     commissionResult = transitioned.results?.commission || null;
   } else {
     const saved = await setOrderAt(index, order, { expectedRevision: currentRevision });
-    if (!saved) return Response.json({ ok: false, error: "stale_revision" }, { status: 409 });
+    if (!saved) return Response.json({ ok: false, error: "stale_revision", mutationApplied: false }, { status: 409 });
   }
   let internalEffectsOk = true;
   if (referenceChanged) {
@@ -957,6 +1118,26 @@ export async function PATCH(request, { params }) {
       meta: { status: order.status },
     }) && internalEffectsOk;
   }
+  const pushResults = await enqueueOrderUpdatePush(
+    order,
+    { credentialsChanged, statusChanged },
+    operation.operationId,
+  );
+  if (statusChanged) {
+    await traceAdminOrderBestEffort(order, {
+      stage: "admin_order_status_update",
+      component: "admin_order",
+      outcome: "ok",
+      operationId: operation.operationId,
+    });
+  }
+  await traceAdminOrderBestEffort(order, {
+    stage: "push_enqueue_order",
+    component: "push",
+    outcome: pushResults.some((item) => item?.ok === false) ? "error" : pushResults.length ? "ok" : "skipped",
+    operationId: operation.operationId,
+    errorCode: pushResults.find((item) => item?.ok === false)?.error || "",
+  });
   const logOk = await pushAdminActionLog({
     action: "order_update",
     actor,
@@ -986,8 +1167,9 @@ export async function PATCH(request, { params }) {
     const noticeAt = new Date();
     order.invalidEmailNoticeAt = noticeAt.toISOString();
     order.invalidEmailNoticeAtBeijing = formatBeijingTime(noticeAt);
-    order.invalidEmailNoticeOk = Boolean(invalidEmailResult?.ok);
-    order.invalidEmailNoticeError = invalidEmailResult?.ok ? "" : clean(invalidEmailResult?.reason || invalidEmailResult?.error || "send_failed", 120);
+    order.invalidEmailNoticeOk = Boolean(invalidEmailResult?.delivered);
+    order.invalidEmailNoticeSuppressed = Boolean(invalidEmailResult?.suppressed);
+    order.invalidEmailNoticeError = invalidEmailResult?.delivered ? "" : clean(invalidEmailResult?.reason || invalidEmailResult?.error || (invalidEmailResult?.suppressed ? "suppressed" : "send_failed"), 120);
     const noticeExpectedRevision = Number(order.revision);
     const noticeSaved = await setOrderAt(index, order, { expectedRevision: noticeExpectedRevision });
     if (!noticeSaved) {
@@ -995,6 +1177,7 @@ export async function PATCH(request, { params }) {
       return Response.json({
         ok: false,
         error: "stale_revision",
+        mutationApplied: true,
         order: latestEntry?.order ? orderForAdminResponse(latestEntry.order) : null,
         invalidNotice: { email: invalidEmailResult },
       }, { status: 409 });
@@ -1007,10 +1190,15 @@ export async function PATCH(request, { params }) {
       `admin-order:${order.orderId}:operation:${operation.operationId}:quote-email`,
       () => sendProxyQuoteEmail(order, quotePaymentUrl),
     );
-    order.quoteEmailSentAt = new Date().toISOString();
-    order.quoteEmailSentAtBeijing = formatBeijingTime(new Date());
-    order.quoteEmailOk = Boolean(quoteEmailResult?.ok);
-    order.quoteEmailError = quoteEmailResult?.ok ? "" : clean(quoteEmailResult?.reason || quoteEmailResult?.error || "send_failed", 120);
+    const quoteHandledAt = new Date();
+    order.quoteEmailHandledAt = quoteHandledAt.toISOString();
+    order.quoteEmailSuppressed = Boolean(quoteEmailResult?.suppressed);
+    if (quoteEmailResult?.delivered) {
+      order.quoteEmailSentAt = quoteHandledAt.toISOString();
+      order.quoteEmailSentAtBeijing = formatBeijingTime(quoteHandledAt);
+    }
+    order.quoteEmailOk = Boolean(quoteEmailResult?.delivered);
+    order.quoteEmailError = quoteEmailResult?.delivered ? "" : clean(quoteEmailResult?.reason || quoteEmailResult?.error || (quoteEmailResult?.suppressed ? "suppressed" : "send_failed"), 120);
     const quoteNoticeExpectedRevision = Number(order.revision);
     const quoteNoticeSaved = await setOrderAt(index, order, { expectedRevision: quoteNoticeExpectedRevision });
     if (!quoteNoticeSaved) {
@@ -1018,6 +1206,7 @@ export async function PATCH(request, { params }) {
       return Response.json({
         ok: false,
         error: "stale_revision",
+        mutationApplied: true,
         order: latestEntry?.order ? orderForAdminResponse(latestEntry.order) : null,
         quote: { email: quoteEmailResult },
       }, { status: 409 });
@@ -1059,7 +1248,17 @@ async function sendInvalidOrderEmail(order) {
     const content = buildProxyOrderEmail({
       kind: "invalid", order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale: emailLocale, support: settings.support,
     });
-    return sendSimpleEmail({ to: order.email, idempotencyKey: `order-invalid:${order.orderId}:${order.revision || 0}`, ...content, fromName: brandName, support: settings.support, locale: emailLocale });
+    return sendSimpleEmail({
+      to: order.email,
+      idempotencyKey: `order-invalid:${order.orderId}:${order.revision || 0}`,
+      ...content,
+      category: "order_update",
+      relatedType: "order",
+      relatedId: order.orderId,
+      fromName: brandName,
+      support: settings.support,
+      locale: emailLocale,
+    });
   }
   const supportContact = supportText(settings.support, emailLocale);
   const html = buildInvalidOrderEmailHtml({
@@ -1087,6 +1286,9 @@ async function sendInvalidOrderEmail(order) {
       : `订单 ${order.orderId} 未收到付款，已标记无效 · ${brandName}`,
     text,
     html,
+    category: "order_update",
+    relatedType: "order",
+    relatedId: order.orderId,
     fromName: brandName,
     support: settings.support,
     locale: emailLocale,
@@ -1095,7 +1297,7 @@ async function sendInvalidOrderEmail(order) {
 
 // DELETE /api/admin/orders/:orderId — soft-delete (tombstone in storage,
 // filtered from query/account/admin lists; stays out permanently).
-export async function DELETE(request, { params }) {
+async function deleteOrderHandler(request, { params }) {
   const session = adminSession(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   if (!isRootAdminSession(session)) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
@@ -1154,7 +1356,7 @@ export async function DELETE(request, { params }) {
     archiveOperationId: operation.operationId,
   });
   if (!archived.ok) {
-    return Response.json({ ok: false, error: archived.error || "delete_failed" }, {
+    return Response.json({ ok: false, error: archived.error || "delete_failed", ...(archived.error === "stale_revision" ? { mutationApplied: false } : {}) }, {
       status: archived.error === "stale_revision" ? 409 : 500,
     });
   }
@@ -1177,3 +1379,7 @@ export async function DELETE(request, { params }) {
     await redisCmd(["EVAL", release, "1", lockKey, lockToken]);
   }
 }
+
+export const GET = withApiTelemetry("admin_orders", getOrderHandler);
+export const PATCH = withApiTelemetry("admin_orders", updateOrderHandler);
+export const DELETE = withApiTelemetry("admin_orders", deleteOrderHandler);

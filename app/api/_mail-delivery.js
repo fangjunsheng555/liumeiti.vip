@@ -78,6 +78,21 @@ function pipelineRows(value) {
   return value.map((item) => (item && typeof item === "object" && Object.hasOwn(item, "result") ? item.result : item));
 }
 
+function pipelineEntryHasError(entry) {
+  if (!entry || typeof entry !== "object") return false;
+  if (Object.hasOwn(entry, "error") && entry.error != null) return true;
+  return Object.hasOwn(entry, "result")
+    && entry.result
+    && typeof entry.result === "object"
+    && Object.hasOwn(entry.result, "error")
+    && entry.result.error != null;
+}
+
+function checkedPipelineRows(response, expectedLength) {
+  if (!Array.isArray(response) || response.length !== expectedLength || response.some(pipelineEntryHasError)) return null;
+  return pipelineRows(response);
+}
+
 function normalizeRecipients(value) {
   return Array.from(new Set((Array.isArray(value) ? value : [value])
     .map((item) => clean(item, 200).toLowerCase())
@@ -170,12 +185,74 @@ function nextStatus(current, incoming) {
   return (STATUS_PRIORITY[incoming] || 0) >= (STATUS_PRIORITY[current] || 0) ? incoming : current;
 }
 
-async function getRecordByMessageId(messageId) {
+async function readRecordByMessageId(messageId) {
   const safeMessageId = canonicalMessageId(messageId);
-  if (!safeMessageId) return null;
-  const id = await redisCmd(["GET", messageKey(safeMessageId)]);
-  if (!id) return null;
-  return parseJson(await redisCmd(["GET", recordKey(id)]));
+  if (!safeMessageId) return { ok: true, record: null };
+  const lookup = await redisPipeline([["GET", messageKey(safeMessageId)]]);
+  const lookupRows = checkedPipelineRows(lookup, 1);
+  if (!lookupRows) return { ok: false, error: "storage_failed", record: null };
+  if (lookupRows[0] != null && typeof lookupRows[0] !== "string") return { ok: false, error: "storage_failed", record: null };
+  const id = clean(lookupRows[0], 120);
+  if (!id) return { ok: true, record: null };
+  const stored = await redisPipeline([["GET", recordKey(id)]]);
+  const storedRows = checkedPipelineRows(stored, 1);
+  if (!storedRows) return { ok: false, error: "storage_failed", record: null };
+  const record = storedRows[0] == null ? null : parseJson(storedRows[0]);
+  if (storedRows[0] != null && (!record || typeof record !== "object" || Array.isArray(record))) {
+    return { ok: false, error: "storage_failed", record: null };
+  }
+  return { ok: true, record };
+}
+
+const COMPLETE_EVENT_LEASE_SCRIPT = `
+if redis.call('GET',KEYS[1])==ARGV[1] then
+  redis.call('SET',KEYS[1],'done','EX',ARGV[2])
+  return 1
+end
+return 0`;
+
+const RELEASE_EVENT_LEASE_SCRIPT = `
+if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) end
+return 0`;
+
+async function acquireEventLease(lockKey) {
+  const token = randomBytes(18).toString("hex");
+  const acquired = await redisCmd(["SET", lockKey, token, "NX", "EX", "300"]);
+  if (acquired === "OK") return { ok: true, token };
+  const probe = await redisPipeline([["GET", lockKey]]);
+  const rows = checkedPipelineRows(probe, 1);
+  if (!rows) return { ok: false, error: "storage_failed", retryable: true };
+  if (rows[0] === "done" || rows[0] === "1") return { ok: true, duplicate: true };
+  if (rows[0]) return { ok: false, error: "event_processing", retryable: true };
+  return { ok: false, error: "storage_failed", retryable: true };
+}
+
+async function completeEventLease(lockKey, token) {
+  return Number(await redisCmd(["EVAL", COMPLETE_EVENT_LEASE_SCRIPT, "1", lockKey, token, String(EVENT_TTL_SECONDS)])) === 1;
+}
+
+async function releaseEventLease(lockKey, token) {
+  return Number(await redisCmd(["EVAL", RELEASE_EVENT_LEASE_SCRIPT, "1", lockKey, token])) === 1;
+}
+
+function traceableOrderRelatedType(value) {
+  const type = clean(value, 40).toLowerCase();
+  return type === "order" || type === "quote" || type === "after_sales" || /(?:^|_)order(?:_|$)/.test(type) || /(?:^|_)quote(?:_|$)/.test(type);
+}
+
+async function appendDeliveryBusinessTrace(record, item) {
+  const status = clean(item?.status || record?.status, 30).toLowerCase();
+  if (!traceableOrderRelatedType(record?.relatedType) || !record?.relatedId || !["sent", "delivered", "delayed", "bounced", "complained", "failed", "suppressed"].includes(status)) return;
+  try {
+    const { appendBusinessTraceEvent } = await import("./_observability.js");
+    await appendBusinessTraceEvent(record.relatedId, {
+      stage: `email_${status}`,
+      component: "mail_delivery",
+      outcome: ["bounced", "complained", "failed", "suppressed"].includes(status) ? "error" : (status === "delayed" ? "retry" : "ok"),
+      operationId: clean(item?.id || record?.providerMessageId || record?.messageId, 160),
+      at: item?.createdAt || record?.updatedAt || new Date().toISOString(),
+    });
+  } catch {}
 }
 
 async function persistRecord(record) {
@@ -186,8 +263,12 @@ async function persistRecord(record) {
   ];
   const lookupIds = Array.from(new Set([record.messageId, record.providerMessageId].map(canonicalMessageId).filter(Boolean)));
   lookupIds.forEach((messageId) => commands.push(["SET", messageKey(messageId), record.id]));
-  const result = pipelineRows(await redisPipeline(commands));
-  if (result.length !== commands.length || result.some((item) => item == null)) return false;
+  const result = checkedPipelineRows(await redisPipeline(commands), commands.length);
+  if (!result
+      || result[0] !== "OK"
+      || result[1] == null
+      || !Number.isFinite(Number(result[1]))
+      || result.slice(2).some((item) => item !== "OK")) return false;
   const overflow = await redisCmd(["ZREVRANGE", DELIVERY_INDEX_KEY, String(MAX_RECORDS), "-1"]);
   if (Array.isArray(overflow) && overflow.length) {
     const cleanup = [["ZREM", DELIVERY_INDEX_KEY, ...overflow]];
@@ -197,10 +278,41 @@ async function persistRecord(record) {
   return true;
 }
 
+async function applyRecipientFeedback(record, item) {
+  const status = clean(item?.status || record?.status, 30).toLowerCase();
+  if (!["delivered", "delayed", "bounced", "complained", "suppressed"].includes(status)) return;
+  const { applyMailFeedback } = await import("./_mail-preferences.js");
+  const feedback = await applyMailFeedback({
+    email: record?.to || record?.recipients?.[0] || "",
+    status,
+    eventType: item?.type || "",
+    reason: item?.reason || record?.reason || "",
+    provider: record?.provider || "",
+    eventId: item?.id || "",
+    campaignId: record?.category === "marketing" ? record?.relatedId || "" : "",
+  });
+  if (feedback?.ok === false) throw new Error(feedback.error || "mail_feedback_save_failed");
+  if (record?.category === "marketing" && record?.relatedId) {
+    try {
+      const { recordMarketingCampaignMetric } = await import("./_marketing-campaign-queue.js");
+      const metric = await recordMarketingCampaignMetric(
+        record.relatedId,
+        status,
+        `delivery:${record?.provider || "unknown"}:${item?.id || record?.messageId || record?.id}:${status}`,
+      );
+      if (!metric?.ok) throw new Error(metric?.error || "campaign_metric_save_failed");
+    } catch (error) {
+      throw new Error(error?.message || "campaign_metric_save_failed");
+    }
+  }
+}
+
 export async function registerEmailDelivery({ args = {}, result = {} } = {}) {
   const now = new Date();
   const messageId = canonicalMessageId(result?.messageId);
-  const existing = messageId ? await getRecordByMessageId(messageId) : null;
+  const existingRead = messageId ? await readRecordByMessageId(messageId) : { ok: true, record: null };
+  if (!existingRead.ok) return null;
+  const existing = existingRead.record;
   const recipients = normalizeRecipients(args.to);
   const requestedStatus = DELIVERY_STATUSES.includes(result?.status) ? result.status : "";
   const status = requestedStatus || (result?.ok ? (result?.scheduled ? "scheduled" : "sent") : "failed");
@@ -311,17 +423,25 @@ export async function applySmtp2goWebhookEvent(event) {
   if (!incoming) return { ok: true, ignored: true };
   const safeEventId = smtp2goEventKey(event, eventName);
   const lockKey = SMTP2GO_EVENT_PREFIX + safeEventId;
-  const locked = await redisCmd(["SET", lockKey, "processing", "NX", "EX", "300"]);
-  if (locked !== "OK") return { ok: true, duplicate: true };
+  const lease = await acquireEventLease(lockKey);
+  if (lease.duplicate) return { ok: true, duplicate: true };
+  if (!lease.ok) return lease;
   try {
     const senderMessageId = canonicalMessageId(event?.["message-id"] || event?.message_id);
     const providerMessageId = canonicalMessageId(event?.email_id);
-    let record = await getRecordByMessageId(senderMessageId);
-    if (!record && providerMessageId) record = await getRecordByMessageId(providerMessageId);
+    let lookup = await readRecordByMessageId(senderMessageId);
+    if (!lookup.ok) throw new Error("delivery_lookup_failed");
+    let record = lookup.record;
+    if (!record && providerMessageId) {
+      lookup = await readRecordByMessageId(providerMessageId);
+      if (!lookup.ok) throw new Error("delivery_lookup_failed");
+      record = lookup.record;
+    }
     const now = new Date();
     const item = smtp2goEventItem(event, safeEventId);
     const recipients = normalizeRecipients(event?.rcpt || event?.recipients);
     const createdAt = normalizeEventTime(event?.sendtime, now);
+    const previousStatus = record?.status || "";
     record = {
       ...(record || {}),
       id: record?.id || makeDeliveryId(),
@@ -345,11 +465,13 @@ export async function applySmtp2goWebhookEvent(event) {
     };
     const saved = await persistRecord(record);
     if (!saved) throw new Error("delivery_save_failed");
-    await redisCmd(["SET", lockKey, "1", "EX", String(EVENT_TTL_SECONDS)]);
+    await appendDeliveryBusinessTrace(record, item);
+    await applyRecipientFeedback(record, item, previousStatus);
+    if (!await completeEventLease(lockKey, lease.token)) throw new Error("event_completion_failed");
     return { ok: true, record };
   } catch (error) {
-    await redisCmd(["DEL", lockKey]);
-    return { ok: false, error: clean(error?.message || "delivery_event_failed", 160) };
+    await releaseEventLease(lockKey, lease.token);
+    return { ok: false, retryable: true, error: clean(error?.message || "delivery_event_failed", 160) };
   }
 }
 
@@ -417,17 +539,25 @@ export async function applyBrevoWebhookEvent(event) {
   if (!incoming) return { ok: true, ignored: true };
   const safeEventId = brevoEventKey(event, eventName);
   const lockKey = BREVO_EVENT_PREFIX + safeEventId;
-  const locked = await redisCmd(["SET", lockKey, "processing", "NX", "EX", "300"]);
-  if (locked !== "OK") return { ok: true, duplicate: true };
+  const lease = await acquireEventLease(lockKey);
+  if (lease.duplicate) return { ok: true, duplicate: true };
+  if (!lease.ok) return lease;
   try {
     const senderMessageId = brevoCustomMessageId(event);
     const providerMessageId = canonicalMessageId(event?.["message-id"] || event?.messageId);
-    let record = senderMessageId ? await getRecordByMessageId(senderMessageId) : null;
-    if (!record && providerMessageId) record = await getRecordByMessageId(providerMessageId);
+    let lookup = senderMessageId ? await readRecordByMessageId(senderMessageId) : { ok: true, record: null };
+    if (!lookup.ok) throw new Error("delivery_lookup_failed");
+    let record = lookup.record;
+    if (!record && providerMessageId) {
+      lookup = await readRecordByMessageId(providerMessageId);
+      if (!lookup.ok) throw new Error("delivery_lookup_failed");
+      record = lookup.record;
+    }
     const now = new Date();
     const item = brevoEventItem(event, safeEventId);
     const recipients = normalizeRecipients(event?.email || event?.to);
     const createdAt = normalizeEventTime(event?.ts || event?.ts_event || event?.date, now);
+    const previousStatus = record?.status || "";
     record = {
       ...(record || {}),
       id: record?.id || makeDeliveryId(),
@@ -454,11 +584,13 @@ export async function applyBrevoWebhookEvent(event) {
     };
     const saved = await persistRecord(record);
     if (!saved) throw new Error("delivery_save_failed");
-    await redisCmd(["SET", lockKey, "1", "EX", String(EVENT_TTL_SECONDS)]);
+    await appendDeliveryBusinessTrace(record, item);
+    await applyRecipientFeedback(record, item, previousStatus);
+    if (!await completeEventLease(lockKey, lease.token)) throw new Error("event_completion_failed");
     return { ok: true, record };
   } catch (error) {
-    await redisCmd(["DEL", lockKey]);
-    return { ok: false, error: clean(error?.message || "delivery_event_failed", 160) };
+    await releaseEventLease(lockKey, lease.token);
+    return { ok: false, retryable: true, error: clean(error?.message || "delivery_event_failed", 160) };
   }
 }
 
@@ -488,16 +620,20 @@ export async function applyResendWebhookEvent(event, eventId) {
   const safeEventId = clean(eventId, 160);
   if (!safeEventId || !String(event?.type || "").startsWith("email.")) return { ok: true, ignored: true };
   const lockKey = DELIVERY_EVENT_PREFIX + safeEventId;
-  const locked = await redisCmd(["SET", lockKey, "processing", "NX", "EX", "300"]);
-  if (locked !== "OK") return { ok: true, duplicate: true };
+  const lease = await acquireEventLease(lockKey);
+  if (lease.duplicate) return { ok: true, duplicate: true };
+  if (!lease.ok) return lease;
   try {
     const messageId = canonicalMessageId(event?.data?.email_id || event?.data?.message_id);
-    let record = await getRecordByMessageId(messageId);
+    const lookup = await readRecordByMessageId(messageId);
+    if (!lookup.ok) throw new Error("delivery_lookup_failed");
+    let record = lookup.record;
     const now = new Date();
     const incoming = EVENT_STATUS[event.type] || "";
     const tags = event?.data?.tags && typeof event.data.tags === "object" ? event.data.tags : {};
     const recipients = normalizeRecipients(event?.data?.to);
     const item = eventItem(event, safeEventId);
+    const previousStatus = record?.status || "";
     record = {
       ...(record || {}),
       id: record?.id || makeDeliveryId(),
@@ -520,19 +656,28 @@ export async function applyResendWebhookEvent(event, eventId) {
     };
     const saved = await persistRecord(record);
     if (!saved) throw new Error("delivery_save_failed");
-    await redisCmd(["SET", lockKey, "1", "EX", String(EVENT_TTL_SECONDS)]);
+    await appendDeliveryBusinessTrace(record, item);
+    await applyRecipientFeedback(record, item, previousStatus);
+    if (!await completeEventLease(lockKey, lease.token)) throw new Error("event_completion_failed");
     return { ok: true, record };
   } catch (error) {
-    await redisCmd(["DEL", lockKey]);
-    return { ok: false, error: clean(error?.message || "delivery_event_failed", 160) };
+    await releaseEventLease(lockKey, lease.token);
+    return { ok: false, retryable: true, error: clean(error?.message || "delivery_event_failed", 160) };
   }
 }
 
 export async function listEmailDeliveries({ query = "", status = "all", category = "all", limit = 100 } = {}) {
   const ids = await redisCmd(["ZREVRANGE", DELIVERY_INDEX_KEY, "0", "499"]);
-  if (!Array.isArray(ids) || !ids.length) return { records: [], counts: {}, total: 0 };
-  const rows = pipelineRows(await redisPipeline(ids.map((id) => ["GET", recordKey(id)])));
-  const records = reconcileDeliveryStatuses(rows.map(parseJson).filter(Boolean));
+  if (!Array.isArray(ids)) return { ok: false, error: "storage_failed", records: [], counts: {}, total: 0 };
+  if (!ids.length) return { ok: true, records: [], counts: {}, total: 0 };
+  const commands = [...ids.map((id) => ["GET", recordKey(id)]), ["PING"]];
+  const rows = checkedPipelineRows(await redisPipeline(commands), commands.length);
+  if (!rows || rows.at(-1) !== "PONG") return { ok: false, error: "storage_failed", records: [], counts: {}, total: 0 };
+  const parsedRows = rows.slice(0, -1).map((row) => (row == null ? null : parseJson(row)));
+  if (parsedRows.some((record, index) => rows[index] != null && (!record || typeof record !== "object" || Array.isArray(record)))) {
+    return { ok: false, error: "storage_failed", records: [], counts: {}, total: 0 };
+  }
+  const records = reconcileDeliveryStatuses(parsedRows.filter(Boolean));
   const counts = records.reduce((out, record) => {
     out[record.status || "sent"] = (out[record.status || "sent"] || 0) + 1;
     return out;
@@ -545,11 +690,22 @@ export async function listEmailDeliveries({ query = "", status = "all", category
     return [record.to, record.subject, record.relatedId, record.category, record.provider, record.primaryProvider]
       .join(" ").toLowerCase().includes(needle);
   });
-  return { records: filtered.slice(0, Math.max(1, Math.min(300, Number(limit || 100)))), counts, total: filtered.length };
+  return { ok: true, records: filtered.slice(0, Math.max(1, Math.min(300, Number(limit || 100)))), counts, total: filtered.length };
 }
 
 export async function getEmailDelivery(id) {
-  return parseJson(await redisCmd(["GET", recordKey(id)]));
+  const commands = [["GET", recordKey(id)], ["PING"]];
+  const rows = checkedPipelineRows(await redisPipeline(commands), commands.length);
+  if (!rows || rows[1] !== "PONG") return { ok: false, error: "storage_failed", record: null };
+  const record = rows[0] == null ? null : parseJson(rows[0]);
+  if (rows[0] != null && (!record || typeof record !== "object" || Array.isArray(record))) {
+    return { ok: false, error: "storage_failed", record: null };
+  }
+  return { ok: true, record };
+}
+
+export async function readEmailDeliveryByMessageId(messageId) {
+  return readRecordByMessageId(messageId);
 }
 
 export const mailDeliveryInternals = {

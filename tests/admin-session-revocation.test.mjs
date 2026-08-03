@@ -264,7 +264,7 @@ function deferNextStaffMutation(state) {
 }
 
 async function loadMiddleware() {
-  let source = await fs.readFile(new URL("../middleware.js", import.meta.url), "utf8");
+  let source = await fs.readFile(new URL("../proxy.js", import.meta.url), "utf8");
   const nextServerUrl = pathToFileURL(process.cwd() + "/node_modules/next/server.js").href;
   source = source.replace('from "next/server"', `from ${JSON.stringify(nextServerUrl)}`);
   return import("data:text/javascript;base64," + Buffer.from(source).toString("base64"));
@@ -280,7 +280,7 @@ function adminRequest(path, token, method = "GET") {
 test("admin logout durably revokes a copied JWT before clearing the cookie", async (t) => {
   const redis = installFakeRedis();
   t.after(() => redis.restore());
-  const { middleware } = await loadMiddleware();
+  const { proxy: middleware } = await loadMiddleware();
   const issuedAt = Date.now() - 1_000;
   const copiedToken = utils.signSession({
     role: "admin",
@@ -315,9 +315,19 @@ test("admin logout durably revokes a copied JWT before clearing the cookie", asy
   assert.equal(diagnosticReplay.status, 401);
 });
 
-test("configured Redis revocation failures fail closed without locking the login endpoint", async (t) => {
+test("admin kick lookup outages warn and fail open by default while durable auth operations stay strict", async (t) => {
   const redis = installFakeRedis();
   t.after(() => redis.restore());
+  const previousKickPolicy = process.env.ADMIN_KICK_CHECK_FAIL_CLOSED;
+  delete process.env.ADMIN_KICK_CHECK_FAIL_CLOSED;
+  const originalWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args.join(" "));
+  t.after(() => {
+    console.warn = originalWarn;
+    if (previousKickPolicy === undefined) delete process.env.ADMIN_KICK_CHECK_FAIL_CLOSED;
+    else process.env.ADMIN_KICK_CHECK_FAIL_CLOSED = previousKickPolicy;
+  });
   const previousAdminUsername = process.env.ADMIN_USERNAME;
   const previousAdminPassword = process.env.ADMIN_PASSWORD;
   const previous2faDisable = process.env.ADMIN_2FA_DISABLE;
@@ -332,7 +342,7 @@ test("configured Redis revocation failures fail closed without locking the login
     if (previous2faDisable === undefined) delete process.env.ADMIN_2FA_DISABLE;
     else process.env.ADMIN_2FA_DISABLE = previous2faDisable;
   });
-  const { middleware } = await loadMiddleware();
+  const { proxy: middleware } = await loadMiddleware();
   const token = utils.signSession({
     role: "admin",
     staffId: 1,
@@ -343,12 +353,14 @@ test("configured Redis revocation failures fail closed without locking the login
 
   redis.state.failGet = true;
   const protectedResponse = await middleware(adminRequest("/api/admin/health", token));
-  assert.equal(protectedResponse.status, 503);
-  assert.deepEqual(await protectedResponse.json(), { ok: false, error: "session_store_unavailable" });
+  assert.equal(protectedResponse.status, 200);
+  assert.equal(protectedResponse.headers.get("x-middleware-next"), "1");
   const loginLogResponse = await middleware(adminRequest("/api/admin/login-log", token));
-  assert.equal(loginLogResponse.status, 503);
+  assert.equal(loginLogResponse.status, 200);
   const diagnosticResponse = await middleware(adminRequest("/api/test-email", token, "POST"));
-  assert.equal(diagnosticResponse.status, 503);
+  assert.equal(diagnosticResponse.status, 200);
+  assert.ok(warnings.some((entry) => entry.includes("admin_session_revocation_check_unavailable")));
+  assert.ok(warnings.some((entry) => entry.includes("redis_http_error")));
 
   const loginWhileConfiguredStoreIsDown = await loginRoute.POST(new Request("https://www.liumeiti.vip/api/admin/login", {
     method: "POST",
@@ -362,20 +374,31 @@ test("configured Redis revocation failures fail closed without locking the login
   const redisToken = process.env.KV_REST_API_TOKEN;
   delete process.env.KV_REST_API_TOKEN;
   const partialConfigResponse = await middleware(adminRequest("/api/admin/health", token));
-  assert.equal(partialConfigResponse.status, 503);
+  assert.equal(partialConfigResponse.status, 200);
+  assert.equal(partialConfigResponse.headers.get("x-middleware-next"), "1");
   process.env.KV_REST_API_TOKEN = redisToken;
 
   const redisUrl = process.env.KV_REST_API_URL;
   delete process.env.KV_REST_API_URL;
   delete process.env.KV_REST_API_TOKEN;
   const missingConfigResponse = await middleware(adminRequest("/api/admin/health", token));
-  assert.equal(missingConfigResponse.status, 503);
+  assert.equal(missingConfigResponse.status, 200);
+  assert.equal(missingConfigResponse.headers.get("x-middleware-next"), "1");
+  assert.ok(warnings.some((entry) => entry.includes("redis_configuration_missing")));
   const missingConfigLogin = await loginRoute.POST(new Request("https://www.liumeiti.vip/api/admin/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ username: "root-admin", password: "root-password-strong" }),
   }));
   assert.equal(missingConfigLogin.status, 503);
+  process.env.ADMIN_KICK_CHECK_FAIL_CLOSED = "1";
+  const explicitlyStrictResponse = await middleware(adminRequest("/api/admin/health", token));
+  assert.equal(explicitlyStrictResponse.status, 503);
+  assert.deepEqual(await explicitlyStrictResponse.json(), {
+    ok: false,
+    error: "session_store_unavailable",
+  });
+  delete process.env.ADMIN_KICK_CHECK_FAIL_CLOSED;
   process.env.KV_REST_API_URL = redisUrl;
   process.env.KV_REST_API_TOKEN = redisToken;
 
@@ -536,7 +559,7 @@ test("a mutation carrying old t0 but committing after issuance cannot preserve t
   }];
   const redis = installFakeRedis({ [STAFF_KEY]: JSON.stringify(staff) });
   t.after(() => redis.restore());
-  const { middleware } = await loadMiddleware();
+  const { proxy: middleware } = await loadMiddleware();
   const delayed = deferNextStaffMutation(redis.state);
   const mutationPromise = utils.updateAdminStaff(
     2,

@@ -9,14 +9,17 @@ import {
   redisConfig,
   setOrderAt,
 } from "../_utils.js";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 const TICKET_PREFIX = "liumeiti:after-sales:record:";
 const ACTIVE_ORDER_PREFIX = "liumeiti:after-sales:active:";
 const ALL_INDEX = "liumeiti:after-sales:index";
 const PENDING_INDEX = "liumeiti:after-sales:status:pending";
 const COMPLETED_INDEX = "liumeiti:after-sales:status:completed";
+const CREATION_OUTBOX_INDEX = "liumeiti:after-sales:creation-outbox";
 const COMPLETION_OUTBOX_INDEX = "liumeiti:after-sales:completion-outbox";
+const CREATION_OUTBOX_BACKFILL_CURSOR = "liumeiti:after-sales:creation-outbox:backfill:v1";
+const CREATION_OUTBOX_BACKFILL_LOCK = "liumeiti:after-sales:creation-outbox:backfill-lock:v1";
 const COMPLETE_LOCK_PREFIX = "liumeiti:after-sales:complete-lock:";
 const CREDENTIAL_SERVICES = new Set(["spotify", "ai", "netflix", "disney", "max"]);
 
@@ -40,6 +43,7 @@ redis.call('SET',KEYS[1],ARGV[1])
 redis.call('ZADD',KEYS[3],ARGV[2],ARGV[3])
 redis.call('ZADD',KEYS[4],ARGV[2],ARGV[3])
 redis.call('ZREM',KEYS[5],ARGV[3])
+redis.call('ZADD',KEYS[6],ARGV[2],ARGV[3])
 redis.call('SET',KEYS[2],ARGV[3])
 return cjson.encode({ok=true})`;
 
@@ -71,6 +75,7 @@ if not ok or type(ticket)~='table' or tostring(ticket.ticketId or '')~=ARGV[1] t
 ticket.creationEffectsPending=false
 ticket.creationEffectsCompletedAt=ARGV[2]
 redis.call('SET',KEYS[1],cjson.encode(ticket))
+redis.call('ZREM',KEYS[2],ARGV[1])
 return 1`;
 
 const REPAIR_COMPLETED_TICKET_SCRIPT = `
@@ -79,6 +84,7 @@ redis.call('ZREM',KEYS[2],ARGV[2])
 redis.call('ZADD',KEYS[3],ARGV[1],ARGV[2])
 if ARGV[3]=='1' then redis.call('ZADD',KEYS[4],ARGV[4],ARGV[2]) else redis.call('ZREM',KEYS[4],ARGV[2]) end
 if redis.call('GET',KEYS[5])==ARGV[2] then redis.call('DEL',KEYS[5]) end
+if ARGV[5]=='1' then redis.call('ZADD',KEYS[6],ARGV[1],ARGV[2]) else redis.call('ZREM',KEYS[6],ARGV[2]) end
 return 1`;
 
 function normalizeId(value, limit = 100) {
@@ -186,31 +192,64 @@ function isCredentialService(service) {
   return CREDENTIAL_SERVICES.has(clean(service, 40).toLowerCase());
 }
 
+function orderCredentialItems(order) {
+  if (Array.isArray(order?.items) && order.items.length) return order.items;
+  if (!order) return [];
+  return [{
+    service: order.service || "",
+    account: order.account || "",
+    password: order.password || "",
+    staffAccount: order.staffAccount || "",
+    staffPassword: order.staffPassword || "",
+  }];
+}
+
+function orderCredentialFingerprint(order) {
+  if (!order) return "";
+  const snapshot = orderCredentialItems(order).map((item, index) => ({
+    index,
+    service: clean(item?.service, 40).toLowerCase(),
+    account: clean(item?.account, 80),
+    password: clean(item?.password, 120),
+    staffAccount: clean(item?.staffAccount, 80),
+    staffPassword: clean(item?.staffPassword, 120),
+  }));
+  return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+}
+
 export async function hydrateAfterSalesTicketCredentials(ticket) {
   if (!ticket) return null;
+  if (ticket.status !== "pending") return ticket;
   const order = await getOrderById(ticket.orderId);
-  const orderItems = Array.isArray(order?.items) && order.items.length
-    ? order.items
-    : order
-      ? [{
-          service: order.service || "",
-          account: order.staffAccount || order.account || "",
-          password: order.staffPassword || order.password || "",
-        }]
-      : [];
+  const orderItems = orderCredentialItems(order);
   return {
     ...ticket,
+    credentialOrderHash: orderCredentialFingerprint(order),
     items: (Array.isArray(ticket.items) ? ticket.items : []).map((item, arrayIndex) => {
       const index = Number.isFinite(Number(item?.index)) ? Number(item.index) : arrayIndex;
       const source = orderItems[index] || {};
       const credentialManaged = Boolean(item.credentialManaged || isCredentialService(item.service || source.service));
       if (!credentialManaged) return { ...item, index };
+      const service = clean(item.service || source.service, 40).toLowerCase();
+      const currentAccount = clean(source.staffAccount || source.account, 80);
+      const currentPassword = clean(source.staffPassword || source.password, 120);
+      // Spotify credentials are explicitly editable in the customer ticket
+      // form, so its submitted values are intentional. Other credential
+      // services are hidden from that form: their stored values are only a
+      // creation-time snapshot and must not overwrite a newer order value.
+      const customerSubmitted = item.customerCredentialEditable === true || service === "spotify";
       return {
         ...item,
         index,
         credentialManaged: true,
-        account: clean(item.account || source.staffAccount || source.account, 80),
-        password: clean(item.password || source.staffPassword || source.password, 120),
+        customerCredentialEditable: customerSubmitted,
+        submittedAccount: clean(item.account, 80),
+        submittedPassword: clean(item.password, 120),
+        currentAccount,
+        currentPassword,
+        account: customerSubmitted ? clean(item.account || currentAccount, 80) : currentAccount,
+        password: customerSubmitted ? clean(item.password || currentPassword, 120) : currentPassword,
+        applyCredentialsByDefault: customerSubmitted,
       };
     }),
   };
@@ -226,8 +265,8 @@ export async function createAfterSalesTicket(ticket) {
   const score = createdScore(ticket);
   const normalized = { ...ticket, ticketId, orderId, creationEffectsPending: true };
   const raw = await redisCmd([
-    "EVAL", CREATE_TICKET_SCRIPT, "5",
-    ticketKey(ticketId), activeKey, ALL_INDEX, PENDING_INDEX, COMPLETED_INDEX,
+    "EVAL", CREATE_TICKET_SCRIPT, "6",
+    ticketKey(ticketId), activeKey, ALL_INDEX, PENDING_INDEX, COMPLETED_INDEX, CREATION_OUTBOX_INDEX,
     JSON.stringify(normalized), String(score), ticketId, orderId, TICKET_PREFIX,
   ]);
   let result = null;
@@ -250,23 +289,33 @@ function mergeCompletionItems(ticket, updates) {
     const index = Number.isFinite(Number(item?.index)) ? Number(item.index) : arrayIndex;
     const hasCredentials = Boolean(item?.credentialManaged || isCredentialService(item?.service) || item?.account || item?.password);
     if (!hasCredentials) return { ...item, index };
+    const hasUpdate = submitted.has(index);
     const update = submitted.get(index) || {};
+    const {
+      submittedAccount: _submittedAccount,
+      submittedPassword: _submittedPassword,
+      currentAccount: _currentAccount,
+      currentPassword: _currentPassword,
+      applyCredentialsByDefault: _applyCredentialsByDefault,
+      ...storedItem
+    } = item;
     return {
-      ...item,
+      ...storedItem,
       index,
       credentialManaged: true,
       account: clean(update.account ?? item.account, 80),
       password: clean(update.password ?? item.password, 120),
+      credentialsApplied: hasUpdate,
     };
   });
-  if (items.some((item) => (item.account || item.password) && (!item.account || !item.password))) {
+  if (items.some((item) => item.credentialsApplied && (!item.account || !item.password))) {
     return { ok: false, error: "missing_credentials" };
   }
   return { ok: true, items };
 }
 
-async function syncOrderCredentials(ticket, items, actor, operationId = "", requestHash = "") {
-  const credentialItems = items.filter((item) => item.credentialManaged && item.account && item.password);
+async function syncOrderCredentials(ticket, items, actor, operationId = "", requestHash = "", expectedCredentialHash = "") {
+  const credentialItems = items.filter((item) => item.credentialsApplied && item.credentialManaged && item.account && item.password);
   if (!credentialItems.length) return { ok: true };
 
   const orderEntry = await getOrderEntryById(ticket.orderId);
@@ -288,6 +337,10 @@ async function syncOrderCredentials(ticket, items, actor, operationId = "", requ
   // The marker and credentials are part of the same order CAS write. A crash
   // after that write therefore resumes without a second revision/audit entry.
   if (stableOperation && processedSyncs.includes(stableOperation)) return { ok: true, idempotent: true };
+  const stableCredentialHash = clean(expectedCredentialHash, 80);
+  if (stableCredentialHash && orderCredentialFingerprint(order) !== stableCredentialHash) {
+    return { ok: false, error: "stale_order_credentials" };
+  }
   const expectedRevision = Number(order.revision ?? 0);
   if (!Array.isArray(order.items) || !order.items.length) {
     const source = credentialItems[0] || items[0] || {};
@@ -321,18 +374,16 @@ async function syncOrderCredentials(ticket, items, actor, operationId = "", requ
     }
   }
 
-  if (order.items.length === 1 && credentialItems.length === 1) {
-    const item = credentialItems[0];
-    const service = clean(item.service || order.items[0]?.service || order.service, 40).toLowerCase();
-    if (service === "spotify") {
-      order.account = item.account;
-      order.password = item.password;
-      order.staffAccount = "";
-      order.staffPassword = "";
-    } else {
-      order.staffAccount = item.account;
-      order.staffPassword = item.password;
-    }
+  if (order.items.length > 0) {
+    // Top-level compatibility fields are always a mirror of items[0], not a
+    // bundle-wide credential. Rebuild the mirror in the same CAS write after
+    // any after-sales credential update so older readers cannot retain stale
+    // values when the first item belongs to a multi-item order.
+    const primaryItem = order.items[0];
+    order.account = primaryItem?.account || "";
+    order.password = primaryItem?.password || "";
+    order.staffAccount = primaryItem?.staffAccount || "";
+    order.staffPassword = primaryItem?.staffPassword || "";
   }
   const now = new Date();
   order.staffAudit = Array.isArray(order.staffAudit) ? order.staffAudit : [];
@@ -376,7 +427,14 @@ async function syncOrderCredentials(ticket, items, actor, operationId = "", requ
         && !target.staffPassword
       : target.staffAccount === item.account && target.staffPassword === item.password;
   });
-  return credentialsMatch ? { ok: true } : { ok: false, error: "order_sync_failed" };
+  const persistedPrimary = persistedItems[0] || {};
+  const primaryMirrorMatches = Boolean(persisted) && (
+    (persisted.account || "") === (persistedPrimary.account || "")
+    && (persisted.password || "") === (persistedPrimary.password || "")
+    && (persisted.staffAccount || "") === (persistedPrimary.staffAccount || "")
+    && (persisted.staffPassword || "") === (persistedPrimary.staffPassword || "")
+  );
+  return credentialsMatch && primaryMirrorMatches ? { ok: true } : { ok: false, error: "order_sync_failed" };
 }
 
 export async function completeAfterSalesTicket(ticketId, completion, actor) {
@@ -400,9 +458,9 @@ export async function completeAfterSalesTicket(ticketId, completion, actor) {
       }
       if (owned) {
         await redisCmd([
-          "EVAL", REPAIR_COMPLETED_TICKET_SCRIPT, "5",
-          ALL_INDEX, PENDING_INDEX, COMPLETED_INDEX, COMPLETION_OUTBOX_INDEX, activeOrderKey(ticket.orderId),
-          String(createdScore(ticket)), ticket.ticketId, ticket.completionEffectsPending ? "1" : "0", String(Date.now()),
+          "EVAL", REPAIR_COMPLETED_TICKET_SCRIPT, "6",
+          ALL_INDEX, PENDING_INDEX, COMPLETED_INDEX, COMPLETION_OUTBOX_INDEX, activeOrderKey(ticket.orderId), CREATION_OUTBOX_INDEX,
+          String(createdScore(ticket)), ticket.ticketId, ticket.completionEffectsPending ? "1" : "0", String(Date.now()), ticket.creationEffectsPending !== false ? "1" : "0",
         ]);
       }
       return { ok: true, ticket, changed: false, owned };
@@ -411,12 +469,20 @@ export async function completeAfterSalesTicket(ticketId, completion, actor) {
 
     const merged = mergeCompletionItems(ticket, payload.items);
     if (!merged.ok) return merged;
-    const synced = await syncOrderCredentials(ticket, merged.items, actor, completionOperationId, completionRequestHash);
+    const synced = await syncOrderCredentials(
+      ticket,
+      merged.items,
+      actor,
+      completionOperationId,
+      completionRequestHash,
+      payload.credentialOrderHash,
+    );
     if (!synced.ok) return synced;
 
     const now = new Date();
+    const { credentialOrderHash: _credentialOrderHash, ...ticketRecord } = ticket;
     const completed = {
-      ...ticket,
+      ...ticketRecord,
       status: "completed",
       items: merged.items,
       staffNote: clean(payload.staffNote, 2000),
@@ -452,17 +518,74 @@ export async function getAfterSalesCompletionOutbox(limit = 30) {
   return getTicketsByIds(ids);
 }
 
+export async function backfillAfterSalesCreationOutbox(batchSize = 200) {
+  const savedCursor = await redisCmd(["GET", CREATION_OUTBOX_BACKFILL_CURSOR]);
+  if (savedCursor === "done") return { ok: true, done: true, processed: 0, indexed: 0 };
+  const token = randomBytes(10).toString("hex");
+  const locked = await redisCmd(["SET", CREATION_OUTBOX_BACKFILL_LOCK, token, "NX", "EX", "30"]);
+  if (locked !== "OK") {
+    const existingLock = await redisCmd(["GET", CREATION_OUTBOX_BACKFILL_LOCK]);
+    return existingLock
+      ? { ok: true, skipped: true, reason: "backfill_busy", processed: 0, indexed: 0 }
+      : { ok: false, error: "creation_outbox_backfill_lock_unavailable", processed: 0, indexed: 0 };
+  }
+  try {
+    const safeBatch = Math.max(1, Math.min(500, Number(batchSize || 200)));
+    const cursor = Math.max(0, Number(savedCursor || 0));
+    const ids = await redisCmd(["ZRANGE", ALL_INDEX, String(cursor), String(cursor + safeBatch - 1)]);
+    const safeIds = Array.isArray(ids) ? ids.map((id) => normalizeId(id)).filter(Boolean) : [];
+    const rawRows = safeIds.length ? pipelineRows(await redisPipeline(safeIds.map((id) => ["GET", ticketKey(id)]))) : [];
+    const commands = [];
+    let indexed = 0;
+    safeIds.forEach((id, index) => {
+      const ticket = parseRecord(pipelineValue(rawRows[index]));
+      if (ticket && ticket.creationEffectsPending !== false) {
+        commands.push(["ZADD", CREATION_OUTBOX_INDEX, String(createdScore(ticket)), id]);
+        indexed += 1;
+      } else {
+        commands.push(["ZREM", CREATION_OUTBOX_INDEX, id]);
+      }
+    });
+    if (commands.length) await redisPipeline(commands);
+    const total = Math.max(0, Number(await redisCmd(["ZCARD", ALL_INDEX]) || 0));
+    const nextCursor = cursor + safeIds.length;
+    const done = !safeIds.length || nextCursor >= total;
+    await redisCmd(["SET", CREATION_OUTBOX_BACKFILL_CURSOR, done ? "done" : String(nextCursor)]);
+    return { ok: true, done, processed: safeIds.length, indexed, cursor: nextCursor, total };
+  } finally {
+    await compareDelete(CREATION_OUTBOX_BACKFILL_LOCK, token);
+  }
+}
+
 export async function getAfterSalesCreationOutbox(limit = 30) {
   const safeLimit = Math.max(1, Math.min(100, Number(limit || 30)));
-  const ids = await redisCmd(["ZREVRANGE", PENDING_INDEX, "0", String(safeLimit - 1)]);
-  return (await getTicketsByIds(ids)).filter((ticket) => ticket.creationEffectsPending !== false);
+  // This incremental migration makes pre-index records enumerable without a
+  // one-shot full scan. New tickets never depend on it because creation and
+  // outbox insertion share the same Lua transaction above.
+  const backfill = await backfillAfterSalesCreationOutbox();
+  if (backfill?.ok === false) throw new Error(backfill.error || "creation_outbox_backfill_failed");
+  const scanLimit = Math.min(500, Math.max(100, safeLimit * 4));
+  const ids = await redisCmd(["ZRANGE", CREATION_OUTBOX_INDEX, "0", String(scanLimit - 1)]);
+  if (!Array.isArray(ids)) throw new Error("creation_outbox_unavailable");
+  const safeIds = Array.isArray(ids) ? ids.map((id) => normalizeId(id)).filter(Boolean) : [];
+  if (!safeIds.length) return [];
+  const rawRows = pipelineRows(await redisPipeline(safeIds.map((id) => ["GET", ticketKey(id)])));
+  const tickets = [];
+  const staleIds = [];
+  safeIds.forEach((id, index) => {
+    const ticket = parseRecord(pipelineValue(rawRows[index]));
+    if (!ticket || ticket.creationEffectsPending === false) staleIds.push(id);
+    else if (tickets.length < safeLimit) tickets.push(ticket);
+  });
+  if (staleIds.length) await redisPipeline(staleIds.map((id) => ["ZREM", CREATION_OUTBOX_INDEX, id]));
+  return tickets;
 }
 
 export async function markAfterSalesCreationEffectsDone(ticketId) {
   const id = normalizeId(ticketId);
   if (!id) return false;
   return Number(await redisCmd([
-    "EVAL", CREATE_EFFECTS_SCRIPT, "1", ticketKey(id), id, new Date().toISOString(),
+    "EVAL", CREATE_EFFECTS_SCRIPT, "2", ticketKey(id), CREATION_OUTBOX_INDEX, id, new Date().toISOString(),
   ])) === 1;
 }
 

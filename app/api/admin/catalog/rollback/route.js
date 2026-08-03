@@ -8,6 +8,7 @@ import {
 import { getCatalogOverrides, getMergedCatalog } from "../../../_catalog.js";
 import { commitCatalogVersion, getCatalogVersion, listCatalogVersions } from "../../../_catalog-versions.js";
 import { recordHealthStatus } from "../../../_health.js";
+import { withApiTelemetry } from "../../../_observability.js";
 
 export const runtime = "nodejs";
 
@@ -25,7 +26,7 @@ async function catalogWithStock(overrides) {
   }));
 }
 
-export async function POST(request) {
+async function rollbackCatalogHandler(request) {
   if (!gate(request)) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   let body = {};
   try { body = await request.json(); } catch (e) {}
@@ -72,3 +73,5 @@ export async function POST(request) {
     catalog: await catalogWithStock(target.overrides),
   });
 }
+
+export const POST = withApiTelemetry("admin_catalog", rollbackCatalogHandler);

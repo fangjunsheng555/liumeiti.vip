@@ -31,6 +31,17 @@ function compactTime(value) {
   return match ? `${match[1]} ${match[2]}` : value || "未记录";
 }
 
+function credentialDrafts(ticket) {
+  return (ticket?.items || []).map((item, index) => ({
+    index: Number.isFinite(Number(item.index)) ? Number(item.index) : index,
+    service: item.service || "",
+    account: item.account || "",
+    password: item.password || "",
+    editable: Boolean(item.credentialManaged || item.account || item.password),
+    apply: Boolean(item.applyCredentialsByDefault),
+  }));
+}
+
 export default function AfterSalesPanel({ canEdit = false, canSendMail = false, onChanged, onOpenOrder }) {
   const [status, setStatus] = useState("pending");
   const [search, setSearch] = useState("");
@@ -87,12 +98,8 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "detail_failed");
       setActive(data.ticket);
-      setCredentialItems((data.ticket.items || []).map((item, index) => ({
-        index: Number.isFinite(Number(item.index)) ? Number(item.index) : index,
-        account: item.account || "",
-        password: item.password || "",
-        editable: Boolean(item.credentialManaged || item.account || item.password),
-      })));
+      const loadedDrafts = credentialDrafts(data.ticket);
+      setCredentialItems(loadedDrafts);
       setShownPasswords({});
       setStaffNote(data.ticket.staffNote || "");
       setResult(null);
@@ -101,7 +108,11 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
         const pending = readAdminMutationJournals(window.localStorage, "after-sales-complete", data.ticket.ticketId);
         if (pending.ok && pending.records.length === 1) {
           const payload = pending.records[0].record.payload || {};
-          setCredentialItems((Array.isArray(payload.items) ? payload.items : []).map((item) => ({ ...item, editable: true })));
+          const recoveredItems = Array.isArray(payload.items) ? payload.items : [];
+          setCredentialItems(loadedDrafts.map((item) => {
+            const recovered = recoveredItems.find((entry) => Number(entry?.index) === item.index);
+            return recovered ? { ...item, ...recovered, editable: true, apply: true } : item;
+          }));
           setStaffNote(String(payload.staffNote || ""));
           setCompletionRecoveryPending(true);
           setResult({ type: "warning", message: "已恢复上次结果未确认的完成操作，请重试以确认邮件与审计副作用。" });
@@ -118,7 +129,11 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
   }
 
   function updateCredential(index, field, value) {
-    setCredentialItems((items) => items.map((item) => item.index === index ? { ...item, [field]: value } : item));
+    setCredentialItems((items) => items.map((item) => item.index === index ? { ...item, [field]: value, apply: true } : item));
+  }
+
+  function toggleCredentialApply(index) {
+    setCredentialItems((items) => items.map((item) => item.index === index ? { ...item, apply: !item.apply } : item));
   }
 
   async function openRelatedOrder() {
@@ -137,7 +152,7 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
 
   async function completeTicket() {
     if (!active || (active.status !== "pending" && !completionRecoveryPending) || completing || !canEdit) return;
-    if (credentialItems.some((item) => item.editable && (!item.account.trim() || !item.password.trim()))) {
+    if (credentialItems.some((item) => item.editable && item.apply && (!item.account.trim() || !item.password.trim()))) {
       setResult({ type: "error", message: "请完整填写该服务的账号和密码后再完成工单" });
       return;
     }
@@ -148,7 +163,8 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
       const payload = {
         status: "completed",
         staffNote,
-        items: credentialItems.filter((item) => item.editable).map(({ index, account, password }) => ({ index, account, password })),
+        credentialOrderHash: active.credentialOrderHash || "",
+        items: credentialItems.filter((item) => item.editable && item.apply).map(({ index, account, password }) => ({ index, account, password })),
       };
       const pending = prepareAdminMutationJournal(window.localStorage, "after-sales-complete", active.ticketId, payload);
       const operation = pending.record.idempotencyRequest;
@@ -160,6 +176,18 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
       });
       const data = await response.json();
       if (!response.ok || !data.ok) {
+        if (response.status === 409 && data.error === "stale_order_credentials") {
+          clearAdminMutationJournal(window.localStorage, pending.storageKey, operation.key);
+          setCompletionRecoveryPending(false);
+          const refreshedResponse = await fetch(`/api/admin/after-sales/${encodeURIComponent(active.ticketId)}`, { credentials: "same-origin", cache: "no-store" });
+          const refreshed = await refreshedResponse.json();
+          if (refreshedResponse.ok && refreshed.ok) {
+            setActive(refreshed.ticket);
+            setCredentialItems(credentialDrafts(refreshed.ticket));
+          }
+          setResult({ type: "warning", message: "订单凭据已被其他操作更新，已重新载入最新内容；请核对后再次完成工单。" });
+          return;
+        }
         if (isExplicitTerminalIdempotencyResponse(response.status, data)) {
           clearAdminMutationJournal(window.localStorage, pending.storageKey, operation.key);
         }
@@ -170,12 +198,7 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
       clearAdminMutationJournal(window.localStorage, pending.storageKey, operation.key);
       setCompletionRecoveryPending(false);
       setActive(data.ticket);
-      setCredentialItems((data.ticket.items || []).map((item, index) => ({
-        index: Number.isFinite(Number(item.index)) ? Number(item.index) : index,
-        account: item.account || "",
-        password: item.password || "",
-        editable: Boolean(item.credentialManaged || item.account || item.password),
-      })));
+      setCredentialItems(credentialDrafts(data.ticket));
       setStaffNote(data.ticket.staffNote || "");
       setResult(data.changed === false
         ? { type: "success", message: "工单已由其他工作人员完成，未重复发送邮件" }
@@ -297,7 +320,7 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
               </section>
 
               <section className="admin-after-sales-detail-section">
-                <h3>用户提交的服务资料</h3>
+                <h3>本次处理的服务资料</h3>
                 <div className="admin-after-sales-item-list">
                   {(active.items || []).map((item, index) => {
                     const itemIndex = Number.isFinite(Number(item.index)) ? Number(item.index) : index;
@@ -321,6 +344,16 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
                                 </button>
                               </div>
                             </label>
+                            <button
+                              type="button"
+                              className={`admin-after-sales-credential-apply${draft.apply ? " active" : ""}`}
+                              onClick={() => toggleCredentialApply(itemIndex)}
+                              aria-pressed={draft.apply}
+                              disabled={!canEdit || completing}
+                            >
+                              <ShieldCheck size={13} />
+                              {draft.apply ? "完成时写回订单" : "不修改订单凭据"}
+                            </button>
                           </div>
                         ) : hasCredentials ? (
                           <div className="admin-after-sales-item-fields">

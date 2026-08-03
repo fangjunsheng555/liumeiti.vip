@@ -10,7 +10,8 @@ export async function settleAfterSalesCreationEffects(ticket) {
     (stableId) => sendAfterSalesEmail(ticket, "received", { idempotencyKey: stableId }),
   );
   const providerResult = delivery.value && typeof delivery.value === "object" ? delivery.value : null;
-  const email = Boolean(delivery.idempotent || providerResult?.ok);
+  const email = Boolean(delivery.delivered === true || (delivery.idempotent && delivery.delivered !== false));
+  const emailHandled = Boolean(delivery.ok && (email || delivery.terminal || delivery.suppressed || delivery.skipped));
   const timeline = await appendOrderTimelineOnce(ticket.orderId, `after-sales-created:${ticket.ticketId}:timeline`, {
     type: "after_sales_created",
     visibility: "public",
@@ -20,12 +21,14 @@ export async function settleAfterSalesCreationEffects(ticket) {
     meta: { ticketId: ticket.ticketId },
   });
   let settled = false;
-  if (email && timeline) settled = await markAfterSalesCreationEffectsDone(ticket.ticketId);
+  if (emailHandled && timeline) settled = await markAfterSalesCreationEffectsDone(ticket.ticketId);
   return {
     ok: Boolean(timeline),
     email,
+    emailHandled,
+    suppressed: Boolean(delivery.suppressed),
     settled,
-    retryable: !email && !delivery.uncertain && !delivery.pending,
+    retryable: !emailHandled && !delivery.uncertain && !delivery.pending,
     uncertain: Boolean(delivery.uncertain),
     pending: Boolean(delivery.pending),
     error: providerResult?.reason || providerResult?.error || delivery.error || "",

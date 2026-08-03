@@ -85,13 +85,15 @@ function publicOrder(order, type, locale = "zh") {
       return out;
     });
   } else {
+    const account = order.staffAccount || order.account || "";
+    const password = order.staffPassword || order.password || "";
     const it = {
       service: order.service || "",
       label: localizeOrderItemLabel(order.service, order.plan || order.rocketPlan, order.serviceLabel || "", locale),
       cycle: localizeCycle(order.cycle || "", locale),
       amount: Number(order.finalAmount || 0),
-      account: order.account || "",
-      password: order.password || "",
+      account,
+      password,
     };
     if (it.service === "rocket") it.subscriptionLinks = subscriptionLinks(order.orderId);
     items = [it];

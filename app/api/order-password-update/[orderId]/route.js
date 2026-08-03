@@ -13,7 +13,11 @@ import {
 import { appendOrderTimelineOnce } from "../../_order-timeline.js";
 import { deliverOnce } from "../../_delivery-once.js";
 import { idempotencyPayloadHash, requiredIdempotencyKey } from "../../_money.js";
-import { claimDurableOperation, completeDurableOperation } from "../../_durable-operation.js";
+import {
+  claimDurableOperation,
+  completeDurableOperation,
+  durableOperationId,
+} from "../../_durable-operation.js";
 
 const RELEASE_ORDER_LOCK_SCRIPT = "if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) else return 0 end";
 
@@ -68,6 +72,35 @@ function publicDetails(order, item, itemIndex) {
     requestedAtBeijing: item.passwordCorrectionRequestedAtBeijing || "",
     updatedAtBeijing: item.customerPasswordUpdatedAtBeijing || "",
   };
+}
+
+async function repairResolvedPrimaryCredentialMirror(target) {
+  if (!target?.resolved || target.itemIndex !== 0 || !target.entry?.order || !target.item) return target;
+  const order = target.entry.order;
+  const item = target.item;
+  const mirrorMatches = (order.account || "") === (item.account || "")
+    && (order.password || "") === (item.password || "")
+    && (order.staffAccount || "") === (item.staffAccount || "")
+    && (order.staffPassword || "") === (item.staffPassword || "");
+  if (mirrorMatches) return target;
+
+  const expectedRevision = Number(order.revision ?? 0);
+  order.account = item.account || "";
+  order.password = item.password || "";
+  order.staffAccount = item.staffAccount || "";
+  order.staffPassword = item.staffPassword || "";
+  const saved = await setOrderAt(target.entry.index, order, { expectedRevision });
+  if (!saved) return { error: "stale_revision" };
+  const latest = await getOrderEntryById(order.orderId);
+  const latestItem = latest?.order?.items?.[0];
+  if (!latest?.order || !latestItem
+    || (latest.order.account || "") !== (latestItem.account || "")
+    || (latest.order.password || "") !== (latestItem.password || "")
+    || (latest.order.staffAccount || "") !== (latestItem.staffAccount || "")
+    || (latest.order.staffPassword || "") !== (latestItem.staffPassword || "")) {
+    return { error: "save_failed" };
+  }
+  return { ...target, entry: latest, item: latestItem };
 }
 
 async function notifySpotifyDetailsUpdated(order, item) {
@@ -154,14 +187,34 @@ export async function PATCH(request, { params }) {
   if (locked !== "OK") return Response.json({ ok: false, error: "order_update_busy" }, { status: 409 });
 
   try {
-    const target = await findTarget(orderId, token);
+    let target = await findTarget(orderId, token);
     if (target.error) {
       const status = target.error === "order_not_found" ? 404 : target.error === "order_invalid" ? 409 : 401;
       return Response.json({ ok: false, error: target.error }, { status });
     }
+    const operationPrincipal = `${orderId}:${createHash("sha256").update(token).digest("hex")}`;
+    const expectedOperationId = durableOperationId({
+      scope: "spotify-password-update",
+      principal: operationPrincipal,
+      idempotencyKey: idempotency.key,
+    });
+
+    // Reject a new submission before claiming its durable operation. Claiming
+    // first would leave a permanent `started` record in the recovery queue for
+    // every expected 410 response. The original key still matches the commit
+    // marker and may resume after a crash or lost response.
+    if (target.resolved
+      && target.item.passwordCorrectionResolvedOperationId !== expectedOperationId) {
+      return Response.json({ ok: false, error: "update_link_used" }, { status: 410 });
+    }
+    target = await repairResolvedPrimaryCredentialMirror(target);
+    if (target.error) {
+      const status = target.error === "stale_revision" ? 409 : 500;
+      return Response.json({ ok: false, error: target.error }, { status });
+    }
     const operation = await claimDurableOperation({
       scope: "spotify-password-update",
-      principal: `${orderId}:${createHash("sha256").update(token).digest("hex")}`,
+      principal: operationPrincipal,
       idempotencyKey: idempotency.key,
       requestHash,
     });
@@ -172,6 +225,15 @@ export async function PATCH(request, { params }) {
     }
     if (operation.state === "done") {
       return Response.json({ ...(operation.record.result || { ok: true }), idempotent: true });
+    }
+
+    // A correction link is single-use. The same idempotency operation may
+    // resume after a lost response, but a new payload/key must never receive a
+    // false success after the resolved-token branch skipped the order write.
+    // The preflight identity and durable-operation implementation must remain
+    // byte-for-byte aligned. Fail closed if that invariant is ever broken.
+    if (operation.operationId !== expectedOperationId) {
+      return Response.json({ ok: false, error: "operation_identity_mismatch" }, { status: 503 });
     }
 
     const { entry, item, itemIndex } = target;
@@ -186,6 +248,15 @@ export async function PATCH(request, { params }) {
       item.password = password;
       item.staffAccount = "";
       item.staffPassword = "";
+      // The legacy top-level fields always mirror items[0], including on
+      // multi-item orders. Keep the mirror in this same CAS write so Telegram,
+      // admin/export readers and the canonical item can never diverge.
+      if (itemIndex === 0) {
+        entry.order.account = account;
+        entry.order.password = password;
+        entry.order.staffAccount = "";
+        entry.order.staffPassword = "";
+      }
       item.customerPasswordUpdatedAt = now.toISOString();
       item.customerPasswordUpdatedAtBeijing = formatBeijingTime(now);
       item.customerPasswordUpdateCount = Number(item.customerPasswordUpdateCount || 0) + 1;
@@ -207,7 +278,13 @@ export async function PATCH(request, { params }) {
       const latest = await getOrderEntryById(orderId);
       persistedOrder = latest?.order;
       persistedItem = persistedOrder?.items?.[itemIndex];
-      if (!persistedOrder || persistedItem?.passwordCorrectionResolvedOperationId !== operation.operationId) {
+      const primaryMirrorMatches = itemIndex !== 0 || (
+        persistedOrder?.account === account
+        && persistedOrder?.password === password
+        && !persistedOrder?.staffAccount
+        && !persistedOrder?.staffPassword
+      );
+      if (!persistedOrder || persistedItem?.passwordCorrectionResolvedOperationId !== operation.operationId || !primaryMirrorMatches) {
         return Response.json({ ok: false, error: "save_failed" }, { status: 500 });
       }
     }
@@ -219,27 +296,25 @@ export async function PATCH(request, { params }) {
       summaryZh: "用户已提交更新后的 Spotify 登录资料",
       summaryEn: "The customer submitted updated Spotify login details",
       actor: "customer",
-    });
+    }).catch(() => false);
     const logOk = await pushAdminActionLog({
       action: "spotify_customer_details_updated",
       actor: { staffId: 0, staffUsername: "system" },
       target: "order:" + orderId,
       detail: { itemIndex },
       operationId: `${effectOperationId}:admin-log`,
-    });
+    }).catch(() => false);
     const notice = await deliverOnce(
       `spotify-password-updated:${orderId}:${itemIndex}:${effectOperationId}:telegram`,
       () => notifySpotifyDetailsUpdated(persistedOrder, persistedItem),
     );
-    if (!timelineOk || !logOk) {
-      return Response.json({ ok: false, error: "operation_effect_journal_unavailable" }, { status: 503 });
-    }
     const responsePayload = {
       ok: true,
       details: publicDetails(persistedOrder, persistedItem, itemIndex),
       updatedAtBeijing: persistedItem.customerPasswordUpdatedAtBeijing,
       alreadySubmitted: Boolean(target.resolved),
       notification: { ok: Boolean(notice?.ok) },
+      audit: { timelineRecorded: Boolean(timelineOk), adminLogRecorded: Boolean(logOk) },
     };
     const completed = await completeDurableOperation(operation, responsePayload);
     if (!completed.ok) return Response.json({ ok: false, error: completed.error }, { status: 503 });
