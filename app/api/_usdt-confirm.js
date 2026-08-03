@@ -13,6 +13,8 @@ import {
   redisCmd,
 } from "./_utils.js";
 import { deliverOnce } from "./_delivery-once.js";
+import { enqueueOrderPushEvent } from "./_push.js";
+import { appendBusinessTraceEvent } from "./_observability.js";
 
 export const USDT_TRC20_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
 
@@ -188,6 +190,10 @@ function parseConfirmationEffect(raw, expectedKey) {
     amount,
     amountMicros: String(amountMicros),
     email: clean(effect.email, 200),
+    userEmail: clean(effect.userEmail, 254).toLowerCase(),
+    accountLifecycleId: clean(effect.accountLifecycleId, 80).toLowerCase(),
+    locale: effect.locale === "en" ? "en" : "zh",
+    businessTraceId: clean(effect.businessTraceId, 40),
     actor: {
       staffId: Number.isSafeInteger(actorId) && actorId >= 0 ? actorId : 0,
       staffUsername: clean(effect.actor?.staffUsername || "system", 60) || "system",
@@ -251,9 +257,31 @@ export async function dispatchUsdtConfirmationEffect(effectKeyValue, settings = 
       ? { ok: true, skipped: true, reason: "telegram_disabled" }
       : sendTelegram(confirmationNotice(effect))
   ));
+  const push = await enqueueOrderPushEvent({
+    orderId: effect.orderId,
+    userEmail: effect.userEmail,
+    accountLifecycleId: effect.accountLifecycleId,
+    locale: effect.locale,
+  }, "order.payment_confirmed", `usdt:${effect.txId}`)
+    .catch((error) => ({ ok: false, error: error?.message || "push_enqueue_failed" }));
+  await appendBusinessTraceEvent(effect.orderId, {
+    businessTraceId: effect.businessTraceId,
+    stage: "usdt_payment_confirmed",
+    component: "usdt",
+    outcome: "ok",
+    operationId: `usdt:${effect.txId}`,
+  }).catch(() => null);
+  await appendBusinessTraceEvent(effect.orderId, {
+    businessTraceId: effect.businessTraceId,
+    stage: "push_enqueue_payment_confirmed",
+    component: "push",
+    outcome: push.ok === false ? "error" : push.skipped ? "skipped" : "ok",
+    operationId: `usdt:${effect.txId}`,
+    errorCode: push.error || push.reason || "",
+  }).catch(() => null);
 
   const settled = effectDeliverySettled(adminLog) && effectDeliverySettled(telegram);
-  if (!settled) return { ok: false, pending: true, effect, adminLog, telegram };
+  if (!settled) return { ok: false, pending: true, effect, adminLog, telegram, push };
   const removed = await completeConfirmationEffect(effectKey, raw);
   const uncertain = Boolean(adminLog?.uncertain || telegram?.uncertain);
   return {
@@ -263,6 +291,7 @@ export async function dispatchUsdtConfirmationEffect(effectKeyValue, settings = 
     effect,
     adminLog,
     telegram,
+    push,
     ...(removed ? {} : { error: "confirmation_effect_finalize_failed" }),
   };
 }

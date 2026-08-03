@@ -3,6 +3,7 @@ import {
   adminPermissionProfile,
   adminSessionFromRequest,
   clean,
+  getOrderByIdStrict,
   getOrdersByInternalReference,
   normalizeInternalReference,
   pushAdminActionLog,
@@ -18,6 +19,7 @@ import {
   ensureDurableOperationPlan,
 } from "../../../_durable-operation.js";
 import { idempotencyPayloadHash, requiredIdempotencyKey } from "../../../_money.js";
+import { withApiTelemetry } from "../../../_observability.js";
 import { buildReferenceNotificationEmail } from "../reference-notification-email.js";
 import { createHash } from "node:crypto";
 
@@ -40,6 +42,8 @@ function referenceNoticeOrderSnapshot(order) {
   return {
     orderId: clean(order?.orderId, 80).toUpperCase(),
     serviceLabel: clean(order?.serviceLabel, 300),
+    service: clean(order?.service, 80),
+    cycle: clean(order?.cycle, 80),
     locale: order?.locale === "en" ? "en" : "zh",
     remark: clean(order?.remark, 1500),
     staffNotes: clean(order?.staffNotes, 3000),
@@ -47,6 +51,10 @@ function referenceNoticeOrderSnapshot(order) {
     password: clean(order?.password, 300),
     staffAccount: clean(order?.staffAccount, 200),
     staffPassword: clean(order?.staffPassword, 300),
+    subscriptionLinks: order?.subscriptionLinks && typeof order.subscriptionLinks === "object" ? {
+      shadowrocket: clean(order.subscriptionLinks.shadowrocket, 1000),
+      clash: clean(order.subscriptionLinks.clash, 1000),
+    } : null,
     items: (Array.isArray(order?.items) ? order.items : []).map((item) => ({
       label: clean(item?.label, 240),
       cycle: clean(item?.cycle, 80),
@@ -63,6 +71,72 @@ function referenceNoticeOrderSnapshot(order) {
   };
 }
 
+function overlayCurrentOrderCredentials(plannedOrder, currentOrder) {
+  const currentItems = Array.isArray(currentOrder?.items) && currentOrder.items.length
+    ? currentOrder.items
+    : [];
+  const plannedItems = Array.isArray(plannedOrder?.items) ? plannedOrder.items : [];
+  if (plannedItems.length && currentItems.length !== plannedItems.length) return null;
+  return {
+    ...plannedOrder,
+    account: clean(currentOrder?.account, 200),
+    password: clean(currentOrder?.password, 300),
+    staffAccount: clean(currentOrder?.staffAccount, 200),
+    staffPassword: clean(currentOrder?.staffPassword, 300),
+    items: plannedItems.map((item, index) => {
+      const current = currentItems[index];
+      if (!current) return null;
+      return {
+        ...item,
+        account: clean(current.account, 200),
+        password: clean(current.password, 300),
+        staffAccount: clean(current.staffAccount, 200),
+        staffPassword: clean(current.staffPassword, 300),
+        subscriptionLinks: current.subscriptionLinks && typeof current.subscriptionLinks === "object" ? {
+          shadowrocket: clean(current.subscriptionLinks.shadowrocket, 1000),
+          clash: clean(current.subscriptionLinks.clash, 1000),
+        } : null,
+      };
+    }),
+  };
+}
+
+async function currentCredentialSnapshots(recipient, plannedOrders) {
+  const email = String(recipient?.email || "").trim().toLowerCase();
+  const orderIds = Array.isArray(recipient?.orderIds) ? recipient.orderIds : [];
+  if (!validEmail(email) || plannedOrders.length !== orderIds.length) {
+    return { ok: false, terminal: true, error: "reference_notice_plan_invalid" };
+  }
+  try {
+    const currentOrders = await Promise.all(orderIds.map((orderId) => getOrderByIdStrict(orderId)));
+    const currentById = new Map(currentOrders.map((current) => [
+      String(current?.orderId || "").toUpperCase(),
+      current,
+    ]));
+    const plannedIds = new Set(plannedOrders.map((order) => String(order?.orderId || "").toUpperCase()));
+    if (plannedIds.size !== plannedOrders.length
+      || orderIds.some((orderId) => !plannedIds.has(String(orderId || "").toUpperCase()))) {
+      return { ok: false, terminal: true, error: "reference_notice_plan_invalid" };
+    }
+    const refreshed = plannedOrders.map((planned) => {
+      const plannedOrderId = String(planned?.orderId || "").toUpperCase();
+      const current = currentById.get(plannedOrderId);
+      if (!current || current.deleted || current.status === "invalid") return null;
+      if (String(current.email || "").trim().toLowerCase() !== email) return null;
+      return overlayCurrentOrderCredentials(planned, current);
+    });
+    if (refreshed.some((order) => !order || order.items?.some((item) => !item))) {
+      return { ok: false, terminal: true, error: "reference_notice_order_identity_changed" };
+    }
+    return { ok: true, orders: refreshed };
+  } catch {
+    // A strict read distinguishes a temporary store failure from a missing or
+    // reassigned order. No provider call has happened yet, so deliverOnce can
+    // safely retry later without ever falling back to stale account details.
+    return { ok: false, retryable: true, error: "order_credentials_unavailable" };
+  }
+}
+
 async function matchingOrders(reference) {
   return (await getOrdersByInternalReference(reference, 500))
     .filter((order) => order && !order.deleted && order.status !== "invalid");
@@ -76,7 +150,7 @@ function requireStaff(request, permission) {
   return { session, permissions };
 }
 
-export async function GET(request) {
+async function getReferenceNoticeHandler(request) {
   const auth = requireStaff(request, "canViewOrders");
   if (auth.response) return auth.response;
   const reference = normalizeInternalReference(new URL(request.url).searchParams.get("reference"));
@@ -91,7 +165,7 @@ export async function GET(request) {
   }, { headers: { "Cache-Control": "no-store" } });
 }
 
-export async function POST(request) {
+async function sendReferenceNoticeHandler(request) {
   const auth = requireStaff(request, "canSendMail");
   if (auth.response) return auth.response;
   let body = {};
@@ -162,8 +236,11 @@ export async function POST(request) {
     plan = planned.plan;
   }
 
-  // Always resume the first exact snapshot. Later order/reference/settings
-  // changes cannot alter recipients or content after a response is lost.
+  // Recipients, selected orders, notes and mail settings stay bound to the
+  // first durable plan. Credentials are the one exception: before a provider
+  // call that has not yet succeeded we re-read them strictly, so a retry after
+  // an account correction cannot send an older password. An uncertain provider
+  // result is never retried by deliverOnce, preserving at-most-once delivery.
   const results = [];
   let internalEffectsOk = true;
   for (const recipient of Array.isArray(plan?.recipients) ? plan.recipients : []) {
@@ -172,10 +249,11 @@ export async function POST(request) {
     const recipientOrders = Array.isArray(recipient?.orders) ? recipient.orders : [];
     const locale = recipient?.locale === "en" ? "en" : "zh";
     const recipientHash = createHash("sha256").update(email).digest("hex");
-    const delivery = await deliverOnce(`reference-notice:${operation.operationId}:${recipientHash}:email`, (stableId) => {
-      if (!validEmail(email) || recipientOrders.length !== recipientOrderIds.length) return null;
+    const delivery = await deliverOnce(`reference-notice:${operation.operationId}:${recipientHash}:email`, async (stableId) => {
+      const refreshed = await currentCredentialSnapshots(recipient, recipientOrders);
+      if (!refreshed.ok) return refreshed;
       const content = buildReferenceNotificationEmail({
-        orders: recipientOrders,
+        orders: refreshed.orders,
         subject,
         message,
         brandName: locale === "en"
@@ -187,7 +265,7 @@ export async function POST(request) {
       return sendSimpleEmail({
         to: email,
         ...content,
-        category: "transactional",
+        category: "order_update",
         relatedType: "reference_notice",
         relatedId: reference,
         support: plan.emailContext?.support,
@@ -195,16 +273,18 @@ export async function POST(request) {
         idempotencyKey: stableId,
       });
     });
-    const sent = delivery.value && typeof delivery.value === "object"
-      ? delivery.value
-      : { ok: Boolean(delivery.ok && delivery.idempotent) };
+    const sent = delivery.value && typeof delivery.value === "object" ? delivery.value : {};
+    const handled = Boolean(delivery.ok && (delivery.delivered || delivery.terminal || delivery.suppressed || delivery.skipped));
+    const delivered = delivery.delivered === true;
     results.push({
       email,
-      ok: Boolean(sent?.ok),
+      ok: delivered,
+      handled,
+      suppressed: Boolean(delivery.suppressed || sent.suppressed),
       uncertain: Boolean(delivery.uncertain || delivery.pending),
-      error: sent?.ok ? "" : clean(sent?.reason || sent?.error || delivery.error || "send_failed", 120),
+      error: delivered ? "" : clean(sent?.reason || sent?.error || delivery.error || (delivery.suppressed ? "suppressed" : "send_failed"), 120),
     });
-    if (sent?.ok) {
+    if (delivered) {
       for (const plannedOrderId of recipientOrderIds) {
         internalEffectsOk = await appendOrderTimelineOnce(plannedOrderId, `${operation.operationId}:timeline:${plannedOrderId}`, {
           type: "customer_notice_sent",
@@ -218,6 +298,7 @@ export async function POST(request) {
   }
 
   const delivered = results.filter((result) => result.ok).length;
+  const handled = results.filter((result) => result.handled).length;
   const uncertain = results.some((result) => result.uncertain);
   if (uncertain) {
     return Response.json({
@@ -231,7 +312,7 @@ export async function POST(request) {
       results,
     }, { status: 409 });
   }
-  if (delivered < results.length) {
+  if (handled < results.length) {
     return Response.json({
       ok: false,
       partial: delivered > 0,
@@ -265,3 +346,6 @@ export async function POST(request) {
   if (!completed.ok) return Response.json({ ok: false, error: completed.error }, { status: 503 });
   return Response.json(responsePayload);
 }
+
+export const GET = withApiTelemetry("admin_after_sales", getReferenceNoticeHandler);
+export const POST = withApiTelemetry("admin_after_sales", sendReferenceNoticeHandler);

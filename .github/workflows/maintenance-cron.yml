@@ -1,0 +1,74 @@
+name: Production maintenance scheduler
+
+on:
+  schedule:
+    # Keep the external dispatcher hourly on Vercel Hobby. Minute 17 avoids
+    # the busiest top-of-hour window; vercel.json retains a daily fallback.
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-maintenance
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      MAINTENANCE_URL: https://www.liumeiti.vip/api/cron/maintenance
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - name: Run maintenance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "${CRON_SECRET:-}" ]]; then
+            echo "CRON_SECRET is not configured"
+            exit 1
+          fi
+
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+          status="$(curl --silent --show-error \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --max-time 55 \
+            --retry 2 \
+            --retry-delay 5 \
+            --retry-all-errors \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            "$MAINTENANCE_URL")"
+
+          if [[ "$status" -lt 200 || "$status" -ge 300 ]]; then
+            echo "Maintenance returned HTTP ${status}"
+            head -c 2000 "$response_file"
+            exit 1
+          fi
+          if ! jq -e '.ok == true' "$response_file" >/dev/null; then
+            echo "Maintenance returned a non-success payload"
+            head -c 2000 "$response_file"
+            exit 1
+          fi
+
+      - name: Send independent Telegram failure alert
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ -z "${TELEGRAM_BOT_TOKEN:-}" || -z "${TELEGRAM_CHAT_ID:-}" ]]; then
+            echo "Telegram failure alert secrets are not configured"
+            exit 0
+          fi
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          curl --silent --show-error --fail \
+            --max-time 20 \
+            --request POST \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=⚠️ liumeiti.vip 生产维护任务失败。GitHub Actions: ${run_url}" \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" >/dev/null

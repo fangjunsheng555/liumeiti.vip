@@ -13,6 +13,15 @@ import {
   buildMarketingMailText,
 } from "./marketing-template.js";
 import { buildMarketingArgs } from "./marketing-data.js";
+import {
+  MARKETING_MAIL_V7_PREVIEW,
+  MARKETING_MAIL_V7_SUBJECT,
+  MARKETING_MAIL_V7_TEMPLATE_ID,
+  buildMarketingMailV7Html,
+  buildMarketingMailV7Text,
+  sanitizeMarketingMailHtml,
+  validateMarketingOffer,
+} from "./marketing-template-v7.js";
 
 function cleanMailBody(value) {
   return String(value || "")
@@ -24,10 +33,7 @@ function cleanMailBody(value) {
 }
 
 function cleanMailHtml(value) {
-  return String(value || "")
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, " ")
-    .trim()
-    .slice(0, 120000);
+  return sanitizeMarketingMailHtml(value);
 }
 
 function htmlToText(value) {
@@ -75,7 +81,8 @@ export async function GET(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const url = new URL(request.url);
-  if (url.searchParams.get("template") === MARKETING_MAIL_TEMPLATE_ID) {
+  const requestedTemplate = url.searchParams.get("template");
+  if ([MARKETING_MAIL_TEMPLATE_ID, MARKETING_MAIL_V7_TEMPLATE_ID].includes(requestedTemplate)) {
     if (!adminPermissionProfile(session).canSendMail) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
     const { getSettings } = await import("../../_settings.js");
     const settings = await getSettings();
@@ -83,13 +90,14 @@ export async function GET(request) {
     const siteDomain = process.env.SITE_DOMAIN || "www.liumeiti.vip";
     const siteUrl = process.env.SITE_URL || "https://www.liumeiti.vip";
     const marketingArgs = await buildMarketingArgs(brandName, siteDomain, siteUrl);
+    const isV7 = requestedTemplate === MARKETING_MAIL_V7_TEMPLATE_ID;
     return Response.json({
       ok: true,
-      template: MARKETING_MAIL_TEMPLATE_ID,
-      subject: MARKETING_MAIL_SUBJECT,
-      preview: MARKETING_MAIL_PREVIEW,
-      html: buildMarketingMailHtml(marketingArgs),
-      text: buildMarketingMailText(marketingArgs),
+      template: requestedTemplate,
+      subject: isV7 ? MARKETING_MAIL_V7_SUBJECT : MARKETING_MAIL_SUBJECT,
+      preview: isV7 ? MARKETING_MAIL_V7_PREVIEW : MARKETING_MAIL_PREVIEW,
+      html: isV7 ? buildMarketingMailV7Html(marketingArgs) : buildMarketingMailHtml(marketingArgs),
+      text: isV7 ? buildMarketingMailV7Text(marketingArgs) : buildMarketingMailText(marketingArgs),
     });
   }
   const logs = await getAdminMailLog();
@@ -104,10 +112,15 @@ export async function POST(request) {
   let body = {};
   try { body = await request.json(); } catch (e) {}
 
-  const template = body.template === MARKETING_MAIL_TEMPLATE_ID ? MARKETING_MAIL_TEMPLATE_ID : "customer";
-  const isMarketingMail = template === MARKETING_MAIL_TEMPLATE_ID;
+  const template = [MARKETING_MAIL_TEMPLATE_ID, MARKETING_MAIL_V7_TEMPLATE_ID].includes(body.template)
+    ? body.template
+    : "customer";
+  const isMarketingMail = template !== "customer";
+  const isMarketingV7 = template === MARKETING_MAIL_V7_TEMPLATE_ID;
+  const offerValidation = isMarketingV7 ? validateMarketingOffer(body.offer || {}) : { ok: true, offer: null };
+  if (!offerValidation.ok) return Response.json({ ok: false, error: offerValidation.error }, { status: 400 });
   const recipients = parseMailRecipients(body.to);
-  const defaultSubject = isMarketingMail ? MARKETING_MAIL_SUBJECT : "客服服务通知";
+  const defaultSubject = isMarketingMail ? (isMarketingV7 ? MARKETING_MAIL_V7_SUBJECT : MARKETING_MAIL_SUBJECT) : "客服服务通知";
   const subject = clean(body.subject || defaultSubject, 120) || defaultSubject;
   const content = cleanMailBody(body.content);
   const customHtml = isMarketingMail ? cleanMailHtml(body.html) : "";
@@ -137,7 +150,9 @@ export async function POST(request) {
   const mailSubject = subject.includes(brandName) ? subject : `${brandName} · ${subject}`;
   const marketingArgs = isMarketingMail ? await buildMarketingArgs(brandName, siteDomain, siteUrl) : null;
   const html = isMarketingMail
-    ? (customHtml || buildMarketingMailHtml(marketingArgs))
+    ? (customHtml || (isMarketingV7
+        ? buildMarketingMailV7Html({ ...marketingArgs, offer: offerValidation.offer })
+        : buildMarketingMailHtml(marketingArgs)))
     : buildCustomerMailHtml({
         subject,
         content,
@@ -147,7 +162,9 @@ export async function POST(request) {
         staffId: actor.staffId,
       });
   const text = isMarketingMail
-    ? (customHtml ? (htmlToText(customHtml) || buildMarketingMailText(marketingArgs)) : buildMarketingMailText(marketingArgs))
+    ? (customHtml
+        ? (htmlToText(customHtml) || (isMarketingV7 ? buildMarketingMailV7Text({ ...marketingArgs, offer: offerValidation.offer }) : buildMarketingMailText(marketingArgs)))
+        : (isMarketingV7 ? buildMarketingMailV7Text({ ...marketingArgs, offer: offerValidation.offer }) : buildMarketingMailText(marketingArgs)))
     : buildCustomerMailText({
         subject,
         content,
@@ -156,7 +173,11 @@ export async function POST(request) {
         siteUrl,
         staffId: actor.staffId,
       });
-  const logContent = isMarketingMail ? (customHtml ? `${MARKETING_MAIL_PREVIEW}（自定义 HTML）` : MARKETING_MAIL_PREVIEW) : content;
+  const marketingPreview = isMarketingV7 ? MARKETING_MAIL_V7_PREVIEW : MARKETING_MAIL_PREVIEW;
+  const logContent = isMarketingMail ? (customHtml ? `${marketingPreview}（自定义 HTML）` : marketingPreview) : content;
+  const campaignId = isMarketingMail
+    ? (clean(body.campaignId, 80).replace(/[^A-Za-z0-9_-]/g, "") || `MCADHOC${Date.now().toString(36).toUpperCase()}`)
+    : "";
 
   const results = [];
   const logs = [];
@@ -168,9 +189,13 @@ export async function POST(request) {
       html,
       category: isMarketingMail ? "marketing" : "support",
       relatedType: "admin_mail",
+      relatedId: campaignId,
+      campaignId,
       fromName: `${brandName}客服`,
       marketing: isMarketingMail,
       support: settings.support,
+      siteUrl,
+      locale: body.locale === "en" ? "en" : "zh",
     });
     const reason = result.ok ? "" : (result.reason || result.error || result.code || "send_failed");
     const log = await pushAdminMailLog({
@@ -183,11 +208,17 @@ export async function POST(request) {
       messageId: result.messageId || "",
       staffId: actor.staffId,
       staffUsername: actor.staffUsername,
+      category: isMarketingMail ? "marketing" : "support",
+      relatedType: "admin_mail",
+      relatedId: campaignId,
+      campaignId,
+      template,
     });
     if (log) logs.push(log);
     results.push({
       to,
       ok: result.ok,
+      suppressed: Boolean(result.suppressed),
       reason,
       messageId: result.messageId || "",
       logId: log?.id || "",
@@ -195,7 +226,8 @@ export async function POST(request) {
   }
 
   const sentCount = results.filter((item) => item.ok).length;
-  const failedCount = results.length - sentCount;
+  const suppressedCount = results.filter((item) => item.suppressed).length;
+  const failedCount = results.length - sentCount - suppressedCount;
   await pushAdminActionLog({
     action: "customer_mail_send",
     actor,
@@ -206,12 +238,13 @@ export async function POST(request) {
       template,
       recipients,
       sentCount,
+      suppressedCount,
       failedCount,
       logIds: logs.map((item) => item.id),
     },
   });
 
-  if (sentCount === 0) {
+  if (sentCount === 0 && failedCount > 0) {
     return Response.json({
       ok: false,
       error: "send_failed",
@@ -219,6 +252,7 @@ export async function POST(request) {
       logs,
       results,
       sentCount,
+      suppressedCount,
       failedCount,
     }, { status: 502 });
   }
@@ -228,6 +262,7 @@ export async function POST(request) {
     logs,
     results,
     sentCount,
+    suppressedCount,
     failedCount,
     messageId: results.find((item) => item.messageId)?.messageId || "",
   });

@@ -1,6 +1,6 @@
 // Tool Maoyang — 用户「意见 / 建议」反馈，经主站现成 SMTP 发到运营邮箱。
 // 开放提交（无需登录，降低门槛），靠 IP 速率限制 + 长度上限 + 蜜罐防滥用。
-// 纯加性：复用现有 helpers，不改任何文件。CORS 由 middleware 覆盖 /api/tool/*。
+// 纯加性：复用现有 helpers，不改任何文件。CORS 由 root proxy 覆盖 /api/tool/*。
 
 import {
   clean, validEmail, checkRateLimit, rateLimitResponse,

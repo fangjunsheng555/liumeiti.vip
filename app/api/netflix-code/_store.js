@@ -1,8 +1,10 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 import { clean, formatBeijingTime, redisCmd, redisPipeline } from "../_utils.js";
 
 const EVENT_PREFIX = "liumeiti:netflix-mail:event:";
 const EVENT_INDEX = "liumeiti:netflix-mail:received";
+const EVENT_SEQUENCE_KEY = "liumeiti:netflix-mail:arrival-sequence:v1";
+const EVENT_SEQUENCE_EVENT_PREFIX = "liumeiti:netflix-mail:event-sequence:v1:";
 const ACCOUNT_INDEX_PREFIX = "liumeiti:netflix-mail:account:";
 const ACCESS_PREFIX = "liumeiti:netflix-code:access:";
 // Only successful deliveries belong in the operational history. The former
@@ -10,6 +12,12 @@ const ACCESS_PREFIX = "liumeiti:netflix-code:access:";
 // instead of migrating those rows into the new view.
 const ACCESS_INDEX = "liumeiti:netflix-code:access-success-index:v1";
 const ACCESS_DEDUPE_PREFIX = "liumeiti:netflix-code:access-success-dedupe:";
+// A successful result may be viewed more than once while it is still the
+// newest mail. Once a newer, unparsed mail arrives, however, that previously
+// returned event must never be guessed to be the newer mail's sibling merely
+// because one copy lost its SRC footer.
+const RETURNED_EVENT_PREFIX = "liumeiti:netflix-code:returned-event:v1:";
+const RETURNED_EVENT_GLOBAL_PREFIX = "liumeiti:netflix-code:returned-event-global:v1:";
 // v2 drops locks created by the former per-poll counter. Automatic polling
 // must never lock a customer who only clicked the retrieve button once.
 const LOCK_PREFIX = "liumeiti:netflix-code:lock:v2:";
@@ -22,10 +30,98 @@ function deliveryFingerprint(record) {
   return /^[a-f0-9]{64}$/.test(value) ? value : "";
 }
 
+function requestFingerprints(record) {
+  return Array.from(new Set((Array.isArray(record?.requestFingerprints) ? record.requestFingerprints : [])
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter((value) => /^[a-f0-9]{64}$/.test(value))))
+    .slice(0, 12);
+}
+
+function sameNetflixRequest(left, right) {
+  const leftDelivery = deliveryFingerprint(left);
+  const rightDelivery = deliveryFingerprint(right);
+  // Two present, unequal Netflix SRC UUIDs conclusively identify different
+  // requests and must override weaker content similarities (including the
+  // rare case where Netflix generates the same four digits twice).
+  if (leftDelivery && rightDelivery && leftDelivery !== rightDelivery) return false;
+  // Equal SRC values are not sufficient positive evidence on their own. A
+  // newly forwarded message can quote the previous Netflix email and retain
+  // only that older SRC footer. Treating the quoted value as authoritative
+  // would let a newer unparsed request replay the previous code. At least one
+  // HMAC-protected original Message-ID/content identity must also overlap.
+  const rightEvidence = new Set(requestFingerprints(right));
+  return requestFingerprints(left).some((value) => rightEvidence.has(value));
+}
+
+function compareArrival(left, right) {
+  const receivedDifference = Number(right?.receivedAt || 0) - Number(left?.receivedAt || 0);
+  if (receivedDifference) return receivedDifference;
+  const leftSequence = Number(left?.record?.arrivalSequence || 0);
+  const rightSequence = Number(right?.record?.arrivalSequence || 0);
+  if (Number.isSafeInteger(leftSequence) && Number.isSafeInteger(rightSequence) && leftSequence !== rightSequence) {
+    return rightSequence - leftSequence;
+  }
+  return 0;
+}
+
+function recordRequestSentAt(entry) {
+  const value = new Date(entry?.record?.requestSentAt || 0).getTime();
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function rankedNetflixRequestClusters(records) {
+  const pool = [...(Array.isArray(records) ? records : [])]
+    .filter((entry) => Number.isFinite(Number(entry?.receivedAt)) && Number(entry.receivedAt) > 0);
+  const clusters = [];
+  for (const entry of pool) {
+    const matching = [];
+    clusters.forEach((cluster, index) => {
+      if (cluster.some((candidate) => sameNetflixRequest(entry?.record, candidate?.record))) matching.push(index);
+    });
+    if (!matching.length) {
+      clusters.push([entry]);
+      continue;
+    }
+    const merged = [entry];
+    for (let index = matching.length - 1; index >= 0; index -= 1) {
+      merged.push(...clusters.splice(matching[index], 1)[0]);
+    }
+    clusters.push(merged);
+  }
+
+  const ranked = clusters.map((entries) => {
+    const orderedEntries = [...entries].sort(compareArrival);
+    const sourceTimes = entries.map(recordRequestSentAt).filter((value) => value > 0);
+    const firstReceivedAt = Math.min(...entries.map((entry) => Number(entry.receivedAt)));
+    const firstEntries = entries.filter((entry) => Number(entry.receivedAt) === firstReceivedAt);
+    const firstSequences = firstEntries
+      .map((entry) => Number(entry?.record?.arrivalSequence || 0))
+      .filter((value) => Number.isSafeInteger(value) && value > 0);
+    const firstArrivalSequence = firstSequences.length ? Math.min(...firstSequences) : 0;
+    return {
+      entries: orderedEntries,
+      // All copies normally carry the same original Date. If a wrapper
+      // rewrites one, use the earliest value; a delayed duplicate can then
+      // never advance its request cluster.
+      requestTime: sourceTimes.length ? Math.min(...sourceTimes) : firstReceivedAt,
+      firstReceivedAt,
+      firstArrivalSequence,
+    };
+  }).sort((left, right) => (
+    right.requestTime - left.requestTime
+    || right.firstReceivedAt - left.firstReceivedAt
+    || right.firstArrivalSequence - left.firstArrivalSequence
+    || compareArrival(left.entries[0], right.entries[0])
+  ));
+  return ranked;
+}
+
+function sortNewestNetflixRequests(records) {
+  return rankedNetflixRequestClusters(records).flatMap((cluster) => cluster.entries);
+}
+
 export function latestNetflixSiblingCluster(records) {
-  const sorted = [...(Array.isArray(records) ? records : [])]
-    .filter((entry) => Number.isFinite(Number(entry?.receivedAt)))
-    .sort((left, right) => Number(right.receivedAt) - Number(left.receivedAt));
+  const sorted = sortNewestNetflixRequests(records);
   const newestReceivedAt = Number(sorted[0]?.receivedAt || 0);
   if (!newestReceivedAt) return [];
   const newestFingerprint = deliveryFingerprint(sorted[0]?.record);
@@ -42,30 +138,41 @@ export function latestNetflixSiblingCluster(records) {
 // newest delivery outranks a rejected copy.
 export const NETFLIX_DUAL_DELIVERY_WINDOW_MS = 120 * 1000;
 
-export function latestAcceptedNetflixRecords(records, windowMs = NETFLIX_DUAL_DELIVERY_WINDOW_MS) {
-  const sorted = [...(Array.isArray(records) ? records : [])]
-    .filter((entry) => Number.isFinite(Number(entry?.receivedAt)))
-    .sort((left, right) => Number(right.receivedAt) - Number(left.receivedAt));
+export function latestAcceptedNetflixRecords(
+  records,
+  windowMs = NETFLIX_DUAL_DELIVERY_WINDOW_MS,
+  { excludeFallbackEventIds = [] } = {},
+) {
+  const rankedClusters = rankedNetflixRequestClusters(records);
+  const sorted = rankedClusters.flatMap((cluster) => cluster.entries);
   const newestReceivedAt = Number(sorted[0]?.receivedAt || 0);
   if (!newestReceivedAt) return [];
   const newest = sorted[0];
-  const newestFingerprint = deliveryFingerprint(newest?.record);
-  // The newest accepted message is authoritative by itself, even when an old
-  // legacy record has no delivery fingerprint. Older accepted copies may only
-  // participate when they prove they belong to exactly the same Netflix SRC
-  // delivery as the newest message.
+  // A successfully parsed newest delivery is always authoritative. Returning
+  // only that record prevents an older code from being used when the customer
+  // requested two different Netflix messages close together.
   if (newest.record?.accepted) {
-    return sorted.filter((entry, index) => entry.record?.accepted && (
-      index === 0
-      || (newestFingerprint
-        && deliveryFingerprint(entry?.record) === newestFingerprint
-        && newestReceivedAt - Number(entry.receivedAt) <= windowMs)
-    ));
+    return [newest];
   }
-  if (!newestFingerprint) return [];
-  return sorted.filter((entry) => entry.record?.accepted
-    && deliveryFingerprint(entry?.record) === newestFingerprint
-    && newestReceivedAt - Number(entry.receivedAt) <= windowMs);
+
+  // An older accepted result may outrank a newer rejected copy only when both
+  // prove they came from the same original Netflix request. Unequal SRC UUIDs
+  // conclusively reject a match, while HMAC-protected original Message-ID or
+  // canonical-content identities provide the required positive proof. An SRC
+  // match alone is unsafe because a new forward may quote only the previous
+  // email's footer. With no shared positive evidence the situation is
+  // information-theoretically ambiguous, so fail closed instead of ever
+  // returning a possibly stale code.
+  const excludedFallbacks = new Set(validEventIds(excludeFallbackEventIds));
+  // Request identity can be transitive: one wrapper may preserve Message-ID,
+  // another canonical body, and a bridge copy both. Reuse the already proven
+  // newest request cluster instead of requiring the accepted copy to share a
+  // fingerprint directly with the latest rejected wrapper.
+  return (rankedClusters[0]?.entries || []).filter((entry) => {
+    if (!entry.record?.accepted || Math.abs(newestReceivedAt - Number(entry.receivedAt)) > windowMs) return false;
+    if (excludedFallbacks.has(String(entry.record?.eventId || "").toUpperCase())) return false;
+    return true;
+  }).slice(0, 1);
 }
 
 function parseJson(value) {
@@ -88,6 +195,20 @@ function encryptionKey() {
   const secret = String(process.env.NETFLIX_CODE_ENCRYPTION_KEY || "");
   if (secret.length < 32) return null;
   return createHash("sha256").update(secret).digest();
+}
+
+function protectedNetflixRequestFingerprints(parsed) {
+  const fingerprints = new Set(requestFingerprints(parsed));
+  const key = encryptionKey();
+  if (!key) return Array.from(fingerprints).slice(0, 12);
+  for (const value of (Array.isArray(parsed?.requestEvidence) ? parsed.requestEvidence : [])) {
+    const evidence = String(value || "").trim();
+    if (!evidence || evidence.length > 2000) continue;
+    fingerprints.add(createHmac("sha256", key)
+      .update(`netflix-request-evidence-v1\0${evidence}`)
+      .digest("hex"));
+  }
+  return Array.from(fingerprints).slice(0, 12);
 }
 
 function encryptPayload(value) {
@@ -176,6 +297,23 @@ function eventKey(eventId) {
   return EVENT_PREFIX + clean(eventId, 80).toUpperCase();
 }
 
+async function arrivalSequenceFor(eventId) {
+  const candidate = Number(await redisCmd(["INCR", EVENT_SEQUENCE_KEY]) || 0);
+  if (!Number.isSafeInteger(candidate) || candidate <= 0) return 0;
+  const key = EVENT_SEQUENCE_EVENT_PREFIX + clean(eventId, 80).toUpperCase();
+  const reserved = await redisCmd([
+    "SET",
+    key,
+    String(candidate),
+    "NX",
+    "EX",
+    String(EVENT_TTL_SECONDS),
+  ]);
+  if (reserved === "OK") return candidate;
+  const existing = Number(await redisCmd(["GET", key]) || 0);
+  return Number.isSafeInteger(existing) && existing > 0 ? existing : 0;
+}
+
 function accountIndexKey(hash) {
   return ACCOUNT_INDEX_PREFIX + clean(hash, 80).toLowerCase();
 }
@@ -198,9 +336,78 @@ function accessDedupeId(record) {
     .digest("hex");
 }
 
+function returnedEventKey(orderId, eventId) {
+  const normalizedOrderId = clean(orderId, 80).replace(/\s+/g, "").toUpperCase();
+  const normalizedEventId = validEventIds(eventId)[0] || "";
+  if (!normalizedOrderId || !normalizedEventId) return "";
+  return RETURNED_EVENT_PREFIX + createHash("sha256")
+    .update(`${normalizedOrderId}|${normalizedEventId}`)
+    .digest("hex");
+}
+
+function returnedEventGlobalKey(eventId) {
+  const normalizedEventId = validEventIds(eventId)[0] || "";
+  return normalizedEventId
+    ? RETURNED_EVENT_GLOBAL_PREFIX + createHash("sha256").update(normalizedEventId).digest("hex")
+    : "";
+}
+
+function returnedAccessDedupeKey(orderId, record) {
+  const outcome = record?.kind === "code"
+    ? "code_returned"
+    : record?.kind === "household"
+      ? "household_link_returned"
+      : record?.kind === "link"
+        ? "travel_link_returned"
+        : "";
+  return outcome ? ACCESS_DEDUPE_PREFIX + accessDedupeId({
+    orderId: clean(orderId, 80).replace(/\s+/g, "").toUpperCase(),
+    eventId: clean(record?.eventId, 80),
+    outcome,
+  }) : "";
+}
+
+async function returnedNetflixEventIds(orderId, records) {
+  const candidates = (Array.isArray(records) ? records : [])
+    .map(({ record }) => record)
+    .filter((record) => record?.accepted
+      && returnedEventGlobalKey(record.eventId)
+      && returnedEventKey(orderId, record.eventId)
+      && returnedAccessDedupeKey(orderId, record));
+  if (!candidates.length) return { ok: true, eventIds: [] };
+  // The access dedupe key predates the explicit safety marker, so checking
+  // both also protects results returned before this migration was deployed.
+  const commands = candidates.flatMap((record) => [
+    ["GET", returnedEventGlobalKey(record.eventId)],
+    ["GET", returnedEventKey(orderId, record.eventId)],
+    ["GET", returnedAccessDedupeKey(orderId, record)],
+  ]);
+  const response = await redisPipeline(commands);
+  // A failed evidence lookup is a store outage, not proof that a candidate was
+  // never returned. Propagate it so the API reports 503 instead of guessing.
+  if (!pipelineSucceeded(response, commands.length)) {
+    return { ok: false, error: "storage_unavailable" };
+  }
+  const rows = pipelineRows(response);
+  return { ok: true, eventIds: candidates
+    .filter((record, index) => pipelineValue(rows[index * 3]) === "1"
+      || pipelineValue(rows[index * 3 + 1]) === "1"
+      || pipelineValue(rows[index * 3 + 2]) === "1")
+    .map((record) => record.eventId) };
+}
+
 function pipelineSucceeded(value, expected) {
   const rows = pipelineRows(value);
   return rows.length === expected && rows.every((entry) => !entry?.error);
+}
+
+async function strictRedisRead(commands) {
+  const requested = Array.isArray(commands) ? commands : [];
+  const response = await redisPipeline([...requested, ["PING"]]);
+  if (!pipelineSucceeded(response, requested.length + 1)) return null;
+  const rows = pipelineRows(response);
+  if (String(pipelineValue(rows[requested.length]) || "").toUpperCase() !== "PONG") return null;
+  return rows.slice(0, requested.length);
 }
 
 export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "" } = {}) {
@@ -210,6 +417,14 @@ export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "
   const encrypted = parsed?.accepted ? protectNetflixMailResult(parsed?.value) : null;
   const accountEmailPayload = protectNetflixMailAccountEmails(accountEmails);
   if (parsed?.accepted && !encrypted) return { ok: false, error: "encryption_not_configured" };
+  // Cloudflare timestamps have millisecond precision, so two distinct messages
+  // can legitimately share receivedAt. Redis provides the distributed arrival
+  // tiebreaker; without it we must reject storage and let the webhook retry
+  // instead of guessing which distinct code is newest from its event hash.
+  const arrivalSequence = await arrivalSequenceFor(eventId);
+  if (!arrivalSequence) {
+    return { ok: false, error: "storage_unavailable" };
+  }
   const score = new Date(parsed?.receivedAt || Date.now()).getTime();
   const record = {
     eventId,
@@ -220,15 +435,22 @@ export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "
     language: clean(parsed?.language || "unknown", 20),
     receivedAt: parsed?.receivedAt || new Date().toISOString(),
     receivedAtBeijing: formatBeijingTime(parsed?.receivedAt || new Date()),
+    requestSentAt: parsed?.requestSentAt || "",
     expiresAt: parsed?.expiresAt || "",
     sender: maskNetflixEmail(parsed?.sender),
     subject: clean(parsed?.subject, 240),
     deliveryFingerprint: deliveryFingerprint(parsed),
+    requestFingerprints: protectedNetflixRequestFingerprints(parsed),
+    arrivalSequence,
     accountHashes,
     accountHints: accountEmails.map(maskNetflixEmail).filter(Boolean),
     accountEmailPayload,
     payload: encrypted,
     messageIdHash: createHash("sha256").update(String(messageId || digest || eventId)).digest("hex"),
+    // Bind the durable record to the raw webhook body. The ingest replay
+    // marker uses this value to distinguish a real committed duplicate from
+    // a marker whose event write was lost.
+    ingestDigestHash: createHash("sha256").update(String(digest || "")).digest("hex"),
   };
   const commands = [
     ["SET", eventKey(eventId), JSON.stringify(record), "EX", String(EVENT_TTL_SECONDS)],
@@ -245,7 +467,38 @@ export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "
   return { ok, eventId, accepted: record.accepted, kind: record.kind, reason: record.reason };
 }
 
-export async function findLatestNetflixMailState(email, { since = 0, excludeEventIds = [] } = {}) {
+export async function verifyNetflixMailEvent(eventId, digest) {
+  const normalizedEventId = validEventIds(eventId)[0] || "";
+  if (!normalizedEventId) return { ok: false, error: "invalid_event_id" };
+  const response = await redisPipeline([
+    ["GET", eventKey(normalizedEventId)],
+    ["PING"],
+  ]);
+  if (!pipelineSucceeded(response, 2)) return { ok: false, error: "storage_unavailable" };
+  const rows = pipelineRows(response);
+  if (String(pipelineValue(rows[1]) || "").toUpperCase() !== "PONG") {
+    return { ok: false, error: "storage_unavailable" };
+  }
+  const raw = pipelineValue(rows[0]);
+  if (raw == null) return { ok: true, exists: false, matches: false };
+  const record = parseJson(raw);
+  if (!record || record.eventId !== normalizedEventId) {
+    return { ok: false, error: "event_record_invalid" };
+  }
+  const expectedDigestHash = createHash("sha256").update(String(digest || "")).digest("hex");
+  return {
+    ok: true,
+    exists: true,
+    matches: record.ingestDigestHash === expectedDigestHash,
+    record,
+  };
+}
+
+export async function findLatestNetflixMailState(email, {
+  since = 0,
+  excludeEventIds = [],
+  orderId = "",
+} = {}) {
   const hash = netflixAccountHash(email);
   // The customer normally returns after Netflix has already sent the message.
   // Keep a short lookback so a valid code received just before authorization is
@@ -253,18 +506,45 @@ export async function findLatestNetflixMailState(email, { since = 0, excludeEven
   const startedAt = Number(since || 0);
   const minScore = Math.max(Date.now() - 20 * 60 * 1000, startedAt - 5 * 60 * 1000);
   const rejectedMinScore = Math.max(Date.now() - 20 * 60 * 1000, startedAt);
-  const ids = await redisCmd(["ZREVRANGEBYSCORE", accountIndexKey(hash), "+inf", String(minScore), "LIMIT", "0", "20"]);
+  const indexRows = await strictRedisRead([
+    ["ZREVRANGEBYSCORE", accountIndexKey(hash), "+inf", String(minScore), "LIMIT", "0", "20"],
+  ]);
+  if (!indexRows) return { state: "error", error: "storage_unavailable" };
+  const indexedIds = pipelineValue(indexRows[0]);
+  if (!Array.isArray(indexedIds)) return { state: "error", error: "storage_unavailable" };
+  const ids = validEventIds(indexedIds);
+  if (ids.length !== indexedIds.length) return { state: "error", error: "storage_unavailable" };
   const records = [];
-  for (const eventId of (Array.isArray(ids) ? ids : [])) {
-    const record = parseJson(await redisCmd(["GET", eventKey(eventId)]));
-    if (!record?.accountHashes?.includes(hash)) continue;
+  const eventRows = ids.length
+    ? await strictRedisRead(ids.map((eventId) => ["GET", eventKey(eventId)]))
+    : [];
+  if (eventRows == null) return { state: "error", error: "storage_unavailable" };
+  for (let index = 0; index < ids.length; index += 1) {
+    const raw = pipelineValue(eventRows[index]);
+    const record = parseJson(raw);
+    // An index member without a valid matching event is an inconsistent read,
+    // not the same thing as a healthy empty inbox.
+    if (!record || !record?.accountHashes?.includes(hash)) {
+      return { state: "error", error: "storage_unavailable" };
+    }
     const receivedAt = new Date(record.receivedAt || 0).getTime();
     const expiresAt = new Date(record.expiresAt || 0).getTime();
-    if (!receivedAt || receivedAt < minScore || !expiresAt || expiresAt <= Date.now()) continue;
+    if (!receivedAt || !expiresAt) return { state: "error", error: "storage_unavailable" };
+    if (receivedAt < minScore || expiresAt <= Date.now()) continue;
     records.push({ record, receivedAt });
   }
   const siblingCluster = latestNetflixSiblingCluster(records);
-  for (const { record } of latestAcceptedNetflixRecords(records)) {
+  // This exclusion applies only to fallback behind a newer rejected mail.
+  // The newest accepted event remains readable in the same or a later browser
+  // session, so a refresh does not make a still-valid code disappear.
+  const returned = orderId
+    ? await returnedNetflixEventIds(orderId, records)
+    : { ok: true, eventIds: [] };
+  if (!returned.ok) return { state: "error", error: returned.error || "storage_unavailable" };
+  const excludeFallbackEventIds = returned.eventIds;
+  for (const { record } of latestAcceptedNetflixRecords(records, NETFLIX_DUAL_DELIVERY_WINDOW_MS, {
+    excludeFallbackEventIds,
+  })) {
     const value = decryptPayload(record.payload);
     if (!value) continue;
     return {
@@ -310,6 +590,8 @@ export async function recordNetflixCodeAccess(entry) {
   const eventId = clean(entry?.eventId, 80);
   if (!orderId || !eventId) return false;
 
+  if (!await markNetflixCodeResultReturned(orderId, eventId)) return false;
+
   const dedupeId = accessDedupeId({ orderId, eventId, outcome });
   const first = await redisCmd([
     "SET",
@@ -343,6 +625,24 @@ export async function recordNetflixCodeAccess(entry) {
   if (!ok) await redisCmd(["DEL", ACCESS_DEDUPE_PREFIX + dedupeId]);
   await redisCmd(["ZREMRANGEBYSCORE", ACCESS_INDEX, "-inf", String(Date.now() - ACCESS_TTL_SECONDS * 1000)]);
   return ok;
+}
+
+export async function markNetflixCodeResultReturned(orderId, eventId) {
+  const markerKey = returnedEventKey(orderId, eventId);
+  const globalMarkerKey = returnedEventGlobalKey(eventId);
+  if (!markerKey || !globalMarkerKey) return false;
+  // The global marker prevents a shared Netflix account from replaying an old
+  // result through a different order. The order-scoped v1 marker is retained
+  // as migration evidence and for existing operational tooling.
+  if (await redisCmd([
+    "SET",
+    globalMarkerKey,
+    "1",
+    "EX",
+    String(EVENT_TTL_SECONDS),
+  ]) !== "OK") return false;
+  await redisCmd(["SET", markerKey, "1", "EX", String(EVENT_TTL_SECONDS)]);
+  return true;
 }
 
 async function recordsFromIndex(indexKey, offset, limit, prefix) {

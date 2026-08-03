@@ -9,6 +9,8 @@ import {
   redisPipeline,
   setOrderAt,
 } from "./_utils.js";
+import { enqueueOrderPushEvent } from "./_push.js";
+import { appendBusinessTraceEvent } from "./_observability.js";
 
 export const QUOTE_VALID_DAY_OPTIONS = [1, 3, 7, 14];
 export const DEFAULT_QUOTE_VALID_DAYS = 7;
@@ -129,7 +131,34 @@ async function expireQuoteOrderUnderLock(orderId, now, expectedRevision) {
       reason: stale ? "stale_revision" : "save_failed",
     };
   }
-  return { changed: saved, order: saved ? nextOrder : latestEntry.order, saved, reason: saved ? "expired" : "save_failed" };
+  const push = await enqueueOrderPushEvent(
+    nextOrder,
+    "order.quote_expired",
+    `quote-expiry:${nextOrder.quoteExpiresAt || latestRevision}`,
+    { ttlMs: 24 * 60 * 60 * 1000 },
+  ).catch((error) => ({ ok: false, error: error?.message || "push_enqueue_failed" }));
+  await appendBusinessTraceEvent(nextOrder.orderId, {
+    businessTraceId: nextOrder.businessTraceId,
+    stage: "quote_expired",
+    component: "quote_expiry",
+    outcome: "ok",
+    operationId: `quote-expiry:${nextOrder.quoteExpiresAt || latestRevision}`,
+  }).catch(() => null);
+  await appendBusinessTraceEvent(nextOrder.orderId, {
+    businessTraceId: nextOrder.businessTraceId,
+    stage: "push_enqueue_quote_expired",
+    component: "push",
+    outcome: push.ok === false ? "error" : push.skipped ? "skipped" : "ok",
+    operationId: `quote-expiry:${nextOrder.quoteExpiresAt || latestRevision}`,
+    errorCode: push.error || push.reason || "",
+  }).catch(() => null);
+  return {
+    changed: saved,
+    order: saved ? nextOrder : latestEntry.order,
+    saved,
+    push,
+    reason: saved ? "expired" : "save_failed",
+  };
 }
 
 export async function expireQuoteOrderEntry(entry, now = new Date(), options = {}) {

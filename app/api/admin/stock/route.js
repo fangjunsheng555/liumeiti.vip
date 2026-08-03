@@ -1,8 +1,12 @@
 import {
   adminSessionFromRequest, adminPermissionProfile,
   adminActorFromRequest, pushAdminActionLog,
-  getAiStockMap, setAiStock, AI_STOCK_PLAN_IDS,
+  getAiStockMap, AI_STOCK_PLAN_IDS,
 } from "../../_utils.js";
+import { setStockAndMaybeEnqueueRestock } from "../../_push.js";
+import { normalizeStockValue } from "../../_stock-input.js";
+
+export { normalizeStockValue } from "../../_stock-input.js";
 
 const AI_PLAN_LABELS = {
   "gpt-plus": "GPT Plus",
@@ -37,24 +41,49 @@ export async function PATCH(request) {
   const input = (body && typeof body.stock === "object" && body.stock) ? body.stock : (body || {});
 
   const updates = {};
+  const failures = [];
+  const operationPrefix = `ai-stock:${Date.now().toString(36)}`;
   for (const id of AI_STOCK_PLAN_IDS) {
     if (!(id in input)) continue;
     const raw = input[id];
-    if (raw === "" || raw == null || raw === "unlimited") {
-      await setAiStock(id, "");
-      updates[id] = null;
-      continue;
-    }
-    const n = Math.floor(Number(raw));
-    if (!Number.isFinite(n) || n < 0) {
+    const normalized = normalizeStockValue(raw);
+    if (!normalized.ok) {
       return Response.json({ ok: false, error: "invalid_value", planId: id }, { status: 400 });
     }
-    await setAiStock(id, n);
-    updates[id] = n;
+    if (normalized.value === "") {
+      const result = await setStockAndMaybeEnqueueRestock("ai", id, "", `${operationPrefix}:${id}`, {
+        serviceLabelZh: "AI 会员",
+        serviceLabelEn: "AI membership",
+        planLabelZh: AI_PLAN_LABELS[id] || id,
+        planLabelEn: AI_PLAN_LABELS[id] || id,
+      });
+      if (result.ok) updates[id] = null;
+      else failures.push({ planId: id, error: result.error || "stock_update_failed" });
+      continue;
+    }
+    const n = normalized.value;
+    const result = await setStockAndMaybeEnqueueRestock("ai", id, n, `${operationPrefix}:${id}`, {
+      serviceLabelZh: "AI 会员",
+      serviceLabelEn: "AI membership",
+      planLabelZh: AI_PLAN_LABELS[id] || id,
+      planLabelEn: AI_PLAN_LABELS[id] || id,
+    });
+    if (result.ok) updates[id] = n;
+    else failures.push({ planId: id, error: result.error || "stock_update_failed" });
   }
 
   const actor = adminActorFromRequest(request);
-  await pushAdminActionLog({ action: "ai_stock_update", actor, target: "ai-stock", detail: updates });
+  await pushAdminActionLog({ action: "ai_stock_update", actor, target: "ai-stock", detail: { updates, failures } });
   const stock = await getAiStockMap();
+  if (failures.length) {
+    return Response.json({
+      ok: false,
+      error: "stock_update_failed",
+      partial: Object.keys(updates).length > 0,
+      updated: updates,
+      failed: failures,
+      stock,
+    }, { status: 503 });
+  }
   return Response.json({ ok: true, stock, updated: updates });
 }

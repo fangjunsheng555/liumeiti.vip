@@ -12,6 +12,7 @@ import { claimDurableOperation, completeDurableOperation } from "../../../_durab
 import { buildInvalidOrderEmailHtml, buildInvalidOrderEmailText } from "../../../order/invalid-email.js";
 import { getSettings } from "../../../_settings.js";
 import { supportText } from "../../../../lib/settings-defaults.js";
+import { withApiTelemetry } from "../../../_observability.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
@@ -58,6 +59,9 @@ async function sendInvalidOrderEmail(order) {
       : `订单 ${order.orderId} 未收到付款，已标记无效 · ${brandName}`,
     text,
     html,
+    category: "order_update",
+    relatedType: "order",
+    relatedId: order.orderId,
     fromName: brandName,
     support: settings.support,
     locale: emailLocale,
@@ -73,7 +77,7 @@ async function deliverInvalidOrderEmail(order) {
 
 // POST /api/admin/orders/batch
 // body: { orderIds: string[], action: "delete" | "invalid" }
-export async function POST(request) {
+async function batchOrdersHandler(request) {
   const session = adminSession(request);
   if (!session) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
@@ -350,3 +354,5 @@ export async function POST(request) {
     await redisCmd(["EVAL", RELEASE_ORDER_LOCK_SCRIPT, "1", operation.lockKey, operationLockToken]);
   }
 }
+
+export const POST = withApiTelemetry("admin_orders", batchOrdersHandler);

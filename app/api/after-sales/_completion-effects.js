@@ -1,6 +1,8 @@
-import { pushAdminActionLog } from "../_utils.js";
+import { getOrderById, pushAdminActionLog } from "../_utils.js";
 import { appendOrderTimelineOnce } from "../_order-timeline.js";
 import { deliverOnce } from "../_delivery-once.js";
+import { enqueueAfterSalesCompletedPush } from "../_push.js";
+import { appendBusinessTraceEvent } from "../_observability.js";
 import { sendAfterSalesEmail } from "./_email.js";
 import { markAfterSalesCompletionEffectsDone } from "./_store.js";
 
@@ -15,7 +17,30 @@ export async function settleAfterSalesCompletionEffects(ticket, actor = {}) {
     (stableId) => sendAfterSalesEmail(ticket, "completed", { idempotencyKey: stableId }),
   );
   const providerResult = delivery.value && typeof delivery.value === "object" ? delivery.value : null;
-  const email = Boolean(delivery.idempotent || providerResult?.ok);
+  const email = Boolean(delivery.delivered === true || (delivery.idempotent && delivery.delivered !== false));
+  const emailHandled = Boolean(delivery.ok && (email || delivery.terminal || delivery.suppressed || delivery.skipped));
+  const order = await getOrderById(ticket.orderId);
+  const push = order
+    ? await enqueueAfterSalesCompletedPush(ticket, order, operationId)
+      .catch((error) => ({ ok: false, error: error?.message || "push_enqueue_failed" }))
+    : { ok: true, queued: false, skipped: true, reason: "order_missing" };
+  if (order?.orderId) {
+    await appendBusinessTraceEvent(order.orderId, {
+      businessTraceId: order.businessTraceId,
+      stage: "after_sales_completed",
+      component: "after_sales",
+      outcome: "ok",
+      operationId,
+    }).catch(() => null);
+    await appendBusinessTraceEvent(order.orderId, {
+      businessTraceId: order.businessTraceId,
+      stage: "push_enqueue_after_sales",
+      component: "push",
+      outcome: push.ok === false ? "error" : push.skipped ? "skipped" : "ok",
+      operationId,
+      errorCode: push.error || push.reason || "",
+    }).catch(() => null);
+  }
   const timelineOk = await appendOrderTimelineOnce(ticket.orderId, `${operationId}:timeline`, {
     type: "after_sales_completed",
     visibility: "public",
@@ -24,23 +49,26 @@ export async function settleAfterSalesCompletionEffects(ticket, actor = {}) {
     actor: actor.staffUsername || ticket.completedBy?.staffUsername || "system",
     meta: { ticketId: ticket.ticketId },
   });
-  const logOk = !email || await pushAdminActionLog({
+  const logOk = !emailHandled || await pushAdminActionLog({
     action: "after_sales_complete",
     actor: actor.staffId ? actor : (ticket.completedBy || { staffId: 0, staffUsername: "keeper" }),
     target: `after-sales:${ticket.ticketId}`,
-    detail: { orderId: ticket.orderId, email: ticket.email, emailed: true },
+    detail: { orderId: ticket.orderId, email: ticket.email, emailed: email, suppressed: Boolean(delivery.suppressed) },
     operationId: `${operationId}:admin-log`,
   });
   const internalOk = Boolean(timelineOk && logOk);
   let settled = false;
-  if (email && internalOk) {
+  if (emailHandled && internalOk) {
     settled = await markAfterSalesCompletionEffectsDone(ticket.ticketId, operationId);
   }
   return {
     ok: internalOk,
     email,
+    emailHandled,
+    suppressed: Boolean(delivery.suppressed),
+    push,
     settled,
-    retryable: !email && !delivery.uncertain && !delivery.pending,
+    retryable: !emailHandled && !delivery.uncertain && !delivery.pending,
     uncertain: Boolean(delivery.uncertain),
     pending: Boolean(delivery.pending),
     error: providerResult?.reason || providerResult?.error || delivery.error || "",

@@ -23,6 +23,7 @@ const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
 const SITE_URL = process.env.SITE_URL || `https://${SITE_DOMAIN}`;
 const LINK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_PENDING_ITEMS = 10;
 
 function normalizeOrderId(value) {
   return clean(value, 80).replace(/\s+/g, "").toUpperCase();
@@ -71,11 +72,22 @@ export async function POST(request) {
   if (!pendingItems.length) {
     return Response.json({ ok: false, error: "no_pending_correction" }, { status: 409 });
   }
+  if (pendingItems.length > MAX_PENDING_ITEMS) {
+    return Response.json({
+      ok: false,
+      error: "too_many_pending_corrections",
+      limit: MAX_PENDING_ITEMS,
+      pendingCount: pendingItems.length,
+      unprocessedItemIndexes: pendingItems
+        .slice(MAX_PENDING_ITEMS)
+        .map((item) => order.items.indexOf(item)),
+    }, { status: 409 });
+  }
 
   const settings = await getSettings();
   const brandName = settings.brand.name || BRAND_NAME;
   const now = new Date();
-  const selected = pendingItems.slice(0, 2).map((item) => ({ item, itemIndex: order.items.indexOf(item) }));
+  const selected = pendingItems.map((item) => ({ item, itemIndex: order.items.indexOf(item) }));
   let changed = false;
   for (const { item, itemIndex } of selected) {
     // 轮换 token(旧链接失效)并顺延 7 天,再发一封新邮件。
@@ -99,7 +111,7 @@ export async function POST(request) {
     if (!saved) return Response.json({ ok: false, error: "stale_revision" }, { status: 409 });
   }
 
-  let emailOk = false;
+  const emailResults = [];
   let markerChanged = false;
   for (const { item, itemIndex } of selected) {
     const token = signSession({ typ: "spotify-correction-link", orderId, itemIndex, operationId });
@@ -127,19 +139,33 @@ export async function POST(request) {
         locale: order.locale === "en" ? "en" : "zh",
       }),
     );
-    const desiredOk = Boolean(result?.ok);
-    const desiredError = desiredOk ? "" : clean(result?.reason || result?.error || "send_failed", 120);
+    const desiredOk = result?.delivered === true;
+    const desiredHandled = Boolean(result?.ok && (result?.delivered || result?.terminal || result?.suppressed || result?.skipped));
+    const desiredSuppressed = Boolean(result?.suppressed);
+    const providerResult = result?.value && typeof result.value === "object" ? result.value : {};
+    const desiredError = desiredOk ? "" : clean(providerResult.reason || providerResult.error || result?.error || (desiredSuppressed ? "suppressed" : "send_failed"), 120);
     if (item.passwordCorrectionEmailOperationId !== operationId
       || item.passwordCorrectionEmailOk !== desiredOk
       || item.passwordCorrectionEmailError !== desiredError) {
       item.passwordCorrectionEmailOperationId = operationId;
-      item.passwordCorrectionEmailSentAt = now.toISOString();
-      item.passwordCorrectionEmailSentAtBeijing = formatBeijingTime(now);
+      item.passwordCorrectionEmailHandledAt = now.toISOString();
+      item.passwordCorrectionEmailSuppressed = desiredSuppressed;
+      if (desiredOk) {
+        item.passwordCorrectionEmailSentAt = now.toISOString();
+        item.passwordCorrectionEmailSentAtBeijing = formatBeijingTime(now);
+      }
       item.passwordCorrectionEmailOk = desiredOk;
       item.passwordCorrectionEmailError = desiredError;
       markerChanged = true;
     }
-    emailOk = emailOk || Boolean(result?.ok);
+    emailResults.push({
+      itemIndex,
+      delivered: desiredOk,
+      handled: desiredHandled,
+      suppressed: desiredSuppressed,
+      uncertain: Boolean(result?.uncertain),
+      error: desiredHandled ? "" : desiredError,
+    });
   }
 
   if (markerChanged) {
@@ -158,8 +184,29 @@ export async function POST(request) {
       );
     }
   }
-  if (!emailOk) return Response.json({ ok: false, error: "email_send_failed" }, { status: 502 });
-  return Response.json({ ok: true, revision: Number(order.revision ?? expectedRevision) });
+  const unhandled = emailResults.filter((result) => !result.handled);
+  if (unhandled.length) {
+    const uncertain = unhandled.some((result) => result.uncertain);
+    return Response.json({
+      ok: false,
+      error: uncertain ? "email_delivery_uncertain" : "email_send_failed",
+      retryable: !uncertain,
+      manualReview: uncertain,
+      failedItemIndexes: unhandled.map((result) => result.itemIndex),
+      revision: Number(order.revision ?? expectedRevision),
+    }, {
+      status: uncertain ? 409 : 502,
+      headers: uncertain ? undefined : { "Retry-After": "5" },
+    });
+  }
+  return Response.json({
+    ok: true,
+    email: emailResults.every((result) => result.delivered),
+    suppressed: emailResults.some((result) => result.suppressed),
+    deliveredCount: emailResults.filter((result) => result.delivered).length,
+    handledCount: emailResults.length,
+    revision: Number(order.revision ?? expectedRevision),
+  });
 }
 
 export async function GET() {

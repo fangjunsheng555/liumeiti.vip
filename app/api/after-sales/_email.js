@@ -1,4 +1,4 @@
-import { sendSimpleEmail } from "../_utils.js";
+import { getOrderById, sendSimpleEmail } from "../_utils.js";
 import { getSettings } from "../_settings.js";
 import { buildEmailBrandHeader } from "../email-brand.js";
 import { supportHtml, supportText } from "../../lib/settings-defaults.js";
@@ -19,7 +19,47 @@ function multiline(value) {
   return escapeHtml(value).replace(/\n/g, "<br>");
 }
 
+async function ticketWithCurrentOrderCredentials(ticket) {
+  const order = await getOrderById(ticket?.orderId);
+  if (!order) return null;
+  const orderItems = Array.isArray(order.items) && order.items.length
+    ? order.items
+    : [{
+        service: order.service || "",
+        label: order.serviceLabel || "",
+        account: order.account || "",
+        password: order.password || "",
+        staffAccount: order.staffAccount || "",
+        staffPassword: order.staffPassword || "",
+      }];
+  return {
+    ...ticket,
+    items: (Array.isArray(ticket?.items) ? ticket.items : []).map((item, arrayIndex) => {
+      const index = Number.isFinite(Number(item?.index)) ? Number(item.index) : arrayIndex;
+      const current = orderItems[index];
+      const credentialManaged = Boolean(
+        item?.credentialManaged
+        || ["spotify", "ai", "netflix", "disney", "max"].includes(String(item?.service || current?.service || "").toLowerCase()),
+      );
+      if (!current || !credentialManaged) return item;
+      return {
+        ...item,
+        account: String(current.staffAccount || current.account || ""),
+        password: String(current.staffPassword || current.password || ""),
+      };
+    }),
+  };
+}
+
 export async function sendAfterSalesEmail(ticket, kind = "received", { idempotencyKey = "" } = {}) {
+  const completed = kind === "completed";
+  if (completed) {
+    const currentTicket = await ticketWithCurrentOrderCredentials(ticket);
+    if (!currentTicket) {
+      return { ok: false, retryable: true, error: "order_credentials_unavailable" };
+    }
+    ticket = currentTicket;
+  }
   const settings = await getSettings();
   const locale = ticket?.locale === "en" ? "en" : "zh";
   const en = locale === "en";
@@ -27,7 +67,6 @@ export async function sendAfterSalesEmail(ticket, kind = "received", { idempoten
   const brandName = (en ? settings.brand.nameEn : settings.brand.name) || "冒央会社";
   const support = supportText(settings.support, locale);
   const supportLinks = supportHtml(settings.support, locale);
-  const completed = kind === "completed";
   const title = completed ? L("售后工单已处理完成", "Your after-sales ticket is complete") : L("您的售后工单已收到", "We received your after-sales ticket");
   const description = completed
     ? L(`订单 ${ticket.orderId} 的售后工单已处理完成。点击下方按钮可查看处理结果。`, `The after-sales ticket for order ${ticket.orderId} is complete. Use the button below to view the result.`)

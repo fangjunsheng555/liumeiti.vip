@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { reduceCartBundle } from "../app/lib/store.js";
 
 test("cart reducer computes add, remove and plan changes without mutating inputs", () => {
@@ -22,4 +23,11 @@ test("quote-only cart action atomically replaces products and plans", () => {
     { type: "add", key: "proxy-pay" },
   );
   assert.deepEqual(next, { cart: ["proxy-pay"], plans: {} });
+});
+
+test("cart persistence and update broadcasts stay outside React state updaters", async () => {
+  const source = await readFile(new URL("../app/lib/store.js", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /setCartState\s*\(\s*\([^)]*\)\s*=>[\s\S]{0,600}?(?:saveCart|saveCartBundle|emitCartUpdate)\s*\(/);
+  assert.doesNotMatch(source, /setCartPlansState\s*\(\s*\([^)]*\)\s*=>[\s\S]{0,600}?(?:saveCartPlans|saveCartBundle|emitCartUpdate)\s*\(/);
+  assert.match(source, /setCartState\(next\.cart\);\s*setCartPlansState\(next\.plans\);\s*saveCartBundle\(next\.cart, next\.plans\);/);
 });

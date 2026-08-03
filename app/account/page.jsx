@@ -5,6 +5,8 @@ import Link from "next/link";
 import MobileNav from "../components/MobileNav";
 import FloatingSupport from "../components/FloatingSupport";
 import AfterSalesTicketSheet from "../components/AfterSalesTicketSheet";
+import PushNotificationSettings from "../components/PushNotificationSettings";
+import EmailPreferenceSettings from "../components/EmailPreferenceSettings";
 import { useLocale } from "../components/LocaleProvider";
 import { DEFAULT_USER_AVATAR_ID, USER_AVATARS, normalizeUserAvatarId, userAvatarPath } from "../lib/avatars";
 import {
@@ -22,7 +24,7 @@ import {
   AlertTriangle, Wallet, TrendingDown, TrendingUp,
   User, Users, Edit3, Check,
   Gift, Send, CreditCard, RefreshCw, Share2, BadgePercent, ShieldCheck,
-  LifeBuoy,
+  LifeBuoy, Bell,
 } from "lucide-react";
 
 const INVITE_LINK_ORIGIN = "https://www.liumeiti.vip";
@@ -160,6 +162,10 @@ export default function AccountPage() {
   const [downlineModal, setDownlineModal] = useState(false);
   const [activityModal, setActivityModal] = useState(false);
   const [casetifyModal, setCasetifyModal] = useState(false);
+  const [preferencesModal, setPreferencesModal] = useState(false);
+  const preferencesTriggerRef = useRef(null);
+  const preferencesDialogRef = useRef(null);
+  const preferencesTitleRef = useRef(null);
   const [moneyBusy, setMoneyBusy] = useState("");
   const [moneyStatus, setMoneyStatus] = useState(null);
   const moneyRequestRef = useRef({});
@@ -210,12 +216,73 @@ export default function AccountPage() {
   useEffect(() => { load(); }, []);
 
   useEffect(() => {
+    if (state.loading || !state.email || typeof window === "undefined") return;
+    const orderId = String(new URLSearchParams(window.location.search).get("order") || "").trim().toUpperCase();
+    if (!orderId) return;
+    const order = state.orders.find((item) => String(item.orderId || "").trim().toUpperCase() === orderId);
+    if (order) setActiveOrder(order);
+  }, [state.loading, state.email, state.orders]);
+
+  useEffect(() => {
     if (!afterSalesOrder) return;
     document.body.style.overflow = "hidden";
     const onKey = (event) => { if (event.key === "Escape" && !afterSalesBusy) setAfterSalesOrder(null); };
     document.addEventListener("keydown", onKey);
     return () => { document.body.style.overflow = ""; document.removeEventListener("keydown", onKey); };
   }, [afterSalesOrder, afterSalesBusy]);
+
+  useEffect(() => {
+    if (!preferencesModal) return;
+    const previousOverflow = document.body.style.overflow;
+    const dialog = preferencesDialogRef.current;
+    const focusableSelector = [
+      "button:not([disabled])",
+      "select:not([disabled])",
+      "input:not([disabled])",
+      "a[href]",
+      "[tabindex]:not([tabindex='-1'])",
+    ].join(",");
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setPreferencesModal(false);
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const focusable = [...dialog.querySelectorAll(focusableSelector)]
+        .filter((element) => !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true");
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const focusIsOutsideCycle = !dialog.contains(document.activeElement)
+        || document.activeElement === dialog
+        || document.activeElement === preferencesTitleRef.current;
+      if (focusIsOutsideCycle) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", onKeyDown);
+    const focusFrame = window.requestAnimationFrame(() => preferencesTitleRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", onKeyDown);
+      preferencesTriggerRef.current?.focus();
+    };
+  }, [preferencesModal]);
 
   function openAfterSales(order) {
     if (!order?.afterSalesEligible || !order?.afterSalesToken || order?.afterSalesTicket?.status === "pending") return;
@@ -873,6 +940,18 @@ export default function AccountPage() {
               <span>{state.email}</span>
             </div>
           </div>
+          <button
+            ref={preferencesTriggerRef}
+            type="button"
+            className="account-preferences-trigger"
+            aria-haspopup="dialog"
+            aria-expanded={preferencesModal}
+            aria-controls="account-preferences-dialog"
+            onClick={() => setPreferencesModal(true)}
+          >
+            <Bell size={14} />
+            <span>{L("通知与偏好", "Notifications")}</span>
+          </button>
         </section>
 
         <section className="account-balance-card">
@@ -1025,7 +1104,48 @@ export default function AccountPage() {
             </div>
           )}
         </section>
+
       </main>
+
+      {preferencesModal && (
+        <div className="account-modal-mask account-preferences-mask" onClick={() => setPreferencesModal(false)}>
+          <section
+            id="account-preferences-dialog"
+            ref={preferencesDialogRef}
+            className="account-preferences-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="account-preferences-title"
+            aria-describedby="account-preferences-description"
+            tabIndex={-1}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="account-preferences-head">
+              <div>
+                <span>{L("账户设置", "Account settings")}</span>
+                <h2 id="account-preferences-title" ref={preferencesTitleRef} tabIndex={-1}>
+                  {L("通知与偏好", "Notifications & preferences")}
+                </h2>
+                <p id="account-preferences-description">
+                  {L("集中管理此设备的浏览器通知和账户邮件。", "Manage browser notifications for this device and account email preferences.")}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="account-modal-close"
+                aria-label={L("关闭通知与偏好", "Close notifications and preferences")}
+                onClick={() => setPreferencesModal(false)}
+              >
+                <X size={17} />
+              </button>
+            </header>
+            <div className="account-preferences-body">
+              <PushNotificationSettings locale={locale} />
+              <EmailPreferenceSettings locale={locale} />
+            </div>
+          </section>
+        </div>
+      )}
 
       {moneyModal && (
         <div className="account-modal-mask" onClick={() => !moneyBusy && setMoneyModal(null)}>

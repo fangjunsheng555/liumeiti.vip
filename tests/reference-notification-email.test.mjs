@@ -58,3 +58,34 @@ test("reference notice uses a concise customer-facing default subject", () => {
   assert.equal(result.subject, "订单服务更新");
   assert.doesNotMatch(result.html, /客服通知/);
 });
+
+test("reference notice preserves legacy no-items staff credentials and subscription links", () => {
+  const legacy = {
+    orderId: "LMLEGACYROCKET1",
+    service: "rocket",
+    serviceLabel: "机场节点",
+    cycle: "1年",
+    account: "buyer-legacy",
+    password: "buyer-password",
+    staffAccount: "staff-legacy",
+    staffPassword: "staff-password",
+    subscriptionLinks: {
+      shadowrocket: "https://example.com/sub/staff-legacy",
+      clash: "https://example.com/sub/staff-legacy?format=clash",
+    },
+  };
+  const result = buildReferenceNotificationEmail({
+    orders: [legacy],
+    subject: "服务资料更新",
+    message: "请使用最新资料。",
+    brandName: "冒央会社",
+    siteDomain: "www.liumeiti.vip",
+    locale: "zh",
+  });
+  assert.match(result.html, /staff-legacy/);
+  assert.match(result.html, /staff-password/);
+  assert.match(result.html, /format=clash/);
+  assert.doesNotMatch(result.html, /buyer-password/);
+  assert.match(result.text, /staff-legacy/);
+  assert.match(result.text, /format=clash/);
+});

@@ -766,7 +766,9 @@ if not raw then local result={ok=true,unlimited=true,changed=false}; saveop(KEYS
 local before=tonumber(raw); if not before or before~=math.floor(before) or before<0 or before>9007199254740991 then return encode({ok=false,error='invalid_stock_record'}) end
 local after=before+delta; if after<0 then return encode({ok=false,error='out_of_stock',remaining=before}) end
 if after>9007199254740991 then return encode({ok=false,error='invalid_stock_record'}) end
-redis.call('SET',KEYS[2],tostring(after)); local result={ok=true,changed=true,remaining=after}; saveop(KEYS[1],ARGV[1],result); return encode(result)
+redis.call('SET',KEYS[2],tostring(after))
+local result={ok=true,changed=true,remaining=after,before=before,after=after,changes={{service=ARGV[3],plan=ARGV[4],before=before,after=after,delta=delta}}}
+saveop(KEYS[1],ARGV[1],result); return encode(result)
 `;
 
 export async function adjustStockEffectAtomic(service, plan, delta, effectId) {
@@ -780,7 +782,7 @@ export async function adjustStockEffectAtomic(service, plan, delta, effectId) {
   return executeOperation({
     script: ADJUST_STOCK_EFFECT_SCRIPT,
     keys: [opKey, stockKey(product, planId)],
-    args: [requestHash, count],
+    args: [requestHash, count, product, planId],
     opKey,
     requestHash,
   });
@@ -804,11 +806,11 @@ for _,spec in ipairs(specs) do
     local after=before+delta
     if after<0 then return encode({ok=false,error='out_of_stock',name=name,remaining=before}) end
     if after>9007199254740991 then return encode({ok=false,error='invalid_stock_record',name=name}) end
-    table.insert(changes,{slot=slot,after=after,name=name}); limited[name]=true
+    table.insert(changes,{slot=slot,before=before,after=after,delta=delta,name=name,service=tostring(spec.service or ''),plan=tostring(spec.plan or '')}); limited[name]=true
   end
 end
 for _,change in ipairs(changes) do redis.call('SET',KEYS[change.slot],tostring(change.after)) end
-local result={ok=true,changedCount=#changes,limited=limited}; saveop(KEYS[1],ARGV[1],result); return encode(result)
+local result={ok=true,changedCount=#changes,limited=limited,changes=changes}; saveop(KEYS[1],ARGV[1],result); return encode(result)
 `;
 
 export async function adjustStockBatchEffectAtomic(adjustments, effectId) {
@@ -1450,6 +1452,10 @@ export async function confirmUsdtOrderAtomic({
     amount,
     amountMicros: String(micros),
     email: clean(current.email, 200),
+    userEmail: normalizeEmail(current.userEmail),
+    accountLifecycleId: clean(current.accountLifecycleId, 80).toLowerCase(),
+    locale: current.locale === "en" ? "en" : "zh",
+    businessTraceId: clean(current.businessTraceId, 40),
     actor: {
       staffId: Number.isSafeInteger(actorId) && actorId >= 0 ? actorId : 0,
       staffUsername: clean(effectActor?.staffUsername || "system", 60) || "system",

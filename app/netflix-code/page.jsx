@@ -54,8 +54,11 @@ export default function NetflixCodePage() {
   const en = locale === "en";
   const L = useCallback((zh, english) => (en ? english : zh), [en]);
   const pollTimer = useRef(null);
+  const codeCopyTimer = useRef(null);
   const pollCount = useRef(0);
   const sessionRef = useRef("");
+  const resultPanelRef = useRef(null);
+  const retrieveButtonRef = useRef(null);
   // Rejected mail events already shown to the user. Sending them back lets the
   // server wait for a fresh email instead of replaying the same failure.
   const seenRejectedRef = useRef([]);
@@ -73,6 +76,7 @@ export default function NetflixCodePage() {
   const [status, setStatus] = useState(null);
   const [retrieving, setRetrieving] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [codeCopyState, setCodeCopyState] = useState("idle");
 
   const availableOrders = useMemo(() => orders.filter(eligibleOrder), [orders]);
 
@@ -99,8 +103,15 @@ export default function NetflixCodePage() {
     return () => {
       alive = false;
       if (pollTimer.current) window.clearTimeout(pollTimer.current);
+      if (codeCopyTimer.current) window.clearTimeout(codeCopyTimer.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (!result) return undefined;
+    const frame = window.requestAnimationFrame(() => resultPanelRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [result]);
 
   function errorCopy(error) {
     return ({
@@ -207,6 +218,7 @@ export default function NetflixCodePage() {
       }
       if (data.kind === "code" || data.kind === "link" || data.kind === "household") {
         stopPolling();
+        setCodeCopyState("idle");
         setResult(data);
         setStatus(null);
         return;
@@ -250,6 +262,26 @@ export default function NetflixCodePage() {
     } catch {}
   }
 
+  async function copyResultCode() {
+    const value = String(result?.code || "").trim();
+    if (!value) return;
+    if (codeCopyTimer.current) window.clearTimeout(codeCopyTimer.current);
+    try {
+      await navigator.clipboard.writeText(value);
+      setCodeCopyState("copied");
+    } catch {
+      setCodeCopyState("error");
+    }
+    codeCopyTimer.current = window.setTimeout(() => setCodeCopyState("idle"), 2500);
+  }
+
+  function retrieveAnotherEmail() {
+    setResult(null);
+    setStatus(null);
+    setCodeCopyState("idle");
+    window.requestAnimationFrame(() => retrieveButtonRef.current?.focus());
+  }
+
   function resetSession() {
     stopPolling();
     sessionRef.current = "";
@@ -257,6 +289,7 @@ export default function NetflixCodePage() {
     setSession(null);
     setResult(null);
     setStatus(null);
+    setCodeCopyState("idle");
   }
 
   return (
@@ -317,7 +350,7 @@ export default function NetflixCodePage() {
             )}
           </section>
         ) : (
-          <section className={styles.workspace} aria-labelledby="workspace-title">
+          <section className={styles.workspace} aria-labelledby="workspace-title" aria-busy={retrieving}>
             <div className={styles.sectionTitle}>
               <span>02</span>
               <div><h2 id="workspace-title">{L("前往 Netflix 发送登录码", "Request a code on Netflix")}</h2><p>{L("按下面三步完成登录。", "Follow these three steps to sign in.")}</p></div>
@@ -337,43 +370,90 @@ export default function NetflixCodePage() {
             </ol>
 
             {!result && (
-              <button type="button" className={styles.retrieve} onClick={beginRetrieve} disabled={retrieving}>
+              <button ref={retrieveButtonRef} type="button" className={styles.retrieve} onClick={beginRetrieve} disabled={retrieving}>
                 {retrieving ? <LoaderCircle className="spin-icon" size={17} /> : <RefreshCw size={17} />}
                 {retrieving ? L("正在接收…", "Waiting…") : L("已在 Netflix 发送，读取登录码", "Sent on Netflix · Get my code")}
               </button>
             )}
 
             {result?.kind === "code" && (
-              <div className={styles.codeResult}>
-                <span>{L("您的 Netflix 登录码", "Your Netflix sign-in code")}</span>
-                <strong>{result.code}</strong>
-                <p><Clock3 size={14} />{L("请尽快输入 Netflix，通常在 15 分钟内有效。", "Enter it on Netflix promptly; it is usually valid for 15 minutes.")}</p>
-              </div>
+              <section ref={resultPanelRef} tabIndex={-1} className={`${styles.resultPanel} ${styles.codeResult}`} aria-labelledby="netflix-code-result-title">
+                <div className={styles.resultHeading}>
+                  <span className={styles.resultIcon} aria-hidden="true"><Check size={18} strokeWidth={3} /></span>
+                  <div>
+                    <p>{L("登录码已读取", "Sign-in code retrieved")}</p>
+                    <h3 id="netflix-code-result-title">{L("您的 Netflix 登录码", "Your Netflix sign-in code")}</h3>
+                  </div>
+                </div>
+
+                <div className={styles.codeSurface}>
+                  <output tabIndex={0} aria-label={L(`Netflix 登录码 ${result.code}`, `Netflix sign-in code ${result.code}`)}>{result.code}</output>
+                  <span>{L("4 位登录码", "4-digit sign-in code")}</span>
+                </div>
+
+                <p className={styles.copyFeedback} data-state={codeCopyState} role="status" aria-live="polite">
+                  {codeCopyState === "copied"
+                    ? L("已复制，可返回 Netflix 粘贴", "Copied. Return to Netflix and paste it")
+                    : codeCopyState === "error"
+                    ? L("复制失败，请选中上方登录码手动复制", "Copy failed. Select the code above to copy it manually")
+                    : "\u00a0"}
+                </p>
+
+                <div className={styles.resultDetails}>
+                  <p><Clock3 size={16} /><span><b>{L("请尽快使用", "Use it promptly")}</b>{L("Netflix 登录码通常在 15 分钟内有效。", "Netflix sign-in codes are usually valid for 15 minutes.")}</span></p>
+                  <p><ShieldCheck size={16} /><span><b>{L("注意安全", "Keep it private")}</b>{L("仅在 Netflix 官方页面输入，请勿分享给他人。", "Enter it only on an official Netflix page. Do not share it.")}</span></p>
+                </div>
+
+                <div className={styles.resultActions}>
+                  <button type="button" className={styles.copyCode} onClick={copyResultCode}>
+                    {codeCopyState === "copied" ? <Check size={16} /> : <Clipboard size={16} />}
+                    {codeCopyState === "copied" ? L("已复制登录码", "Code copied") : L("复制登录码", "Copy sign-in code")}
+                  </button>
+                  <button type="button" className={styles.again} onClick={retrieveAnotherEmail}><RefreshCw size={15} />{L("读取下一封邮件", "Retrieve another email")}</button>
+                </div>
+              </section>
             )}
 
             {result?.kind === "link" && (
-              <div className={styles.linkResult}>
-                <span>{L("请在 Netflix 完成登录确认", "Confirm this sign-in on Netflix")}</span>
-                <p>{L("这封邮件没有直接显示验证码。点击下方按钮，在 Netflix 官方页面获取临时代码。", "This email does not show a code directly. Use the official Netflix page below to get your temporary code.")}</p>
-                <a href={result.url} target="_blank" rel="noopener noreferrer">{L("前往 Netflix 获取临时代码", "Get the temporary code on Netflix")}<ExternalLink size={15} /></a>
-                <small><Clock3 size={13} />{L("链接仅用于本次登录，请勿转发。", "This link is for this sign-in only. Do not share it.")}</small>
-              </div>
+              <section ref={resultPanelRef} tabIndex={-1} className={`${styles.resultPanel} ${styles.linkResult}`} aria-labelledby="netflix-link-result-title">
+                <div className={styles.resultHeading}>
+                  <span className={styles.resultIcon} aria-hidden="true"><Check size={18} strokeWidth={3} /></span>
+                  <div><p>{L("确认邮件已读取", "Confirmation email retrieved")}</p><h3 id="netflix-link-result-title">{L("请在 Netflix 完成登录确认", "Confirm this sign-in on Netflix")}</h3></div>
+                </div>
+                <p className={styles.resultDescription}>{L("这封邮件没有直接显示验证码。请通过下方 Netflix 官方页面获取临时代码。", "This email does not show a code directly. Use the official Netflix page below to get your temporary code.")}</p>
+                <div className={styles.resultActions}>
+                  <a className={styles.netflixAction} href={result.url} target="_blank" rel="noopener noreferrer">{L("前往 Netflix 获取临时代码", "Get the temporary code on Netflix")}<ExternalLink size={15} /></a>
+                  <button type="button" className={styles.again} onClick={retrieveAnotherEmail}><RefreshCw size={15} />{L("读取下一封邮件", "Retrieve another email")}</button>
+                </div>
+                <p className={styles.resultSafety}><Clock3 size={14} />{L("链接仅用于本次登录，请勿转发。", "This link is for this sign-in only. Do not share it.")}</p>
+              </section>
             )}
 
             {result?.kind === "household" && (
-              <div className={styles.linkResult}>
-                <span>{L("请在 Netflix 确认同户设备更新", "Confirm the household update on Netflix")}</span>
-                <p>{L("已收到「更新 Netflix 同户设备」确认邮件。点击下方按钮打开 Netflix 官方确认页（即邮件中的「是的，是我本人」），按页面提示完成确认并获取验证码。", "The Netflix household update email has arrived. The button below opens the official Netflix confirmation page (the “Yes, This Was Me” step). Follow the page to confirm and get your verification code.")}</p>
-                <a href={result.url} target="_blank" rel="noopener noreferrer">{L("前往 Netflix 确认本次请求", "Confirm this request on Netflix")}<ExternalLink size={15} /></a>
-                <small><Clock3 size={13} />{L("链接约 15 分钟内有效，请勿转发。", "The link expires in about 15 minutes. Do not share it.")}</small>
-              </div>
+              <section ref={resultPanelRef} tabIndex={-1} className={`${styles.resultPanel} ${styles.linkResult}`} aria-labelledby="netflix-household-result-title">
+                <div className={styles.resultHeading}>
+                  <span className={styles.resultIcon} aria-hidden="true"><Check size={18} strokeWidth={3} /></span>
+                  <div><p>{L("同户确认邮件已读取", "Household confirmation retrieved")}</p><h3 id="netflix-household-result-title">{L("请在 Netflix 确认同户设备更新", "Confirm the household update on Netflix")}</h3></div>
+                </div>
+                <p className={styles.resultDescription}>{L("打开 Netflix 官方确认页，选择邮件中的「是的，是我本人」，再按页面提示完成确认并获取验证码。", "Open the official Netflix confirmation page, complete the “Yes, This Was Me” step, then follow Netflix's instructions to get the verification code.")}</p>
+                <div className={styles.resultActions}>
+                  <a className={styles.netflixAction} href={result.url} target="_blank" rel="noopener noreferrer">{L("前往 Netflix 确认本次请求", "Confirm this request on Netflix")}<ExternalLink size={15} /></a>
+                  <button type="button" className={styles.again} onClick={retrieveAnotherEmail}><RefreshCw size={15} />{L("读取下一封邮件", "Retrieve another email")}</button>
+                </div>
+                <p className={styles.resultSafety}><Clock3 size={14} />{L("链接约 15 分钟内有效，请勿转发。", "The link expires in about 15 minutes. Do not share it.")}</p>
+              </section>
             )}
-
-            {result && <button type="button" className={styles.again} onClick={() => { setResult(null); setStatus(null); }}>{L("读取下一封邮件", "Retrieve another email")}</button>}
           </section>
         )}
 
-        {status && <div className={`${styles.status} ${styles[status.type]}`}>{status.text}</div>}
+        {status && (
+          <div className={`${styles.status} ${styles[status.type]}`} role={status.type === "error" ? "alert" : "status"} aria-live={status.type === "error" ? "assertive" : "polite"}>
+            <span className={styles.statusIcon} aria-hidden="true">
+              {status.type === "success" ? <Check size={15} /> : status.type === "info" && retrieving ? <LoaderCircle className="spin-icon" size={15} /> : "!"}
+            </span>
+            <div><b>{status.type === "success" ? L("已完成", "Done") : status.type === "error" ? L("暂未完成", "Not completed") : retrieving ? L("正在读取邮件", "Retrieving email") : L("提示", "Notice")}</b><p>{status.text}</p></div>
+          </div>
+        )}
 
         <footer className={styles.note}>
           <ShieldCheck size={15} />

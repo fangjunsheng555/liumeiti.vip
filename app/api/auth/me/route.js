@@ -14,6 +14,7 @@ import { localizeOrderItemLabel, localizeCycle } from "../../../lib/order-i18n.j
 import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../../after-sales/_store.js";
 import { orderExpirySummary, renewalCheckoutPath } from "../../../lib/order-expiry.js";
 import { effectiveQuoteStatus } from "../../_quote-expiry.js";
+import { withApiTelemetry } from "../../_observability.js";
 
 function subscriptionLinks(username) {
   const encoded = encodeURIComponent(String(username || "").trim());
@@ -47,13 +48,15 @@ function publicOrder(order, locale = "zh") {
       return out;
     });
   } else {
+    const account = order.staffAccount || order.account || "";
+    const password = order.staffPassword || order.password || "";
     items = [{
       service: order.service || "",
       label: localizeOrderItemLabel(order.service, order.plan || order.rocketPlan, order.serviceLabel || "", locale),
       cycle: localizeCycle(order.cycle || "", locale),
       amount: Number(order.finalAmount || 0),
-      account: order.account || "",
-      password: order.password || "",
+      account,
+      password,
       subscriptionLinks: order.service === "rocket" ? subscriptionLinks(order.orderId) : null,
     }];
   }
@@ -111,6 +114,26 @@ function maskEmail(email) {
   return `${localMask}@${domainMask}${parts.length ? "." + parts.join(".") : ""}`;
 }
 
+function isToolReadOnlyAccountRequest(request) {
+  const allowed = new Set([
+    "https://tool.liumeiti.vip",
+    process.env.TOOL_ORIGIN || "",
+    ...(process.env.NODE_ENV !== "production"
+      ? ["http://localhost:8799", "http://127.0.0.1:8799"]
+      : []),
+  ].filter(Boolean));
+  return allowed.has(String(request?.headers?.get?.("origin") || ""));
+}
+
+function refreshedSessionHeaders(auth) {
+  const headers = { "Cache-Control": "no-store" };
+  if (auth.legacy) {
+    const refreshed = refreshedUserSessionToken(auth);
+    if (refreshed) headers["Set-Cookie"] = setCookieValue("lm_user", refreshed);
+  }
+  return headers;
+}
+
 async function publicReferralDownlines(email, locale = "zh") {
   // 走反向索引(getReferralDownlineRecords),不再全表扫描;已按 level→新到旧排序。
   const records = await getReferralDownlineRecords(email);
@@ -124,7 +147,7 @@ async function publicReferralDownlines(email, locale = "zh") {
   }));
 }
 
-export async function GET(request) {
+async function getAccountHandler(request) {
   const auth = await authenticateUserRequest(request);
   if (!auth.ok) return userAuthErrorResponse(auth);
   const locale = getCookieFromRequest(request, "locale") === "en" ? "en" : "zh";
@@ -147,6 +170,21 @@ export async function GET(request) {
   }
   const profile = user ? await ensureUserReferralProfile(sessionEmail, user, profileWriteOptions) : null;
 
+  // The external tools site needs only enough data for its account chrome.
+  // Never expose order credentials, coupons, referrals or after-sales records
+  // cross-origin, even though GET /api/auth/me itself is read-only.
+  if (isToolReadOnlyAccountRequest(request)) {
+    return Response.json({
+      ok: true,
+      email: sessionEmail,
+      accountLifecycleId: auth.accountLifecycleId,
+      username: profile?.username || username || "",
+      avatarId: validUserAvatarId(profile?.avatarId) ? profile.avatarId : avatarId,
+      balance: Number(profile?.balance || 0),
+      banned: !!profile?.banned,
+    }, { headers: refreshedSessionHeaders(auth) });
+  }
+
   const myOrderRecords = await getOrdersByEmail(sessionEmail, 100);
   const activeTickets = await getActiveAfterSalesTickets(myOrderRecords.map((order) => order.orderId));
   const myOrders = myOrderRecords.map((order) => {
@@ -163,11 +201,6 @@ export async function GET(request) {
     };
   });
 
-  const headers = {};
-  if (auth.legacy) {
-    const refreshed = refreshedUserSessionToken(auth);
-    if (refreshed) headers["Set-Cookie"] = setCookieValue("lm_user", refreshed);
-  }
   return Response.json({
     ok: true,
     email: sessionEmail,
@@ -180,11 +213,11 @@ export async function GET(request) {
     referralDownlines: await publicReferralDownlines(sessionEmail, locale),
     banned: !!profile?.banned,
     orders: myOrders,
-  }, { headers });
+  }, { headers: refreshedSessionHeaders(auth) });
 }
 
 // PATCH /api/auth/me  body: { username?, avatarId? }
-export async function PATCH(request) {
+async function updateAccountHandler(request) {
   const auth = await authenticateUserRequest(request);
   if (!auth.ok) return userAuthErrorResponse(auth);
   const en = getCookieFromRequest(request, "locale") === "en";
@@ -222,10 +255,10 @@ export async function PATCH(request) {
     const stale = saved?.error === "session_state_changed";
     return Response.json({ ok: false, error: stale ? "session_revoked" : "save_failed" }, { status: stale ? 401 : 500 });
   }
-  const headers = {};
-  if (auth.legacy) {
-    const refreshed = refreshedUserSessionToken(auth);
-    if (refreshed) headers["Set-Cookie"] = setCookieValue("lm_user", refreshed);
-  }
-  return Response.json({ ok: true, username: user.username || "", avatarId: user.avatarId || "" }, { headers });
+  return Response.json({ ok: true, username: user.username || "", avatarId: user.avatarId || "" }, {
+    headers: refreshedSessionHeaders(auth),
+  });
 }
+
+export const GET = withApiTelemetry("auth_account", getAccountHandler);
+export const PATCH = withApiTelemetry("auth_account", updateAccountHandler);

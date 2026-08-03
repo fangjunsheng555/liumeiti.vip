@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { adjustStockBatchEffectAtomic } from "./_money.js";
+import { enqueueOrderPushEvent, enqueueRestockPushEvent } from "./_push.js";
+import { appendBusinessTraceEvent } from "./_observability.js";
 import {
   clean,
   formatBeijingTime,
@@ -36,6 +38,41 @@ function actorSnapshot(actor) {
   };
 }
 
+async function traceOrderBestEffort(order, event) {
+  if (!order?.orderId) return;
+  try {
+    await appendBusinessTraceEvent(order.orderId, {
+      businessTraceId: order.businessTraceId,
+      ...event,
+    });
+  } catch {}
+}
+
+async function enqueueRestocksFromResult(result, effectId) {
+  const changes = Array.isArray(result?.changes) ? result.changes : [];
+  const restocked = changes.filter((change) => (
+    Number(change?.before) === 0
+    && Number(change?.after) > 0
+    && clean(change?.service, 40)
+    && clean(change?.plan, 40)
+  ));
+  if (!restocked.length) return { ok: true, queued: 0 };
+  let queued;
+  try {
+    queued = await Promise.all(restocked.map((change) => enqueueRestockPushEvent(
+      change.service,
+      change.plan,
+      effectId,
+    )));
+  } catch (error) {
+    return { ok: false, queued: 0, error: error?.message || "push_enqueue_failed" };
+  }
+  return {
+    ok: queued.every((item) => item?.ok === true),
+    queued: queued.filter((item) => item?.queued).length,
+  };
+}
+
 async function runEffects(target, transition) {
   const plan = transition.plan || {};
   const actor = transition.actor || null;
@@ -47,6 +84,7 @@ async function runEffects(target, transition) {
       `order-transition:${transition.id}:stock-restore`,
     );
     if (!restored.ok) return { ok: false, error: restored.error || "stock_restore_failed" };
+    const restockPush = await enqueueRestocksFromResult(restored, `order-transition:${transition.id}:stock-restore`);
     for (const item of plan.restoreStock) {
       if (target.items?.[item.index]) {
         target.items[item.index].stockReserved = false;
@@ -55,6 +93,7 @@ async function runEffects(target, transition) {
       }
     }
     results.stockRestore = restored;
+    results.stockRestorePush = restockPush;
   }
 
   if (plan.refund) {
@@ -100,7 +139,12 @@ async function runEffects(target, transition) {
         if (!rolledBack.ok) {
           return { ok: false, error: rolledBack.error || "stock_rollback_failed", partial: true };
         }
+        const rollbackPush = await enqueueRestocksFromResult(
+          rolledBack,
+          `order-transition:${transition.id}:stock-reserve-rollback`,
+        );
         results.stockReserveRollback = rolledBack;
+        results.stockReserveRollbackPush = rollbackPush;
       }
       return {
         ok: false,
@@ -257,12 +301,49 @@ export async function resumePendingOrderTransition(entry) {
       && Array.isArray(latest.order.transitionHistory)
       && latest.order.transitionHistory.some((item) => item?.id === transition.id)) {
       await removePendingIndex(current.orderId);
-      return { ok: true, order: latest.order, results: effects.results, idempotent: true };
+      const push = transition.fromStatus !== latest.order.status
+        ? await enqueueOrderPushEvent(
+          latest.order,
+          `order.${latest.order.status}`,
+          transition.mutationId || transition.id,
+        ).catch((error) => ({ ok: false, error: error?.message || "push_enqueue_failed" }))
+        : { ok: true, skipped: true };
+      await traceOrderBestEffort(latest.order, {
+        stage: "order_status_transition",
+        component: "order_transition",
+        outcome: "ok",
+        operationId: transition.mutationId || transition.id,
+      });
+      await traceOrderBestEffort(latest.order, {
+        stage: "push_enqueue_order",
+        component: "push",
+        outcome: push.ok === false ? "error" : push.skipped ? "skipped" : "ok",
+        operationId: transition.mutationId || transition.id,
+        errorCode: push.error || push.reason || "",
+      });
+      return { ok: true, order: latest.order, results: effects.results, push, idempotent: true };
     }
     return { ok: false, error: "stale_revision" };
   }
   await removePendingIndex(current.orderId);
-  return { ok: true, order: target, results: effects.results };
+  const push = transition.fromStatus !== target.status
+    ? await enqueueOrderPushEvent(target, `order.${target.status}`, transition.mutationId || transition.id)
+      .catch((error) => ({ ok: false, error: error?.message || "push_enqueue_failed" }))
+    : { ok: true, skipped: true };
+  await traceOrderBestEffort(target, {
+    stage: "order_status_transition",
+    component: "order_transition",
+    outcome: "ok",
+    operationId: transition.mutationId || transition.id,
+  });
+  await traceOrderBestEffort(target, {
+    stage: "push_enqueue_order",
+    component: "push",
+    outcome: push.ok === false ? "error" : push.skipped ? "skipped" : "ok",
+    operationId: transition.mutationId || transition.id,
+    errorCode: push.error || push.reason || "",
+  });
+  return { ok: true, order: target, results: effects.results, push };
 }
 
 export async function beginOrderTransition(entry, targetOrder, plan, options = {}) {

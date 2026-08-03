@@ -26,6 +26,13 @@ import {
   commitOrderCreationAtomic, findOrderCreationByIdempotencyKey,
   idempotencyPayloadHash, orderIdForIdempotencyKey, requiredIdempotencyKey,
 } from "../_money.js";
+import { marketingAttributionFromRequest } from "../_mail-preferences.js";
+import {
+  appendBusinessTraceEvent,
+  businessTraceIdForOrder,
+  makeTraceId,
+  withApiTelemetry,
+} from "../_observability.js";
 
 // 从合并后的目录商品里解析规格(沿用 rocket single→basic 别名 + 默认规格回退)。
 function resolveCatalogPlan(product, value) {
@@ -228,10 +235,38 @@ async function deliverOrderNotifications(order, knownSettings = null) {
     deliverOnce(`${prefix}:email`, () => sendOrderEmail(order))
       .then((result) => ({ channel: "email", ...result })),
   ]);
-  return attempts.filter((item) => !item.skipped);
+  return attempts;
 }
 
-export async function POST(request) {
+function queueOrderTrace(order, event = {}) {
+  if (!order?.orderId) return;
+  const task = () => appendBusinessTraceEvent(order.orderId, {
+    businessTraceId: order.businessTraceId,
+    traceId: order.requestTraceId,
+    ...event,
+  }).catch(() => null);
+  try {
+    after(task);
+  } catch {
+    queueMicrotask(task);
+  }
+}
+
+function traceOrderDeliveries(order, deliveries = []) {
+  for (const delivery of deliveries) {
+    queueOrderTrace(order, {
+      stage: `notification_${delivery.channel || "unknown"}`,
+      component: delivery.channel || "notification",
+      outcome: delivery.ok === false
+        ? (delivery.uncertain ? "uncertain" : "error")
+        : delivery.delivered === false || delivery.suppressed || delivery.skipped ? "skipped" : "ok",
+      errorCode: delivery.reason || delivery.error || delivery.code || "",
+      operationId: `order-created:${order.orderId}:${delivery.channel || "unknown"}`,
+    });
+  }
+}
+
+async function handler(request) {
   let body = {};
   try { body = await request.json(); } catch (error) { body = {}; }
   const idempotency = requiredIdempotencyKey(request);
@@ -347,11 +382,19 @@ export async function POST(request) {
   if (previousAttempt.found) {
     const existing = previousAttempt.order;
     const deliveries = await deliverOrderNotifications(existing);
+    queueOrderTrace(existing, {
+      stage: "order_commit_replay",
+      component: "order",
+      outcome: "ok",
+      operationId: serverOperationId,
+    });
+    traceOrderDeliveries(existing, deliveries);
     return Response.json({
       ok: true, orderId: existing.orderId, items: existing.items || [],
       paidAmount: existing.paidAmount, paidCurrency: existing.paidCurrency,
       paymentMethod: existing.paymentMethod, couponDiscount: existing.couponDiscount || 0,
       deliveries, idempotent: true,
+      traceId: existing.businessTraceId || businessTraceIdForOrder(existing.orderId),
     });
   }
 
@@ -542,6 +585,10 @@ export async function POST(request) {
       if (Object.keys(out).length) attribution = out;
     }
   } catch (e) {}
+  let marketingAttribution = null;
+  try {
+    marketingAttribution = marketingAttributionFromRequest(request);
+  } catch {}
 
   // Generate subscription links per item using the orderId (one shared link
   // for all rocket items in the cart — a future change can suffix `-{i}` if
@@ -554,6 +601,8 @@ export async function POST(request) {
 
   const order = {
     orderId,
+    businessTraceId: businessTraceIdForOrder(orderId),
+    requestTraceId: makeTraceId(),
     revision: 1,
     status: "received",
     locale: getCookieFromRequest(request, "locale") === "en" ? "en" : "zh",
@@ -561,6 +610,7 @@ export async function POST(request) {
     accountLifecycleId: userAccountLifecycleId || null,
     referral,
     attribution, // 营销渠道首次来源（utm/referrer/landing/fromTool），用于后台漏斗按来源拆分
+    marketingAttribution, // 最近一次已签名营销邮件点击（30 天），与首次来源分开保存
     createdAt: now.toISOString(),
     createdAtBeijing: formatBeijingTime(now),
     clientIp,
@@ -625,6 +675,13 @@ export async function POST(request) {
   });
   if (!committed.ok) {
     const retryableFailure = isRetryableMoneyOperationFailure(committed);
+    queueOrderTrace(order, {
+      stage: "order_commit",
+      component: "order",
+      outcome: retryableFailure ? "retry" : "error",
+      operationId: serverOperationId,
+      errorCode: committed.error || "storage_failed",
+    });
     if (paymentMethod === "redeem" && !retryableFailure && ![
       "idempotency_conflict",
       "session_state_changed",
@@ -645,14 +702,22 @@ export async function POST(request) {
     }, { status: retryableFailure ? 503 : committed.error === "session_state_changed" ? 401 : committed.error === "account_banned" ? 403 : (conflictErrors.has(committed.error) ? 409 : 400) });
   }
   Object.assign(order, committed.order || {});
+  queueOrderTrace(order, {
+    stage: committed.idempotent ? "order_commit_replay" : "order_committed",
+    component: "order",
+    outcome: "ok",
+    operationId: serverOperationId,
+  });
   if (paymentMethod === "redeem") await clearRedeemRateLimit(redeemGuard);
   const deliveries = [{ channel: "storage", ok: true }];
   if (committed.idempotent) {
     const deliveries = await deliverOrderNotifications(order, settings);
+    traceOrderDeliveries(order, deliveries);
     return Response.json({
       ok: true, orderId: order.orderId, items: order.items || [], paidAmount: order.paidAmount,
       paidCurrency: order.paidCurrency, paymentMethod: order.paymentMethod,
       couponDiscount: order.couponDiscount || 0, deliveries, idempotent: true,
+      traceId: order.businessTraceId,
     });
   }
   try {
@@ -669,6 +734,7 @@ export async function POST(request) {
   });
 
   deliveries.push(...await deliverOrderNotifications(order, settings));
+  traceOrderDeliveries(order, deliveries);
 
   // Confirm after the response so USDT submission stays fast. A short retry
   // catches the normal gap between broadcasting and TRON confirmation.
@@ -702,5 +768,8 @@ export async function POST(request) {
     paymentMethod,
     couponDiscount,
     deliveries,
+    traceId: order.businessTraceId,
   });
 }
+
+export const POST = withApiTelemetry("order_create", handler);

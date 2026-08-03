@@ -10,7 +10,16 @@ function esc(value) {
 function latestItems(order) {
   const source = Array.isArray(order?.items) && order.items.length
     ? order.items
-    : [{ label: order?.serviceLabel || "" }];
+    : [{
+        label: order?.serviceLabel || "",
+        cycle: order?.cycle || "",
+        service: order?.service || "",
+        account: order?.account || "",
+        password: order?.password || "",
+        staffAccount: order?.staffAccount || "",
+        staffPassword: order?.staffPassword || "",
+        subscriptionLinks: order?.subscriptionLinks || null,
+      }];
   return source.map((item) => ({
     label: item?.label || item?.service || order?.serviceLabel || "--",
     cycle: item?.cycle || "",

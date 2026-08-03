@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -15,6 +15,7 @@ import {
   Sparkles,
   Star,
   Tag,
+  Bell,
   X,
 } from "lucide-react";
 import {
@@ -42,6 +43,7 @@ import FloatingSupport from "../components/FloatingSupport";
 import { GUIDE_SLUG_BY_KEY, SERVICE_SLUG_BY_KEY } from "../services/service-data";
 import { useLocale } from "../components/LocaleProvider";
 import { localizeCatalogDisplayPrice } from "../lib/catalog-price";
+import StockAlertButton from "../components/StockAlertButton";
 
 const PRODUCT_PROMOS = {
   spotify: { badge: "热销 No.1", badgeIcon: Flame, originalPrice: 298, monthlyRange: [5200, 7600] },
@@ -389,15 +391,15 @@ export default function ShopPage() {
                     </button>
                     <button
                       type="button"
-                      className={`primary-btn product-cta${added ? " in-cart" : ""}${soldOut ? " sold-out" : ""}`}
-                      disabled={soldOut}
+                      className={`primary-btn product-cta${added ? " in-cart" : ""}`}
                       onClick={(event) => {
                         event.stopPropagation();
-                        handleCartAction(item);
+                        if (soldOut) openPlanSelector(item);
+                        else handleCartAction(item);
                       }}
                     >
-                      {soldOut ? null : added ? <Check size={14} /> : <ShoppingCart size={14} />}
-                      {soldOut ? L("已售罄", "Sold out") : added ? L("已加入", "Added") : L("加入购物车", "Add to cart")}
+                      {soldOut ? <Bell size={14} /> : added ? <Check size={14} /> : <ShoppingCart size={14} />}
+                      {soldOut ? L("到货提醒", "Restock alert") : added ? L("已加入", "Added") : L("加入购物车", "Add to cart")}
                     </button>
                   </div>
                 </article>
@@ -512,15 +514,14 @@ export default function ShopPage() {
                 <div className="detail-body">{selectedProduct.detailBody}</div>
                 <div className="modal-actions product-detail-actions">
                   <button
-                    className={`primary-btn${isInCart(selectedProduct.key) ? " in-cart" : ""}${allPlansSoldOut(selectedProduct.key) ? " sold-out" : ""}`}
-                    disabled={allPlansSoldOut(selectedProduct.key)}
+                    className={`primary-btn${isInCart(selectedProduct.key) ? " in-cart" : ""}`}
                     onClick={() => hasProductPlans(selectedProduct.key)
                       ? openPlanSelector(selectedProduct)
                       : handleCartAction(selectedProduct)}
                   >
-                    {allPlansSoldOut(selectedProduct.key) ? null : isInCart(selectedProduct.key) ? <Check size={16} /> : <ShoppingCart size={16} />}
+                    {allPlansSoldOut(selectedProduct.key) ? <Bell size={16} /> : isInCart(selectedProduct.key) ? <Check size={16} /> : <ShoppingCart size={16} />}
                     {allPlansSoldOut(selectedProduct.key)
-                      ? L("已售罄", "Sold out")
+                      ? L("选择到货提醒", "Choose a restock alert")
                       : hasProductPlans(selectedProduct.key)
                       ? (isInCart(selectedProduct.key) ? L("更换规格", "Change plan") : L("选择规格", "Select plan"))
                       : (isInCart(selectedProduct.key) ? L("已加入购物车", "In cart") : L("加入购物车", "Add to cart"))}
@@ -564,8 +565,8 @@ export default function ShopPage() {
                 const plan = localizePlan(planPickerProduct.key, rawPlan, locale);
                 const optSoldOut = isPlanSoldOut(planPickerProduct.key, plan.id);
                 return (
+                <Fragment key={plan.id}>
                 <button
-                  key={plan.id}
                   type="button"
                   disabled={optSoldOut}
                   className={`shop-rocket-plan-option${planChoices[planPickerProduct.key] === plan.id ? " selected" : ""}${optSoldOut ? " sold-out" : ""}`}
@@ -577,6 +578,10 @@ export default function ShopPage() {
                   </span>
                   <b>¥{plan.amount}<em>/{plan.unit || (locale === "en" ? "yr" : "年")}</em></b>
                 </button>
+                {optSoldOut && (
+                  <StockAlertButton service={planPickerProduct.key} plan={plan.id} locale={locale} />
+                )}
+                </Fragment>
                 );
               })}
             </div>

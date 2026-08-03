@@ -6,6 +6,7 @@ process.env.KV_REST_API_URL = "http://durable-operation.redis.test";
 process.env.KV_REST_API_TOKEN = "test-token";
 
 const values = new Map();
+let dropNextCompletionResponse = false;
 
 function executeEval(command) {
   const script = String(command[1] || "");
@@ -58,9 +59,22 @@ const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(String(input));
   if (url.origin !== "http://durable-operation.redis.test") return originalFetch(input, init);
-  if (url.pathname !== "/pipeline") throw new Error("durable operations must use one atomic pipeline EVAL");
-  const commands = JSON.parse(String(init.body || "[]"));
-  return Response.json(commands.map((command) => ({ result: executeEval(command) })));
+  if (url.pathname === "/pipeline") {
+    const commands = JSON.parse(String(init.body || "[]"));
+    const rows = commands.map((command) => ({ result: executeEval(command) }));
+    if (dropNextCompletionResponse
+      && commands.some((command) => String(command?.[1] || "").includes("record.state='done'"))) {
+      dropNextCompletionResponse = false;
+      // Redis ran and committed the script, but the REST response disappeared.
+      return Response.json({ error: "simulated lost response" }, { status: 503 });
+    }
+    return Response.json(rows);
+  }
+  const command = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  if (command[0]?.toUpperCase() === "GET") {
+    return Response.json({ result: values.get(command[1]) ?? null });
+  }
+  throw new Error("unexpected durable operation command");
 };
 
 const durable = await import("../app/api/_durable-operation.js");
@@ -79,6 +93,7 @@ test("a durable operation survives a lost response and permanently rejects key r
   assert.equal(first.ok, true);
   assert.equal(first.isNew, true);
   assert.equal(first.state, "started");
+  assert.equal(durable.durableOperationId(input), first.operationId);
 
   // Model a worker crash or a dropped HTTP response: the exact retry resumes
   // the same permanent operation instead of minting another effect identity.
@@ -98,12 +113,14 @@ test("a durable operation survives a lost response and permanently rejects key r
   assert.equal(immutablePlan.created, false);
   assert.equal(immutablePlan.plan.recipients[0].email, "first@example.com");
 
+  dropNextCompletionResponse = true;
   const completed = await durable.completeDurableOperation(retryBeforeCompletion, {
     ok: true,
     deleted: "LMORDER1",
     archived: true,
   });
   assert.equal(completed.ok, true);
+  assert.equal(completed.recovered, true);
 
   const lostResponseRetry = await durable.claimDurableOperation(input);
   assert.equal(lostResponseRetry.state, "done");

@@ -12,6 +12,7 @@ export async function buildMarketingArgs(brandName, siteDomain, siteUrl) {
       key,
       name,
       subtitle,
+      active: byKey[key]?.active !== false,
       price: byKey[key]?.active !== false ? (byKey[key]?.priceText || "查看实时价格") : "查看实时价格",
       href: origin + href,
       icon,

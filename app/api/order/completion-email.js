@@ -14,10 +14,26 @@ function escapeHtml(value) {
 
 function formatMoney(value) { return "¥" + Number(value || 0).toFixed(0); }
 
+function completionItems(order) {
+  if (Array.isArray(order?.items) && order.items.length > 0) return order.items;
+  return [{
+    service: order?.service || "",
+    label: order?.serviceLabel || "",
+    cycle: order?.cycle || "",
+    amount: Number(order?.finalAmount || 0),
+    plan: order?.plan || order?.rocketPlan || "",
+    account: order?.account || "",
+    password: order?.password || "",
+    staffAccount: order?.staffAccount || "",
+    staffPassword: order?.staffPassword || "",
+    subscriptionLinks: order?.subscriptionLinks || null,
+  }];
+}
+
 export function buildCompletionEmailHtml({ order, brandName, siteDomain, siteUrl, supportContact, support, locale }) {
   const en = locale === "en";
   const L = (zh, e) => (en ? e : zh);
-  const items = (Array.isArray(order.items) ? order.items : []).map((it) => ({
+  const items = completionItems(order).map((it) => ({
     ...it,
     label: localizeOrderItemLabel(it.service, it.plan || it.rocketPlan, it.label, locale),
     cycle: localizeCycle(it.cycle || "1年", locale),
@@ -151,7 +167,7 @@ export function buildCompletionEmailHtml({ order, brandName, siteDomain, siteUrl
 export function buildCompletionEmailText({ order, brandName, siteDomain, siteUrl, locale }) {
   const en = locale === "en";
   const L = (zh, e) => (en ? e : zh);
-  const items = (Array.isArray(order.items) ? order.items : []).map((it) => ({
+  const items = completionItems(order).map((it) => ({
     ...it,
     label: localizeOrderItemLabel(it.service, it.plan || it.rocketPlan, it.label, locale),
     cycle: localizeCycle(it.cycle || "1年", locale),

@@ -10,6 +10,11 @@ import {
 } from "../lib/admin-mutation-journal";
 import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
 import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
+import {
+  batchOrderMutationFeedback,
+  isSafeOrderMutationRetry,
+  orderMutationErrorMessage,
+} from "./order-mutation-feedback";
 import VisitorsPanel from "./VisitorsPanel";
 import AbandonedPanel from "./AbandonedPanel";
 import InsightsPanel from "./InsightsPanel";
@@ -24,6 +29,7 @@ import SecurityPanel from "./SecurityPanel";
 import AfterSalesPanel from "./AfterSalesPanel";
 import MailDeliveryPanel from "./MailDeliveryPanel";
 import SystemHealthPanel from "./SystemHealthPanel";
+import MarketingCampaignPanel from "./MarketingCampaignPanel";
 import NetflixCodePanel from "./NetflixCodePanel";
 import DeliveryWorkbench from "./DeliveryWorkbench";
 import {
@@ -2384,7 +2390,7 @@ export default function AdminPage() {
       `确认将 ${emails.length} 封邮件加入北京时间 18:30 发送队列？每天最多 ${MARKETING_DAILY_SCHEDULE_LIMIT} 封，预计 ${dailyGroups.length} 个傍晚完成。邮件只会在对应日期提交，不会提前占用 Resend 额度。`,
     )) return;
 
-    const campaignId = `MC${Date.now().toString(36).toUpperCase()}`;
+    const campaignGroupId = `MC${Date.now().toString(36).toUpperCase()}`;
     let scheduledTotal = 0;
     let failedTotal = 0;
     let requestDone = 0;
@@ -2395,7 +2401,13 @@ export default function AdminPage() {
     try {
       for (let dayIndex = 0; dayIndex < dailyGroups.length; dayIndex += 1) {
         const requestGroups = splitIntoBatches(dailyGroups[dayIndex], MARKETING_SCHEDULE_REQUEST_LIMIT);
-        for (const recipients of requestGroups) {
+        for (let requestIndex = 0; requestIndex < requestGroups.length; requestIndex += 1) {
+          const recipients = requestGroups[requestIndex];
+          // The queue's campaign ID is an idempotency boundary: reusing one
+          // ID with a different recipient batch is a conflict, not an append.
+          // Give every day/batch a deterministic child ID so legacy bulk
+          // scheduling remains compatible with the durable campaign model.
+          const campaignId = `${campaignGroupId}-D${dayIndex + 1}-B${requestIndex + 1}`;
           const response = await fetch("/api/admin/mail/campaign", {
             method: "POST",
             credentials: "same-origin",
@@ -3583,6 +3595,43 @@ export default function AdminPage() {
     }
   }
 
+  async function handleOrderMutationConflict(pending, response, data, fallback) {
+    if (!["stale_revision", "order_update_busy"].includes(String(data?.error || ""))) return false;
+    if (!isSafeOrderMutationRetry(data)) {
+      setSaveResult({ type: "error", message: orderMutationErrorMessage(data, fallback) });
+      return true;
+    }
+    // stale_revision and order_update_busy are returned before this mutation
+    // commits. The old exact request (and old expectedRevision) is therefore
+    // safe to retire so the operator can submit a fresh revision after reload.
+    completeAdminMutation(pending.storageKey, pending.operation);
+    const orderId = String(activeOrder?.orderId || "");
+    if (orderId) await openOrder({ orderId });
+    setSaveResult({
+      type: "error",
+      message: orderMutationErrorMessage(data, fallback),
+    });
+    return true;
+  }
+
+  async function replayAppliedOrderMutationOnce(pending, response, data) {
+    if (response?.status !== 409 || data?.error !== "stale_revision" || data?.mutationApplied !== true) {
+      return { response, data };
+    }
+    // The domain change and possibly an email are already durable. Replay the
+    // exact same key/body once so the server resumes its effect journal instead
+    // of asking the operator to create a duplicate mutation.
+    const replayResponse = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
+      credentials: "same-origin",
+      body: JSON.stringify(pending.payload),
+    });
+    let replayData = null;
+    try { replayData = await replayResponse.json(); } catch {}
+    return { response: replayResponse, data: replayData || { ok: false, error: `HTTP ${replayResponse.status}` } };
+  }
+
   async function updateOrderAssignment(action, assignedStaffId = 0) {
     if (!activeOrder?.orderId || assignmentBusy) return;
     setAssignmentBusy(true);
@@ -3603,6 +3652,7 @@ export default function AdminPage() {
       });
       const data = await response.json();
       if (!response.ok || !data.ok) {
+        if (await handleOrderMutationConflict(pending, response, data, "负责人更新失败")) return;
         clearTerminalAdminMutation(pending, response, data);
         const message = data.error === "order_already_assigned"
           ? `该订单已由 ${data.assignment?.username || "其他工作人员"} 负责`
@@ -3702,18 +3752,18 @@ export default function AdminPage() {
       const data = await res.json();
       if (data.ok) {
         completeAdminMutation(pending.storageKey, pending.operation);
-        const verb = action === "delete" ? "删除" : "标记为无效";
-        setBatchResult({
-          type: "success",
-          message: `已${verb} ${data.successCount} 个订单${data.failedCount ? ` · ${data.failedCount} 个失败` : ""}`,
-        });
-        setSelectedIds(new Set());
+        const feedback = batchOrderMutationFeedback(data, action);
+        setBatchResult({ type: feedback.type, message: feedback.message });
+        setSelectedIds(new Set(feedback.failedOrderIds));
         setBatchConfirm(null);
         loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
         loadOverview({ silent: true });
       } else {
         clearTerminalAdminMutation(pending, res, data);
-        setBatchResult({ type: "error", message: data.error || "批量操作失败" });
+        setBatchResult({
+          type: "error",
+          message: orderMutationErrorMessage(data, data.error || "批量操作失败"),
+        });
       }
       });
     } catch (e) {
@@ -3750,8 +3800,9 @@ export default function AdminPage() {
         loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
         loadOverview({ silent: true });
       } else {
+        if (await handleOrderMutationConflict(pending, res, data, "删除失败")) return;
         clearTerminalAdminMutation(pending, res, data);
-        setSaveResult({ type: "error", message: data.error || "删除失败" });
+        setSaveResult({ type: "error", message: orderMutationErrorMessage(data, data.error || "删除失败") });
       }
       });
     } catch (e) {
@@ -3838,14 +3889,16 @@ export default function AdminPage() {
         staffNote: spotifyPasswordMail?.index === itemPosition ? spotifyPasswordMail.note : "",
       };
       const pending = prepareAdminMutation("spotify-password", activeOrder.orderId, payload);
-      const response = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
+      let response = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
         method: "PATCH",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
         body: JSON.stringify(pending.payload),
       });
-      const data = await response.json();
+      let data = await response.json();
+      ({ response, data } = await replayAppliedOrderMutationOnce(pending, response, data));
       if (!response.ok || !data.ok) {
+        if (await handleOrderMutationConflict(pending, response, data, "发送失败")) return;
         clearTerminalAdminMutation(pending, response, data);
         const message = {
           spotify_item_not_found: "未找到对应的 Spotify 商品",
@@ -3914,13 +3967,14 @@ export default function AdminPage() {
         })),
       };
       const pending = prepareAdminMutation("order", activeOrder.orderId, payload);
-      const res = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
+      let res = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
         credentials: "same-origin",
         body: JSON.stringify(pending.payload),
       });
-      const data = await res.json();
+      let data = await res.json();
+      ({ response: res, data } = await replayAppliedOrderMutationOnce(pending, res, data));
       if (data.ok) {
         completeAdminMutation(pending.storageKey, pending.operation);
         const completionMessage = data.completion?.email?.ok ? " · 完成邮件已发送" : data.completion ? " · 完成邮件发送失败" : "";
@@ -3953,12 +4007,15 @@ export default function AdminPage() {
           }),
         }));
       } else {
+        if (await handleOrderMutationConflict(pending, res, data, "保存失败")) return;
         clearTerminalAdminMutation(pending, res, data);
-        const message = {
+        const message = data.error === "completion_credentials_required"
+          ? `请先完整填写「${data.itemLabel || `商品 ${Number(data.itemIndex || 0) + 1}`}」的客服账号和密码，再标记完成`
+          : ({
           quote_required: "请先填写报价并发送付款邮件",
           payment_not_received: "订单尚未收到付款，不能直接标记完成",
           invalid_status: "当前状态不可用",
-        }[data.error] || data.error || "保存失败";
+        }[data.error] || data.error || "保存失败");
         setSaveResult({ type: "error", message });
       }
       });
@@ -3987,14 +4044,16 @@ export default function AdminPage() {
         staffNotes: editForm.staffNotes,
       };
       const pending = prepareAdminMutation("quote", activeOrder.orderId, payload);
-      const res = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
+      let res = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
         credentials: "same-origin",
         body: JSON.stringify(pending.payload),
       });
-      const data = await res.json();
+      let data = await res.json();
+      ({ response: res, data } = await replayAppliedOrderMutationOnce(pending, res, data));
       if (!res.ok || !data.ok) {
+        if (await handleOrderMutationConflict(pending, res, data, "报价发送失败")) return;
         clearTerminalAdminMutation(pending, res, data);
         const message = {
           invalid_quote_amount: "报价金额无效",
@@ -4955,6 +5014,8 @@ export default function AdminPage() {
               </div>
             </div>
 
+            <MarketingCampaignPanel />
+
             {mailResult && <div className={`admin-alert ${mailResult.type}`}>{mailResult.message}</div>}
 
             <div className="admin-mail-log">
@@ -5704,6 +5765,9 @@ export default function AdminPage() {
                   <div><span>支付方式</span><b>{paymentLabel(activeOrder)}</b></div>
                   <div><span>{["pending_payment", "quote_expired"].includes(activeOrder.status) ? "报价金额" : "实付金额"}</span><b>{activeOrder.status === "awaiting_quote" ? "尚未报价" : activeOrder.status === "pending_payment" ? `¥${Number(activeOrder.quoteAmount || 0).toFixed(2)} · 未付款` : activeOrder.status === "quote_expired" ? `¥${Number(activeOrder.quoteAmount || 0).toFixed(2)} · 已失效` : activeOrder.paidCurrency === "CODE" ? "兑换码抵扣" : activeOrder.paidCurrency === "USDT" ? `${activeOrder.paidAmount} USDT` : `¥${activeOrder.paidAmount}`}</b></div>
                   <div><span>件数</span><b>{activeOrder.itemCount} 件</b></div>
+                  {activeOrder.businessTraceId && (
+                    <div className="span-2"><span>业务 Trace ID</span><b className="admin-summary-remark">{activeOrder.businessTraceId}<button type="button" className="admin-mini-copy" onClick={() => copyText(activeOrder.businessTraceId)}><Copy size={11} /></button></b></div>
+                  )}
                   {activeOrder.paidCurrency === "USDT" && (
                     <div className="span-2">
                       <span>链上到账</span>

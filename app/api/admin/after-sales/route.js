@@ -1,7 +1,8 @@
 import { adminPermissionProfile, adminSessionFromRequest, clean } from "../../_utils.js";
 import { listAfterSalesTickets } from "../../after-sales/_store.js";
+import { withApiTelemetry } from "../../_observability.js";
 
-export async function GET(request) {
+async function listAfterSalesHandler(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const permissions = adminPermissionProfile(session);
@@ -15,3 +16,5 @@ export async function GET(request) {
   });
   return Response.json({ ok: true, ...result });
 }
+
+export const GET = withApiTelemetry("admin_after_sales", listAfterSalesHandler);

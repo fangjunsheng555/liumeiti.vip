@@ -1,11 +1,9 @@
-// CORS for cross-origin (same-site) calls from the tools site.
-// tool.liumeiti.vip and liumeiti.vip share the registrable domain, so the
-// lm_user session cookie (SameSite=Lax, host-only) is still sent on these
-// fetches with credentials:'include'. We only add CORS headers when the Origin
-// is an explicitly allowed tool origin — same-origin main-site calls are
-// untouched. Additive: no existing route is modified.
-
 import { NextResponse } from "next/server";
+
+// tool.liumeiti.vip is limited to /api/tool/* plus the read-only account
+// identity endpoint. Account mutations, money, orders and admin APIs remain
+// same-origin-only. The apex and www storefronts intentionally coexist, so
+// exact cross-host requests between those two trusted origins are accepted.
 
 const ALLOWED_TOOL_ORIGINS = new Set(
   [
@@ -16,6 +14,11 @@ const ALLOWED_TOOL_ORIGINS = new Set(
       : []),
   ].filter(Boolean)
 );
+
+const TRUSTED_MAIN_SITE_ORIGINS = new Set([
+  "https://liumeiti.vip",
+  "https://www.liumeiti.vip",
+]);
 
 const SERVICE_CANONICAL_SLUGS = new Set(["spotify", "ai", "netflix", "disney", "hbo-max", "airport-node", "proxy-payment"]);
 const SERVICE_SLUG_REDIRECTS = {
@@ -35,10 +38,17 @@ function isToolApiPath(pathname) {
   return pathname === "/api/tool" || pathname.startsWith("/api/tool/");
 }
 
+function isToolReadOnlyAccountApiPath(pathname, method) {
+  return pathname === "/api/auth/me"
+    && ["GET", "HEAD", "OPTIONS"].includes(String(method || "GET").toUpperCase());
+}
+
 function isProtectedCookieApiPath(pathname) {
   return pathname === "/api/order"
     || pathname === "/api/quote-orders"
     || pathname.startsWith("/api/quote-orders/")
+    || pathname === "/api/account"
+    || pathname.startsWith("/api/account/")
     || pathname.startsWith("/api/auth/")
     || pathname === "/api/admin"
     || pathname.startsWith("/api/admin/")
@@ -56,8 +66,17 @@ function isUnsafeMethod(method) {
   return !["GET", "HEAD", "OPTIONS"].includes(String(method || "GET").toUpperCase());
 }
 
-function isSameOriginBrowserRequest(request, origin) {
-  if (origin) return origin === request.nextUrl.origin;
+function isTrustedMainSiteBridge(request, origin) {
+  return Boolean(
+    origin
+    && origin !== request.nextUrl.origin
+    && TRUSTED_MAIN_SITE_ORIGINS.has(origin)
+    && TRUSTED_MAIN_SITE_ORIGINS.has(request.nextUrl.origin)
+  );
+}
+
+function isAllowedCookieApiOrigin(request, origin) {
+  if (origin) return origin === request.nextUrl.origin || isTrustedMainSiteBridge(request, origin);
   // OAuth callbacks and normal top-level GET navigations may omit Origin.
   // For cookie-authenticated writes, modern browsers still expose their
   // cross-site provenance through Sec-Fetch-Site.
@@ -108,14 +127,27 @@ function handleServiceSlug(request, pathname) {
 // ── 后台会话强制下线检查 ──
 // 会话是无状态 JWT;「踢下线」通过 lm:staff:kick:<id>(毫秒时间戳)实现:
 // 签发时间(iat) <= 踢出边界的会话一律 401。这里只做吊销检查(解析 payload 不验签,
-// 验签仍由各路由做)。Redis 已配置却读取失败时 fail-closed，避免复制 JWT 绕过撤销。
-// 精确的 /api/admin/login 不做中间件检查，由登录路由自身完成同样的 fail-closed
-// 存储校验，避免中间件在读取旧 cookie 后阻断新凭据请求。
+// 验签仍由各路由做)。吊销存储异常默认记录告警并 fail-open，避免后台整体锁死；
+// 只有明确读到且命中踢出边界才 401。ADMIN_KICK_CHECK_FAIL_CLOSED=1 可改为严格模式。
+// 精确的 /api/admin/login 不做中间件检查，避免旧 cookie 阻断新凭据登录。
 function adminSessionStoreUnavailableResponse() {
   return NextResponse.json({ ok: false, error: "session_store_unavailable" }, {
     status: 503,
     headers: { "Cache-Control": "no-store", "Retry-After": "5" },
   });
+}
+
+function adminKickCheckUnavailable(reason) {
+  // Hosting runtime logs provide an observable warning without exposing the
+  // cookie, staff identity, Redis URL, token or response body.
+  console.warn(JSON.stringify({
+    level: "warn",
+    event: "admin_session_revocation_check_unavailable",
+    reason,
+  }));
+  return process.env.ADMIN_KICK_CHECK_FAIL_CLOSED === "1"
+    ? adminSessionStoreUnavailableResponse()
+    : null;
 }
 
 async function adminKickCheck(request) {
@@ -135,24 +167,29 @@ async function adminKickCheck(request) {
     if (!Number.isSafeInteger(staffId) || staffId <= 0) return null;
     const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
     const key = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-    // A signed admin cookie without its revocation store cannot be considered
-    // valid: accepting it would silently restore the old non-revocable JWT
-    // behavior after a deployment/configuration failure.
-    if (!url && !key) return adminSessionStoreUnavailableResponse();
-    if (!url || !key) return adminSessionStoreUnavailableResponse();
+    // Route handlers still verify signatures and permissions. This lookup only
+    // accelerates revocation, so outages default to availability-first. An
+    // explicit switch remains available for operators that require fail-close.
+    if (!url || !key) return adminKickCheckUnavailable("redis_configuration_missing");
     const res = await fetch(`${url.replace(/\/$/, "")}/get/${encodeURIComponent("lm:staff:kick:" + staffId)}`, {
       headers: { Authorization: "Bearer " + key },
     });
-    if (!res.ok) return adminSessionStoreUnavailableResponse();
+    if (!res.ok) return adminKickCheckUnavailable("redis_http_error");
     const stored = await res.json();
     if (!stored || typeof stored !== "object" || stored.error || !("result" in stored)) {
-      return adminSessionStoreUnavailableResponse();
+      return adminKickCheckUnavailable("redis_response_invalid");
     }
     if (stored.result == null) return null;
     const kickTs = Number(stored.result);
-    if (!Number.isSafeInteger(kickTs) || kickTs < 0) return adminSessionStoreUnavailableResponse();
+    if (!Number.isSafeInteger(kickTs) || kickTs < 0) {
+      return adminKickCheckUnavailable("revocation_record_invalid");
+    }
     if (!kickTs) return null;
     const iat = Number(payload?.iat || 0);
+    // Only a valid issued-at value at/before a valid stored boundary is an
+    // explicit revocation hit. Malformed JWTs are left to the signed route
+    // verifier instead of being interpreted as revoked here.
+    if (!Number.isSafeInteger(iat) || iat <= 0) return null;
     if (Number.isSafeInteger(iat) && iat > kickTs) return null; // 踢出后重新登录的新会话有效
     // 已被强制下线:清 cookie + 401
     const out = NextResponse.json({ ok: false, error: "session_revoked" }, {
@@ -161,25 +198,34 @@ async function adminKickCheck(request) {
     });
     out.cookies.set("lm_admin", "", { path: "/", maxAge: 0 });
     return out;
-  } catch (e) { return adminSessionStoreUnavailableResponse(); }
+  } catch (e) { return adminKickCheckUnavailable("redis_request_failed"); }
 }
 
-export async function middleware(request) {
+export async function proxy(request) {
   const origin = request.headers.get("origin") || "";
   const { pathname } = request.nextUrl;
   const toolApi = isToolApiPath(pathname);
-  const allowToolCors = toolApi && ALLOWED_TOOL_ORIGINS.has(origin);
+  const toolReadOnlyAccountApi = isToolReadOnlyAccountApiPath(pathname, request.method);
+  const toolCorsSurface = toolApi || toolReadOnlyAccountApi;
+  const allowToolCors = toolCorsSurface && ALLOWED_TOOL_ORIGINS.has(origin);
+  const allowMainSiteBridgeCors = isTrustedMainSiteBridge(request, origin);
 
   // A sibling subdomain is same-site for SameSite cookies, so cookie flags do
   // not stop it from issuing credentialed requests to the main host. Reject
   // non-same-origin browser requests before any admin/auth/funds route runs.
-  if (isProtectedCookieApiPath(pathname) && !isSameOriginBrowserRequest(request, origin)) {
+  if (
+    isProtectedCookieApiPath(pathname)
+    && !allowToolCors
+    && !isAllowedCookieApiOrigin(request, origin)
+  ) {
     return forbiddenOriginResponse();
   }
 
   // Tool APIs are the only cross-origin surface. Unknown, null and lookalike
   // origins receive neither a permissive preflight nor readable responses.
-  if (toolApi && origin && !allowToolCors) return forbiddenOriginResponse();
+  if (toolCorsSurface && origin && !allowToolCors && !allowMainSiteBridgeCors) {
+    return forbiddenOriginResponse();
+  }
 
   if (pathname.startsWith("/services/")) {
     const serviceResponse = handleServiceSlug(request, pathname);
@@ -193,17 +239,20 @@ export async function middleware(request) {
   }
 
   // Preflight: answer here only for an explicitly allowed tool origin.
-  if (request.method === "OPTIONS" && allowToolCors) {
+  if (request.method === "OPTIONS" && (allowToolCors || allowMainSiteBridgeCors)) {
     const headers = new Headers();
     applyCors(headers, origin);
-    headers.set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
-    headers.set("Access-Control-Allow-Headers", "Content-Type");
+    headers.set("Access-Control-Allow-Methods", toolReadOnlyAccountApi
+      ? "GET,HEAD,OPTIONS"
+      : "GET,HEAD,POST,PATCH,PUT,DELETE,OPTIONS");
+    const requestedHeaders = request.headers.get("access-control-request-headers") || "Content-Type";
+    headers.set("Access-Control-Allow-Headers", requestedHeaders);
     headers.set("Access-Control-Max-Age", "86400");
     return new NextResponse(null, { status: 204, headers });
   }
 
   const res = NextResponse.next();
-  if (allowToolCors) applyCors(res.headers, origin);
+  if (allowToolCors || allowMainSiteBridgeCors) applyCors(res.headers, origin);
   return res;
 }
 
@@ -211,6 +260,7 @@ export const config = {
   matcher: [
     "/services/:path*",
     "/api/auth/:path*",
+    "/api/account/:path*",
     "/api/tool/:path*",
     "/api/order",
     "/api/quote-orders/:path*",

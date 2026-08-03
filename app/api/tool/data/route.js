@@ -1,5 +1,5 @@
 // 工具数据跨设备同步 — 每用户按桶存非敏感数据（收藏 / 常用工具 / AI 历史摘要）。
-// 身份 = lm_user 会话。与 /api/tool/2fa 同架构，但收藏类非敏感故不加密。CORS 由 middleware 的 /api/tool/* 覆盖。
+// 身份 = lm_user 会话。与 /api/tool/2fa 同架构，但收藏类非敏感故不加密。CORS 由 root proxy 的 /api/tool/* 覆盖。
 import {
   checkRateLimit, rateLimitResponse, redisCmd,
 } from "../../_utils.js";

@@ -29,6 +29,7 @@ export default function SpotifyPasswordUpdate({ orderId }) {
     return {
       invalid_update_link: L("更新链接无效，请联系客服重新获取", "This update link is invalid. Contact support for a new one."),
       update_link_expired: L("更新链接已过期，请联系客服重新获取", "This update link has expired. Contact support for a new one."),
+      update_link_used: L("该更新链接已使用，请联系客服重新申请新的链接", "This update link has already been used. Contact support for a new one."),
       order_not_found: L("未找到对应订单", "Order not found."),
       order_invalid: L("订单已失效，无法更新", "This order can no longer be updated."),
       account_required: L("请填写 Spotify 账号", "Enter the Spotify account."),
@@ -36,6 +37,10 @@ export default function SpotifyPasswordUpdate({ orderId }) {
       invalid_email: L("请填写有效的下单邮箱", "Enter a valid order email."),
       contact_required: L("请填写联系方式", "Enter your contact details."),
       save_failed: L("保存失败，请稍后重试", "Couldn't save. Try again shortly."),
+      stale_revision: L(
+        "订单刚被其他操作更新，请保留当前填写内容并稍后重试；如已刷新页面，请重新打开原链接确认结果",
+        "The order was just changed by another operation. Keep these exact fields and retry shortly; if you refreshed, reopen the original link to verify the result.",
+      ),
       order_update_busy: L("订单资料正在更新，请保持原内容并稍后重试", "The order is being updated. Keep the same fields and retry shortly."),
       idempotency_conflict: L("待提交资料与原请求不一致，请勿反复提交并联系客服核对", "The pending details conflict with the original request. Do not resubmit; contact support."),
     }[code] || L("无法读取更新链接", "Couldn't open this update link.");

@@ -42,6 +42,16 @@ function executeEval(script, keys, args) {
     strings.set(keys[0], args[1]);
     return "acquired";
   }
+  if (script.includes("redis.call('SET',KEYS[1],'done')")) {
+    const raw = strings.get(keys[0]);
+    if (raw === "done") return 1;
+    let current = null;
+    try { current = JSON.parse(raw || "null"); } catch {}
+    if (!current || current.token !== args[0]) return 0;
+    strings.set(keys[0], args[2]);
+    for (const indexKey of keys.slice(1, 4)) zset(indexKey).delete(args[1]);
+    return 1;
+  }
   if (script.includes("confirmation_effect_finalize_failed") || script.includes("return 'removed'")) {
     const raw = hash(keys[0]).get(args[0]);
     if (raw == null) {
@@ -174,8 +184,8 @@ test("a transactionally queued effect recovers after a post-confirmation process
   assert.equal(telegramWrites, 1);
   assert.equal(hash(money.USDT_CONFIRM_EFFECT_RECORDS_KEY).has(effect.effectKey), false);
   assert.equal(zset(money.USDT_CONFIRM_EFFECT_INDEX_KEY).has(effect.effectKey), false);
-  assert.equal(strings.get(deliveryInternals.deliveryKey(`usdt-confirm:${effect.orderId}:${effect.txId}:admin-log`)), "done");
-  assert.equal(strings.get(deliveryInternals.deliveryKey(`usdt-confirm:${effect.orderId}:${effect.txId}:telegram`)), "done");
+  assert.equal(JSON.parse(strings.get(deliveryInternals.deliveryKey(`usdt-confirm:${effect.orderId}:${effect.txId}:admin-log`))).status, "done");
+  assert.equal(JSON.parse(strings.get(deliveryInternals.deliveryKey(`usdt-confirm:${effect.orderId}:${effect.txId}:telegram`))).status, "done");
 });
 
 test("overlapping scans cannot duplicate an in-flight Telegram or audit effect", async () => {

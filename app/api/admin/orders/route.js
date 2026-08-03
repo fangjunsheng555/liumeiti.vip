@@ -8,6 +8,7 @@ import {
 import { hasPendingSpotifyPasswordCorrection } from "../../../lib/order-attention.js";
 import { getOrderSla } from "../../../lib/order-sla.js";
 import { effectiveQuoteStatus } from "../../_quote-expiry.js";
+import { withApiTelemetry } from "../../_observability.js";
 
 function subscriptionLinks(username) {
   const encoded = encodeURIComponent(String(username || "").trim());
@@ -63,11 +64,17 @@ function normalizeOrder(order) {
       label: order.serviceLabel || "",
       cycle: order.cycle || "",
       amount: Number(order.finalAmount || 0),
+      plan: order.plan || order.rocketPlan || "",
+      planLabel: order.planLabel || order.rocketPlanLabel || "",
+      platformUrl: order.platformUrl || "",
+      productPrice: order.productPrice || "",
       account: order.account || "",
       password: order.password || "",
-      staffAccount: "",
-      staffPassword: "",
-      subscriptionLinks: order.service === "rocket" && order.account ? subscriptionLinks(order.account) : null,
+      staffAccount: order.staffAccount || "",
+      staffPassword: order.staffPassword || "",
+      subscriptionLinks: order.service === "rocket" && (order.staffAccount || order.account)
+        ? subscriptionLinks(order.staffAccount || order.account)
+        : null,
     }];
   }
   const abnormal = abnormalInfo(order, status);
@@ -177,8 +184,16 @@ function normalizeOrder(order) {
 
 function normalizeOrderSummary(order) {
   const status = effectiveQuoteStatus(order);
-  const items = Array.isArray(order.items) && order.items.length
-    ? order.items.map((item) => ({
+  const sourceItems = Array.isArray(order.items) && order.items.length
+    ? order.items
+    : [{
+      service: order.service || "",
+      label: order.serviceLabel || "",
+      cycle: order.cycle || "",
+      amount: Number(order.finalAmount || 0),
+      plan: order.plan || order.rocketPlan || "",
+    }];
+  const items = sourceItems.map((item) => ({
       service: item?.service || "",
       label: item?.label || "",
       cycle: item?.cycle || "",
@@ -188,8 +203,7 @@ function normalizeOrderSummary(order) {
       customerPasswordUpdatedAt: item?.customerPasswordUpdatedAt || "",
       customerPasswordUpdatedAtBeijing: item?.customerPasswordUpdatedAtBeijing || "",
       customerPasswordUpdateCount: Number(item?.customerPasswordUpdateCount || 0),
-    }))
-    : [];
+    }));
   const source = { ...order, status, items };
   const abnormal = abnormalInfo(source, status);
   return {
@@ -200,7 +214,7 @@ function normalizeOrderSummary(order) {
     createdAt: order.createdAt || "",
     createdAtBeijing: order.createdAtBeijing || "",
     items,
-    itemCount: items.length || 1,
+    itemCount: items.length,
     serviceLabel: order.serviceLabel || items.map((item) => item.label).filter(Boolean).join(" + "),
     paymentMethod: order.paymentMethod || "alipay",
     finalAmount: Number(order.finalAmount || 0),
@@ -277,7 +291,7 @@ function ordersToCsv(orders) {
 }
 
 // GET /api/admin/orders[?q=&status=&from=YYYY-MM-DD&to=YYYY-MM-DD&offset=&limit=&format=csv]
-export async function GET(request) {
+async function listOrdersHandler(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   const url = new URL(request.url);
@@ -381,3 +395,5 @@ export async function GET(request) {
     currentStaff,
   }, { headers: { "Cache-Control": "no-store" } });
 }
+
+export const GET = withApiTelemetry("admin_orders", listOrdersHandler);

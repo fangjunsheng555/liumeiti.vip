@@ -11,6 +11,8 @@ import {
 } from "./_utils.js";
 import { getSettings } from "./_settings.js";
 import { deliverOnce } from "./_delivery-once.js";
+import { enqueueRenewalPushEvent } from "./_push.js";
+import { appendBusinessTraceEvent } from "./_observability.js";
 import { buildEmailBrandHeader } from "./email-brand.js";
 import { orderExpirySummary, renewalCheckoutPath } from "../lib/order-expiry.js";
 
@@ -83,49 +85,103 @@ function buildRenewalEmail({ order, summary, renewUrl, brandName, locale }) {
 }
 
 // 扫描并发送到期提醒。幂等:每单每个到期点只发一次。
-export async function sendDueRenewalReminders({ now = Date.now() } = {}) {
+export async function sendDueRenewalReminders({ now = Date.now(), shouldContinue = () => true } = {}) {
   if (!redisConfig()) return { ok: false, error: "storage_unavailable" };
   const [orders, settings] = await Promise.all([getAllOrders(), getSettings()]);
   const due = [];
   for (const order of orders) {
-    if ((order.status || "") !== "completed" || !validEmail(order.email)) continue;
+    if ((order.status || "") !== "completed") continue;
     const summary = orderExpirySummary(order, now);
     if (!summary) continue;
     if (summary.daysLeft > REMIND_BEFORE_DAYS || summary.daysLeft < -REMIND_GRACE_DAYS) continue;
-    if (order.renewalReminderForExpiresAt === summary.expiresAt) continue; // 该到期点已提醒
+    const needsEmail = validEmail(order.email) && order.renewalReminderForExpiresAt !== summary.expiresAt;
+    const needsPush = order.renewalPushForExpiresAt !== summary.expiresAt;
+    if (!needsEmail && !needsPush) continue;
     const renewUrl = renewalCheckoutPath(order);
     if (!renewUrl) continue;
-    due.push({ order, summary, renewUrl });
+    due.push({ order, summary, renewUrl, needsEmail, needsPush });
   }
 
   let sent = 0;
+  let pushQueued = 0;
   const results = [];
-  for (const { order, summary, renewUrl } of due.slice(0, MAX_SENDS_PER_RUN)) {
+  for (const { order, summary, renewUrl, needsEmail, needsPush } of due.slice(0, MAX_SENDS_PER_RUN)) {
+    if (!shouldContinue()) {
+      return {
+        ok: false,
+        partial: true,
+        deadlineExceeded: true,
+        error: "maintenance_deadline_exceeded",
+        scanned: orders.length,
+        due: due.length,
+        sent,
+        pushQueued,
+        results,
+      };
+    }
     const expectedRevision = Number(order.revision ?? 0);
     const locale = order.locale === "en" ? "en" : "zh";
-    const brandName = (locale === "en" ? settings.brand.nameEn : settings.brand.name) || "冒央会社";
-    const mail = buildRenewalEmail({ order, summary, renewUrl: SITE_URL + renewUrl + "&utm_source=renewal-email", brandName, locale });
-    const deliveryId = `renewal:${order.orderId}:${summary.expiresAt}:email`;
-    const delivery = await deliverOnce(deliveryId, () => sendSimpleEmail({
-      to: order.email,
-      category: "renewal",
-      relatedType: "order",
-      relatedId: order.orderId,
-      idempotencyKey: deliveryId,
-      subject: mail.subject,
-      text: mail.text,
-      html: mail.html,
-      support: settings.support,
-      locale,
-    }));
-    if (!delivery?.ok) { results.push({ orderId: order.orderId, ok: false }); continue; }
+    let delivery = { ok: true, skipped: true };
+    if (needsEmail) {
+      const brandName = (locale === "en" ? settings.brand.nameEn : settings.brand.name) || "冒央会社";
+      const mail = buildRenewalEmail({ order, summary, renewUrl: SITE_URL + renewUrl + "&utm_source=renewal-email", brandName, locale });
+      const deliveryId = `renewal:${order.orderId}:${summary.expiresAt}:email`;
+      delivery = await deliverOnce(deliveryId, () => sendSimpleEmail({
+        to: order.email,
+        category: "renewal",
+        relatedType: "order",
+        relatedId: order.orderId,
+        idempotencyKey: deliveryId,
+        subject: mail.subject,
+        text: mail.text,
+        html: mail.html,
+        support: settings.support,
+        locale,
+      }));
+    }
+    const push = needsPush
+      ? await enqueueRenewalPushEvent(order, summary, renewUrl)
+        .catch((error) => ({ ok: false, error: error?.message || "push_enqueue_failed" }))
+      : { ok: true, skipped: true };
+    await appendBusinessTraceEvent(order.orderId, {
+      businessTraceId: order.businessTraceId,
+      stage: "push_enqueue_renewal",
+      component: "push",
+      outcome: push.ok === false ? "error" : push.skipped ? "skipped" : "ok",
+      operationId: `renewal:${order.orderId}:${summary.expiresAt}`,
+      errorCode: push.error || push.reason || "",
+    }).catch(() => null);
+    const emailSucceeded = Boolean(needsEmail && delivery?.ok && delivery?.delivered === true);
+    const emailHandled = Boolean(needsEmail && delivery?.ok
+      && (emailSucceeded || delivery?.terminal || delivery?.suppressed || delivery?.skipped));
+    // Keep retrying a temporarily disabled or misconfigured Push channel. A
+    // guest order is permanently ineligible, so mark that channel complete.
+    const pushMarker = Boolean(needsPush && push?.ok && (push.queued || push.reason === "guest_order"));
+    if ((needsEmail && !emailHandled) || (needsPush && !pushMarker)) {
+      results.push({
+        orderId: order.orderId,
+        ok: false,
+        email: delivery,
+        push,
+        error: delivery?.error || push?.error || push?.reason || "notification_failed",
+      });
+      continue;
+    }
     const at = new Date();
-    const updated = {
-      ...order,
-      renewalReminderSentAt: at.toISOString(),
-      renewalReminderSentAtBeijing: formatBeijingTime(at),
-      renewalReminderForExpiresAt: summary.expiresAt,
-    };
+    const updated = { ...order };
+    if (emailHandled) {
+      updated.renewalReminderHandledAt = at.toISOString();
+      updated.renewalReminderForExpiresAt = summary.expiresAt;
+      updated.renewalReminderSuppressed = Boolean(delivery?.suppressed);
+    }
+    if (emailSucceeded) {
+      updated.renewalReminderSentAt = at.toISOString();
+      updated.renewalReminderSentAtBeijing = formatBeijingTime(at);
+    }
+    if (pushMarker) {
+      updated.renewalPushQueuedAt = at.toISOString();
+      updated.renewalPushForExpiresAt = summary.expiresAt;
+    }
     const saved = await setOrderAt(
       { orderId: order.orderId, legacyIndex: null },
       updated,
@@ -135,8 +191,16 @@ export async function sendDueRenewalReminders({ now = Date.now() } = {}) {
       results.push({ orderId: order.orderId, ok: false, error: "stale_revision" });
       continue;
     }
-    sent += 1;
-    results.push({ orderId: order.orderId, ok: true, daysLeft: summary.daysLeft, revision: updated.revision });
+    if (emailSucceeded) sent += 1;
+    if (push.queued) pushQueued += 1;
+    results.push({
+      orderId: order.orderId,
+      ok: (!needsEmail || emailHandled) && (!needsPush || pushMarker),
+      daysLeft: summary.daysLeft,
+      revision: updated.revision,
+      email: delivery,
+      push,
+    });
   }
-  return { ok: true, scanned: orders.length, due: due.length, sent, results };
+  return { ok: true, scanned: orders.length, due: due.length, sent, pushQueued, results };
 }

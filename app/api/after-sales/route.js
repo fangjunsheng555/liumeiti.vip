@@ -12,6 +12,7 @@ import { verifyAfterSalesToken } from "../_auth-session.js";
 import { getMergedCatalog } from "../_catalog.js";
 import { createAfterSalesTicket, publicAfterSalesSummary } from "./_store.js";
 import { settleAfterSalesCreationEffects } from "./_creation-effects.js";
+import { withApiTelemetry } from "../_observability.js";
 
 function normalizeOrderId(value) {
   return clean(value, 80).replace(/\s+/g, "").toUpperCase();
@@ -29,7 +30,7 @@ function isCredentialService(service) {
   return ["spotify", "ai", "netflix", "disney", "max"].includes(clean(service, 40).toLowerCase());
 }
 
-export async function POST(request) {
+async function createAfterSalesHandler(request) {
   let body = {};
   try { body = await request.json(); } catch {}
 
@@ -73,6 +74,8 @@ export async function POST(request) {
     plan: order.plan || order.rocketPlan || "",
     account: order.account || "",
     password: order.password || "",
+    staffAccount: order.staffAccount || "",
+    staffPassword: order.staffPassword || "",
     platformUrl: order.platformUrl || "",
     productPrice: order.productPrice || "",
   }];
@@ -152,6 +155,9 @@ export async function POST(request) {
   });
 }
 
-export async function GET() {
+async function rejectAfterSalesListHandler() {
   return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
 }
+
+export const POST = withApiTelemetry("after_sales", createAfterSalesHandler);
+export const GET = withApiTelemetry("after_sales", rejectAfterSalesListHandler);
