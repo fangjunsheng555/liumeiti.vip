@@ -37,6 +37,7 @@ import FloatingSupport from "../components/FloatingSupport";
 import { QQBrandIcon, TelegramBrandIcon, WhatsAppBrandIcon } from "../components/BrandIcons";
 import { useLocale } from "../components/LocaleProvider";
 import AfterSalesTicketSheet from "../components/AfterSalesTicketSheet";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 const ASSURANCE_CARDS_EN = [
   { title: "Reliable setup", desc: "Six years of streaming-service experience; orders are processed fast by our team", meta: "Pro & worry-free" },

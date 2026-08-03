@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 process.env.AUTH_SECRET = "auth-session-test-secret-0123456789abcdef";
@@ -27,6 +28,17 @@ function requestWithToken(token) {
   return new Request("https://www.liumeiti.vip/api/auth/me", {
     headers: { cookie: `lm_user=${encodeURIComponent(token)}` },
   });
+}
+
+function userTokenFromResponse(response) {
+  const cookie = response.headers.get("set-cookie") || "";
+  return decodeURIComponent(cookie.match(/(?:^|,?\s*)lm_user=([^;]+)/)?.[1] || "");
+}
+
+function maskPasswordFieldValues(raw) {
+  return String(raw || "")
+    .replace(/("passwordHash"\s*:\s*)"(?:\\.|[^"\\])*"/g, '$1"<passwordHash>"')
+    .replace(/("passwordResetAt"\s*:\s*)(?:null|"(?:\\.|[^"\\])*")/g, '$1"<passwordResetAt>"');
 }
 
 function redisResponse(result) {
@@ -85,6 +97,9 @@ function installFakeRedis(initial = {}) {
   const state = {
     afterAuthStateRead: null,
     afterProfileSave: null,
+    beforeBanCommit: null,
+    authStatePayloadOverrides: [],
+    forceAuthRepairCalls: 0,
   };
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options = {}) => {
@@ -98,35 +113,90 @@ function installFakeRedis(initial = {}) {
         const keyCount = Number(command[2] || 0);
         const keys = command.slice(3, 3 + keyCount);
         const args = command.slice(3 + keyCount);
-        if (script.includes("READ_USER_AUTH_STATE_V2")) {
+        if (script.includes("READ_USER_AUTH_STATE_V3")) {
           const userRaw = store.get(keys[0]);
           if (!userRaw) return { result: JSON.stringify({ ok: false, error: "session_revoked" }) };
-          const currentVersion = store.has(keys[1]) ? Number(store.get(keys[1])) : 1;
-          const balanceCents = store.get(keys[2]) ?? null;
-          const lifecycle = store.get(keys[3]) || args[0];
-          if (!/^[a-f0-9]{32}$/.test(String(lifecycle || ""))) {
-            return { result: JSON.stringify({ ok: false, error: "auth_record_invalid" }) };
-          }
-          if (!store.has(keys[1])) store.set(keys[1], String(currentVersion));
-          if (!store.has(keys[3])) store.set(keys[3], lifecycle);
+          const versionRaw = store.get(keys[1]);
+          const validVersion = typeof versionRaw === "string"
+            && /^\d+$/.test(versionRaw)
+            && Number.isSafeInteger(Number(versionRaw))
+            && Number(versionRaw) > 0
+            && Number(versionRaw) <= 9007199254740990;
+          const currentVersion = validVersion ? Number(versionRaw) : 1;
+          if (!validVersion) store.set(keys[1], "1");
+          const balanceRaw = store.get(keys[2]);
+          const validBalance = typeof balanceRaw === "string"
+            && /^-?\d+$/.test(balanceRaw)
+            && Number.isSafeInteger(Number(balanceRaw));
+          const balanceCents = validBalance ? balanceRaw : null;
+          if (balanceRaw != null && !validBalance) store.delete(keys[2]);
+          const lifecycleRaw = store.get(keys[3]);
+          const lifecycle = /^[a-f0-9]{32}$/.test(String(lifecycleRaw || "")) ? lifecycleRaw : args[0];
+          if (!/^[a-f0-9]{32}$/.test(String(lifecycleRaw || ""))) store.set(keys[3], lifecycle);
           if (typeof state.afterAuthStateRead === "function") {
             const hook = state.afterAuthStateRead;
             state.afterAuthStateRead = null;
             hook({ store, keys, values: [userRaw, String(currentVersion), balanceCents, lifecycle] });
           }
-          return { result: JSON.stringify({
+          const payload = {
             ok: true,
             userRaw,
             authVersion: currentVersion,
             accountLifecycleId: lifecycle,
             balanceCents,
+            repairedAuthVersion: !validVersion,
+            repairedBalance: balanceRaw != null && !validBalance,
+            repairedLifecycle: lifecycle !== lifecycleRaw,
+          };
+          const override = state.authStatePayloadOverrides.shift();
+          return { result: JSON.stringify(override ? { ...payload, ...override } : payload) };
+        }
+        if (script.includes("FORCE_REPAIR_USER_AUTH_STATE_V1")) {
+          state.forceAuthRepairCalls += 1;
+          const userRaw = store.get(keys[0]);
+          if (typeof userRaw !== "string") {
+            return { result: JSON.stringify({ ok: false, error: "session_revoked" }) };
+          }
+          const versionRaw = store.get(keys[1]);
+          const validVersion = typeof versionRaw === "string"
+            && /^\d+$/.test(versionRaw)
+            && Number.isSafeInteger(Number(versionRaw))
+            && Number(versionRaw) > 0
+            && Number(versionRaw) <= 9007199254740990;
+          const authVersion = validVersion ? Number(versionRaw) : 1;
+          if (!validVersion) store.set(keys[1], "1");
+          const balanceRaw = store.get(keys[2]);
+          const validBalance = typeof balanceRaw === "string"
+            && /^-?\d+$/.test(balanceRaw)
+            && Number.isSafeInteger(Number(balanceRaw));
+          if (balanceRaw != null && !validBalance) store.delete(keys[2]);
+          const lifecycleRaw = store.get(keys[3]);
+          const accountLifecycleId = /^[a-f0-9]{32}$/.test(String(lifecycleRaw || ""))
+            ? lifecycleRaw
+            : args[0];
+          if (!/^[a-f0-9]{32}$/.test(String(lifecycleRaw || ""))) {
+            store.set(keys[3], accountLifecycleId);
+          }
+          return { result: JSON.stringify({
+            ok: true,
+            userRaw,
+            authVersion,
+            accountLifecycleId,
+            balanceCents: validBalance ? balanceRaw : null,
           }) };
         }
         if (script.includes("READ_SESSION_ISSUANCE_STATE") || script.includes("if versionType=='none' then redis.call('SET',KEYS[2],tostring(current)) end")) {
           const user = store.has(keys[0]) ? JSON.parse(store.get(keys[0])) : null;
           if (!user) return { result: JSON.stringify({ ok: false, error: "user_not_found" }) };
           if (user.banned) return { result: JSON.stringify({ ok: false, error: "account_banned" }) };
-          const currentVersion = store.has(keys[1]) ? Number(store.get(keys[1])) : 1;
+          const versionRaw = store.get(keys[1]);
+          const validVersion = typeof versionRaw === "string"
+            && /^\d+$/.test(versionRaw)
+            && Number.isSafeInteger(Number(versionRaw))
+            && Number(versionRaw) > 0
+            && Number(versionRaw) <= 9007199254740990;
+          const currentVersion = validVersion ? Number(versionRaw) : 1;
+          if (!validVersion) store.set(keys[1], "1");
           const expectedVersion = Number(args[0] || 0);
           if (!Number.isSafeInteger(currentVersion) || currentVersion < 1) {
             return { result: JSON.stringify({ ok: false, error: "auth_record_invalid" }) };
@@ -134,12 +204,9 @@ function installFakeRedis(initial = {}) {
           if (expectedVersion > 0 && expectedVersion !== currentVersion) {
             return { result: JSON.stringify({ ok: false, error: "session_state_changed" }) };
           }
-          const lifecycle = store.get(keys[3]) || args[2];
-          if (!/^[a-f0-9]{32}$/.test(String(lifecycle || ""))) {
-            return { result: JSON.stringify({ ok: false, error: "auth_record_invalid" }) };
-          }
-          if (!store.has(keys[1])) store.set(keys[1], String(currentVersion));
-          if (!store.has(keys[3])) store.set(keys[3], lifecycle);
+          const lifecycleRaw = store.get(keys[3]);
+          const lifecycle = /^[a-f0-9]{32}$/.test(String(lifecycleRaw || "")) ? lifecycleRaw : args[2];
+          if (!/^[a-f0-9]{32}$/.test(String(lifecycleRaw || ""))) store.set(keys[3], lifecycle);
           return { result: JSON.stringify({ ok: true, authVersion: currentVersion, accountLifecycleId: lifecycle }) };
         }
         if (script.includes("redis.call('SREM',KEYS[4],ARGV[1])")) {
@@ -164,33 +231,66 @@ function installFakeRedis(initial = {}) {
             },
           }) };
         }
-        if (script.includes("user.passwordHash=ARGV[1]")) {
+        if (script.includes("READ_PASSWORD_RESET_PROFILE_V1")) {
+          if (store.get(keys[1]) !== args[0]) {
+            return { result: JSON.stringify({ ok: false, error: "code_invalid_or_expired" }) };
+          }
+          const userRaw = store.get(keys[0]);
+          if (typeof userRaw !== "string") {
+            return { result: JSON.stringify({ ok: false, error: "user_not_found" }) };
+          }
+          return { result: JSON.stringify({ ok: true, userRaw }) };
+        }
+        if (script.includes("RESET_PASSWORD_AND_REVOKE_V2")) {
           if (store.get(keys[2]) !== args[2]) {
             return { result: JSON.stringify({ ok: false, error: "code_invalid_or_expired" }) };
           }
-          const user = store.has(keys[0]) ? JSON.parse(store.get(keys[0])) : null;
-          if (!user) return { result: JSON.stringify({ ok: false, error: "user_not_found" }) };
-          const currentVersion = store.has(keys[1]) ? Number(store.get(keys[1])) : 1;
-          user.passwordHash = args[0];
-          user.passwordResetAt = args[1];
-          store.set(keys[0], JSON.stringify(user));
+          if (!store.has(keys[0])) return { result: JSON.stringify({ ok: false, error: "user_not_found" }) };
+          if (store.get(keys[0]) !== args[3]) {
+            return { result: JSON.stringify({ ok: false, error: "account_state_changed" }) };
+          }
+          const versionRaw = store.get(keys[1]);
+          const validVersion = typeof versionRaw === "string"
+            && /^\d+$/.test(versionRaw)
+            && Number.isSafeInteger(Number(versionRaw))
+            && Number(versionRaw) > 0
+            && Number(versionRaw) < 9007199254740990;
+          const currentVersion = validVersion ? Number(versionRaw) : 1;
+          store.set(keys[0], args[4]);
           store.set(keys[1], String(currentVersion + 1));
           store.delete(keys[2]);
           return { result: JSON.stringify({ ok: true, authVersion: currentVersion + 1 }) };
         }
-        if (script.includes("user.banned=target")) {
-          const user = store.has(keys[0]) ? JSON.parse(store.get(keys[0])) : null;
-          if (!user) return { result: JSON.stringify({ ok: false, error: "user_not_found" }) };
+        if (script.includes("READ_BAN_PROFILE_V1")) {
+          const userRaw = store.get(keys[0]);
+          if (typeof userRaw !== "string") {
+            return { result: JSON.stringify({ ok: false, error: "user_not_found" }) };
+          }
+          return { result: JSON.stringify({ ok: true, userRaw }) };
+        }
+        if (script.includes("SET_BAN_STATE_AND_REVOKE_V2")) {
+          if (typeof state.beforeBanCommit === "function") {
+            const hook = state.beforeBanCommit;
+            state.beforeBanCommit = null;
+            hook({ store, keys, args });
+          }
+          if (!store.has(keys[0])) return { result: JSON.stringify({ ok: false, error: "user_not_found" }) };
+          if (store.get(keys[0]) !== args[1]) {
+            return { result: JSON.stringify({ ok: false, error: "account_state_changed" }) };
+          }
           const target = args[0] === "1";
-          const currentVersion = store.has(keys[1]) ? Number(store.get(keys[1])) : 1;
-          if (Boolean(user.banned) === target) {
+          const versionRaw = store.get(keys[1]);
+          const validVersion = typeof versionRaw === "string"
+            && /^\d+$/.test(versionRaw)
+            && Number.isSafeInteger(Number(versionRaw))
+            && Number(versionRaw) > 0
+            && Number(versionRaw) < 9007199254740990;
+          const currentVersion = validVersion ? Number(versionRaw) : 1;
+          if (!validVersion) store.set(keys[1], "1");
+          if (args[3] !== "1") {
             return { result: JSON.stringify({ ok: true, changed: false, authVersion: currentVersion, banned: target }) };
           }
-          user.banned = target;
-          user.bannedAt = target ? args[1] : null;
-          user.bannedByStaffId = target ? Number(args[2]) : null;
-          user.unbannedByStaffId = target ? null : Number(args[2]);
-          store.set(keys[0], JSON.stringify(user));
+          store.set(keys[0], args[2]);
           store.set(keys[1], String(currentVersion + 1));
           return { result: JSON.stringify({ ok: true, changed: true, authVersion: currentVersion + 1, banned: target }) };
         }
@@ -504,7 +604,7 @@ test("legacy migration deadline is anchored to deployment and never starts on fi
   assert.equal(redis.store.has(LEGACY_DEADLINE_KEY), false, "a visitor must not create a new rolling deadline");
 });
 
-test("legacy migration accepts an explicit absolute deadline or a pre-initialized Redis anchor only", async (t) => {
+test("legacy migration self-initializes a missing anchor without turning old sessions into a 503 loop", async (t) => {
   const now = Date.now();
   const previousUntil = process.env.LEGACY_USER_SESSION_UNTIL;
   const previousDeployedAt = process.env.LEGACY_USER_SESSION_DEPLOYED_AT;
@@ -523,9 +623,17 @@ test("legacy migration accepts an explicit absolute deadline or a pre-initialize
   const legacy = utils.signSession({ email: "test@example.com", exp: now + 120_000 });
 
   const uninitialized = await authSessions.authenticateUserRequest(requestWithToken(legacy), { now });
-  assert.equal(uninitialized.status, 503);
-  assert.equal(uninitialized.error, "auth_store_unavailable");
-  assert.equal(redis.store.has(LEGACY_DEADLINE_KEY), false);
+  assert.equal(uninitialized.ok, true);
+  assert.equal(
+    redis.store.get(LEGACY_DEADLINE_KEY),
+    String(now + authSessions.USER_SESSION_TTL_MS),
+    "the first active legacy request must create one shared fixed deadline",
+  );
+
+  redis.store.set(LEGACY_DEADLINE_KEY, "not-a-timestamp");
+  const corruptAnchor = await authSessions.authenticateUserRequest(requestWithToken(legacy), { now });
+  assert.equal(corruptAnchor.status, 401);
+  assert.equal(corruptAnchor.error, "legacy_session_expired");
 
   redis.store.set(LEGACY_DEADLINE_KEY, String(now + 30_000));
   const accepted = await authSessions.authenticateUserRequest(requestWithToken(legacy), { now });
@@ -558,6 +666,132 @@ test("banned and deleted users fail closed", async (t) => {
   assert.equal(deleted.ok, false);
   assert.equal(deleted.status, 401);
   assert.equal(deleted.error, "session_revoked");
+});
+
+test("historical malformed auth shadow keys are repaired instead of locking the account", async (t) => {
+  const now = Date.now();
+  const redis = installFakeRedis({
+    [USER_KEY]: JSON.stringify({
+      email: "test@example.com",
+      passwordHash: utils.hashPassword("legacy-password"),
+      balance: 12.5,
+      banned: false,
+    }),
+    [VERSION_KEY]: "",
+    [BALANCE_KEY]: "12.5",
+  });
+  t.after(() => redis.restore());
+
+  const state = await authSessions.readUserAuthState("test@example.com");
+  assert.equal(state.ok, true);
+  assert.equal(state.authVersion, 1);
+  assert.equal(state.user.balance, 12.5, "invalid shadow balance must fall back to the profile");
+  assert.equal(redis.store.get(VERSION_KEY), "1");
+  assert.equal(redis.store.has(BALANCE_KEY), false);
+  assert.match(redis.store.get(LIFECYCLE_KEY), /^[a-f0-9]{32}$/);
+
+  const response = await loginRoute.POST(new Request("https://www.liumeiti.vip/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: "test@example.com", password: "legacy-password" }),
+  }));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).ok, true);
+  const token = userTokenFromResponse(response);
+  assert.ok(token);
+
+  redis.store.delete(VERSION_KEY);
+  const accountAfterMissingVersion = await meRoute.GET(requestWithToken(token));
+  assert.equal(accountAfterMissingVersion.status, 200);
+  assert.equal((await accountAfterMissingVersion.json()).ok, true);
+  assert.equal(redis.store.get(VERSION_KEY), "1");
+});
+
+test("malformed auth-state payloads re-read and canonically repair without a 5xx", async (t) => {
+  const lifecycle = "a".repeat(32);
+  const redis = installFakeRedis({
+    [USER_KEY]: JSON.stringify({
+      email: "test@example.com",
+      username: "legacy-payload",
+      balance: 27.5,
+      coupons: [],
+      banned: false,
+    }),
+    [VERSION_KEY]: "bad-version",
+    [BALANCE_KEY]: "27.50",
+    [LIFECYCLE_KEY]: "BAD-LIFECYCLE",
+  });
+  t.after(() => redis.restore());
+  const malformed = {
+    authVersion: "not-a-number",
+    balanceCents: "27.50",
+    accountLifecycleId: "not-a-lifecycle",
+  };
+  redis.state.authStatePayloadOverrides.push(malformed, malformed);
+
+  const repaired = await authSessions.readUserAuthState("test@example.com");
+  assert.equal(repaired.ok, true);
+  assert.equal(repaired.authVersion, 1);
+  assert.equal(repaired.user.balance, 27.5);
+  assert.match(repaired.accountLifecycleId, /^[a-f0-9]{32}$/);
+  assert.notEqual(repaired.accountLifecycleId, lifecycle);
+  assert.equal(redis.state.forceAuthRepairCalls, 1);
+  assert.equal(redis.store.get(VERSION_KEY), "1");
+  assert.equal(redis.store.has(BALANCE_KEY), false);
+  assert.equal(redis.store.get(LIFECYCLE_KEY), repaired.accountLifecycleId);
+
+  redis.state.authStatePayloadOverrides.push(malformed);
+  const recoveredByReread = await authSessions.readUserAuthState("test@example.com");
+  assert.equal(recoveredByReread.ok, true);
+  assert.equal(recoveredByReread.authVersion, 1);
+  assert.equal(recoveredByReread.user.balance, 27.5);
+  assert.equal(redis.state.forceAuthRepairCalls, 1, "one malformed response should recover on the retry");
+});
+
+test("auth state reserves 503 for a genuinely unavailable Redis transport", async () => {
+  const scriptFailure = await withFetch(
+    async () => Response.json([{ error: "ERR synthetic script failure" }]),
+    () => authSessions.readUserAuthState("test@example.com"),
+  );
+  assert.equal(scriptFailure.ok, false);
+  assert.equal(scriptFailure.status, 500);
+  assert.equal(scriptFailure.error, "storage_error");
+
+  const outage = await withFetch(
+    async () => new Response("unavailable", { status: 503 }),
+    () => authSessions.readUserAuthState("test@example.com"),
+  );
+  assert.equal(outage.ok, false);
+  assert.equal(outage.status, 503);
+  assert.equal(outage.error, "storage_unavailable");
+});
+
+test("malformed profile JSON is reported as a data conflict, not service unavailability", async (t) => {
+  const redis = installFakeRedis({
+    [USER_KEY]: '{"email":"test@example.com","broken":',
+    [VERSION_KEY]: "1",
+    [RESET_KEY]: "778899",
+  });
+  t.after(() => redis.restore());
+
+  const state = await authSessions.readUserAuthState("test@example.com");
+  assert.deepEqual(state, { ok: false, status: 409, error: "account_record_invalid" });
+
+  const login = await loginRoute.POST(new Request("https://www.liumeiti.vip/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: "test@example.com", password: "irrelevant" }),
+  }));
+  assert.equal(login.status, 409);
+  assert.equal((await login.json()).error, "account_record_invalid");
+
+  const reset = await resetRoute.POST(new Request("https://www.liumeiti.vip/api/auth/reset", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: "test@example.com", code: "778899", newPassword: "new-password" }),
+  }));
+  assert.equal(reset.status, 409);
+  assert.equal((await reset.json()).error, "account_record_invalid");
 });
 
 test("admin deletion atomically advances the tombstone and old tokens stay revoked after re-registration", async (t) => {
@@ -836,6 +1070,178 @@ test("password reset code is consumed atomically and a stale password read canno
   assert.deepEqual(staleIssue, { ok: false, error: "session_state_changed" });
 });
 
+test("password reset changes only password fields and preserves every other profile byte", async (t) => {
+  const resetAt = "2026-08-04T04:22:00.000Z";
+  const raw = [
+    "{\n",
+    '  "email" : "test@example.com",\n',
+    '  "passwordHash" : "old-hash",\n',
+    '  "passwordResetAt" : null,\n',
+    '  "coupons" : [],\n',
+    '  "withdrawals" : [],\n',
+    '  "emptyOtherArray" : [  ],\n',
+    '  "nullable" : null,\n',
+    '  "largeInteger" : 123456789012345678901234567890,\n',
+    '  "nested" : { "empty" : [], "nullable" : null }\n',
+    "}",
+  ].join("");
+  const expected = raw
+    .replace('"passwordHash" : "old-hash"', '"passwordHash" : "next-hash"')
+    .replace('"passwordResetAt" : null', `"passwordResetAt" : ${JSON.stringify(resetAt)}`);
+  const redis = installFakeRedis({
+    [USER_KEY]: raw,
+    [VERSION_KEY]: "legacy-invalid-version",
+    [RESET_KEY]: "112233",
+  });
+  t.after(() => redis.restore());
+
+  const result = await authSessions.resetPasswordAndRevokeSessions(
+    "test@example.com",
+    "next-hash",
+    "112233",
+    resetAt,
+  );
+  assert.deepEqual(result, {
+    ok: true,
+    authVersion: 2,
+    email: "test@example.com",
+  });
+  assert.equal(redis.store.get(USER_KEY), expected);
+  assert.equal(
+    maskPasswordFieldValues(redis.store.get(USER_KEY)),
+    maskPasswordFieldValues(raw),
+    "every byte outside passwordHash/passwordResetAt must remain unchanged",
+  );
+  assert.equal(redis.store.get(VERSION_KEY), "2");
+  assert.equal(redis.store.has(RESET_KEY), false);
+  assert.match(redis.store.get(USER_KEY), /"coupons" : \[\]/);
+  assert.match(redis.store.get(USER_KEY), /"withdrawals" : \[\]/);
+  assert.match(redis.store.get(USER_KEY), /"emptyOtherArray" : \[  \]/);
+  assert.match(redis.store.get(USER_KEY), /123456789012345678901234567890/);
+
+  const source = readFileSync(new URL("../app/api/_auth-session.js", import.meta.url), "utf8");
+  const resetScript = source.match(/const RESET_PASSWORD_AND_REVOKE_SCRIPT = `([\s\S]*?)`;/)?.[1] || "";
+  assert.doesNotMatch(resetScript, /cjson\.decode/);
+  assert.doesNotMatch(resetScript, /cjson\.encode\(user\)/);
+  assert.doesNotMatch(resetScript, /coupons/);
+  assert.match(resetScript, /redis\.call\('SET',KEYS\[1\],ARGV\[5\]\)/);
+
+  const withoutResetAt = '{"email":"test@example.com","passwordHash":"old","coupons":[],"nested":{"passwordHash":"keep"}}';
+  redis.store.set(USER_KEY, withoutResetAt);
+  redis.store.set(VERSION_KEY, "1");
+  redis.store.set(RESET_KEY, "223344");
+  const added = await authSessions.resetPasswordAndRevokeSessions(
+    "test@example.com",
+    "new",
+    "223344",
+    resetAt,
+  );
+  assert.equal(added.ok, true);
+  assert.equal(
+    redis.store.get(USER_KEY),
+    `{"email":"test@example.com","passwordHash":"new","coupons":[],"nested":{"passwordHash":"keep"},"passwordResetAt":${JSON.stringify(resetAt)}}`,
+  );
+
+  assert.deepEqual(
+    await authSessions.resetPasswordAndRevokeSessions(
+      "test@example.com",
+      "newer",
+      "223344",
+      "not-a-timestamp",
+    ),
+    { ok: false, error: "invalid_password_update" },
+  );
+  const resetRouteSource = readFileSync(new URL("../app/api/auth/reset/route.js", import.meta.url), "utf8");
+  assert.match(
+    resetRouteSource,
+    /revoked\.error === "code_invalid_or_expired" \|\| revoked\.error === "invalid_password_update" \? 400/,
+  );
+});
+
+test("modified auth Lua scripts wrap JSON encoding and never re-encode a decoded profile", () => {
+  const source = readFileSync(new URL("../app/api/_auth-session.js", import.meta.url), "utf8");
+  const names = [
+    "READ_SESSION_ISSUANCE_STATE_SCRIPT",
+    "READ_PASSWORD_RESET_PROFILE_SCRIPT",
+    "RESET_PASSWORD_AND_REVOKE_SCRIPT",
+    "READ_BAN_PROFILE_SCRIPT",
+    "SET_BAN_STATE_AND_REVOKE_SCRIPT",
+    "READ_USER_AUTH_STATE_SCRIPT",
+    "FORCE_REPAIR_USER_AUTH_STATE_SCRIPT",
+  ];
+  for (const name of names) {
+    const script = source.match(new RegExp("const " + name + " = `([\\s\\S]*?)`;"))?.[1] || "";
+    assert.ok(script, `${name} must be present`);
+    for (const line of script.split(/\r?\n/).filter((entry) => entry.includes("cjson.encode"))) {
+      assert.match(line, /pcall\(cjson\.encode,/, `${name} has an unprotected cjson.encode: ${line}`);
+    }
+    for (const line of script.split(/\r?\n/).filter((entry) => entry.includes("cjson.decode"))) {
+      assert.match(line, /pcall\(cjson\.decode,/, `${name} has an unprotected cjson.decode: ${line}`);
+    }
+    assert.doesNotMatch(script, /cjson\.encode\(user\)/, `${name} must not serialize the profile table`);
+  }
+});
+
+test("ban CAS retries concurrent profile changes and preserves unrelated bytes", async (t) => {
+  const changedAt = new Date("2026-08-04T05:00:00.000Z");
+  const raw = [
+    "{\n",
+    ' "email" : "test@example.com",\n',
+    ' "username" : "before-race",\n',
+    ' "banned" : false,\n',
+    ' "coupons" : [],\n',
+    ' "emptyOtherArray" : [ ],\n',
+    ' "nullable" : null,\n',
+    ' "largeInteger" : 123456789012345678901234567890\n',
+    "}",
+  ].join("");
+  const concurrentRaw = raw.replace("before-race", "concurrent-winner");
+  const expected = concurrentRaw
+    .replace('"banned" : false', '"banned" : true')
+    .replace(
+      "\n}",
+      `\n,"bannedAt":${JSON.stringify(changedAt.toISOString())},"bannedByStaffId":77,"unbannedByStaffId":null}`,
+    );
+  const redis = installFakeRedis({
+    [USER_KEY]: raw,
+    [VERSION_KEY]: "1",
+  });
+  t.after(() => redis.restore());
+  redis.state.beforeBanCommit = ({ store }) => store.set(USER_KEY, concurrentRaw);
+
+  const result = await authSessions.setUserBanStateAndRevokeSessions(
+    "test@example.com",
+    true,
+    { staffId: 77 },
+    changedAt,
+  );
+  assert.deepEqual(result, {
+    ok: true,
+    changed: true,
+    authVersion: 2,
+    banned: true,
+    email: "test@example.com",
+  });
+  assert.equal(redis.store.get(USER_KEY), expected);
+  assert.equal(redis.store.get(VERSION_KEY), "2");
+  assert.match(redis.store.get(USER_KEY), /"username" : "concurrent-winner"/);
+  assert.match(redis.store.get(USER_KEY), /"coupons" : \[\]/);
+  assert.match(redis.store.get(USER_KEY), /"emptyOtherArray" : \[ \]/);
+  assert.match(redis.store.get(USER_KEY), /123456789012345678901234567890/);
+
+  const noOp = await authSessions.setUserBanStateAndRevokeSessions(
+    "test@example.com",
+    true,
+    { staffId: 99 },
+    new Date("2026-08-04T06:00:00.000Z"),
+  );
+  assert.equal(noOp.ok, true);
+  assert.equal(noOp.changed, false);
+  assert.equal(noOp.authVersion, 2);
+  assert.equal(redis.store.get(USER_KEY), expected, "idempotent ban must not rewrite the profile");
+  assert.equal(redis.store.get(VERSION_KEY), "2", "idempotent ban must not revoke again");
+});
+
 test("balance referral backfill cannot write an old profile into a re-registered lifecycle", async (t) => {
   const now = Date.now();
   const oldLifecycle = "a".repeat(32);
@@ -1067,6 +1473,267 @@ test("real Redis keeps delete, tombstone advancement, re-registration, and issua
       const current = await authSessions.createUserSession("test@example.com", Date.now(), 3);
       assert.equal(current.ok, true);
       assert.equal((await authSessions.authenticateUserRequest(requestWithToken(current.token))).ok, true);
+    });
+  } finally {
+    docker(["rm", "-f", container]);
+  }
+});
+
+test("real Redis repairs legacy auth keys and preserves profile bytes during password reset", {
+  skip: process.env.RUN_REAL_REDIS_TESTS !== "1" ? "set RUN_REAL_REDIS_TESTS=1 for Docker integration" : false,
+  timeout: 120_000,
+}, async () => {
+  const container = `lm-auth-repair-${process.pid}-${Date.now()}`;
+  const started = docker(["run", "--rm", "-d", "--name", container, "redis:7-alpine"]);
+  assert.equal(started.status, 0, started.stderr || started.stdout);
+  try {
+    let ready = false;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const ping = docker(["exec", container, "redis-cli", "PING"]);
+      if (ping.status === 0 && ping.stdout.trim() === "PONG") { ready = true; break; }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(ready, true, "Redis container did not become ready");
+    const redis = realRedis(container);
+    const resetAt = "2026-08-04T04:22:00.000Z";
+    const raw = [
+      "{\n",
+      ' "email":"test@example.com",\n',
+      ' "passwordHash" : "old-hash",\n',
+      ' "passwordResetAt" : null,\n',
+      ' "balance" : 19.75,\n',
+      ' "coupons" : [],\n',
+      ' "withdrawals" : [],\n',
+      ' "emptyOtherArray" : [],\n',
+      ' "nullable" : null,\n',
+      ' "largeInteger" : 123456789012345678901234567890,\n',
+      ' "nested" : {"items":[],"nullable":null}\n',
+      "}",
+    ].join("");
+    const expected = raw
+      .replace('"passwordHash" : "old-hash"', '"passwordHash" : "new-hash"')
+      .replace('"passwordResetAt" : null', `"passwordResetAt" : ${JSON.stringify(resetAt)}`);
+    redis.run(["SET", USER_KEY, raw]);
+    redis.run(["SET", VERSION_KEY, "not-an-integer"]);
+    redis.run(["SET", BALANCE_KEY, "19.75"]);
+    redis.run(["SET", LIFECYCLE_KEY, "INVALID-LIFECYCLE"]);
+
+    await withFetch(redis.fetch, async () => {
+      const state = await authSessions.readUserAuthState("test@example.com");
+      assert.equal(state.ok, true);
+      assert.equal(state.authVersion, 1);
+      assert.equal(state.user.balance, 19.75);
+      assert.equal(redis.run(["GET", VERSION_KEY]), "1");
+      assert.equal(redis.run(["GET", BALANCE_KEY]), null);
+      assert.match(redis.run(["GET", LIFECYCLE_KEY]), /^[a-f0-9]{32}$/);
+      assert.equal(redis.run(["GET", USER_KEY]), raw, "repair reads must not rewrite the profile");
+
+      redis.run(["SET", RESET_KEY, "445566"]);
+      const reset = await authSessions.resetPasswordAndRevokeSessions(
+        "test@example.com",
+        "new-hash",
+        "445566",
+        resetAt,
+      );
+      assert.equal(reset.ok, true);
+      assert.equal(reset.authVersion, 2);
+      assert.equal(redis.run(["GET", USER_KEY]), expected);
+      assert.equal(
+        maskPasswordFieldValues(redis.run(["GET", USER_KEY])),
+        maskPasswordFieldValues(raw),
+        "real Redis must preserve every byte outside the two password fields",
+      );
+      assert.equal(redis.run(["GET", VERSION_KEY]), "2");
+      assert.equal(redis.run(["GET", RESET_KEY]), null);
+
+      // Wrong Redis data types are historical-data corruption too. The read
+      // path deletes only those derived keys and recreates safe defaults.
+      redis.run(["DEL", VERSION_KEY, BALANCE_KEY, LIFECYCLE_KEY]);
+      redis.run(["LPUSH", VERSION_KEY, "legacy-list"]);
+      redis.run(["LPUSH", BALANCE_KEY, "legacy-list"]);
+      redis.run(["HSET", LIFECYCLE_KEY, "legacy", "hash"]);
+      const repairedTypes = await authSessions.readUserAuthState("test@example.com");
+      assert.equal(repairedTypes.ok, true);
+      assert.equal(repairedTypes.authVersion, 1);
+      assert.equal(repairedTypes.user.balance, 19.75);
+      assert.equal(redis.run(["TYPE", VERSION_KEY]), "string");
+      assert.equal(redis.run(["GET", VERSION_KEY]), "1");
+      assert.equal(redis.run(["TYPE", BALANCE_KEY]), "none");
+      assert.equal(redis.run(["TYPE", LIFECYCLE_KEY]), "string");
+      assert.match(redis.run(["GET", LIFECYCLE_KEY]), /^[a-f0-9]{32}$/);
+
+      let corruptReadResponses = 2;
+      const corruptingFetch = async (input, init = {}) => {
+        const response = await redis.fetch(input, init);
+        if (corruptReadResponses <= 0 || !String(init.body || "").includes("READ_USER_AUTH_STATE_V3")) {
+          return response;
+        }
+        corruptReadResponses -= 1;
+        const rows = await response.json();
+        const payload = JSON.parse(rows[0].result);
+        rows[0].result = JSON.stringify({
+          ...payload,
+          authVersion: "legacy-bad-response",
+          balanceCents: "19.75",
+          accountLifecycleId: "legacy-bad-response",
+        });
+        return Response.json(rows);
+      };
+      const forcedRepair = await withFetch(
+        corruptingFetch,
+        () => authSessions.readUserAuthState("test@example.com"),
+      );
+      assert.equal(forcedRepair.ok, true);
+      assert.equal(forcedRepair.authVersion, 1);
+      assert.equal(forcedRepair.user.balance, 19.75);
+      assert.match(forcedRepair.accountLifecycleId, /^[a-f0-9]{32}$/);
+      assert.equal(corruptReadResponses, 0, "both defensive reads must be challenged before force repair");
+
+      // Session issuance is a second gate after login/reset and must repair an
+      // invalid lifecycle independently instead of re-locking the account.
+      redis.run(["SET", LIFECYCLE_KEY, "bad-again"]);
+      const session = await authSessions.createUserSession("test@example.com", Date.now(), 1);
+      assert.equal(session.ok, true);
+      assert.match(session.accountLifecycleId, /^[a-f0-9]{32}$/);
+      assert.equal(redis.run(["GET", LIFECYCLE_KEY]), session.accountLifecycleId);
+      assert.equal(redis.run(["GET", USER_KEY]), expected);
+
+      const bannedAt = new Date("2026-08-04T05:30:00.000Z");
+      const expectedBanned = expected.replace(
+        "\n}",
+        `\n,"banned":true,"bannedAt":${JSON.stringify(bannedAt.toISOString())},"bannedByStaffId":55,"unbannedByStaffId":null}`,
+      );
+      redis.run(["SET", VERSION_KEY, "broken-before-ban"]);
+      const banned = await authSessions.setUserBanStateAndRevokeSessions(
+        "test@example.com",
+        true,
+        { staffId: 55 },
+        bannedAt,
+      );
+      assert.equal(banned.ok, true);
+      assert.equal(banned.changed, true);
+      assert.equal(banned.authVersion, 2, "invalid historical version repairs to 1 before revocation");
+      assert.equal(redis.run(["GET", USER_KEY]), expectedBanned);
+      assert.equal(redis.run(["GET", VERSION_KEY]), "2");
+      assert.match(redis.run(["GET", USER_KEY]), /"coupons" : \[\]/);
+      assert.match(redis.run(["GET", USER_KEY]), /"withdrawals" : \[\]/);
+      assert.match(redis.run(["GET", USER_KEY]), /123456789012345678901234567890/);
+
+      const noOpBan = await authSessions.setUserBanStateAndRevokeSessions(
+        "test@example.com",
+        true,
+        { staffId: 99 },
+        new Date("2026-08-04T06:30:00.000Z"),
+      );
+      assert.equal(noOpBan.changed, false);
+      assert.equal(noOpBan.authVersion, 2);
+      assert.equal(redis.run(["GET", USER_KEY]), expectedBanned);
+    });
+  } finally {
+    docker(["rm", "-f", container]);
+  }
+});
+
+test("real Redis legacy account completes login, account, reset, and new-password login routes", {
+  skip: process.env.RUN_REAL_REDIS_TESTS !== "1" ? "set RUN_REAL_REDIS_TESTS=1 for Docker integration" : false,
+  timeout: 120_000,
+}, async () => {
+  const container = `lm-auth-route-chain-${process.pid}-${Date.now()}`;
+  const started = docker(["run", "--rm", "-d", "--name", container, "redis:7-alpine"]);
+  assert.equal(started.status, 0, started.stderr || started.stdout);
+  try {
+    let ready = false;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const ping = docker(["exec", container, "redis-cli", "PING"]);
+      if (ping.status === 0 && ping.stdout.trim() === "PONG") { ready = true; break; }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(ready, true, "Redis container did not become ready");
+    const redis = realRedis(container);
+    // This is deliberately a pre-migration profile: it has no username,
+    // avatar, coupons/referral metadata, lifecycle, or canonical balance key.
+    redis.run(["SET", USER_KEY, JSON.stringify({
+      email: "test@example.com",
+      passwordHash: utils.hashPassword("legacy-password"),
+      balance: 12.5,
+      banned: false,
+    })]);
+    redis.run(["SET", VERSION_KEY, ""]);
+    redis.run(["SET", BALANCE_KEY, "12.5"]);
+    redis.run(["DEL", LIFECYCLE_KEY]);
+
+    await withFetch(redis.fetch, async () => {
+      const login = await loginRoute.POST(new Request("https://www.liumeiti.vip/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: "test@example.com", password: "legacy-password" }),
+      }));
+      assert.equal(login.status, 200);
+      const loginBody = await login.json();
+      assert.equal(loginBody.ok, true);
+      const token = userTokenFromResponse(login);
+      assert.ok(token);
+      assert.equal(redis.run(["GET", VERSION_KEY]), "1");
+      assert.equal(redis.run(["GET", BALANCE_KEY]), null, "decimal shadow key must be removed before profile fallback");
+      assert.match(redis.run(["GET", LIFECYCLE_KEY]), /^[a-f0-9]{32}$/);
+
+      const account = await meRoute.GET(requestWithToken(token));
+      assert.equal(account.status, 200);
+      const accountBody = await account.json();
+      assert.equal(accountBody.ok, true);
+      assert.equal(accountBody.email, "test@example.com");
+      assert.equal(accountBody.balance, 12.5);
+      assert.match(accountBody.accountLifecycleId, /^[a-f0-9]{32}$/);
+      // /api/auth/me backfills missing legacy profile fields through the
+      // canonical money writer, so the deleted decimal shadow becomes cents.
+      assert.equal(redis.run(["GET", BALANCE_KEY]), "1250");
+
+      // Missing auth-version is a separate legacy shape from an empty value.
+      // The already-issued v1 cookie must remain usable and recreate v1.
+      redis.run(["DEL", VERSION_KEY]);
+      const accountAfterMissingVersion = await meRoute.GET(requestWithToken(token));
+      assert.equal(accountAfterMissingVersion.status, 200);
+      assert.equal((await accountAfterMissingVersion.json()).ok, true);
+      assert.equal(redis.run(["GET", VERSION_KEY]), "1");
+
+      redis.run(["SET", RESET_KEY, "334455"]);
+      const reset = await resetRoute.POST(new Request("https://www.liumeiti.vip/api/auth/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: "test@example.com",
+          code: "334455",
+          newPassword: "new-password",
+        }),
+      }));
+      assert.equal(reset.status, 200);
+      assert.equal((await reset.json()).ok, true);
+      assert.equal(redis.run(["GET", VERSION_KEY]), "2");
+      assert.equal(redis.run(["GET", RESET_KEY]), null);
+
+      const oldPassword = await loginRoute.POST(new Request("https://www.liumeiti.vip/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: "test@example.com", password: "legacy-password" }),
+      }));
+      assert.equal(oldPassword.status, 401);
+
+      const newLogin = await loginRoute.POST(new Request("https://www.liumeiti.vip/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: "test@example.com", password: "new-password" }),
+      }));
+      assert.equal(newLogin.status, 200);
+      const newToken = userTokenFromResponse(newLogin);
+      assert.ok(newToken);
+      assert.equal(authSessions.verifyUserSessionCapability(newToken)?.sv, 2);
+
+      const accountWithNewPassword = await meRoute.GET(requestWithToken(newToken));
+      assert.equal(accountWithNewPassword.status, 200);
+      const newAccountBody = await accountWithNewPassword.json();
+      assert.equal(newAccountBody.ok, true);
+      assert.equal(newAccountBody.email, "test@example.com");
+      assert.equal(newAccountBody.balance, 12.5);
     });
   } finally {
     docker(["rm", "-f", container]);

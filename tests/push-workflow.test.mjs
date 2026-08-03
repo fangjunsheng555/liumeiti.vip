@@ -50,6 +50,39 @@ function list(key) {
   return lists.get(key);
 }
 
+function mockKeyType(key) {
+  if (strings.has(key)) return "string";
+  if (hashes.has(key)) return "hash";
+  if (sortedSets.has(key)) return "zset";
+  if (lists.has(key)) return "list";
+  return "none";
+}
+
+function deleteMockKey(key) {
+  strings.delete(key);
+  expirations.delete(key);
+  hashes.delete(key);
+  sortedSets.delete(key);
+  lists.delete(key);
+}
+
+function setMockString(key, value) {
+  deleteMockKey(key);
+  strings.set(key, String(value));
+}
+
+function validAuthVersionRaw(value) {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return false;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 && number <= 9007199254740990;
+}
+
+function validBalanceRaw(value) {
+  if (typeof value !== "string" || !/^-?\d+$/.test(value)) return false;
+  const number = Number(value);
+  return Number.isSafeInteger(number);
+}
+
 function expireString(key) {
   const expiresAt = expirations.get(key);
   if (expiresAt != null && Date.now() >= expiresAt) {
@@ -154,20 +187,37 @@ function executeEval(script, keys, argv) {
     return JSON.stringify({ ok: true, before: before ?? -1, after: after ?? -1, restocked, queued });
   }
 
-  if (script.includes("READ_USER_AUTH_STATE_V2")) {
+  if (script.includes("READ_USER_AUTH_STATE_V3") || script.includes("FORCE_REPAIR_USER_AUTH_STATE_V1")) {
     const [userKey, authVersionKey, balanceKey, lifecycleKey] = keys;
-    const userRaw = strings.get(userKey);
+    const userRaw = mockKeyType(userKey) === "string" ? strings.get(userKey) : null;
     if (!userRaw) return JSON.stringify({ ok: false, error: "session_revoked" });
-    const authVersion = strings.get(authVersionKey) || "1";
-    const lifecycle = strings.get(lifecycleKey) || argv[0];
-    strings.set(authVersionKey, String(authVersion));
-    strings.set(lifecycleKey, lifecycle);
+
+    const versionRaw = mockKeyType(authVersionKey) === "string" ? strings.get(authVersionKey) : null;
+    const repairedAuthVersion = !validAuthVersionRaw(versionRaw);
+    const authVersion = repairedAuthVersion ? 1 : Number(versionRaw);
+    if (repairedAuthVersion) setMockString(authVersionKey, "1");
+
+    const balanceRaw = mockKeyType(balanceKey) === "string" ? strings.get(balanceKey) : null;
+    const repairedBalance = mockKeyType(balanceKey) !== "none" && !validBalanceRaw(balanceRaw);
+    const balanceCents = validBalanceRaw(balanceRaw) ? balanceRaw : null;
+    if (repairedBalance) deleteMockKey(balanceKey);
+
+    const lifecycleRaw = mockKeyType(lifecycleKey) === "string" ? strings.get(lifecycleKey) : null;
+    const repairedLifecycle = !/^[a-f0-9]{32}$/.test(String(lifecycleRaw || ""));
+    const lifecycle = repairedLifecycle ? argv[0] : lifecycleRaw;
+    if (!/^[a-f0-9]{32}$/.test(String(lifecycle || ""))) {
+      return JSON.stringify({ ok: false, error: "invalid_lifecycle_candidate" });
+    }
+    if (repairedLifecycle) setMockString(lifecycleKey, lifecycle);
     return JSON.stringify({
       ok: true,
       userRaw,
-      authVersion: Number(authVersion),
+      authVersion,
       accountLifecycleId: lifecycle,
-      balanceCents: strings.get(balanceKey) ?? null,
+      balanceCents,
+      repairedAuthVersion,
+      repairedBalance,
+      repairedLifecycle,
     });
   }
 
@@ -470,6 +520,39 @@ test.beforeEach(() => {
 });
 
 test.after(() => { globalThis.fetch = originalFetch; });
+
+test("push Redis double mirrors V3 auth repair for wrong types and malformed strings", () => {
+  const keys = [
+    "liumeiti:users:push-adversarial@example.com",
+    "lm:user:authver:push-adversarial@example.com",
+    "liumeiti:users:push-adversarial@example.com:balance:cents",
+    "lm:user:lifecycle:push-adversarial@example.com",
+  ];
+  const lifecycle = "abcdef0123456789abcdef0123456789";
+  strings.set(keys[0], JSON.stringify({ email: "push-adversarial@example.com", balance: 12.5 }));
+  hash(keys[1]).set("wrong", "type");
+  list(keys[2]).push("12.5");
+  sortedSet(keys[3]).set("wrong", 1);
+
+  const repairedTypes = JSON.parse(executeEval("-- READ_USER_AUTH_STATE_V3", keys, [lifecycle]));
+  assert.equal(repairedTypes.ok, true);
+  assert.equal(repairedTypes.authVersion, 1);
+  assert.equal(repairedTypes.balanceCents, null);
+  assert.equal(repairedTypes.accountLifecycleId, lifecycle);
+  assert.equal(strings.get(keys[1]), "1");
+  assert.equal(mockKeyType(keys[2]), "none");
+  assert.equal(strings.get(keys[3]), lifecycle);
+
+  strings.set(keys[1], "");
+  strings.set(keys[2], "12.5");
+  strings.set(keys[3], "UPPERCASE-INVALID-LIFECYCLE");
+  const forced = JSON.parse(executeEval("-- FORCE_REPAIR_USER_AUTH_STATE_V1", keys, [lifecycle]));
+  assert.equal(forced.ok, true);
+  assert.equal(forced.authVersion, 1);
+  assert.equal(forced.balanceCents, null);
+  assert.equal(forced.accountLifecycleId, lifecycle);
+  assert.equal(mockKeyType(keys[2]), "none");
+});
 
 test("subscription validation, preferences and account target are strict", () => {
   assert.deepEqual(push.normalizePushPreferences({ orders: false, locale: "en" }), {

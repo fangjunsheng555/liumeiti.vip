@@ -35,6 +35,17 @@ function realRedis(container) {
   };
 }
 
+function validAuthVersionRaw(value) {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return false;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 && number <= 9007199254740990;
+}
+
+function validBalanceRaw(value) {
+  if (typeof value !== "string" || !/^-?\d+$/.test(value)) return false;
+  return Number.isSafeInteger(Number(value));
+}
+
 class AtomicRedisMock {
   constructor(entries = []) {
     this.values = new Map(entries);
@@ -71,6 +82,22 @@ class AtomicRedisMock {
     const added = target.has(value) ? 0 : 1;
     target.add(value);
     return added;
+  }
+
+  keyType(key) {
+    if (this.values.has(key)) return typeof this.values.get(key) === "string" ? "string" : "other";
+    if (this.sets.has(key)) return "set";
+    return "none";
+  }
+
+  deleteKey(key) {
+    this.values.delete(key);
+    this.sets.delete(key);
+  }
+
+  setString(key, value) {
+    this.deleteKey(key);
+    this.values.set(key, String(value));
   }
 
   existing(opKey, hash) {
@@ -138,19 +165,36 @@ class AtomicRedisMock {
       return { ok: true, balance: cents / 100, balanceCents: cents, authVersion, accountLifecycleId };
     }
 
-    if (script.includes("READ_USER_AUTH_STATE_V2")) {
-      const userRaw = this.values.get(keys[0]);
+    if (script.includes("READ_USER_AUTH_STATE_V3") || script.includes("FORCE_REPAIR_USER_AUTH_STATE_V1")) {
+      const userRaw = this.keyType(keys[0]) === "string" ? this.values.get(keys[0]) : null;
       if (!userRaw) return { ok: false, error: "session_revoked" };
-      const authVersion = this.values.has(keys[1]) ? Number(this.values.get(keys[1])) : 1;
-      const accountLifecycleId = this.values.get(keys[3]) || args[0];
-      this.values.set(keys[1], String(authVersion));
-      this.values.set(keys[3], accountLifecycleId);
+
+      const versionRaw = this.keyType(keys[1]) === "string" ? this.values.get(keys[1]) : null;
+      const repairedAuthVersion = !validAuthVersionRaw(versionRaw);
+      const authVersion = repairedAuthVersion ? 1 : Number(versionRaw);
+      if (repairedAuthVersion) this.setString(keys[1], "1");
+
+      const balanceRaw = this.keyType(keys[2]) === "string" ? this.values.get(keys[2]) : null;
+      const repairedBalance = this.keyType(keys[2]) !== "none" && !validBalanceRaw(balanceRaw);
+      const balanceCents = validBalanceRaw(balanceRaw) ? balanceRaw : null;
+      if (repairedBalance) this.deleteKey(keys[2]);
+
+      const lifecycleRaw = this.keyType(keys[3]) === "string" ? this.values.get(keys[3]) : null;
+      const repairedLifecycle = !/^[a-f0-9]{32}$/.test(String(lifecycleRaw || ""));
+      const accountLifecycleId = repairedLifecycle ? args[0] : lifecycleRaw;
+      if (!/^[a-f0-9]{32}$/.test(String(accountLifecycleId || ""))) {
+        return { ok: false, error: "invalid_lifecycle_candidate" };
+      }
+      if (repairedLifecycle) this.setString(keys[3], accountLifecycleId);
       return {
         ok: true,
         userRaw,
         authVersion,
         accountLifecycleId,
-        balanceCents: this.values.get(keys[2]) ?? null,
+        balanceCents,
+        repairedAuthVersion,
+        repairedBalance,
+        repairedLifecycle,
       };
     }
 
@@ -375,6 +419,39 @@ async function withRedis(redis, callback) {
   global.fetch = redis.fetch;
   try { return await callback(); } finally { global.fetch = original; }
 }
+
+test("money Redis double mirrors V3 auth repair for malformed and wrong-type derived keys", () => {
+  const email = "auth-double@example.com";
+  const keys = [
+    `liumeiti:users:${email}`,
+    `lm:user:authver:${email}`,
+    money.balanceCentsKey(email),
+    money.accountLifecycleKey(email),
+  ];
+  const lifecycle = "fedcba9876543210fedcba9876543210";
+  const redis = new AtomicRedisMock([user(email, 12.5)]);
+  redis.values.set(keys[1], [""]);
+  redis.sets.set(keys[2], new Set(["12.5"]));
+  redis.values.set(keys[3], { invalid: true });
+
+  const repairedTypes = redis.eval(["EVAL", "-- READ_USER_AUTH_STATE_V3", "4", ...keys, lifecycle]);
+  assert.equal(repairedTypes.ok, true);
+  assert.equal(repairedTypes.authVersion, 1);
+  assert.equal(repairedTypes.balanceCents, null);
+  assert.equal(repairedTypes.accountLifecycleId, lifecycle);
+  assert.equal(redis.values.get(keys[1]), "1");
+  assert.equal(redis.keyType(keys[2]), "none");
+  assert.equal(redis.values.get(keys[3]), lifecycle);
+
+  redis.values.set(keys[1], "");
+  redis.values.set(keys[2], "12.5");
+  redis.values.set(keys[3], "INVALID-LIFECYCLE");
+  const forced = redis.eval(["EVAL", "-- FORCE_REPAIR_USER_AUTH_STATE_V1", "4", ...keys, lifecycle]);
+  assert.equal(forced.ok, true);
+  assert.equal(forced.authVersion, 1);
+  assert.equal(forced.balanceCents, null);
+  assert.equal(forced.accountLifecycleId, lifecycle);
+});
 
 test("concurrent transfers cannot spend the same balance twice", async () => {
   const redis = new AtomicRedisMock([

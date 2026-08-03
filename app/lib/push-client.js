@@ -1,3 +1,5 @@
+import { clientFetch as fetch, withClientDeadline } from "./client-fetch.js";
+
 const SERVICE_WORKER_URL = "/sw.js";
 let pushAccountStatePromise = null;
 
@@ -49,18 +51,18 @@ export async function browserPushSubscriptionId(endpoint) {
 export async function registerPushServiceWorker() {
   const capability = browserPushCapability();
   if (!capability.supported) throw new Error("push_unsupported");
-  await navigator.serviceWorker.register(SERVICE_WORKER_URL, {
+  await withClientDeadline(navigator.serviceWorker.register(SERVICE_WORKER_URL, {
     scope: "/",
     updateViaCache: "none",
-  });
-  return navigator.serviceWorker.ready;
+  }), 15_000, "push_service_worker_timeout");
+  return withClientDeadline(navigator.serviceWorker.ready, 15_000, "push_service_worker_timeout");
 }
 
 export async function currentBrowserPushSubscription() {
   const capability = browserPushCapability();
   if (!capability.supported) return null;
-  const registration = await navigator.serviceWorker.getRegistration("/");
-  return registration ? registration.pushManager.getSubscription() : null;
+  const registration = await withClientDeadline(navigator.serviceWorker.getRegistration("/"), 15_000, "push_service_worker_timeout");
+  return registration ? withClientDeadline(registration.pushManager.getSubscription(), 15_000, "push_subscription_timeout") : null;
 }
 
 export async function fetchPushAccountState() {
@@ -150,17 +152,17 @@ export async function enableBrowserPush({ locale = "zh", preferences } = {}) {
     throw new Error(config.error || "push_not_configured");
   }
   const registration = await registerPushServiceWorker();
-  let subscription = await registration.pushManager.getSubscription();
+  let subscription = await withClientDeadline(registration.pushManager.getSubscription(), 15_000, "push_subscription_timeout");
   if (subscription && !pushSubscriptionMatchesVapidKey(subscription, config.publicKey)) {
-    const unsubscribed = await subscription.unsubscribe().catch(() => false);
+    const unsubscribed = await withClientDeadline(subscription.unsubscribe(), 15_000, "push_subscription_timeout").catch(() => false);
     if (!unsubscribed) throw new Error("push_vapid_rotation_failed");
     subscription = null;
   }
   if (!subscription) {
-    subscription = await registration.pushManager.subscribe({
+    subscription = await withClientDeadline(registration.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: base64UrlBytes(config.publicKey),
-    });
+    }), 15_000, "push_subscription_timeout");
   }
   const response = await fetch("/api/auth/push/subscriptions", {
     method: "POST",
@@ -184,7 +186,7 @@ export async function disableBrowserPush({ allDevices = false } = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data.ok) throw new Error(data.error || "push_unsubscribe_failed");
-  if (subscription) await subscription.unsubscribe().catch(() => false);
+  if (subscription) await withClientDeadline(subscription.unsubscribe(), 15_000, "push_subscription_timeout").catch(() => false);
   invalidatePushAccountStateCache();
   return data;
 }

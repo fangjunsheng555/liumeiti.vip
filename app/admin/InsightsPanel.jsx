@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { clientFetch as fetch } from "../lib/client-fetch";
 import {
   Activity,
   AlertTriangle,

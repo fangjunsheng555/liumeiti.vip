@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Inbox, LoaderCircle, CheckCircle2, AlertTriangle, Pin, Plus, Pencil, Trash2, Eye, EyeOff, Megaphone, Send } from "lucide-react";
 import ServiceNoticeDialog from "./ServiceNoticeDialog";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 const C = {
   text: "var(--text, #1d1d1f)", muted: "var(--muted, #6e6e73)", faint: "var(--faint, #8a8a8e)", border: "var(--border, #d2d2d7)",
@@ -155,10 +156,11 @@ export default function AnnouncePostsPanel() {
       <p style={{ color: C.muted, fontSize: 12.5, margin: "0 0 16px" }}>管理公司公告、业务动态、网站/系统通知与活动公告。置顶优先、按日期倒序展示。日期由你手动填写。</p>
 
       {msg && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "9px 13px", borderRadius: 10, fontSize: 13, fontWeight: 600,
+        <div role={msg.type === "error" ? "alert" : "status"} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "9px 13px", borderRadius: 10, fontSize: 13, fontWeight: 600,
           background: msg.type === "error" ? "#fef2f2" : "#f0fdf4", border: `1px solid ${msg.type === "error" ? "#fecaca" : "#bbf7d0"}`, color: msg.type === "error" ? C.danger : C.ok }}>
           {msg.type === "error" ? <AlertTriangle size={15} style={{ flex: "none" }} /> : <CheckCircle2 size={15} style={{ flex: "none" }} />}
           <span>{msg.text}</span>
+          {msg.type === "error" && <button type="button" onClick={load} disabled={loading || busy} style={{ marginLeft: "auto" }}>刷新数据</button>}
         </div>
       )}
 

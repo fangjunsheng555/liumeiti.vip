@@ -10,6 +10,7 @@ import {
 } from "../lib/admin-mutation-journal";
 import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
 import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
+import { clientFetch as fetch, isClientRequestTimeout } from "../lib/client-fetch";
 import {
   batchOrderMutationFeedback,
   isSafeOrderMutationRetry,
@@ -45,7 +46,7 @@ import {
   Gift, CreditCard, Plus, UserPlus, Mail, BellRing, BarChart3, Download, FileText,
   LayoutDashboard, ClipboardList, ShoppingCart, Users, Wallet, Coins,
   Megaphone, Footprints, Menu, Newspaper, Gauge, Package, SlidersHorizontal,
-  LifeBuoy, MailCheck, Activity, KeyRound,
+  LifeBuoy, MailCheck, Activity, KeyRound, RefreshCw,
 } from "lucide-react";
 
 const STATUS_LABEL = {
@@ -1200,6 +1201,18 @@ function customerDetailsRevision(order) {
   ]);
 }
 
+function adminBootstrapErrorMessage(error, status = 0) {
+  if (isClientRequestTimeout(error)) return "后台连接超时，可能是网络或服务繁忙。请重试；若刚完成写操作，请先核对结果再重复提交。";
+  if (status === 403) return "当前后台账号没有读取订单与权限信息的权限，请重新登录或联系站长。";
+  if (status === 503) return "后台会话或数据服务暂时不可用，页面已停止等待。请稍后重试。";
+  if (error instanceof SyntaxError) return "后台返回了无法解析的数据，页面已停止等待。请刷新重试。";
+  return "无法连接后台，页面已停止等待。请检查网络后重试。";
+}
+
+function hasAdminPermissionContext(staff) {
+  return Boolean(staff && (staff.root || Number(staff.id || 0) === 1 || (staff.permissions && typeof staff.permissions === "object")));
+}
+
 export default function AdminPage() {
   const [authed, setAuthed] = useState(null); // null=loading, false=login, true=ok
   const [loginName, setLoginName] = useState("");
@@ -1211,6 +1224,7 @@ export default function AdminPage() {
   const [loggingIn, setLoggingIn] = useState(false);
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [logoutError, setLogoutError] = useState("");
+  const [bootstrapError, setBootstrapError] = useState("");
 
   useSiteSettings(); // 站点设置(PDF 凭证品牌/版权等随设置)
   useCatalogSync(); // 兑换码商品与规格价格同步后台目录
@@ -3056,7 +3070,10 @@ export default function AdminPage() {
     const limit = Math.min(200, Math.max(1, Number(options.limit || ORDER_PAGE_SIZE)));
     const cacheKey = orderListCacheKey({ q, status, from: options.from, to: options.to });
     const { controller, sequence } = beginPollRequest("orders");
-    if (!silent && !append) setLoading(true);
+    if (!silent && !append) {
+      setLoading(true);
+      setBootstrapError("");
+    }
     if (append) setOrdersLoadingMore(true);
     try {
       const params = new URLSearchParams();
@@ -3072,12 +3089,24 @@ export default function AdminPage() {
         signal: controller.signal,
       });
       if (res.status === 401) {
+        setBootstrapError("");
         setAuthed(false);
         return;
       }
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      let data;
+      try { data = await res.json(); }
+      catch (error) { error.responseStatus = res.status; throw error; }
+      if (!res.ok || !data.ok) {
+        const error = new Error(data.error || `HTTP ${res.status}`);
+        error.responseStatus = res.status;
+        throw error;
+      }
       if (isCurrentPollRequest("orders", sequence)) {
+        if (!hasAdminPermissionContext(data.currentStaff)) {
+          const error = new Error("staff_context_missing");
+          error.responseStatus = res.status;
+          throw error;
+        }
         const incoming = Array.isArray(data.orders) ? data.orders : [];
         const meta = { filteredCount: Number(data.filteredCount || 0), total: Number(data.total || 0), hasMore: Boolean(data.hasMore) };
         const revision = String(data.listRevision || "0");
@@ -3091,7 +3120,8 @@ export default function AdminPage() {
         setOrdersMeta(meta);
         orderListRevisionRef.current = revision;
         if (Array.isArray(data.assignableStaff)) setAssignableStaff(data.assignableStaff);
-        if (data.currentStaff) applyCurrentStaff(data.currentStaff);
+        applyCurrentStaff(data.currentStaff);
+        setBootstrapError("");
         setAuthed(true);
         markPollSuccess("orders");
       }
@@ -3099,6 +3129,7 @@ export default function AdminPage() {
       if (e?.name !== "AbortError" && isCurrentPollRequest("orders", sequence)) {
         console.error(e);
         orderLoadEffectSignatureRef.current = "";
+        setBootstrapError(adminBootstrapErrorMessage(e, Number(e?.responseStatus || 0)));
         markPollFailure("orders", e);
       }
     } finally {
@@ -3470,6 +3501,11 @@ export default function AdminPage() {
       });
       const data = await res.json();
       if (data.ok) {
+        if (!hasAdminPermissionContext(data.staff)) {
+          setBootstrapError("登录成功，但后台没有返回工作人员权限信息。请重试加载；仍失败请联系站长。");
+        } else {
+          setBootstrapError("");
+        }
         setAuthed(true);
         setCurrentStaff(data.staff || null);
         setPassword("");
@@ -4112,6 +4148,15 @@ export default function AdminPage() {
     }
   };
 
+  const retryAdminBootstrap = () => {
+    setBootstrapError("");
+    orderLoadEffectSignatureRef.current = "";
+    loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, {
+      from: dateFrom,
+      to: dateTo,
+    });
+  };
+
   // ── Login screen ──
   if (authed === false) {
     return (
@@ -4162,6 +4207,21 @@ export default function AdminPage() {
   }
 
   // ── Loading ──
+  if ((authed === null || (authed === true && !permissionsReady)) && bootstrapError) {
+    return (
+      <div className="admin-login-page">
+        <div className="admin-login-card" role="alert" aria-live="assertive">
+          <div className="admin-login-icon"><AlertTriangle size={28} /></div>
+          <h1>后台加载失败</h1>
+          <p>{bootstrapError}</p>
+          <button type="button" onClick={retryAdminBootstrap} disabled={loading}>
+            {loading ? <><LoaderCircle size={14} className="spin-icon" />正在重试</> : <><RefreshCw size={14} />重试</>}
+          </button>
+          <Link href="/" className="admin-back-link"><ArrowLeft size={13} />返回首页</Link>
+        </div>
+      </div>
+    );
+  }
   if (authed === null) {
     return <div className="admin-loading"><LoaderCircle size={28} className="spin-icon" /></div>;
   }

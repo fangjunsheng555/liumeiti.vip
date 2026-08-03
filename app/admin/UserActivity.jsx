@@ -4,6 +4,7 @@
 // 数据 = /api/admin/user-activity?email=
 import { useEffect, useState } from "react";
 import { Inbox, LoaderCircle } from "lucide-react";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 const C = {
   text: "var(--text, #1d1d1f)", muted: "var(--muted, #6e6e73)", faint: "var(--faint, #8a8a8e)",

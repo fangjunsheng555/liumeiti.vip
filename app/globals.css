@@ -7963,6 +7963,81 @@ body:has(.admin-page) {
    /account user dashboard
    ═══════════════════════════════════════════════════════ */
 .account-loading { min-height: 60vh; display: grid; place-items: center; color: var(--muted); }
+.account-load-error {
+  width: min(520px, calc(100% - 32px));
+  min-height: 180px;
+  margin: clamp(72px, 16vh, 150px) auto 0;
+  padding: 26px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px 12px;
+  align-items: start;
+  border: 1px solid #fecaca;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.09);
+}
+.account-load-error-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: #fff1f2;
+  color: #be123c;
+}
+.account-load-error strong { display: block; margin: 1px 0 7px; color: #172033; font-size: 17px; }
+.account-load-error p { margin: 0; color: #667085; font-size: 13.5px; line-height: 1.65; }
+.account-load-error button {
+  grid-column: 1 / -1;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 12px;
+  background: #0f766e;
+  color: #fff;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.account-load-error button:hover { background: #115e59; }
+.account-load-error button:focus-visible { outline: 3px solid rgba(13, 148, 136, 0.28); outline-offset: 2px; }
+.account-refresh-error {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 11px 12px;
+  border: 1px solid #fecaca;
+  border-radius: 13px;
+  background: #fff7f7;
+  color: #9f1239;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.account-refresh-error button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid #fda4af;
+  border-radius: 9px;
+  background: #fff;
+  color: #9f1239;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+@media (max-width: 520px) {
+  .account-refresh-error { grid-template-columns: auto minmax(0, 1fr); }
+  .account-refresh-error button { grid-column: 1 / -1; justify-content: center; }
+}
 
 .account-page { min-height: 100vh; background: #f4f6fb; padding-bottom: 40px; }
 .account-header {

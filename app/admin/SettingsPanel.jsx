@@ -4,6 +4,7 @@
 // 改任何项,保存后前端站点(客服/服务中心/页脚/收款码/结账)与订单邮件即时同步。
 import { useEffect, useState, useCallback } from "react";
 import { LoaderCircle, Save, RotateCcw, Settings as SettingsIcon, AlertTriangle, CheckCircle2, Headphones, Coins, Layers, QrCode, Tag, FileText, Bell, Upload, DatabaseBackup } from "lucide-react";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 // 图片压缩:最长边 640px,白底(利于扫码),优先 PNG,超 400KB 降级 JPEG。
 async function compressImage(file) {
@@ -118,7 +119,7 @@ export default function SettingsPanel() {
   }
 
   if (loading && !s) return <div style={{ display: "inline-flex", gap: 8, alignItems: "center", color: "var(--muted)", fontSize: 13 }}><LoaderCircle size={16} className="spin-icon" />加载设置…</div>;
-  if (!s) return msg ? <div className="admin-settings-alert error"><AlertTriangle size={15} />{msg.text}</div> : null;
+  if (!s) return msg ? <div className="admin-settings-alert error" role="alert"><AlertTriangle size={15} />{msg.text}<button type="button" className="admin-settings-btn" onClick={load}><RotateCcw size={13} />重试</button></div> : null;
 
   // 组合优惠 tier 是「折扣额」(0.05=5% off=9.5折);USDT discount 是「实付倍率」(0.9=付9成=10% off=9折)
   const bundlePct = (v) => `${Math.round(Number(v || 0) * 100)}% off · ${(10 * (1 - Number(v || 0))).toFixed(1)}折`;

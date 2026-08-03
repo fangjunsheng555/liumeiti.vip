@@ -5,6 +5,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { LoaderCircle, Save, RotateCcw, Package, AlertTriangle, CheckCircle2, History, Undo2, X } from "lucide-react";
 import { getCatalogDisplayPrice } from "../lib/catalog-price.js";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 export default function CatalogPanel() {
   const [catalog, setCatalog] = useState(null);
@@ -120,7 +121,7 @@ export default function CatalogPanel() {
   }
 
   if (loading && !catalog) return <div style={{ display: "inline-flex", gap: 8, alignItems: "center", color: "var(--muted)", fontSize: 13 }}><LoaderCircle size={16} className="spin-icon" />加载商品…</div>;
-  if (!catalog) return msg ? <div className="admin-settings-alert error"><AlertTriangle size={15} />{msg.text}</div> : null;
+  if (!catalog) return msg ? <div className="admin-settings-alert error" role="alert"><AlertTriangle size={15} />{msg.text}<button type="button" className="admin-settings-btn" onClick={load}><RotateCcw size={13} />重试</button></div> : null;
 
   return (
     <div className="admin-settings">

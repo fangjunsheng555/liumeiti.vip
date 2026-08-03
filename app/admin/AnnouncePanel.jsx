@@ -3,6 +3,7 @@
 // 后台「站内公告」编辑。仅超级管理员。设置后前端 banner 展示（可点链接、可关闭）。
 import { useEffect, useState } from "react";
 import { Megaphone, CheckCircle2, AlertTriangle, LoaderCircle } from "lucide-react";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 const C = {
   text: "var(--text, #1d1d1f)", muted: "var(--muted, #6e6e73)", faint: "var(--faint, #8a8a8e)", border: "var(--border, #d2d2d7)",
@@ -19,16 +20,24 @@ export default function AnnouncePanel() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null); // { type: "ok"|"error", text } | null
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetch("/api/admin/announcement", { credentials: "same-origin", cache: "no-store" });
-        const d = await r.json();
-        if (d && d.ok && d.announce) { setText(d.announce.text || ""); setTextEn(d.announce.textEn || ""); setLink(d.announce.link || ""); setActive(!!d.announce.active); }
-      } catch (e) {}
+  async function load() {
+    setLoading(true);
+    setMsg(null);
+    try {
+      const r = await fetch("/api/admin/announcement", { credentials: "same-origin", cache: "no-store" });
+      const d = await r.json();
+      if (!r.ok || !d?.ok) throw new Error(d?.error || "load_failed");
+      if (d.announce) { setText(d.announce.text || ""); setTextEn(d.announce.textEn || ""); setLink(d.announce.link || ""); setActive(!!d.announce.active); }
+    } catch (e) {
+      setMsg({ type: "error", text: "公告加载失败，请检查网络后重试" });
+    } finally {
       setLoading(false);
-    })();
-  }, []);
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function save() {
     setBusy(true); setMsg(null);
@@ -98,6 +107,7 @@ export default function AnnouncePanel() {
               background: msg.type === "error" ? "#fef2f2" : "#f0fdf4", border: `1px solid ${msg.type === "error" ? "#fecaca" : "#bbf7d0"}`, color: msg.type === "error" ? C.danger : C.ok }}>
               {msg.type === "error" ? <AlertTriangle size={15} style={{ flex: "none" }} /> : <CheckCircle2 size={15} style={{ flex: "none" }} />}
               <span>{msg.text}</span>
+              {msg.type === "error" && <button type="button" onClick={load} disabled={loading} style={{ marginLeft: "auto", minHeight: 30, padding: "0 11px", border: "1px solid currentColor", borderRadius: 8, background: "#fff", color: "inherit", font: "inherit", cursor: "pointer" }}>重试</button>}
             </div>
           )}
 

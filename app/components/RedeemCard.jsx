@@ -10,6 +10,7 @@ import {
   prepareSinglePendingOperation,
   readSinglePendingOperation,
 } from "../lib/single-pending-journal";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 function GoogleIcon() {
   return (
