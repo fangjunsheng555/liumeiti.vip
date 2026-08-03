@@ -10,6 +10,7 @@ import {
 } from "../lib/admin-mutation-journal";
 import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
 import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 export default function ReferenceNoticeDialog({ open, onClose, onSent }) {
   const [reference, setReference] = useState("");

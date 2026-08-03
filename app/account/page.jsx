@@ -9,6 +9,7 @@ import PushNotificationSettings from "../components/PushNotificationSettings";
 import EmailPreferenceSettings from "../components/EmailPreferenceSettings";
 import { useLocale } from "../components/LocaleProvider";
 import { DEFAULT_USER_AVATAR_ID, USER_AVATARS, normalizeUserAvatarId, userAvatarPath } from "../lib/avatars";
+import { requestAccountLoad } from "./load-account.js";
 import {
   isExplicitTerminalIdempotencyResponse,
 } from "../lib/idempotency";
@@ -178,42 +179,37 @@ export default function AccountPage() {
   const [authReturnTo, setAuthReturnTo] = useState("");
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [logoutError, setLogoutError] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const loadRequestRef = useRef({ sequence: 0, controller: null });
 
   async function load() {
+    const sequence = loadRequestRef.current.sequence + 1;
+    loadRequestRef.current.controller?.abort();
+    const controller = new AbortController();
+    loadRequestRef.current = { sequence, controller };
+    setLoadError("");
     setState((s) => ({ ...s, loading: true }));
     try {
-      const [meRes, balRes] = await Promise.all([
-        fetch("/api/auth/me", { credentials: "same-origin" }),
-        fetch("/api/auth/balance", { credentials: "same-origin" }),
-      ]);
-      if (meRes.status === 401) {
-        setState({ loading: false, email: null, accountLifecycleId: "", username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
-        return;
+      const result = await requestAccountLoad({
+        locale,
+        signal: controller.signal,
+        timeoutMs: 15_000,
+      });
+      if (sequence !== loadRequestRef.current.sequence || result.cancelled) return;
+      if (result.state) setState(result.state);
+      else setState((current) => ({ ...current, loading: false }));
+      setLoadError(result.error || "");
+    } finally {
+      if (sequence === loadRequestRef.current.sequence) {
+        loadRequestRef.current = { sequence, controller: null };
       }
-      const me = await meRes.json();
-      const bal = balRes.ok ? await balRes.json() : { balance: 0, transactions: [] };
-      if (me.ok) {
-        setState({
-          loading: false,
-          email: me.email,
-          accountLifecycleId: me.accountLifecycleId || "",
-          username: me.username || "",
-          avatarId: normalizeUserAvatarId(me.avatarId),
-          orders: me.orders,
-          balance: Number(bal.balance || 0),
-          txs: bal.transactions || [],
-          coupons: bal.coupons || me.coupons || [],
-          withdrawals: bal.withdrawals || [],
-          referral: me.referral || bal.referral || null,
-          referralDownlines: me.referralDownlines || [],
-        });
-      }
-    } catch (e) {
-      setState({ loading: false, email: null, accountLifecycleId: "", username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    return () => loadRequestRef.current.controller?.abort();
+  }, []);
 
   useEffect(() => {
     if (state.loading || !state.email || typeof window === "undefined") return;
@@ -728,6 +724,23 @@ export default function AccountPage() {
     );
   }
 
+  if (loadError && !state.email) {
+    return (
+      <div className="account-page">
+        <div className="account-load-error" role="alert" aria-live="assertive">
+          <span className="account-load-error-icon"><AlertTriangle size={22} /></span>
+          <div>
+            <strong>{L("账户暂时无法载入", "Your account couldn't be loaded")}</strong>
+            <p>{loadError}</p>
+          </div>
+          <button type="button" onClick={load}>
+            <RefreshCw size={15} />{L("重试", "Retry")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!state.email) {
     return (
       <div className="account-page account-auth-page">
@@ -906,6 +919,13 @@ export default function AccountPage() {
 
       <main className="account-main">
         {logoutError && <div className="auth-error" role="alert">{logoutError}</div>}
+        {loadError && (
+          <div className="account-refresh-error" role="alert">
+            <AlertTriangle size={16} />
+            <span>{loadError}</span>
+            <button type="button" onClick={load}><RefreshCw size={13} />{L("重试", "Retry")}</button>
+          </div>
+        )}
         <section className="account-info-card">
           <button type="button" className="account-avatar" onClick={() => setAvatarModal(true)} aria-label={L("更换头像", "Change avatar")}>
             <img src={userAvatarPath(state.avatarId)} alt="" className="account-avatar-img" />

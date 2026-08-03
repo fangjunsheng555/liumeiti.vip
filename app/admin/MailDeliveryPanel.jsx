@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, MailCheck, RefreshCw, Search, X } from "lucide-react";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 const STATUS = {
   scheduled: { label: "已排期", tone: "neutral" },

@@ -33,7 +33,10 @@ export async function PATCH(request, { params }) {
 
   const updated = await setUserBanStateAndRevokeSessions(email, banned, actor);
   if (!updated.ok) {
-    const status = updated.error === "user_not_found" ? 404 : 503;
+    const status = updated.error === "user_not_found" ? 404
+      : updated.error === "account_state_changed" || updated.error === "account_record_invalid" ? 409
+        : updated.error === "storage_unavailable" || updated.error === "redis_cluster_keyspace_not_supported" ? 503
+          : 500;
     return Response.json({ ok: false, error: updated.error || "auth_store_unavailable" }, { status });
   }
   await pushAdminActionLog({

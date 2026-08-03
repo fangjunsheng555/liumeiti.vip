@@ -4,6 +4,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { LoaderCircle, ShieldCheck, KeyRound, Copy, CheckCircle2, AlertTriangle, ScrollText, RefreshCw } from "lucide-react";
 import QRCode from "qrcode";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 function copy(text) {
   try { navigator.clipboard?.writeText(text); } catch (e) {}
@@ -11,43 +12,62 @@ function copy(text) {
 
 export default function SecurityPanel({ isRoot }) {
   const [status, setStatus] = useState(null); // { enabled, remainingBackup, globallyDisabled }
+  const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState(null);
   const [pending, setPending] = useState(null); // { secret, otpauth }
   const [qrUrl, setQrUrl] = useState("");       // otpauth 二维码 dataURL
+  const [qrError, setQrError] = useState(false);
   const [code, setCode] = useState("");
   const [regenCode, setRegenCode] = useState(""); // 重新生成备用码用的动态码
   const [backupCodes, setBackupCodes] = useState(null); // 一次性展示
   const [copied, setCopied] = useState("");
   const [loginLog, setLoginLog] = useState(null);
+  const [loginLogError, setLoginLogError] = useState("");
 
   // 绑定流程:otpauth 链接生成扫码二维码
   useEffect(() => {
     let on = true;
+    let qrTimer = null;
+    let settled = false;
     if (pending?.otpauth) {
+      setQrError(false);
+      qrTimer = window.setTimeout(() => {
+        settled = true;
+        if (on) { setQrUrl(""); setQrError(true); }
+      }, 5_000);
       QRCode.toDataURL(pending.otpauth, { width: 220, margin: 1, errorCorrectionLevel: "M" })
-        .then((url) => { if (on) setQrUrl(url); })
-        .catch(() => { if (on) setQrUrl(""); });
+        .then((url) => { if (on && !settled) { settled = true; window.clearTimeout(qrTimer); setQrUrl(url); } })
+        .catch(() => { if (on && !settled) { settled = true; window.clearTimeout(qrTimer); setQrUrl(""); setQrError(true); } });
     } else {
       setQrUrl("");
+      setQrError(false);
     }
-    return () => { on = false; };
+    return () => { on = false; if (qrTimer) window.clearTimeout(qrTimer); };
   }, [pending?.otpauth]);
 
   const load = useCallback(async () => {
+    setLoadError("");
     try {
       const r = await fetch("/api/admin/2fa", { credentials: "same-origin", cache: "no-store" });
       const j = await r.json();
-      if (j.ok) setStatus(j);
-    } catch (e) {}
+      if (!r.ok || !j.ok) throw new Error(j.error || "load_failed");
+      setStatus(j);
+    } catch (e) {
+      setLoadError(e?.message === "unauthorized" ? "后台登录已失效，请重新登录" : "安全设置加载失败，请检查网络后重试");
+    }
   }, []);
   const loadLog = useCallback(async () => {
     if (!isRoot) return;
+    setLoginLogError("");
     try {
       const r = await fetch("/api/admin/login-log", { credentials: "same-origin", cache: "no-store" });
       const j = await r.json();
-      if (j.ok) setLoginLog(j.entries || []);
-    } catch (e) {}
+      if (!r.ok || !j.ok) throw new Error(j.error || "load_failed");
+      setLoginLog(j.entries || []);
+    } catch (e) {
+      setLoginLogError("登录日志加载失败，请重试");
+    }
   }, [isRoot]);
   useEffect(() => { load(); loadLog(); }, [load, loadLog]);
 
@@ -108,7 +128,12 @@ export default function SecurityPanel({ isRoot }) {
         <div className="admin-settings-section-title"><span className="ico"><KeyRound size={15} /></span>我的两步验证(TOTP)</div>
         <div className="admin-settings-section-sub">绑定后登录需输入验证器动态码;支持 Google Authenticator / 1Password / 本站工具箱 2FA 等</div>
 
-        {!status ? (
+        {!status && loadError ? (
+          <div className="admin-settings-alert error" role="alert">
+            <AlertTriangle size={15} />{loadError}
+            <button type="button" className="admin-settings-btn" onClick={load}><RefreshCw size={13} />重试</button>
+          </div>
+        ) : !status ? (
           <div style={{ color: "var(--muted)", fontSize: 13 }}><LoaderCircle size={14} className="spin-icon" /> 加载中…</div>
         ) : status.globallyDisabled ? (
           <div className="admin-settings-alert error"><AlertTriangle size={15} />环境变量 ADMIN_2FA_DISABLE=1 生效中,两步验证被全局跳过(紧急兜底模式)。</div>
@@ -153,6 +178,8 @@ export default function SecurityPanel({ isRoot }) {
               <div className="admin-2fa-qr-row">
                 {qrUrl ? (
                   <img className="admin-2fa-qr" src={qrUrl} alt="2FA 绑定二维码" width={170} height={170} />
+                ) : qrError ? (
+                  <div className="admin-2fa-qr admin-2fa-qr-loading" role="alert"><AlertTriangle size={18} /><span>二维码生成失败，请复制右侧密钥或链接手动添加</span></div>
                 ) : (
                   <div className="admin-2fa-qr admin-2fa-qr-loading"><LoaderCircle size={18} className="spin-icon" /></div>
                 )}
@@ -195,7 +222,9 @@ export default function SecurityPanel({ isRoot }) {
         <div className="admin-settings-section">
           <div className="admin-settings-section-title"><span className="ico"><ScrollText size={15} /></span>登录日志<span style={{ fontWeight: 500, fontSize: 12, color: "var(--faint)" }}>(最近 100 条,成功/失败均记录)</span></div>
           <div className="admin-login-log">
-            {loginLog === null ? (
+            {loginLog === null && loginLogError ? (
+              <div className="admin-settings-alert error" role="alert"><AlertTriangle size={14} />{loginLogError}<button type="button" className="admin-settings-btn" onClick={loadLog}><RefreshCw size={13} />重试</button></div>
+            ) : loginLog === null ? (
               <div style={{ color: "var(--muted)", fontSize: 13, padding: "8px 0" }}><LoaderCircle size={14} className="spin-icon" /> 加载中…</div>
             ) : loginLog.length === 0 ? (
               <div style={{ color: "var(--muted)", fontSize: 13, padding: "8px 0" }}>暂无记录</div>

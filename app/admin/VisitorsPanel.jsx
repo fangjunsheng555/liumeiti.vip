@@ -6,6 +6,7 @@
 // 批量删 = DELETE /api/admin/visitors（按选择 ids 或 olderThanDays）。
 import { useCallback, useEffect, useState } from "react";
 import { Inbox, LoaderCircle, CheckCircle2, AlertTriangle, Info, X } from "lucide-react";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 const LIMIT = 50;
 const OLD_DAYS = 30;

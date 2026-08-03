@@ -33,8 +33,11 @@ async function loginHandler(request) {
   // version is pinned through issuance, closing the reset/login race where an
   // old password could otherwise receive the post-reset session version.
   const loginState = await readUserAuthState(email);
-  if (!loginState.ok && loginState.status === 503) {
-    return Response.json({ ok: false, error: loginState.error || "auth_store_unavailable" }, { status: 503 });
+  if (!loginState.ok && Number(loginState.status) >= 409) {
+    return Response.json(
+      { ok: false, error: loginState.error || "auth_store_unavailable" },
+      { status: Number(loginState.status) || 500 },
+    );
   }
   const user = loginState.ok ? loginState.user : null;
   if (!user || !verifyPassword(password, user.passwordHash)) {
@@ -49,7 +52,10 @@ async function loginHandler(request) {
   const session = await createUserSession(email, Date.now(), loginState.authVersion);
   if (!session.ok) {
     const status = session.error === "account_banned" ? 403
-      : (session.error === "session_state_changed" || session.error === "user_not_found" ? 409 : 503);
+      : (session.error === "session_state_changed" || session.error === "user_not_found"
+          || session.error === "account_record_invalid" ? 409
+        : session.error === "storage_unavailable" || session.error === "redis_cluster_keyspace_not_supported" ? 503
+          : 500);
     return Response.json({ ok: false, error: session.error || "auth_store_unavailable" }, { status });
   }
   return Response.json({ ok: true, email, accountLifecycleId: session.accountLifecycleId }, {

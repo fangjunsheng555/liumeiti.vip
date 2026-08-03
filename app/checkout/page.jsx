@@ -66,6 +66,7 @@ import {
   withCheckoutSubmissionCoordination,
   writeCheckoutPendingJournal,
 } from "../lib/checkout-pending-journal";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 const CHECKOUT_DRAFT_KEY = "liumeiti:checkout-draft:v2";
 const CHECKOUT_DRAFT_MAX_AGE = 7 * 24 * 60 * 60 * 1000;

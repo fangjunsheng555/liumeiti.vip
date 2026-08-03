@@ -19,6 +19,7 @@ import { useLocale } from "./LocaleProvider";
 import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
 import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
 import { clearSinglePendingOperation, prepareSinglePendingOperation } from "../lib/single-pending-journal";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 async function quoteTokenDigest(token) {
   if (!globalThis.crypto?.subtle || typeof TextEncoder !== "function") {
@@ -41,6 +42,8 @@ export default function ProxyQuotePayment({ orderId }) {
   const [usdtRate, setUsdtRate] = useState(0);
   const [copied, setCopied] = useState(false);
   const [qrReady, setQrReady] = useState(false);
+  const [qrError, setQrError] = useState(false);
+  const [qrReloadKey, setQrReloadKey] = useState(0);
   const paymentRequestRef = useRef(null);
   const alipayQrSrc = settings.payment.alipayQr || "/payment/alipay.jpg";
   const usdtQrSrc = settings.payment.usdtQr || "/payment/usdt.png";
@@ -105,6 +108,7 @@ export default function ProxyQuotePayment({ orderId }) {
     if (method === payMethod || submitting) return;
     setPayMethod(method);
     setQrReady(false);
+    setQrError(false);
     setPaymentReadyAt(0);
     setState((current) => ({ ...current, error: "", errorCode: "", notice: "" }));
   }
@@ -241,15 +245,17 @@ export default function ProxyQuotePayment({ orderId }) {
                   ? L("TRC20 · 请按此精确金额转账", "TRC20 · send this exact amount")
                   : L("请按此精确金额付款", "Pay this exact amount")}</small>
               </div>
-              <div className={`proxy-payment-qr-frame${qrReady ? " ready" : " loading"}`}>
-                {!qrReady && <div className="proxy-payment-qr-loading"><LoaderCircle size={20} className="spin-icon" /><span>{L("正在切换收款码", "Loading payment QR")}</span></div>}
+              <div className={`proxy-payment-qr-frame${qrReady ? " ready" : qrError ? " error" : " loading"}`}>
+                {!qrReady && !qrError && <div className="proxy-payment-qr-loading"><LoaderCircle size={20} className="spin-icon" /><span>{L("正在切换收款码", "Loading payment QR")}</span></div>}
+                {qrError && <div className="proxy-payment-qr-loading" role="alert"><span>{L("收款码加载失败", "Payment QR failed to load")}</span><button type="button" onClick={() => { setQrError(false); setQrReady(false); setQrReloadKey((value) => value + 1); }}>{L("重试", "Retry")}</button></div>}
                 <img
-                  key={`${payMethod}:${paymentQrSrc}`}
+                  key={`${payMethod}:${paymentQrSrc}:${qrReloadKey}`}
                   src={paymentQrSrc}
                   alt={isUsdt ? L("USDT 收款码", "USDT QR code") : L("支付宝收款码", "Alipay QR code")}
                   className="proxy-payment-qr"
                   loading="eager"
-                  onLoad={() => { setQrReady(true); setPaymentReadyAt(Date.now()); }}
+                  onLoad={() => { setQrError(false); setQrReady(true); setPaymentReadyAt(Date.now()); }}
+                  onError={() => { setQrError(true); setQrReady(false); setPaymentReadyAt(0); }}
                 />
               </div>
               <strong>{isUsdt ? L("TRC20 钱包扫码", "Scan with a TRC20 wallet") : L("支付宝扫一扫", "Scan with Alipay")}</strong>

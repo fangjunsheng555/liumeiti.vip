@@ -17,6 +17,7 @@ import {
 import FloatingSupport from "./FloatingSupport";
 import { useLocale } from "./LocaleProvider";
 import { validEmail } from "../lib/store";
+import { clientFetch as fetch } from "../lib/client-fetch";
 import {
   createPendingIdempotencyRecord,
   idempotencyFingerprint,

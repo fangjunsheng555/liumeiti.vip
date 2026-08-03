@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 const empty = { marketing: "unknown", orderUpdates: true, renewal: true, serviceNotices: true };
 const CARD = { border: "1px solid #dbe4ef", borderRadius: 16, background: "#fff", padding: "17px 18px", display: "grid", gap: 12 };

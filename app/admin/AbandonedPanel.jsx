@@ -5,6 +5,7 @@
 // 召回 = POST {id, action:"email"}（复用站点发信）；标记已成交 = action:"converted"；批量删 = DELETE。
 import { useCallback, useEffect, useState } from "react";
 import { Inbox, LoaderCircle, CheckCircle2, AlertTriangle } from "lucide-react";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 const LIMIT = 50;
 const C = {

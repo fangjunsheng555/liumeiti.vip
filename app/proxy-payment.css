@@ -546,7 +546,8 @@
   transition: opacity .15s ease;
 }
 
-.proxy-payment-qr-frame.loading .proxy-payment-qr {
+.proxy-payment-qr-frame.loading .proxy-payment-qr,
+.proxy-payment-qr-frame.error .proxy-payment-qr {
   opacity: 0;
 }
 
@@ -597,6 +598,22 @@
   color: #245a91;
   background: #edf5ff;
   border-color: #cbdff4;
+}
+
+.proxy-payment-qr-frame.error .proxy-payment-qr-loading {
+  color: #b42318;
+  background: #fff7f6;
+}
+
+.proxy-payment-qr-loading button {
+  min-height: 32px;
+  padding: 0 14px;
+  border: 1px solid #f1b6af;
+  border-radius: 9px;
+  background: #fff;
+  color: #9f241a;
+  font: inherit;
+  cursor: pointer;
 }
 
 .admin-order-status.status-quote_expired,

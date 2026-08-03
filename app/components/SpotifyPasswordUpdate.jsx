@@ -11,6 +11,7 @@ import {
   isExplicitTerminalIdempotencyResponse,
 } from "../lib/idempotency";
 import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 export default function SpotifyPasswordUpdate({ orderId }) {
   const { locale } = useLocale();

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { validateMarketingCampaignDates } from "./marketing-campaign-form.js";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 const card = { border: "1px solid #dce5e3", borderRadius: 16, background: "#fff", padding: 18 };
 const input = { width: "100%", boxSizing: "border-box", border: "1px solid #ccd9d6", borderRadius: 9, padding: "9px 11px", background: "#fff", color: "#183e3a" };

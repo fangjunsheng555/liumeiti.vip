@@ -72,10 +72,122 @@ function parseUserRecord(raw) {
   if (!raw || typeof raw !== "string") return null;
   try {
     const user = JSON.parse(raw);
-    return user && typeof user === "object" ? user : null;
+    return user && typeof user === "object" && !Array.isArray(user) ? user : null;
   } catch (error) {
     return null;
   }
+}
+
+function jsonStringEnd(raw, start) {
+  if (raw[start] !== '"') return -1;
+  for (let index = start + 1; index < raw.length; index += 1) {
+    if (raw[index] === "\\") {
+      index += 1;
+      continue;
+    }
+    if (raw[index] === '"') return index + 1;
+  }
+  return -1;
+}
+
+function jsonValueEnd(raw, start) {
+  if (raw[start] === '"') return jsonStringEnd(raw, start);
+  if (raw[start] === "{" || raw[start] === "[") {
+    const stack = [raw[start]];
+    for (let index = start + 1; index < raw.length; index += 1) {
+      if (raw[index] === '"') {
+        index = jsonStringEnd(raw, index) - 1;
+        if (index < 0) return -1;
+        continue;
+      }
+      if (raw[index] === "{" || raw[index] === "[") stack.push(raw[index]);
+      else if (raw[index] === "}" || raw[index] === "]") {
+        const expected = raw[index] === "}" ? "{" : "[";
+        if (stack.pop() !== expected) return -1;
+        if (stack.length === 0) return index + 1;
+      }
+    }
+    return -1;
+  }
+  let end = start;
+  while (end < raw.length && raw[end] !== "," && raw[end] !== "}") end += 1;
+  while (end > start && /\s/.test(raw[end - 1])) end -= 1;
+  return end;
+}
+
+// Change only explicitly named top-level fields while retaining every other
+// byte of the historical profile. In particular, this avoids a Lua cjson
+// decode/encode round-trip that converts [] to {} and rounds large numbers.
+function patchTopLevelJsonFields(raw, updates) {
+  const parsed = parseUserRecord(raw);
+  if (!parsed) return "";
+
+  const replacements = new Map(Object.entries(updates || {}).map(([key, value]) => [key, JSON.stringify(value)]));
+  if (!replacements.size || Array.from(replacements.values()).some((value) => value === undefined)) return "";
+  const found = new Set();
+  const edits = [];
+  const skipWhitespace = (position) => {
+    let next = position;
+    while (next < raw.length && /\s/.test(raw[next])) next += 1;
+    return next;
+  };
+
+  let index = skipWhitespace(0);
+  if (raw[index] !== "{") return "";
+  index = skipWhitespace(index + 1);
+  let closingBrace = -1;
+  let propertyCount = 0;
+  while (index < raw.length) {
+    if (raw[index] === "}") {
+      closingBrace = index;
+      break;
+    }
+    const keyEnd = jsonStringEnd(raw, index);
+    if (keyEnd < 0) return "";
+    let key;
+    try { key = JSON.parse(raw.slice(index, keyEnd)); } catch { return ""; }
+    index = skipWhitespace(keyEnd);
+    if (raw[index] !== ":") return "";
+    const valueStart = skipWhitespace(index + 1);
+    const valueEnd = jsonValueEnd(raw, valueStart);
+    if (valueEnd < 0) return "";
+    propertyCount += 1;
+    if (replacements.has(key)) {
+      edits.push({ start: valueStart, end: valueEnd, value: replacements.get(key) });
+      found.add(key);
+    }
+    index = skipWhitespace(valueEnd);
+    if (raw[index] === ",") {
+      index = skipWhitespace(index + 1);
+      continue;
+    }
+    if (raw[index] === "}") {
+      closingBrace = index;
+      break;
+    }
+    return "";
+  }
+  if (closingBrace < 0 || skipWhitespace(closingBrace + 1) !== raw.length) return "";
+
+  const missing = Array.from(replacements.entries()).filter(([key]) => !found.has(key));
+  if (missing.length) {
+    const fields = missing.map(([key, value]) => `${JSON.stringify(key)}:${value}`).join(",");
+    edits.push({
+      start: closingBrace,
+      end: closingBrace,
+      value: `${propertyCount ? "," : ""}${fields}`,
+    });
+  }
+
+  let next = raw;
+  for (const edit of edits.sort((left, right) => right.start - left.start)) {
+    next = next.slice(0, edit.start) + edit.value + next.slice(edit.end);
+  }
+  return parseUserRecord(next) ? next : "";
+}
+
+function patchUserPasswordFields(raw, passwordHash, passwordResetAt) {
+  return patchTopLevelJsonFields(raw, { passwordHash, passwordResetAt });
 }
 
 function strictLifetime(claim, maxTtlMs, now) {
@@ -200,7 +312,7 @@ export function configuredLegacyUserDeadline(env = process.env) {
   return deployedAt + USER_SESSION_TTL_MS;
 }
 
-async function ensureLegacyUserDeadline() {
+async function ensureLegacyUserDeadline(now = Date.now()) {
   const hasExplicitConfiguration = Boolean(
     String(process.env.LEGACY_USER_SESSION_UNTIL || "").trim()
     || String(process.env.LEGACY_USER_SESSION_DEPLOYED_AT || "").trim(),
@@ -210,62 +322,92 @@ async function ensureLegacyUserDeadline() {
     // the previous `now + 14 days` fallback, their value cannot be extended by
     // a user's first visit or by a cold start. LEGACY_USER_SESSION_UNTIL takes
     // precedence so operators can publish one auditable migration deadline.
-    return configuredLegacyUserDeadline();
+    // A malformed rollout value must not turn into a 503 loop. Treat it as an
+    // expired migration window so the browser can clear the legacy cookie and
+    // the user can immediately sign in again with a typed session.
+    return configuredLegacyUserDeadline() || -1;
   }
 
-  // A deployment may pre-initialize this key before serving traffic. Runtime
-  // authentication only reads it: a legacy user's first request must never be
-  // able to start (or restart) the migration window.
-  return finiteTimestamp(await redisCmd(["GET", LEGACY_USER_DEADLINE_KEY]));
+  const raw = await redisCmd(["GET", LEGACY_USER_DEADLINE_KEY]);
+  if (raw != null) return absoluteTimestamp(raw) || -1;
+
+  // Older deployments did not always seed the rollout anchor. Initializing it
+  // with NX keeps every instance on one deadline and avoids locking all active
+  // legacy users behind a 503. A legacy token is independently capped at the
+  // same 14-day lifetime, so this recovery cannot extend that token itself.
+  const candidate = finiteTimestamp(now) + USER_SESSION_TTL_MS;
+  if (!Number.isSafeInteger(candidate)) return -1;
+  const initialized = await redisCmd(["SET", LEGACY_USER_DEADLINE_KEY, String(candidate), "NX"]);
+  if (initialized === "OK") return candidate;
+
+  // SET returning null can mean either an NX race or an unavailable Redis
+  // transport. One read distinguishes a winner from a real outage.
+  const racedRaw = await redisCmd(["GET", LEGACY_USER_DEADLINE_KEY]);
+  return racedRaw == null ? 0 : (absoluteTimestamp(racedRaw) || -1);
 }
 
 const READ_SESSION_ISSUANCE_STATE_SCRIPT = `
--- READ_SESSION_ISSUANCE_STATE_V2
+-- READ_SESSION_ISSUANCE_STATE_V3
 local function keytype(key)
   local result=redis.call('TYPE',key)
   if type(result)=='table' then return result.ok end
   return result
 end
-if keytype(KEYS[1])~='string' then return cjson.encode({ok=false,error='user_not_found'}) end
+local function encode(value)
+  local ok,result=pcall(cjson.encode,value)
+  if ok then return result end
+  return '{"ok":false,"error":"response_encode_failed"}'
+end
+local function validversion(raw)
+  if not raw or not string.match(raw,'^%d+$') then return nil end
+  local value=tonumber(raw)
+  if not value or value<1 or value~=math.floor(value) or value>9007199254740990 then return nil end
+  return value
+end
+if keytype(KEYS[1])~='string' then return encode({ok=false,error='user_not_found'}) end
 local emailSetType=keytype(KEYS[3])
-if emailSetType~='none' and emailSetType~='set' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
+local emailSetWritable=emailSetType=='none' or emailSetType=='set'
 local lifecycleType=keytype(KEYS[4])
-if lifecycleType~='none' and lifecycleType~='string' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
+if lifecycleType~='none' and lifecycleType~='string' then
+  redis.call('DEL',KEYS[4])
+  lifecycleType='none'
+end
 local raw=redis.call('GET',KEYS[1])
 local decoded,user=pcall(cjson.decode,raw)
-if not decoded or type(user)~='table' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
-if user.banned==true then return cjson.encode({ok=false,error='account_banned'}) end
+if not decoded or type(user)~='table' then return encode({ok=false,error='account_record_invalid'}) end
+if user.banned==true then return encode({ok=false,error='account_banned'}) end
 local versionType=keytype(KEYS[2])
-if versionType~='none' and versionType~='string' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
 local current=1
 if versionType=='string' then
-  local versionRaw=redis.call('GET',KEYS[2])
-  if not string.match(versionRaw or '','^%d+$') then return cjson.encode({ok=false,error='auth_record_invalid'}) end
-  current=tonumber(versionRaw)
+  current=validversion(redis.call('GET',KEYS[2]))
 end
-if not current or current<1 or current~=math.floor(current) or current>9007199254740990 then
-  return cjson.encode({ok=false,error='auth_record_invalid'})
+if not current then current=1 end
+if versionType~='string' or not validversion(redis.call('GET',KEYS[2])) then
+  if versionType~='none' then redis.call('DEL',KEYS[2]) end
+  redis.call('SET',KEYS[2],'1')
+  versionType='string'
 end
 local expected=tonumber(ARGV[1] or '0')
 if not expected or expected<0 or expected~=math.floor(expected) then
-  return cjson.encode({ok=false,error='invalid_auth_version'})
+  return encode({ok=false,error='invalid_auth_version'})
 end
-if expected>0 and current~=expected then return cjson.encode({ok=false,error='session_state_changed'}) end
+if expected>0 and current~=expected then return encode({ok=false,error='session_state_changed'}) end
 local lifecycle=redis.call('GET',KEYS[4])
 if lifecycle then
   if #lifecycle~=32 or string.match(lifecycle,'[^a-f0-9]') then
-    return cjson.encode({ok=false,error='auth_record_invalid'})
+    redis.call('DEL',KEYS[4])
+    lifecycle=nil
   end
-else
+end
+if not lifecycle then
   lifecycle=ARGV[3]
   if #lifecycle~=32 or string.match(lifecycle,'[^a-f0-9]') then
-    return cjson.encode({ok=false,error='invalid_lifecycle_candidate'})
+    return encode({ok=false,error='invalid_lifecycle_candidate'})
   end
   redis.call('SET',KEYS[4],lifecycle)
 end
-if versionType=='none' then redis.call('SET',KEYS[2],tostring(current)) end
-redis.call('SADD',KEYS[3],ARGV[2])
-return cjson.encode({ok=true,authVersion=current,accountLifecycleId=lifecycle})`;
+if emailSetWritable then redis.call('SADD',KEYS[3],ARGV[2]) end
+return encode({ok=true,authVersion=current,accountLifecycleId=lifecycle,emailIndexRepairRequired=not emailSetWritable})`;
 
 function unsupportedAtomicKeyspaceError() {
   const mode = redisAtomicKeyspaceMode();
@@ -285,6 +427,9 @@ async function readSessionIssuanceState(email, expectedAuthVersion = 0) {
     [userRecordKey(email), authVersionKey(email), USER_EMAIL_SET_KEY, accountLifecycleKey(email)],
     [expected, email, newAccountLifecycleId()],
   );
+  if (result.ok && result.value?.emailIndexRepairRequired) {
+    console.warn("[auth] user email index has an incompatible Redis type; session issuance continued");
+  }
   return result.ok ? result.value : result;
 }
 
@@ -306,42 +451,63 @@ export async function createUserSession(emailValue, now = Date.now(), expectedAu
     : { ok: false, error: "session_sign_failed" };
 }
 
-const RESET_PASSWORD_AND_REVOKE_SCRIPT = `
+const READ_PASSWORD_RESET_PROFILE_SCRIPT = `
+-- READ_PASSWORD_RESET_PROFILE_V1
 local function keytype(key)
   local result=redis.call('TYPE',key)
   if type(result)=='table' then return result.ok end
   return result
 end
-if keytype(KEYS[3])~='string' or redis.call('GET',KEYS[3])~=ARGV[3] then
-  return cjson.encode({ok=false,error='code_invalid_or_expired'})
+local function encode(value)
+  local ok,result=pcall(cjson.encode,value)
+  if ok then return result end
+  return '{"ok":false,"error":"response_encode_failed"}'
 end
-if keytype(KEYS[1])~='string' then return cjson.encode({ok=false,error='user_not_found'}) end
+if keytype(KEYS[2])~='string' or redis.call('GET',KEYS[2])~=ARGV[1] then
+  return encode({ok=false,error='code_invalid_or_expired'})
+end
+if keytype(KEYS[1])~='string' then return encode({ok=false,error='user_not_found'}) end
+return encode({ok=true,userRaw=redis.call('GET',KEYS[1])})`;
+
+const RESET_PASSWORD_AND_REVOKE_SCRIPT = `
+-- RESET_PASSWORD_AND_REVOKE_V2
+local function keytype(key)
+  local result=redis.call('TYPE',key)
+  if type(result)=='table' then return result.ok end
+  return result
+end
+local function encode(value)
+  local ok,result=pcall(cjson.encode,value)
+  if ok then return result end
+  return '{"ok":false,"error":"response_encode_failed"}'
+end
+local function validversion(raw)
+  if not raw or not string.match(raw,'^%d+$') then return nil end
+  local value=tonumber(raw)
+  if not value or value<1 or value~=math.floor(value) or value>=9007199254740990 then return nil end
+  return value
+end
+if keytype(KEYS[3])~='string' or redis.call('GET',KEYS[3])~=ARGV[3] then
+  return encode({ok=false,error='code_invalid_or_expired'})
+end
+if keytype(KEYS[1])~='string' then return encode({ok=false,error='user_not_found'}) end
+if redis.call('GET',KEYS[1])~=ARGV[4] then return encode({ok=false,error='account_state_changed'}) end
 local versionType=keytype(KEYS[2])
-if versionType~='none' and versionType~='string' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
-local raw=redis.call('GET',KEYS[1])
-local decoded,user=pcall(cjson.decode,raw)
-if not decoded or type(user)~='table' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
 local current=1
 if versionType=='string' then
-  local versionRaw=redis.call('GET',KEYS[2])
-  if not string.match(versionRaw or '','^%d+$') then return cjson.encode({ok=false,error='auth_record_invalid'}) end
-  current=tonumber(versionRaw)
+  current=validversion(redis.call('GET',KEYS[2]))
 end
-if not current or current<1 or current~=math.floor(current) or current>9007199254740990 then
-  return cjson.encode({ok=false,error='auth_record_invalid'})
+if not current then current=1 end
+if versionType~='string' or not validversion(redis.call('GET',KEYS[2])) then
+  if versionType~='none' then redis.call('DEL',KEYS[2]) end
+  redis.call('SET',KEYS[2],'1')
 end
-if ARGV[1]=='' or ARGV[2]=='' then return cjson.encode({ok=false,error='invalid_password_update'}) end
-user.passwordHash=ARGV[1]
-user.passwordResetAt=ARGV[2]
-local encoded=cjson.encode(user)
-if string.find(raw,'"coupons"%s*:%s*%[%s*%]') then
-  encoded=string.gsub(encoded,'"coupons":{}','"coupons":[]',1)
-end
+if ARGV[1]=='' or ARGV[2]=='' or ARGV[5]=='' then return encode({ok=false,error='invalid_password_update'}) end
 local nextVersion=current+1
-redis.call('SET',KEYS[1],encoded)
+redis.call('SET',KEYS[1],ARGV[5])
 redis.call('SET',KEYS[2],tostring(nextVersion))
 redis.call('DEL',KEYS[3])
-return cjson.encode({ok=true,authVersion=nextVersion})`;
+return encode({ok=true,authVersion=nextVersion})`;
 
 export async function resetPasswordAndRevokeSessions(emailValue, passwordHash, resetCode, resetAt = new Date().toISOString()) {
   const email = normalizeEmail(emailValue);
@@ -353,61 +519,84 @@ export async function resetPasswordAndRevokeSessions(emailValue, passwordHash, r
   }
   const keyspaceError = unsupportedAtomicKeyspaceError();
   if (keyspaceError) return { ok: false, error: keyspaceError };
-  const result = await redisEvalAtomic(
-    RESET_PASSWORD_AND_REVOKE_SCRIPT,
-    [userRecordKey(email), authVersionKey(email), RESET_CODE_PREFIX + email],
-    [hash, timestamp, code],
-  );
-  return result.ok ? { ...result.value, email } : result;
+  const keys = [userRecordKey(email), authVersionKey(email), RESET_CODE_PREFIX + email];
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const prepared = await redisEvalAtomic(
+      READ_PASSWORD_RESET_PROFILE_SCRIPT,
+      [keys[0], keys[2]],
+      [code],
+    );
+    if (!prepared.ok) return prepared;
+    if (!prepared.value?.ok) return prepared.value || { ok: false, error: "invalid_storage_response" };
+    const raw = String(prepared.value.userRaw || "");
+    const nextRaw = patchUserPasswordFields(raw, hash, timestamp);
+    if (!nextRaw) return { ok: false, error: "account_record_invalid" };
+    const committed = await redisEvalAtomic(
+      RESET_PASSWORD_AND_REVOKE_SCRIPT,
+      keys,
+      [hash, timestamp, code, raw, nextRaw],
+    );
+    if (!committed.ok) return committed;
+    if (committed.value?.error === "account_state_changed") continue;
+    return committed.value?.ok ? { ...committed.value, email } : committed.value;
+  }
+  return { ok: false, error: "account_state_changed" };
 }
 
-const SET_BAN_STATE_AND_REVOKE_SCRIPT = `
+const READ_BAN_PROFILE_SCRIPT = `
+-- READ_BAN_PROFILE_V1
 local function keytype(key)
   local result=redis.call('TYPE',key)
   if type(result)=='table' then return result.ok end
   return result
 end
-if keytype(KEYS[1])~='string' then return cjson.encode({ok=false,error='user_not_found'}) end
-local versionType=keytype(KEYS[2])
-if versionType~='none' and versionType~='string' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
-local raw=redis.call('GET',KEYS[1])
-local decoded,user=pcall(cjson.decode,raw)
-if not decoded or type(user)~='table' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
-local target=ARGV[1]=='1'
-if (user.banned==true)==target then
-  local unchangedVersion=versionType=='string' and tonumber(redis.call('GET',KEYS[2])) or 1
-  if not unchangedVersion or unchangedVersion<1 or unchangedVersion~=math.floor(unchangedVersion) then
-    return cjson.encode({ok=false,error='auth_record_invalid'})
-  end
-  return cjson.encode({ok=true,changed=false,authVersion=unchangedVersion,banned=target})
+local function encode(value)
+  local ok,result=pcall(cjson.encode,value)
+  if ok then return result end
+  return '{"ok":false,"error":"response_encode_failed"}'
 end
+if keytype(KEYS[1])~='string' then return encode({ok=false,error='user_not_found'}) end
+return encode({ok=true,userRaw=redis.call('GET',KEYS[1])})`;
+
+const SET_BAN_STATE_AND_REVOKE_SCRIPT = `
+-- SET_BAN_STATE_AND_REVOKE_V2
+local function keytype(key)
+  local result=redis.call('TYPE',key)
+  if type(result)=='table' then return result.ok end
+  return result
+end
+local function encode(value)
+  local ok,result=pcall(cjson.encode,value)
+  if ok then return result end
+  return '{"ok":false,"error":"response_encode_failed"}'
+end
+local function validversion(raw)
+  if not raw or not string.match(raw,'^%d+$') then return nil end
+  local value=tonumber(raw)
+  if not value or value<1 or value~=math.floor(value) or value>=9007199254740990 then return nil end
+  return value
+end
+if keytype(KEYS[1])~='string' then return encode({ok=false,error='user_not_found'}) end
+if redis.call('GET',KEYS[1])~=ARGV[2] then return encode({ok=false,error='account_state_changed'}) end
+local versionType=keytype(KEYS[2])
 local current=1
 if versionType=='string' then
-  local versionRaw=redis.call('GET',KEYS[2])
-  if not string.match(versionRaw or '','^%d+$') then return cjson.encode({ok=false,error='auth_record_invalid'}) end
-  current=tonumber(versionRaw)
+  current=validversion(redis.call('GET',KEYS[2]))
 end
-if not current or current<1 or current~=math.floor(current) or current>9007199254740990 then
-  return cjson.encode({ok=false,error='auth_record_invalid'})
+if not current then current=1 end
+if versionType~='string' or not validversion(redis.call('GET',KEYS[2])) then
+  if versionType~='none' then redis.call('DEL',KEYS[2]) end
+  redis.call('SET',KEYS[2],'1')
 end
-user.banned=target
-if target then
-  user.bannedAt=ARGV[2]
-  user.bannedByStaffId=tonumber(ARGV[3])
-  user.unbannedByStaffId=nil
-else
-  user.bannedAt=cjson.null
-  user.bannedByStaffId=cjson.null
-  user.unbannedByStaffId=tonumber(ARGV[3])
+local target=ARGV[1]=='1'
+if ARGV[4]~='1' then
+  return encode({ok=true,changed=false,authVersion=current,banned=target})
 end
-local encoded=cjson.encode(user)
-if string.find(raw,'"coupons"%s*:%s*%[%s*%]') then
-  encoded=string.gsub(encoded,'"coupons":{}','"coupons":[]',1)
-end
+if ARGV[3]=='' then return encode({ok=false,error='invalid_ban_update'}) end
 local nextVersion=current+1
-redis.call('SET',KEYS[1],encoded)
+redis.call('SET',KEYS[1],ARGV[3])
 redis.call('SET',KEYS[2],tostring(nextVersion))
-return cjson.encode({ok=true,changed=true,authVersion=nextVersion,banned=target})`;
+return encode({ok=true,changed=true,authVersion=nextVersion,banned=target})`;
 
 export async function setUserBanStateAndRevokeSessions(emailValue, banned, actor = null, now = new Date()) {
   const email = normalizeEmail(emailValue);
@@ -417,12 +606,35 @@ export async function setUserBanStateAndRevokeSessions(emailValue, banned, actor
   const keyspaceError = unsupportedAtomicKeyspaceError();
   if (keyspaceError) return { ok: false, error: keyspaceError };
   const staffId = positiveInteger(actor?.staffId) || 1;
-  const result = await redisEvalAtomic(
-    SET_BAN_STATE_AND_REVOKE_SCRIPT,
-    [userRecordKey(email), authVersionKey(email)],
-    [banned ? "1" : "0", date.toISOString(), staffId],
-  );
-  return result.ok ? { ...result.value, email } : result;
+  const keys = [userRecordKey(email), authVersionKey(email)];
+  const target = Boolean(banned);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const prepared = await redisEvalAtomic(READ_BAN_PROFILE_SCRIPT, [keys[0]], []);
+    if (!prepared.ok) return prepared;
+    if (!prepared.value?.ok) return prepared.value || { ok: false, error: "invalid_storage_response" };
+    const raw = String(prepared.value.userRaw || "");
+    const user = parseUserRecord(raw);
+    if (!user) return { ok: false, error: "account_record_invalid" };
+    const changed = (user.banned === true) !== target;
+    const nextRaw = changed
+      ? patchTopLevelJsonFields(raw, {
+          banned: target,
+          bannedAt: target ? date.toISOString() : null,
+          bannedByStaffId: target ? staffId : null,
+          unbannedByStaffId: target ? null : staffId,
+        })
+      : raw;
+    if (!nextRaw) return { ok: false, error: "account_record_invalid" };
+    const committed = await redisEvalAtomic(
+      SET_BAN_STATE_AND_REVOKE_SCRIPT,
+      keys,
+      [target ? "1" : "0", raw, nextRaw, changed ? "1" : "0"],
+    );
+    if (!committed.ok) return committed;
+    if (committed.value?.error === "account_state_changed") continue;
+    return committed.value?.ok ? { ...committed.value, email } : committed.value;
+  }
+  return { ok: false, error: "account_state_changed" };
 }
 
 export async function revokeUserSessions(emailValue) {
@@ -440,85 +652,221 @@ export async function revokeUserSessions(emailValue) {
 }
 
 const READ_USER_AUTH_STATE_SCRIPT = `
--- READ_USER_AUTH_STATE_V2
+-- READ_USER_AUTH_STATE_V3
 local function keytype(key)
   local result=redis.call('TYPE',key)
   if type(result)=='table' then return result.ok end
   return result
 end
-if keytype(KEYS[1])~='string' then return cjson.encode({ok=false,error='session_revoked'}) end
-local versionType=keytype(KEYS[2]); local balanceType=keytype(KEYS[3]); local lifecycleType=keytype(KEYS[4])
-if (versionType~='none' and versionType~='string')
-  or (balanceType~='none' and balanceType~='string')
-  or (lifecycleType~='none' and lifecycleType~='string') then
-  return cjson.encode({ok=false,error='auth_record_invalid'})
+local function encode(value)
+  local ok,result=pcall(cjson.encode,value)
+  if ok then return result end
+  return '{"ok":false,"error":"response_encode_failed"}'
 end
+local function validversion(raw)
+  if not raw or not string.match(raw,'^%d+$') then return nil end
+  local value=tonumber(raw)
+  if not value or value<1 or value~=math.floor(value) or value>9007199254740990 then return nil end
+  return value
+end
+local function validbalance(raw)
+  if not raw or not string.match(raw,'^-?%d+$') then return nil end
+  local value=tonumber(raw)
+  if not value or value~=math.floor(value) or value < -9007199254740991 or value > 9007199254740991 then return nil end
+  return value
+end
+if keytype(KEYS[1])~='string' then return encode({ok=false,error='session_revoked'}) end
+local versionType=keytype(KEYS[2]); local balanceType=keytype(KEYS[3]); local lifecycleType=keytype(KEYS[4])
 local userRaw=redis.call('GET',KEYS[1])
-local decoded,user=pcall(cjson.decode,userRaw)
-if not decoded or type(user)~='table' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
 local current=1
 if versionType=='string' then
-  local versionRaw=redis.call('GET',KEYS[2])
-  if not string.match(versionRaw or '','^%d+$') then return cjson.encode({ok=false,error='auth_record_invalid'}) end
-  current=tonumber(versionRaw)
+  current=validversion(redis.call('GET',KEYS[2]))
 end
-if not current or current<1 or current~=math.floor(current) or current>9007199254740990 then
-  return cjson.encode({ok=false,error='auth_record_invalid'})
+local authVersionRepaired=false
+if not current then current=1 end
+if versionType~='string' or not validversion(redis.call('GET',KEYS[2])) then
+  if versionType~='none' then redis.call('DEL',KEYS[2]) end
+  redis.call('SET',KEYS[2],'1')
+  authVersionRepaired=true
 end
-local balanceRaw=redis.call('GET',KEYS[3])
-if balanceRaw then
-  if not string.match(balanceRaw,'^-?%d+$') then return cjson.encode({ok=false,error='auth_record_invalid'}) end
-  local balance=tonumber(balanceRaw)
-  if not balance or balance~=math.floor(balance) or balance < -9007199254740991 or balance > 9007199254740991 then
-    return cjson.encode({ok=false,error='auth_record_invalid'})
+local balanceRaw=nil
+local balanceRepaired=false
+if balanceType=='string' then
+  local candidate=redis.call('GET',KEYS[3])
+  if validbalance(candidate) then
+    balanceRaw=candidate
+  else
+    redis.call('DEL',KEYS[3])
+    balanceRepaired=true
   end
+elseif balanceType~='none' then
+  redis.call('DEL',KEYS[3])
+  balanceRepaired=true
 end
-local lifecycle=redis.call('GET',KEYS[4])
-if lifecycle then
-  if #lifecycle~=32 or string.match(lifecycle,'[^a-f0-9]') then return cjson.encode({ok=false,error='auth_record_invalid'}) end
-else
+local lifecycle=nil
+local lifecycleRepaired=false
+if lifecycleType=='string' then lifecycle=redis.call('GET',KEYS[4]) end
+if lifecycle and (#lifecycle~=32 or string.match(lifecycle,'[^a-f0-9]')) then
+  redis.call('DEL',KEYS[4])
+  lifecycle=nil
+  lifecycleRepaired=true
+elseif lifecycleType~='none' and lifecycleType~='string' then
+  redis.call('DEL',KEYS[4])
+  lifecycleRepaired=true
+end
+if not lifecycle then
   lifecycle=ARGV[1]
-  if #lifecycle~=32 or string.match(lifecycle,'[^a-f0-9]') then return cjson.encode({ok=false,error='invalid_lifecycle_candidate'}) end
+  if #lifecycle~=32 or string.match(lifecycle,'[^a-f0-9]') then return encode({ok=false,error='invalid_lifecycle_candidate'}) end
+  redis.call('SET',KEYS[4],lifecycle)
+  lifecycleRepaired=true
+end
+return encode({ok=true,userRaw=userRaw,authVersion=current,accountLifecycleId=lifecycle,balanceCents=balanceRaw,
+  repairedAuthVersion=authVersionRepaired,repairedBalance=balanceRepaired,repairedLifecycle=lifecycleRepaired})`;
+
+const FORCE_REPAIR_USER_AUTH_STATE_SCRIPT = `
+-- FORCE_REPAIR_USER_AUTH_STATE_V1
+local function keytype(key)
+  local result=redis.call('TYPE',key)
+  if type(result)=='table' then return result.ok end
+  return result
+end
+local function encode(value)
+  local ok,result=pcall(cjson.encode,value)
+  if ok then return result end
+  return '{"ok":false,"error":"response_encode_failed"}'
+end
+local function validversion(raw)
+  if not raw or not string.match(raw,'^%d+$') then return nil end
+  local value=tonumber(raw)
+  if not value or value<1 or value~=math.floor(value) or value>9007199254740990 then return nil end
+  return value
+end
+local function validbalance(raw)
+  if not raw or not string.match(raw,'^-?%d+$') then return nil end
+  local value=tonumber(raw)
+  if not value or value~=math.floor(value) or value < -9007199254740991 or value > 9007199254740991 then return nil end
+  return value
+end
+if keytype(KEYS[1])~='string' then return encode({ok=false,error='session_revoked'}) end
+local versionType=keytype(KEYS[2])
+local current=versionType=='string' and validversion(redis.call('GET',KEYS[2])) or nil
+if not current then
+  if versionType~='none' then redis.call('DEL',KEYS[2]) end
+  redis.call('SET',KEYS[2],'1')
+  current=1
+end
+local balanceType=keytype(KEYS[3])
+local balanceRaw=nil
+if balanceType=='string' then
+  local candidate=redis.call('GET',KEYS[3])
+  if validbalance(candidate) then balanceRaw=candidate else redis.call('DEL',KEYS[3]) end
+elseif balanceType~='none' then
+  redis.call('DEL',KEYS[3])
+end
+local lifecycleType=keytype(KEYS[4])
+local lifecycle=lifecycleType=='string' and redis.call('GET',KEYS[4]) or nil
+if not lifecycle or #lifecycle~=32 or string.match(lifecycle,'[^a-f0-9]') then
+  if lifecycleType~='none' then redis.call('DEL',KEYS[4]) end
+  lifecycle=ARGV[1]
+  if #lifecycle~=32 or string.match(lifecycle,'[^a-f0-9]') then return encode({ok=false,error='invalid_lifecycle_candidate'}) end
   redis.call('SET',KEYS[4],lifecycle)
 end
-if versionType=='none' then redis.call('SET',KEYS[2],tostring(current)) end
-return cjson.encode({ok=true,userRaw=userRaw,authVersion=current,accountLifecycleId=lifecycle,balanceCents=balanceRaw})`;
+return encode({ok=true,userRaw=redis.call('GET',KEYS[1]),authVersion=current,
+  accountLifecycleId=lifecycle,balanceCents=balanceRaw})`;
+
+function normalizedUserAuthState(state) {
+  const user = parseUserRecord(state?.userRaw);
+  if (!user) return { ok: false, error: "account_record_invalid" };
+
+  let balanceValid = true;
+  if (state.balanceCents != null) {
+    const rawBalance = String(state.balanceCents);
+    const cents = /^-?\d+$/.test(rawBalance) ? Number(rawBalance) : Number.NaN;
+    if (Number.isSafeInteger(cents)) user.balance = cents / 100;
+    else balanceValid = false;
+  }
+  const authVersion = positiveInteger(state.authVersion);
+  const versionValid = Boolean(authVersion && authVersion <= 9007199254740990);
+  const accountLifecycleId = String(state.accountLifecycleId || "");
+  const lifecycleValid = validAccountLifecycleId(accountLifecycleId);
+  if (!balanceValid || !versionValid || !lifecycleValid) {
+    return {
+      ok: false,
+      error: "auth_state_invalid",
+      invalid: {
+        balance: !balanceValid,
+        authVersion: !versionValid,
+        lifecycle: !lifecycleValid,
+      },
+    };
+  }
+  return { ok: true, user, authVersion, accountLifecycleId };
+}
+
+function userAuthStorageFailure(result) {
+  const error = result?.error || "auth_store_unavailable";
+  return {
+    ok: false,
+    status: error === "storage_unavailable" || error === "auth_store_unavailable" ? 503 : 500,
+    error,
+  };
+}
 
 export async function readUserAuthState(email) {
   const normalized = normalizeEmail(email);
   if (!validEmail(normalized)) return { ok: false, status: 401, error: "session_revoked" };
   const keyspaceError = unsupportedAtomicKeyspaceError();
-  if (keyspaceError) return { ok: false, status: 503, error: keyspaceError };
-  const result = await redisEvalAtomic(
-    READ_USER_AUTH_STATE_SCRIPT,
-    [userRecordKey(normalized), authVersionKey(normalized), balanceCentsKey(normalized), accountLifecycleKey(normalized)],
+  if (keyspaceError) {
+    return {
+      ok: false,
+      status: keyspaceError === "redis_cluster_keyspace_not_supported" ? 503 : 500,
+      error: keyspaceError,
+    };
+  }
+  const keys = [
+    userRecordKey(normalized),
+    authVersionKey(normalized),
+    balanceCentsKey(normalized),
+    accountLifecycleKey(normalized),
+  ];
+  const read = () => redisEvalAtomic(READ_USER_AUTH_STATE_SCRIPT, keys, [newAccountLifecycleId()]);
+  const stateError = (state) => state?.error === "session_revoked"
+    ? { ok: false, status: 401, error: "session_revoked" }
+    : { ok: false, status: 409, error: state?.error || "auth_state_invalid" };
+
+  let result = await read();
+  if (!result.ok) return userAuthStorageFailure(result);
+  if (!result.value?.ok) return stateError(result.value);
+  let normalizedState = normalizedUserAuthState(result.value);
+  if (normalizedState.ok) return normalizedState;
+  if (normalizedState.error === "account_record_invalid") {
+    return { ok: false, status: 409, error: normalizedState.error };
+  }
+
+  // A rolling deployment, proxy cache, or defensive test double can still
+  // surface an old/malformed payload even though V3 repairs the keys in Lua.
+  // Re-read once, then perform one explicit canonical repair so a historical
+  // representation can never strand an otherwise valid profile in a 5xx.
+  result = await read();
+  if (!result.ok) return userAuthStorageFailure(result);
+  if (!result.value?.ok) return stateError(result.value);
+  normalizedState = normalizedUserAuthState(result.value);
+  if (normalizedState.ok) return normalizedState;
+  if (normalizedState.error === "account_record_invalid") {
+    return { ok: false, status: 409, error: normalizedState.error };
+  }
+
+  const repaired = await redisEvalAtomic(
+    FORCE_REPAIR_USER_AUTH_STATE_SCRIPT,
+    keys,
     [newAccountLifecycleId()],
   );
-  if (!result.ok) return { ok: false, status: 503, error: result.error || "auth_store_unavailable" };
-  const state = result.value;
-  if (!state?.ok) {
-    return state?.error === "session_revoked"
-      ? { ok: false, status: 401, error: "session_revoked" }
-      : { ok: false, status: 503, error: state?.error || "auth_record_invalid" };
-  }
-  const user = parseUserRecord(state.userRaw);
-  if (!user) return { ok: false, status: 503, error: "auth_record_invalid" };
-  if (state.balanceCents != null) {
-    const rawBalance = String(state.balanceCents);
-    if (!/^-?\d+$/.test(rawBalance)) return { ok: false, status: 503, error: "auth_record_invalid" };
-    const cents = Number(rawBalance);
-    if (!Number.isSafeInteger(cents)) return { ok: false, status: 503, error: "auth_record_invalid" };
-    user.balance = cents / 100;
-  }
-  const authVersion = positiveInteger(state.authVersion);
-  if (!authVersion || authVersion > 9007199254740990) {
-    return { ok: false, status: 503, error: "auth_record_invalid" };
-  }
-  const accountLifecycleId = String(state.accountLifecycleId || "");
-  if (!validAccountLifecycleId(accountLifecycleId)) {
-    return { ok: false, status: 503, error: "auth_record_invalid" };
-  }
-  return { ok: true, user, authVersion, accountLifecycleId };
+  if (!repaired.ok) return userAuthStorageFailure(repaired);
+  if (!repaired.value?.ok) return stateError(repaired.value);
+  const repairedState = normalizedUserAuthState(repaired.value);
+  return repairedState.ok
+    ? repairedState
+    : { ok: false, status: 409, error: repairedState.error || "auth_state_invalid" };
 }
 
 export async function authenticateUserRequest(request, options = {}) {
@@ -544,7 +892,7 @@ export async function authenticateUserRequest(request, options = {}) {
     if (state.authVersion !== 1) {
       return { ok: false, status: 401, error: "session_revoked" };
     }
-    const deadline = await ensureLegacyUserDeadline();
+    const deadline = await ensureLegacyUserDeadline(now);
     if (!deadline) return { ok: false, status: 503, error: "auth_store_unavailable" };
     if (now >= deadline) return { ok: false, status: 401, error: "legacy_session_expired" };
   }

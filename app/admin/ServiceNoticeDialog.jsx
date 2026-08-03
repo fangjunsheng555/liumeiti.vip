@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { LoaderCircle, MailCheck, RefreshCw, Send, X } from "lucide-react";
 import styles from "./ServiceNoticeDialog.module.css";
+import { clientFetch as fetch } from "../lib/client-fetch";
 
 const ERROR_TEXT = {
   announcement_not_found: "未找到这条公告",
