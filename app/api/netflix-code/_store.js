@@ -24,6 +24,8 @@ const LOCK_PREFIX = "liumeiti:netflix-code:lock:v2:";
 const EVENT_TTL_SECONDS = 7 * 24 * 60 * 60;
 const ACCESS_TTL_SECONDS = 90 * 24 * 60 * 60;
 const SIBLING_EVENT_WINDOW_MS = 15 * 1000;
+const MAX_REQUEST_FINGERPRINTS = 32;
+const MAX_PRIMARY_REQUEST_FINGERPRINTS = 4;
 
 function deliveryFingerprint(record) {
   const value = String(record?.deliveryFingerprint || "").trim().toLowerCase();
@@ -34,7 +36,14 @@ function requestFingerprints(record) {
   return Array.from(new Set((Array.isArray(record?.requestFingerprints) ? record.requestFingerprints : [])
     .map((value) => String(value || "").trim().toLowerCase())
     .filter((value) => /^[a-f0-9]{64}$/.test(value))))
-    .slice(0, 12);
+    .slice(0, MAX_REQUEST_FINGERPRINTS);
+}
+
+function requestPrimaryFingerprints(record) {
+  return Array.from(new Set((Array.isArray(record?.requestPrimaryFingerprints) ? record.requestPrimaryFingerprints : [])
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter((value) => /^[a-f0-9]{64}$/.test(value))))
+    .slice(0, MAX_PRIMARY_REQUEST_FINGERPRINTS);
 }
 
 function sameNetflixRequest(left, right) {
@@ -44,13 +53,27 @@ function sameNetflixRequest(left, right) {
   // requests and must override weaker content similarities (including the
   // rare case where Netflix generates the same four digits twice).
   if (leftDelivery && rightDelivery && leftDelivery !== rightDelivery) return false;
+  // Conflicting Exchange current-identity headers are not proof of either
+  // request. The event may still return its own parsed result, but it cannot
+  // authorize fallback to another event's code.
+  if (left?.requestIdentityAmbiguous === true || right?.requestIdentityAmbiguous === true) return false;
   // Equal SRC values are not sufficient positive evidence on their own. A
   // newly forwarded message can quote the previous Netflix email and retain
   // only that older SRC footer. Treating the quoted value as authoritative
   // would let a newer unparsed request replay the previous code. At least one
   // HMAC-protected original Message-ID/content identity must also overlap.
-  const rightEvidence = new Set(requestFingerprints(right));
-  return requestFingerprints(left).some((value) => rightEvidence.has(value));
+  const leftEvidence = requestFingerprints(left);
+  const rightEvidence = requestFingerprints(right);
+  const leftPrimary = requestPrimaryFingerprints(left);
+  const rightPrimary = requestPrimaryFingerprints(right);
+  // New records carry one HMAC-protected current identity. When only one side
+  // has the new field, compare that identity with the legacy record's full
+  // evidence set; this keeps pre-deployment mail readable without letting an
+  // auxiliary References thread member override two explicit identities.
+  const leftCandidates = leftPrimary.length ? leftPrimary : leftEvidence;
+  const rightCandidates = rightPrimary.length ? rightPrimary : rightEvidence;
+  const rightSet = new Set(rightCandidates);
+  return leftCandidates.some((value) => rightSet.has(value));
 }
 
 function compareArrival(left, right) {
@@ -69,6 +92,17 @@ function recordRequestSentAt(entry) {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
+function clusterDeliveryFingerprints(entries) {
+  return new Set((Array.isArray(entries) ? entries : [])
+    .map((entry) => deliveryFingerprint(entry?.record))
+    .filter(Boolean));
+}
+
+function clusterPrimaryFingerprints(entries) {
+  return new Set((Array.isArray(entries) ? entries : [])
+    .flatMap((entry) => requestPrimaryFingerprints(entry?.record)));
+}
+
 function rankedNetflixRequestClusters(records) {
   const pool = [...(Array.isArray(records) ? records : [])]
     .filter((entry) => Number.isFinite(Number(entry?.receivedAt)) && Number(entry.receivedAt) > 0);
@@ -79,6 +113,22 @@ function rankedNetflixRequestClusters(records) {
       if (cluster.some((candidate) => sameNetflixRequest(entry?.record, candidate?.record))) matching.push(index);
     });
     if (!matching.length) {
+      clusters.push([entry]);
+      continue;
+    }
+    // Pairwise checks are not enough when a fingerprint-less wrapper bridges
+    // two evidence identities. Never create a transitive cluster containing
+    // two different SRC UUIDs; that would let a newer failed request replay an
+    // accepted code from an older request through the wrapper in the middle.
+    const mergedFingerprints = clusterDeliveryFingerprints([
+      entry,
+      ...matching.flatMap((index) => clusters[index]),
+    ]);
+    const mergedPrimaryFingerprints = clusterPrimaryFingerprints([
+      entry,
+      ...matching.flatMap((index) => clusters[index]),
+    ]);
+    if (mergedFingerprints.size > 1 || mergedPrimaryFingerprints.size > 1) {
       clusters.push([entry]);
       continue;
     }
@@ -104,6 +154,7 @@ function rankedNetflixRequestClusters(records) {
       // rewrites one, use the earliest value; a delayed duplicate can then
       // never advance its request cluster.
       requestTime: sourceTimes.length ? Math.min(...sourceTimes) : firstReceivedAt,
+      hasTrustedRequestTime: sourceTimes.length > 0,
       firstReceivedAt,
       firstArrivalSequence,
     };
@@ -144,6 +195,34 @@ export function latestAcceptedNetflixRecords(
   { excludeFallbackEventIds = [] } = {},
 ) {
   const rankedClusters = rankedNetflixRequestClusters(records);
+  const firstCluster = rankedClusters[0];
+  const secondCluster = rankedClusters[1];
+  // Legacy events can lack the distributed sequence. If two distinct request
+  // clusters then tie on every trustworthy ordering signal, Redis member order
+  // cannot prove which code is newest. Fail closed instead of guessing.
+  if (firstCluster && secondCluster
+    && firstCluster.requestTime === secondCluster.requestTime
+    && firstCluster.firstReceivedAt === secondCluster.firstReceivedAt
+    && firstCluster.firstArrivalSequence === secondCluster.firstArrivalSequence
+    && compareArrival(firstCluster.entries[0], secondCluster.entries[0]) === 0) {
+    return [];
+  }
+  // Never compare a trusted original send time with a nearby cluster whose
+  // request time is unknown as though both values had equal meaning. The
+  // latter may be a delayed old wrapper that merely arrived later. Outside the
+  // duplicate-delivery window the existing product policy treats it as a new
+  // request; inside the window the only safe result is no code.
+  if (firstCluster && rankedClusters.slice(1).some((cluster) => (
+    (!firstCluster.hasTrustedRequestTime
+      && cluster.hasTrustedRequestTime
+      && firstCluster.firstReceivedAt >= cluster.firstReceivedAt
+      && firstCluster.firstReceivedAt - cluster.firstReceivedAt <= windowMs)
+    || (firstCluster.hasTrustedRequestTime
+      && cluster.hasTrustedRequestTime
+      && firstCluster.requestTime === cluster.requestTime)
+  ))) {
+    return [];
+  }
   const sorted = rankedClusters.flatMap((cluster) => cluster.entries);
   const newestReceivedAt = Number(sorted[0]?.receivedAt || 0);
   if (!newestReceivedAt) return [];
@@ -164,14 +243,14 @@ export function latestAcceptedNetflixRecords(
   // information-theoretically ambiguous, so fail closed instead of ever
   // returning a possibly stale code.
   const excludedFallbacks = new Set(validEventIds(excludeFallbackEventIds));
-  // Request identity can be transitive: one wrapper may preserve Message-ID,
-  // another canonical body, and a bridge copy both. Reuse the already proven
-  // newest request cluster instead of requiring the accepted copy to share a
-  // fingerprint directly with the latest rejected wrapper.
+  // Evidence overlap is deliberately non-transitive for fallback. References
+  // is a thread-level header and a newly forwarded request can quote both an
+  // older identity and its SRC footer. A bridge record must therefore never
+  // turn indirect overlap into permission to replay an older accepted code.
   return (rankedClusters[0]?.entries || []).filter((entry) => {
     if (!entry.record?.accepted || Math.abs(newestReceivedAt - Number(entry.receivedAt)) > windowMs) return false;
     if (excludedFallbacks.has(String(entry.record?.eventId || "").toUpperCase())) return false;
-    return true;
+    return sameNetflixRequest(newest.record, entry.record);
   }).slice(0, 1);
 }
 
@@ -200,7 +279,7 @@ function encryptionKey() {
 function protectedNetflixRequestFingerprints(parsed) {
   const fingerprints = new Set(requestFingerprints(parsed));
   const key = encryptionKey();
-  if (!key) return Array.from(fingerprints).slice(0, 12);
+  if (!key) return Array.from(fingerprints).slice(0, MAX_REQUEST_FINGERPRINTS);
   for (const value of (Array.isArray(parsed?.requestEvidence) ? parsed.requestEvidence : [])) {
     const evidence = String(value || "").trim();
     if (!evidence || evidence.length > 2000) continue;
@@ -208,7 +287,21 @@ function protectedNetflixRequestFingerprints(parsed) {
       .update(`netflix-request-evidence-v1\0${evidence}`)
       .digest("hex"));
   }
-  return Array.from(fingerprints).slice(0, 12);
+  return Array.from(fingerprints).slice(0, MAX_REQUEST_FINGERPRINTS);
+}
+
+function protectedNetflixPrimaryRequestFingerprints(parsed) {
+  const key = encryptionKey();
+  if (!key) return requestPrimaryFingerprints(parsed);
+  const fingerprints = new Set();
+  for (const value of (Array.isArray(parsed?.requestPrimaryEvidence) ? parsed.requestPrimaryEvidence : [])) {
+    const evidence = String(value || "").trim();
+    if (!evidence || evidence.length > 2000) continue;
+    fingerprints.add(createHmac("sha256", key)
+      .update(`netflix-request-evidence-v1\0${evidence}`)
+      .digest("hex"));
+  }
+  return Array.from(fingerprints).slice(0, MAX_PRIMARY_REQUEST_FINGERPRINTS);
 }
 
 function encryptPayload(value) {
@@ -440,6 +533,8 @@ export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "
     sender: maskNetflixEmail(parsed?.sender),
     subject: clean(parsed?.subject, 240),
     deliveryFingerprint: deliveryFingerprint(parsed),
+    requestIdentityAmbiguous: parsed?.requestIdentityAmbiguous === true,
+    requestPrimaryFingerprints: protectedNetflixPrimaryRequestFingerprints(parsed),
     requestFingerprints: protectedNetflixRequestFingerprints(parsed),
     arrivalSequence,
     accountHashes,
@@ -507,7 +602,10 @@ export async function findLatestNetflixMailState(email, {
   const minScore = Math.max(Date.now() - 20 * 60 * 1000, startedAt - 5 * 60 * 1000);
   const rejectedMinScore = Math.max(Date.now() - 20 * 60 * 1000, startedAt);
   const indexRows = await strictRedisRead([
-    ["ZREVRANGEBYSCORE", accountIndexKey(hash), "+inf", String(minScore), "LIMIT", "0", "20"],
+    // Selection needs the complete active window: truncating before request
+    // clustering can discard the first copy of a delayed duplicate and make an
+    // old code appear newest. The time range bounds this to still-live mail.
+    ["ZREVRANGEBYSCORE", accountIndexKey(hash), "+inf", String(minScore)],
   ]);
   if (!indexRows) return { state: "error", error: "storage_unavailable" };
   const indexedIds = pipelineValue(indexRows[0]);

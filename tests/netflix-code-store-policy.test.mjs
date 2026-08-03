@@ -20,8 +20,12 @@ function mail({
   at = BASE,
   accepted,
   id,
-  fingerprint = DELIVERY_A,
-  requestFingerprint = REQUEST_A,
+  // Absence is the least favorable production shape: no SRC and no shared
+  // request identity. Tests that model preserved evidence opt in explicitly.
+  fingerprint = "",
+  requestFingerprint = "",
+  primaryFingerprint = "",
+  requestIdentityAmbiguous = false,
   code = "",
   sequence = 0,
   requestSentAt = "",
@@ -35,6 +39,10 @@ function mail({
       requestFingerprints: Array.isArray(requestFingerprint)
         ? requestFingerprint
         : requestFingerprint ? [requestFingerprint] : [],
+      requestPrimaryFingerprints: Array.isArray(primaryFingerprint)
+        ? primaryFingerprint
+        : primaryFingerprint ? [primaryFingerprint] : [],
+      requestIdentityAmbiguous,
       arrivalSequence: sequence,
       requestSentAt,
       value: code,
@@ -60,8 +68,8 @@ test("only the settings auto-forward copy arrives and parses: returns its code",
 
 test("both copies arrive and parse: returns the latest copy", () => {
   const result = selected([
-    mail({ at: BASE - 40_000, accepted: true, id: "first-copy", code: "4827" }),
-    mail({ accepted: true, id: "second-copy", code: "4827" }),
+    mail({ at: BASE - 40_000, accepted: true, id: "first-copy", requestFingerprint: REQUEST_A, code: "4827" }),
+    mail({ accepted: true, id: "second-copy", requestFingerprint: REQUEST_A, code: "4827" }),
   ]);
   assert.deepEqual(result.map((record) => record.eventId), ["second-copy"]);
   assert.equal(result[0]?.value, "4827");
@@ -71,15 +79,15 @@ test("one copy parses and one fails at 0-120 seconds: returns the successful cop
   for (const gap of [0, 60_000, 120_000]) {
     await t.test(`failure arrives ${gap} ms after success`, () => {
       const result = selected([
-        mail({ at: BASE - gap, accepted: true, id: `success-${gap}`, code: "4827" }),
-        mail({ accepted: false, id: `failure-${gap}` }),
+        mail({ at: BASE - gap, accepted: true, id: `success-${gap}`, requestFingerprint: REQUEST_A, code: "4827" }),
+        mail({ accepted: false, id: `failure-${gap}`, requestFingerprint: REQUEST_A }),
       ]);
       assert.equal(result[0]?.value, "4827");
     });
     await t.test(`success arrives ${gap} ms after failure`, () => {
       const result = selected([
-        mail({ at: BASE - gap, accepted: false, id: `failure-first-${gap}` }),
-        mail({ accepted: true, id: `success-last-${gap}`, code: "7314" }),
+        mail({ at: BASE - gap, accepted: false, id: `failure-first-${gap}`, requestFingerprint: REQUEST_A }),
+        mail({ accepted: true, id: `success-last-${gap}`, requestFingerprint: REQUEST_A, code: "7314" }),
       ]);
       assert.equal(result[0]?.value, "7314");
     });
@@ -88,16 +96,16 @@ test("one copy parses and one fails at 0-120 seconds: returns the successful cop
 
 test("the successful copy has no SRC fingerprint: still returns its code", () => {
   const result = selected([
-    mail({ at: BASE - 70_000, accepted: true, id: "success-without-src", fingerprint: "", code: "4827" }),
-    mail({ accepted: false, id: "failed-with-src" }),
+    mail({ at: BASE - 70_000, accepted: true, id: "success-without-src", fingerprint: "", requestFingerprint: REQUEST_A, code: "4827" }),
+    mail({ accepted: false, id: "failed-with-src", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A }),
   ]);
   assert.equal(result[0]?.value, "4827");
 });
 
 test("the failed copy has no SRC fingerprint: still returns the successful code", () => {
   const result = selected([
-    mail({ at: BASE - 70_000, accepted: true, id: "success-with-src", code: "4827" }),
-    mail({ accepted: false, id: "failed-without-src", fingerprint: "" }),
+    mail({ at: BASE - 70_000, accepted: true, id: "success-with-src", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, code: "4827" }),
+    mail({ accepted: false, id: "failed-without-src", fingerprint: "", requestFingerprint: REQUEST_A }),
   ]);
   assert.equal(result[0]?.value, "4827");
 });
@@ -111,14 +119,14 @@ test("a successful historical record without a fingerprint remains readable", ()
 
 test("when both copies fail to parse, no result is selected", () => {
   assert.deepEqual(selected([
-    mail({ at: BASE - 10_000, accepted: false, id: "rule-failure" }),
-    mail({ accepted: false, id: "settings-failure" }),
+    mail({ at: BASE - 10_000, accepted: false, id: "rule-failure", requestFingerprint: REQUEST_A }),
+    mail({ accepted: false, id: "settings-failure", requestFingerprint: REQUEST_A }),
   ]), []);
 });
 
 test("different requested code emails always return the latest parsed code", () => {
   const result = selected([
-    mail({ at: BASE - 10_000, accepted: true, id: "old-code", fingerprint: DELIVERY_A, code: "4827" }),
+    mail({ at: BASE - 10_000, accepted: true, id: "old-code", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, code: "4827" }),
     mail({ accepted: true, id: "new-code", fingerprint: DELIVERY_B, requestFingerprint: REQUEST_B, code: "7314" }),
   ]);
   assert.deepEqual(result.map((record) => record.value), ["7314"]);
@@ -144,54 +152,155 @@ test("original Netflix sent time keeps a delayed old copy behind the newer reque
   assert.deepEqual(result.map((record) => record.value), ["7314"]);
 });
 
-test("same Date precision still ranks request clusters by first arrival, not a delayed old copy", () => {
+test("different requests with the same trusted send time fail closed", () => {
   const sameSentAt = new Date(BASE - 60_000).toISOString();
   const result = selected([
     mail({ at: BASE - 20_000, accepted: true, id: "same-date-a-first", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, requestSentAt: sameSentAt, code: "4827", sequence: 40 }),
     mail({ at: BASE - 10_000, accepted: true, id: "same-date-b", fingerprint: DELIVERY_B, requestFingerprint: REQUEST_B, requestSentAt: sameSentAt, code: "7314", sequence: 41 }),
     mail({ at: BASE, accepted: true, id: "same-date-a-delayed", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, requestSentAt: sameSentAt, code: "4827", sequence: 42 }),
   ]);
-  assert.deepEqual(result.map((record) => record.value), ["7314"]);
+  assert.deepEqual(result, []);
 });
 
-test("a transitive evidence bridge still returns the successful copy from the newest request cluster", () => {
+test("transitive evidence alone cannot authorize an accepted-code fallback", () => {
   const requestX = "3".repeat(64);
   const requestY = "4".repeat(64);
-  const result = selected([
+  assert.deepEqual(selected([
     mail({ at: BASE - 20_000, accepted: true, id: "bridge-success", requestFingerprint: requestY, code: "7314" }),
     mail({ at: BASE - 10_000, accepted: false, id: "bridge-both", requestFingerprint: [requestX, requestY] }),
     mail({ at: BASE, accepted: false, id: "bridge-latest", requestFingerprint: requestX }),
-  ]);
-  assert.equal(result[0]?.value, "7314");
+  ]), []);
+});
+
+test("a fingerprint-less evidence bridge cannot merge two different SRC requests", () => {
+  const requestX = "3".repeat(64);
+  const requestY = "4".repeat(64);
+  assert.deepEqual(selected([
+    mail({ at: BASE - 20_000, accepted: true, id: "old-success", fingerprint: DELIVERY_A, requestFingerprint: requestX, code: "4827" }),
+    mail({ at: BASE - 10_000, accepted: false, id: "identity-bridge", fingerprint: "", requestFingerprint: [requestX, requestY] }),
+    mail({ at: BASE, accepted: false, id: "new-failure", fingerprint: DELIVERY_B, requestFingerprint: requestY }),
+  ]), []);
+});
+
+test("a quoted old SRC plus a transitive identity bridge never replays the old code", () => {
+  const requestX = "3".repeat(64);
+  const requestY = "4".repeat(64);
+  const rows = [
+    mail({ at: BASE - 20_000, accepted: true, id: "old-success", fingerprint: DELIVERY_A, requestFingerprint: requestX, code: "4827" }),
+    mail({ at: BASE - 10_000, accepted: false, id: "thread-bridge", fingerprint: "", requestFingerprint: [requestX, requestY] }),
+    mail({ at: BASE, accepted: false, id: "new-failure-quoting-old-src", fingerprint: DELIVERY_A, requestFingerprint: requestY }),
+  ];
+  const permutations = [
+    [rows[0], rows[1], rows[2]],
+    [rows[0], rows[2], rows[1]],
+    [rows[1], rows[0], rows[2]],
+    [rows[1], rows[2], rows[0]],
+    [rows[2], rows[0], rows[1]],
+    [rows[2], rows[1], rows[0]],
+  ];
+  for (const input of permutations) assert.deepEqual(selected(input), []);
+});
+
+test("current primary identity prevents an old References thread member from demoting the newest accepted code", () => {
+  const requestX = "3".repeat(64);
+  const requestY = "4".repeat(64);
+  const requestZ = "5".repeat(64);
+  const rows = [
+    mail({ at: BASE - 10 * 60_000, accepted: true, id: "old-thread-code", requestFingerprint: requestX, primaryFingerprint: requestX, code: "1111" }),
+    mail({ at: BASE - 5 * 60_000, accepted: true, id: "middle-code", requestFingerprint: requestZ, primaryFingerprint: requestZ, code: "2222" }),
+    mail({ at: BASE, accepted: true, id: "new-thread-code", requestFingerprint: [requestX, requestY], primaryFingerprint: requestY, code: "3333" }),
+  ];
+  const permutations = [
+    [rows[0], rows[1], rows[2]],
+    [rows[0], rows[2], rows[1]],
+    [rows[1], rows[0], rows[2]],
+    [rows[1], rows[2], rows[0]],
+    [rows[2], rows[0], rows[1]],
+    [rows[2], rows[1], rows[0]],
+  ];
+  for (const input of permutations) assert.deepEqual(selected(input).map((record) => record.value), ["3333"]);
+});
+
+test("a new primary identity matches a legacy record only through that exact identity", () => {
+  const requestX = "3".repeat(64);
+  const requestY = "4".repeat(64);
+  assert.deepEqual(selected([
+    mail({ at: BASE - 60_000, accepted: true, id: "legacy-success", requestFingerprint: requestX, code: "4827" }),
+    mail({ at: BASE, accepted: false, id: "new-failure", requestFingerprint: [requestX, requestY], primaryFingerprint: requestX }),
+  ]).map((record) => record.value), ["4827"]);
+  assert.deepEqual(selected([
+    mail({ at: BASE - 60_000, accepted: true, id: "legacy-other-request", requestFingerprint: requestY, code: "7314" }),
+    mail({ at: BASE, accepted: false, id: "new-failure", requestFingerprint: [requestX, requestY], primaryFingerprint: requestX }),
+  ]), []);
+});
+
+test("different explicit primary identities override shared auxiliary thread evidence", () => {
+  assert.deepEqual(selected([
+    mail({ at: BASE - 30_000, accepted: true, id: "old-success", requestFingerprint: REQUEST_A, primaryFingerprint: REQUEST_A, code: "4827" }),
+    mail({ at: BASE, accepted: false, id: "new-failure", requestFingerprint: REQUEST_A, primaryFingerprint: REQUEST_B }),
+  ]), []);
+});
+
+test("an ambiguous current identity cannot claim an older accepted code", () => {
+  assert.deepEqual(selected([
+    mail({ at: BASE - 30_000, accepted: true, id: "old-success", requestFingerprint: REQUEST_A, primaryFingerprint: REQUEST_A, code: "4827" }),
+    mail({ at: BASE, accepted: false, id: "conflicting-rule-copy", requestFingerprint: [REQUEST_A, REQUEST_B], requestIdentityAmbiguous: true }),
+  ]), []);
 });
 
 test("different accepted codes with the same millisecond timestamp use the distributed arrival sequence", () => {
   const result = selected([
     mail({ accepted: true, id: "new-code", fingerprint: DELIVERY_B, requestFingerprint: REQUEST_B, code: "7314", sequence: 42 }),
-    mail({ accepted: true, id: "old-code", fingerprint: DELIVERY_A, code: "4827", sequence: 41 }),
+    mail({ accepted: true, id: "old-code", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, code: "4827", sequence: 41 }),
   ]);
   assert.deepEqual(result.map((record) => record.value), ["7314"]);
 });
 
+test("an unknown-time competitor fails closed through the 120-second ambiguity boundary", () => {
+  for (const gap of [10_000, 119_999, 120_000]) {
+    assert.deepEqual(selected([
+      mail({ at: BASE - gap, accepted: true, id: `trusted-request-${gap}`, fingerprint: DELIVERY_B, requestFingerprint: REQUEST_B, primaryFingerprint: REQUEST_B, requestSentAt: new Date(BASE - gap - 1_000).toISOString(), code: "7314" }),
+      mail({ at: BASE, accepted: true, id: `unknown-time-competitor-${gap}`, fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, primaryFingerprint: REQUEST_A, code: "4827" }),
+    ]), []);
+  }
+});
+
+test("an unknown-time rule-only request remains usable beyond the duplicate-delivery window", () => {
+  const result = selected([
+    mail({ at: BASE - 120_001, accepted: true, id: "previous-request", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, primaryFingerprint: REQUEST_A, requestSentAt: new Date(BASE - 120_001).toISOString(), code: "4827" }),
+    mail({ at: BASE, accepted: true, id: "rule-only-current-request", fingerprint: DELIVERY_B, requestFingerprint: REQUEST_B, primaryFingerprint: REQUEST_B, code: "7314" }),
+  ]);
+  assert.deepEqual(result.map((record) => record.value), ["7314"]);
+});
+
+test("indistinguishable same-millisecond legacy requests fail closed instead of guessing", () => {
+  const rows = [
+    mail({ accepted: true, id: "legacy-a", fingerprint: DELIVERY_A, code: "4827" }),
+    mail({ accepted: true, id: "legacy-b", fingerprint: DELIVERY_B, code: "7314" }),
+  ];
+  assert.deepEqual(selected(rows), []);
+  assert.deepEqual(selected([...rows].reverse()), []);
+});
+
 test("same-millisecond success and failure preserve any-success behavior regardless of array order", () => {
   const result = selected([
-    mail({ accepted: true, id: "successful-copy", fingerprint: "", code: "4827", sequence: 41 }),
-    mail({ accepted: false, id: "failed-copy", fingerprint: "", sequence: 42 }),
+    mail({ accepted: true, id: "successful-copy", fingerprint: "", requestFingerprint: REQUEST_A, code: "4827", sequence: 41 }),
+    mail({ accepted: false, id: "failed-copy", fingerprint: "", requestFingerprint: REQUEST_A, sequence: 42 }),
   ]);
   assert.deepEqual(result.map((record) => record.value), ["4827"]);
 });
 
 test("a newer failed email with a different fingerprint never falls back to the old code", () => {
   assert.deepEqual(selected([
-    mail({ at: BASE - 10_000, accepted: true, id: "old-code", fingerprint: DELIVERY_A, code: "4827" }),
+    mail({ at: BASE - 10_000, accepted: true, id: "old-code", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, code: "4827" }),
     mail({ accepted: false, id: "new-unparsed-mail", fingerprint: DELIVERY_B, requestFingerprint: REQUEST_B }),
   ]), []);
 });
 
 test("different present SRC fingerprints override a coincidentally matching content identity", () => {
   assert.deepEqual(selected([
-    mail({ at: BASE - 10_000, accepted: true, id: "old-code", fingerprint: DELIVERY_A, code: "4827" }),
-    mail({ accepted: false, id: "new-unparsed-mail", fingerprint: DELIVERY_B }),
+    mail({ at: BASE - 10_000, accepted: true, id: "old-code", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, code: "4827" }),
+    mail({ accepted: false, id: "new-unparsed-mail", fingerprint: DELIVERY_B, requestFingerprint: REQUEST_A }),
   ]), []);
 });
 
@@ -235,8 +344,8 @@ test("an unreturned old code is never guessed behind a newer fingerprint-less fa
 
 test("a newer failed fingerprint-less email never replays a code already returned to this order", () => {
   assert.deepEqual(selected([
-    mail({ at: BASE - 10_000, accepted: true, id: "NM000000000000000000000001", fingerprint: "", code: "4827" }),
-    mail({ accepted: false, id: "NM000000000000000000000002", fingerprint: "" }),
+    mail({ at: BASE - 10_000, accepted: true, id: "NM000000000000000000000001", fingerprint: "", requestFingerprint: REQUEST_A, code: "4827" }),
+    mail({ accepted: false, id: "NM000000000000000000000002", fingerprint: "", requestFingerprint: REQUEST_A }),
   ], {
     excludeFallbackEventIds: ["NM000000000000000000000001"],
   }), []);
@@ -253,8 +362,8 @@ test("the current newest accepted event remains readable after it was returned",
 
 test("accepted fallback is limited to the 120-second duplicate-delivery window", () => {
   assert.deepEqual(selected([
-    mail({ at: BASE - 120_001, accepted: true, id: "stale-code", code: "4827" }),
-    mail({ accepted: false, id: "new-email" }),
+    mail({ at: BASE - 120_001, accepted: true, id: "stale-code", requestFingerprint: REQUEST_A, code: "4827" }),
+    mail({ accepted: false, id: "new-email", requestFingerprint: REQUEST_A }),
   ]), []);
 });
 
@@ -296,11 +405,15 @@ test("Netflix mail reads distinguish a healthy empty inbox from Redis failures",
     result: command[0] === "PING" ? "PONG" : [],
   }));
 
+  let activeWindowQuery = [];
   globalThis.fetch = async (_url, init = {}) => {
     const commands = JSON.parse(init.body || "[]");
+    activeWindowQuery = commands.find((command) => command[0] === "ZREVRANGEBYSCORE") || activeWindowQuery;
     return Response.json(healthyPipeline(commands));
   };
   assert.deepEqual(await findLatestNetflixMailState(account), { state: "pending" });
+  assert.equal(activeWindowQuery.includes("LIMIT"), false,
+    "request selection must read the complete active window before clustering");
 
   globalThis.fetch = async () => new Response("", { status: 503 });
   const httpFailure = await findLatestNetflixMailState(account);

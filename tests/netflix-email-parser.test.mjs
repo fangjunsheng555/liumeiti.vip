@@ -296,6 +296,220 @@ test("derives shared original-message evidence when one forwarded copy loses its
   assert.ok(shared.some((value) => value.startsWith("content-sha256:")));
 });
 
+test("collects Exchange original-message identity headers for a flattened rule forward", async () => {
+  const original = "<Original.Netflix.Request@Mailer.Netflix.Com>";
+  const replyIdentity = "<Reply.Identity@Mailer.Netflix.Com>";
+  const referencedIdentity = "<Referenced.Identity@Mailer.Netflix.Com>";
+  const parsed = await parseNetflixEmail(mime({
+    from: "forwarding-account@example.com",
+    to: "netflix@codes.liumeiti.vip",
+    subject: "Fwd: Your Netflix sign-in code",
+    extraHeaders: [
+      "Message-ID: <New.Exchange.Wrapper@Outlook.Com>",
+      `X-MS-Exchange-Parent-Message-Id:   ${original}  `,
+      `References: <Earlier.Thread@Outlook.Com> ${referencedIdentity}`,
+      `In-Reply-To: ${replyIdentity}`,
+      `X-Microsoft-Original-Message-Id: ${original}`,
+    ],
+    text: [
+      "Forwarded message",
+      "From: Netflix <info@account.netflix.com>",
+      "To: forwarding-account@example.com",
+      "Enter this code to sign in to Netflix: 7314.",
+    ].join("\n"),
+  }), {
+    from: "forwarding-account@example.com",
+    to: "netflix@codes.liumeiti.vip",
+    inboxAddress: "netflix@codes.liumeiti.vip",
+  });
+
+  assert.equal(parsed.accepted, true);
+  assert.deepEqual(parsed.requestPrimaryEvidence, ["message-id:<original.netflix.request@mailer.netflix.com>"],
+    "the dedicated parent header must win over conflicting thread identities");
+  assert.ok(parsed.requestEvidence.includes("message-id:<original.netflix.request@mailer.netflix.com>"));
+  assert.ok(parsed.requestEvidence.includes("message-id:<earlier.thread@outlook.com>"),
+    "References must be split into individual identities");
+  assert.ok(parsed.requestEvidence.includes("message-id:<referenced.identity@mailer.netflix.com>"));
+  assert.ok(parsed.requestEvidence.includes("message-id:<reply.identity@mailer.netflix.com>"));
+  assert.ok(parsed.requestEvidence.includes("message-id:<new.exchange.wrapper@outlook.com>"),
+    "the root Message-ID is collected even when the message is not structured Netflix mail");
+});
+
+test("collects each supported Exchange original-identity header independently", async (t) => {
+  const cases = [
+    ["X-MS-Exchange-Parent-Message-Id", "parent-only@mailer.netflix.com"],
+    ["X-Microsoft-Original-Message-Id", "microsoft-original-only@mailer.netflix.com"],
+    ["In-Reply-To", "reply-only@mailer.netflix.com"],
+    ["References", "references-only@mailer.netflix.com"],
+  ];
+  for (const [header, identity] of cases) {
+    await t.test(header, async () => {
+      const expected = `message-id:<${identity}>`;
+      const parsed = await parseNetflixEmail(mime({
+        from: "forwarding-account@example.com",
+        to: "netflix@codes.liumeiti.vip",
+        extraHeaders: [`${header}: <${identity}>`],
+        text: [
+          "Forwarded message",
+          "From: Netflix <info@account.netflix.com>",
+          "To: forwarding-account@example.com",
+          "Enter this code to sign in to Netflix: 7314.",
+        ].join("\n"),
+      }), {
+        from: "forwarding-account@example.com",
+        to: "netflix@codes.liumeiti.vip",
+        inboxAddress: "netflix@codes.liumeiti.vip",
+      });
+      assert.equal(parsed.requestIdentityAmbiguous, false);
+      assert.deepEqual(parsed.requestPrimaryEvidence, [expected]);
+      assert.ok(parsed.requestEvidence.includes(expected));
+    });
+  }
+});
+
+test("dedicated original-id headers outrank differing conversation headers without ambiguity", async () => {
+  const parsed = await parseNetflixEmail(mime({
+    from: "forwarding-account@example.com",
+    to: "netflix@codes.liumeiti.vip",
+    extraHeaders: [
+      "X-MS-Exchange-Parent-Message-Id: <current-request@mailer.netflix.com>",
+      "In-Reply-To: <thread-root@outlook.com>",
+      "References: <thread-root@outlook.com>",
+    ],
+    text: [
+      "Forwarded message",
+      "From: Netflix <info@account.netflix.com>",
+      "To: forwarding-account@example.com",
+      "Enter this code to sign in to Netflix: 7314.",
+    ].join("\n"),
+  }), {
+    from: "forwarding-account@example.com",
+    to: "netflix@codes.liumeiti.vip",
+    inboxAddress: "netflix@codes.liumeiti.vip",
+  });
+
+  assert.equal(parsed.requestIdentityAmbiguous, false);
+  assert.deepEqual(parsed.requestPrimaryEvidence, ["message-id:<current-request@mailer.netflix.com>"]);
+  assert.ok(parsed.requestEvidence.includes("message-id:<thread-root@outlook.com>"));
+});
+
+test("uses the last References identity when a long Exchange chain is the only original-id header", async () => {
+  const history = Array.from({ length: 15 }, (_, index) => `<history-${index}@outlook.com>`);
+  const original = "<current-netflix-request@mailer.netflix.com>";
+  const parsed = await parseNetflixEmail(mime({
+    from: "forwarding-account@example.com",
+    to: "netflix@codes.liumeiti.vip",
+    subject: "Fwd: Your Netflix sign-in code",
+    extraHeaders: [
+      "Message-ID: <exchange-wrapper@outlook.com>",
+      `References: ${[...history, original].join(" ")}`,
+    ],
+    text: [
+      "Forwarded message",
+      "From: Netflix <info@account.netflix.com>",
+      "To: forwarding-account@example.com",
+      "Enter this code to sign in to Netflix: 7314.",
+    ].join("\n"),
+  }), {
+    from: "forwarding-account@example.com",
+    to: "netflix@codes.liumeiti.vip",
+    inboxAddress: "netflix@codes.liumeiti.vip",
+  });
+
+  assert.equal(parsed.accepted, true);
+  assert.deepEqual(parsed.requestPrimaryEvidence, ["message-id:<current-netflix-request@mailer.netflix.com>"]);
+  assert.ok(parsed.requestEvidence.includes("message-id:<history-0@outlook.com>"));
+  assert.ok(parsed.requestEvidence.includes("message-id:<history-14@outlook.com>"));
+  assert.ok(parsed.requestEvidence.includes("message-id:<current-netflix-request@mailer.netflix.com>"));
+});
+
+test("canonicalizes bracketed and unbracketed Message-IDs to the same current identity", async () => {
+  const direct = await parseNetflixEmail(mime({
+    extraHeaders: ["Message-ID: canonical-request@mailer.netflix.com"],
+    text: "Enter this code to sign in to Netflix: 7314.",
+  }));
+  const forwarded = await parseNetflixEmail(mime({
+    from: "forwarding-account@example.com",
+    to: "netflix@codes.liumeiti.vip",
+    extraHeaders: ["X-MS-Exchange-Parent-Message-Id: <CANONICAL-REQUEST@MAILER.NETFLIX.COM>"],
+    text: [
+      "Forwarded message",
+      "From: Netflix <info@account.netflix.com>",
+      "To: forwarding-account@example.com",
+      "Enter this code to sign in to Netflix: 7314.",
+    ].join("\n"),
+  }), {
+    from: "forwarding-account@example.com",
+    to: "netflix@codes.liumeiti.vip",
+    inboxAddress: "netflix@codes.liumeiti.vip",
+  });
+
+  assert.deepEqual(direct.requestPrimaryEvidence, ["message-id:<canonical-request@mailer.netflix.com>"]);
+  assert.deepEqual(forwarded.requestPrimaryEvidence, direct.requestPrimaryEvidence);
+  assert.equal(forwarded.requestIdentityAmbiguous, false);
+});
+
+test("keeps the last bare identity in a mixed References chain", async () => {
+  const parsed = await parseNetflixEmail(mime({
+    from: "forwarding-account@example.com",
+    to: "netflix@codes.liumeiti.vip",
+    extraHeaders: ["References: <old-thread@outlook.com> current-request@mailer.netflix.com"],
+    text: [
+      "Forwarded message",
+      "From: Netflix <info@account.netflix.com>",
+      "To: forwarding-account@example.com",
+      "Enter this code to sign in to Netflix: 7314.",
+    ].join("\n"),
+  }), {
+    from: "forwarding-account@example.com",
+    to: "netflix@codes.liumeiti.vip",
+    inboxAddress: "netflix@codes.liumeiti.vip",
+  });
+
+  assert.deepEqual(parsed.requestPrimaryEvidence, ["message-id:<current-request@mailer.netflix.com>"]);
+  assert.ok(parsed.requestEvidence.includes("message-id:<old-thread@outlook.com>"));
+  assert.ok(parsed.requestEvidence.includes("message-id:<current-request@mailer.netflix.com>"));
+});
+
+test("marks conflicting flattened current-identity headers as ambiguous", async () => {
+  const parsed = await parseNetflixEmail(mime({
+    from: "forwarding-account@example.com",
+    to: "netflix@codes.liumeiti.vip",
+    extraHeaders: [
+      "X-MS-Exchange-Parent-Message-Id: <old-request@mailer.netflix.com>",
+      "X-Microsoft-Original-Message-Id: <new-request@mailer.netflix.com>",
+      "References: <old-request@mailer.netflix.com> <new-request@mailer.netflix.com>",
+    ],
+    text: [
+      "Forwarded message",
+      "From: Netflix <info@account.netflix.com>",
+      "To: forwarding-account@example.com",
+      "Netflix could not display a supported sign-in code in this message.",
+    ].join("\n"),
+  }), {
+    from: "forwarding-account@example.com",
+    to: "netflix@codes.liumeiti.vip",
+    inboxAddress: "netflix@codes.liumeiti.vip",
+  });
+
+  assert.equal(parsed.accepted, false);
+  assert.equal(parsed.requestIdentityAmbiguous, true);
+  assert.deepEqual(parsed.requestPrimaryEvidence, []);
+});
+
+test("a structured Netflix root keeps its own Message-ID despite unrelated thread headers", async () => {
+  const parsed = await parseNetflixEmail(mime({
+    extraHeaders: [
+      "Message-ID: <current-request@mailer.netflix.com>",
+      "X-MS-Exchange-Parent-Message-Id: <unrelated-thread@outlook.com>",
+    ],
+    text: "Enter this code to sign in to Netflix: 7314.",
+  }));
+
+  assert.equal(parsed.requestIdentityAmbiguous, false);
+  assert.deepEqual(parsed.requestPrimaryEvidence, ["message-id:<current-request@mailer.netflix.com>"]);
+});
+
 test("preserves the complete Netflix travel verify URL from the Traditional Chinese template", async () => {
   const expected = "https://www.netflix.com/account/travel/verify?token=ANHP9mtXT1FUDR57mCB9262dhhIEz25Ia-3lCLb5WFU&flow=travel_verification&locale=zh-TW";
   const parsed = await parseNetflixEmail(mime({
