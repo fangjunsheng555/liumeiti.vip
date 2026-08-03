@@ -285,22 +285,103 @@ function canonicalNetflixMessageBody(value) {
   return normalized.length >= 32 && normalized.includes("netflix") ? normalized : "";
 }
 
+const ORIGINAL_MESSAGE_ID_HEADER_KEYS = [
+  "x-ms-exchange-parent-message-id",
+  "x-microsoft-original-message-id",
+  "in-reply-to",
+  "references",
+];
+const MAX_REQUEST_EVIDENCE = 32;
+
+function normalizedMessageIds(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return [];
+  const canonical = (item) => {
+    const inner = String(item || "").trim().replace(/^<|>$/g, "").trim();
+    return inner && inner.length <= 498 && inner.includes("@") ? `<${inner}>` : "";
+  };
+  // A few Exchange paths omit angle brackets around a single Message-ID.
+  // Parse bracketed and bare values in one ordered pass because a folded
+  // References chain can legitimately mix both forms.
+  return unique(Array.from(normalized.matchAll(/<[^<>\r\n]{1,498}>|[^\s,<>\r\n]{1,498}@[^\s,<>\r\n]{1,498}/g), (match) => canonical(match[0]))
+    .filter(Boolean));
+}
+
+function messageHeaderValues(message, key) {
+  const wanted = String(key || "").toLowerCase();
+  return (Array.isArray(message?.headers) ? message.headers : [])
+    .filter((header) => String(header?.key || header?.originalKey || "").trim().toLowerCase() === wanted)
+    .map((header) => header?.value);
+}
+
+function messageIdsForHeader(message, key) {
+  return unique(messageHeaderValues(message, key).flatMap(normalizedMessageIds));
+}
+
+// References is a thread chain, not the identity of the current request. Keep
+// every value as auxiliary evidence below, but persist one separate current
+// identity so an old thread member cannot claim a newer code. RFC References
+// places the immediate parent last; Exchange's dedicated original-id headers
+// are stronger and take precedence when present.
+function netflixRequestIdentity(current) {
+  const message = current?.message;
+  let identities = [];
+  if (current?.structuredNetflix) {
+    identities = normalizedMessageIds(message?.messageId);
+  } else {
+    const strongCandidates = [];
+    for (const key of [
+      "x-ms-exchange-parent-message-id",
+      "x-microsoft-original-message-id",
+    ]) {
+      strongCandidates.push(...messageIdsForHeader(message, key));
+    }
+    identities = unique(strongCandidates);
+    if (identities.length > 1) return { evidence: [], ambiguous: true };
+    // In-Reply-To and References describe a conversation and can legitimately
+    // retain an older thread root. They identify the current request only when
+    // Exchange did not preserve either dedicated original-message header.
+    if (!identities.length) {
+      const weakCandidates = [];
+      const inReplyTo = messageIdsForHeader(message, "in-reply-to");
+      const references = messageIdsForHeader(message, "references");
+      if (inReplyTo.length) weakCandidates.push(inReplyTo.at(-1));
+      if (references.length) weakCandidates.push(references.at(-1));
+      identities = unique(weakCandidates);
+      if (identities.length > 1) return { evidence: [], ambiguous: true };
+    }
+  }
+  return {
+    evidence: identities.map((messageId) => `message-id:${messageId}`),
+    ambiguous: false,
+  };
+}
+
 // Correlating a rejected copy with an older accepted copy is safe only when
 // both carry positive evidence from the same original Netflix message. Keep a
 // set because Outlook may preserve the original Message-ID in one wrapper and
-// only the canonical original body in another. These values exist only in the
-// in-memory parsed object; _store HMACs them before persistence.
+// only the canonical original body in another. Exchange identity headers are
+// collected for flattened and structured messages alike: an inbox-rule copy
+// is normally not structured as Netflix mail, but its parent/references value
+// is the original Message-ID carried by the settings-forward copy. These
+// values exist only in memory; _store HMACs them before persistence.
 function netflixRequestEvidence(current) {
   const evidence = new Set();
-  if (current?.structuredNetflix) {
-    const messageId = String(current?.message?.messageId || "").trim().toLowerCase();
-    if (messageId && messageId.length <= 500) evidence.add(`message-id:${messageId}`);
+  const message = current?.message;
+  const addMessageIds = (value) => {
+    for (const messageId of normalizedMessageIds(value)) {
+      evidence.add(`message-id:${messageId}`);
+    }
+  };
+  addMessageIds(message?.messageId);
+  for (const key of ORIGINAL_MESSAGE_ID_HEADER_KEYS) {
+    for (const value of messageHeaderValues(message, key)) addMessageIds(value);
   }
   const body = canonicalNetflixMessageBody(current?.text || current?.htmlText || "");
   if (body) {
     evidence.add(`content-sha256:${createHash("sha256").update(body).digest("hex")}`);
   }
-  return Array.from(evidence).slice(0, 12);
+  return Array.from(evidence).slice(0, MAX_REQUEST_EVIDENCE);
 }
 
 function detectLanguage(text, html) {
@@ -667,6 +748,7 @@ export async function parseNetflixEmail(raw, envelope = {}) {
   const language = detectLanguage(text, current.html);
   const receivedAt = new Date(envelope.receivedAt || Date.now()).toISOString();
   const expiresAt = new Date(new Date(receivedAt).getTime() + 15 * 60 * 1000).toISOString();
+  const requestIdentity = netflixRequestIdentity(current);
   const base = {
     accepted: true,
     accountEmails,
@@ -680,6 +762,8 @@ export async function parseNetflixEmail(raw, envelope = {}) {
     // Never let a quoted SRC that survives only in the secondary alternative
     // override a clean primary text part; use HTML only when text is absent.
     deliveryFingerprint: netflixDeliveryFingerprint(current.text || current.htmlText),
+    requestPrimaryEvidence: requestIdentity.evidence,
+    requestIdentityAmbiguous: requestIdentity.ambiguous,
     requestEvidence: netflixRequestEvidence(current),
   };
 
