@@ -9,6 +9,8 @@ const sortedSets = new Map();
 const originalFetch = globalThis.fetch;
 let failDoneRecordOnce = false;
 let failClaimOnce = false;
+let loseClaimResponseAfterCommitOnce = false;
+let failClaimRecoveryPipelineOnce = false;
 let failBackfillReadOnce = false;
 
 function sortedSet(key) {
@@ -59,7 +61,8 @@ function execute(command) {
         }
         try {
           const state = JSON.parse(raw);
-          if (state?.status === "done") {
+          if (state?.status === "done" && state.result && typeof state.result === "object"
+            && !Array.isArray(state.result) && state.result.ok === true) {
             clearDeliveryIndexes(keys, argv[3]);
             return raw;
           }
@@ -67,7 +70,10 @@ function execute(command) {
             indexDelivery(keys, state.status, state.score || argv[2], argv[3]);
             return state.status;
           }
-          if (state?.status !== "retryable") return "uncertain";
+          if (state?.status !== "retryable") {
+            indexDelivery(keys, "uncertain", state?.score || argv[2], argv[3]);
+            return "uncertain";
+          }
         } catch {
           indexDelivery(keys, "uncertain", argv[2], argv[3]);
           return "uncertain";
@@ -75,6 +81,10 @@ function execute(command) {
       }
       values.set(keys[0], argv[1]);
       indexDelivery(keys, "sending", argv[2], argv[3]);
+      if (loseClaimResponseAfterCommitOnce) {
+        loseClaimResponseAfterCommitOnce = false;
+        return null;
+      }
       return "acquired";
     }
     if (script.includes("ARGV[3]=='sending'") && script.includes("return 1")) {
@@ -95,7 +105,10 @@ function execute(command) {
         return 1;
       }
       const current = JSON.parse(raw || "null");
+      const replacement = JSON.parse(argv[2] || "null");
       if (!current || current.token !== argv[0]) return 0;
+      if (!replacement?.result || typeof replacement.result !== "object"
+        || Array.isArray(replacement.result) || replacement.result.ok !== true) return 0;
       values.set(keys[0], argv[2] || "done");
       clearDeliveryIndexes(keys, argv[1]);
       return 1;
@@ -107,6 +120,7 @@ function execute(command) {
     return 1;
   }
   if (name === "ZREM") return sortedSet(args[0]).delete(args[1]) ? 1 : 0;
+  if (name === "ZSCORE") return sortedSet(args[0]).has(args[1]) ? String(sortedSet(args[0]).get(args[1])) : null;
   if (name === "SCAN") {
     const pattern = String(args[2] || "").replace(/\*$/, "");
     return ["0", [...values.keys()].filter((key) => key.startsWith(pattern))];
@@ -119,6 +133,11 @@ globalThis.fetch = async (input, options = {}) => {
   if (url.origin !== "http://delivery-once.redis.test") return originalFetch(input);
   if (url.pathname === "/pipeline") {
     const commands = JSON.parse(options.body || "[]");
+    if (failClaimRecoveryPipelineOnce && commands.length === 3
+        && commands[0]?.[0] === "GET" && commands[1]?.[0] === "ZSCORE" && commands[2]?.[0] === "PING") {
+      failClaimRecoveryPipelineOnce = false;
+      return Response.json([{ error: "ERR injected recovery failure" }, ...commands.slice(1).map((command) => ({ result: execute(command) }))]);
+    }
     if (failBackfillReadOnce && commands.length > 0 && commands.every((command) => command[0] === "GET")) {
       failBackfillReadOnce = false;
       return Response.json(commands.map((command, index) => (
@@ -144,6 +163,60 @@ test("successful delivery is not repeated", async () => {
   assert.equal(second.idempotent, true);
   assert.equal(sent, 1);
   assert.equal(JSON.parse(values.get(deliveryInternals.deliveryKey("order:LM1:email"))).status, "done");
+});
+
+test("a done journal copied under another delivery key cannot impersonate that delivery", async () => {
+  values.clear();
+  sortedSets.clear();
+  await deliverOnce("identity:source", async () => ({ ok: true }));
+  const sourceKey = deliveryInternals.deliveryKey("identity:source");
+  const targetKey = deliveryInternals.deliveryKey("identity:target");
+  values.set(targetKey, values.get(sourceKey));
+  let sent = 0;
+  const replay = await deliverOnce("identity:target", async () => { sent += 1; return { ok: true }; });
+  assert.equal(replay.ok, false);
+  assert.equal(replay.uncertain, true);
+  assert.equal(sent, 0);
+});
+
+test("invalid structured done journals stay uncertain and never replay as success", async (t) => {
+  const cases = [["array", []], ["null", null], ["missing", {}], ["string", { ok: "true" }], ["number", { ok: 1 }]];
+  for (const [name, result] of cases) {
+    await t.test(name, async () => {
+      values.clear();
+      sortedSets.clear();
+      const id = `invalid-done:${name}`;
+      const key = deliveryInternals.deliveryKey(id);
+      values.set(key, JSON.stringify({ status: "done", score: 1, result }));
+      let sent = 0;
+      const replay = await deliverOnce(id, async () => { sent += 1; return { ok: true }; });
+      assert.equal(replay.ok, false);
+      assert.equal(replay.uncertain, true);
+      assert.equal(replay.error, "delivery_result_uncertain");
+      assert.equal(sent, 0);
+      assert.equal(sortedSet(deliveryInternals.DELIVERY_UNCERTAIN_INDEX).has(key), true);
+    });
+  }
+});
+
+test("unserializable provider acknowledgements remain uncertain instead of creating invalid done records", async (t) => {
+  const circular = { ok: true };
+  circular.self = circular;
+  for (const [name, result] of [["circular", circular], ["bigint", { ok: true, value: 1n }]]) {
+    await t.test(name, async () => {
+      values.clear();
+      sortedSets.clear();
+      const id = `unserializable:${name}`;
+      let sent = 0;
+      const first = await deliverOnce(id, async () => { sent += 1; return result; });
+      const second = await deliverOnce(id, async () => { sent += 1; return { ok: true }; });
+      assert.equal(first.ok, false);
+      assert.equal(first.uncertain, true);
+      assert.equal(second.pending, true);
+      assert.equal(sent, 1);
+      assert.equal(JSON.parse(values.get(deliveryInternals.deliveryKey(id))).status, "sending");
+    });
+  }
 });
 
 test("a definitive provider rejection marks the journal retryable", async () => {
@@ -287,6 +360,67 @@ test("legacy delivery journals are repeatably backfilled into real status indexe
   const replay = await backfillDeliveryStatusIndexes();
   assert.equal(replay.done, true);
   assert.equal(replay.processed, 0);
+});
+
+test("a committed claim whose response is lost is recovered and delivered exactly once", async () => {
+  values.clear();
+  sortedSets.clear();
+  loseClaimResponseAfterCommitOnce = true;
+  let sent = 0;
+  const first = await deliverOnce("order:LM6B:email", async () => { sent += 1; return { ok: true }; });
+  const replay = await deliverOnce("order:LM6B:email", async () => { sent += 1; return { ok: true }; });
+  assert.equal(first.ok, true);
+  assert.equal(replay.idempotent, true);
+  assert.equal(sent, 1);
+});
+
+test("claim recovery tolerates one transient read failure after the commit response is lost", async () => {
+  values.clear();
+  sortedSets.clear();
+  loseClaimResponseAfterCommitOnce = true;
+  failClaimRecoveryPipelineOnce = true;
+  let sent = 0;
+  const first = await deliverOnce("order:LM6C:email", async () => { sent += 1; return { ok: true }; });
+  const replay = await deliverOnce("order:LM6C:email", async () => { sent += 1; return { ok: true }; });
+  assert.equal(first.ok, true);
+  assert.equal(replay.idempotent, true);
+  assert.equal(sent, 1);
+});
+
+test("delivery backfill only treats explicit done journals as complete", async () => {
+  values.clear();
+  sortedSets.clear();
+  const legacyDoneKey = deliveryInternals.deliveryKey("legacy:done-marker");
+  const structuredDoneKey = deliveryInternals.deliveryKey("legacy:done-record");
+  const malformedKey = deliveryInternals.deliveryKey("legacy:malformed");
+  const unknownKey = deliveryInternals.deliveryKey("legacy:unknown-status");
+  const primitiveKey = deliveryInternals.deliveryKey("legacy:primitive");
+  const invalidDoneKeys = [["array", []], ["null", null], ["missing", {}], ["string", { ok: "true" }], ["number", { ok: 1 }]].map(([name, result]) => {
+    const key = deliveryInternals.deliveryKey(`legacy:invalid-done:${name}`);
+    values.set(key, JSON.stringify({ status: "done", score: 3, result }));
+    return key;
+  });
+  values.set(legacyDoneKey, "done");
+  values.set(structuredDoneKey, JSON.stringify({ status: "done", storageKey: structuredDoneKey, score: 1, result: { ok: true, delivered: true } }));
+  values.set(malformedKey, "not-json");
+  values.set(unknownKey, JSON.stringify({ status: "sendng", score: 2 }));
+  values.set(primitiveKey, "123");
+  for (const key of [legacyDoneKey, structuredDoneKey]) {
+    sortedSet(deliveryInternals.DELIVERY_SENDING_INDEX).set(key, 1);
+  }
+
+  const result = await backfillDeliveryStatusIndexes();
+
+  assert.equal(result.ok, true);
+  assert.equal(result.indexed, 8);
+  for (const key of [legacyDoneKey, structuredDoneKey]) {
+    assert.equal(sortedSet(deliveryInternals.DELIVERY_SENDING_INDEX).has(key), false);
+    assert.equal(sortedSet(deliveryInternals.DELIVERY_UNCERTAIN_INDEX).has(key), false);
+  }
+  for (const key of [malformedKey, unknownKey, primitiveKey]) {
+    assert.equal(sortedSet(deliveryInternals.DELIVERY_UNCERTAIN_INDEX).has(key), true);
+  }
+  for (const key of invalidDoneKeys) assert.equal(sortedSet(deliveryInternals.DELIVERY_UNCERTAIN_INDEX).has(key), true);
 });
 
 test("delivery backfill does not advance its cursor after a detail pipeline failure", async () => {

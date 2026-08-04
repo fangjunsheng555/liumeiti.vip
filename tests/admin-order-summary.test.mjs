@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { executeOrderCasEval } from "./helpers/order-cas-redis-mock.mjs";
+import { executeDurableOperationEval } from "./helpers/durable-operation-redis-mock.mjs";
 
 process.env.AUTH_SECRET = "admin-order-summary-test-secret-32-characters";
 process.env.KV_REST_API_URL = "http://redis.order-summary.test";
@@ -29,6 +30,7 @@ function execute(command) {
   const [rawName, ...args] = command;
   const name = String(rawName || "").toUpperCase();
   commandNames.push(name);
+  if (name === "PING") return "PONG";
   if (name === "GET") return values.get(args[0]) ?? null;
   if (name === "SET") {
     const [key, value, ...options] = args;
@@ -44,39 +46,12 @@ function execute(command) {
   if (name === "EVAL") {
     const cas = executeOrderCasEval(command, { values, lists, hashes, sortedSets, sets });
     if (cas.handled) return cas.result;
+    const durable = executeDurableOperationEval(command, { values, sortedSet });
+    if (durable.handled) return durable.result;
     const script = String(args[0] || "");
     const keyCount = Number(args[1] || 0);
     const keys = args.slice(2, 2 + keyCount);
     const argv = args.slice(2 + keyCount);
-    if (script.includes("state='started'") && script.includes("isNew=true")) {
-      const existing = values.get(keys[0]);
-      if (existing) {
-        const record = JSON.parse(existing);
-        if (record.requestHash !== argv[0]) return JSON.stringify({ ok: false, error: "idempotency_conflict" });
-        return JSON.stringify({ ok: true, state: record.state || "started", record, isNew: false });
-      }
-      const record = {
-        version: 1,
-        state: "started",
-        operationId: argv[1],
-        requestHash: argv[0],
-        createdAt: argv[2],
-      };
-      values.set(keys[0], JSON.stringify(record));
-      return JSON.stringify({ ok: true, state: "started", record, isNew: true });
-    }
-    if (script.includes("record.state='done'") && script.includes("completedAt=ARGV[3]")) {
-      const raw = values.get(keys[0]);
-      if (!raw) return JSON.stringify({ ok: false, error: "operation_record_missing" });
-      const record = JSON.parse(raw);
-      if (record.requestHash !== argv[0]) return JSON.stringify({ ok: false, error: "idempotency_conflict" });
-      if (record.state === "done") return JSON.stringify({ ok: true, state: "done", record, idempotent: true });
-      record.state = "done";
-      record.result = JSON.parse(argv[1]);
-      record.completedAt = argv[2];
-      values.set(keys[0], JSON.stringify(record));
-      return JSON.stringify({ ok: true, state: "done", record, idempotent: false });
-    }
     if (script.includes("local marked=redis.call('SET',KEYS[1],'1','NX')")) {
       if (values.has(keys[0])) return 0;
       values.set(keys[0], "1");

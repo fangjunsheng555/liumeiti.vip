@@ -8,66 +8,17 @@ const DELIVERY_RETRYABLE_INDEX = "lm:delivery:v2:status:retryable";
 const DELIVERY_BACKFILL_CURSOR = "lm:delivery:v2:backfill-cursor";
 
 const CLAIM_SCRIPT = `
-local function clearIndexes(member)
-  redis.call('ZREM',KEYS[2],member)
-  redis.call('ZREM',KEYS[3],member)
-  redis.call('ZREM',KEYS[4],member)
-end
-local function indexStatus(status,score,member)
-  clearIndexes(member)
-  if status=='sending' then redis.call('ZADD',KEYS[2],score,member) end
-  if status=='uncertain' then redis.call('ZADD',KEYS[3],score,member) end
-  if status=='retryable' then redis.call('ZADD',KEYS[4],score,member) end
-end
-local raw=redis.call('GET',KEYS[1])
-if raw then
-  if raw=='done' then clearIndexes(ARGV[4]); return 'done' end
-  local ok,state=pcall(cjson.decode,raw)
-  if not ok or type(state)~='table' then
-    indexStatus('uncertain',ARGV[3],ARGV[4])
-    return 'uncertain'
-  end
-  local status=tostring(state.status or '')
-  if status=='done' then clearIndexes(ARGV[4]); return raw end
-  if status=='sending' or status=='uncertain' then
-    indexStatus(status,tonumber(state.score or ARGV[3]),ARGV[4])
-    return status
-  end
-  if status~='retryable' then
-    indexStatus('uncertain',tonumber(state.score or ARGV[3]),ARGV[4])
-    return 'uncertain'
-  end
-end
-redis.call('SET',KEYS[1],ARGV[2])
-indexStatus('sending',ARGV[3],ARGV[4])
-return 'acquired'`;
+local function validtype(key,expected) local value=redis.call('TYPE',key) local actual=type(value)=='table' and value.ok or value return actual=='none' or actual==expected end local function safescore(value) local score=tonumber(value) if not score or score~=score or score~=math.floor(score) or score<0 or score>9007199254740991 then return nil end return score end local function clearIndexes(member) redis.call('ZREM',KEYS[2],member) redis.call('ZREM',KEYS[3],member) redis.call('ZREM',KEYS[4],member) end local function indexStatus(status,score,member) clearIndexes(member) if status=='sending' then redis.call('ZADD',KEYS[2],score,member) end if status=='uncertain' then redis.call('ZADD',KEYS[3],score,member) end if status=='retryable' then redis.call('ZADD',KEYS[4],score,member) end end if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') or not validtype(KEYS[3],'zset') or not validtype(KEYS[4],'zset') then return redis.error_reply('delivery_storage_type_error') end local claimScore=safescore(ARGV[3]) local createdOk,created=pcall(cjson.decode,ARGV[2]) local createdScore=createdOk and type(created)=='table' and safescore(created.score) or nil if not claimScore or ARGV[1]=='' or ARGV[4]=='' or ARGV[4]~=KEYS[1] or not createdOk or type(created)~='table' or tostring(created.status or '')~='sending' or type(created.token)~='string' or created.token~=ARGV[1] or createdScore~=claimScore then return redis.error_reply('delivery_invalid_claim') end local raw=redis.call('GET',KEYS[1]) if raw then if raw=='done' then clearIndexes(ARGV[4]); return 'done' end local ok,state=pcall(cjson.decode,raw) if not ok or type(state)~='table' then indexStatus('uncertain',claimScore,ARGV[4]) return 'uncertain' end local status=tostring(state.status or '') if status=='done' and type(state.result)=='table' and state.result.ok==true then clearIndexes(ARGV[4]); return raw end if status=='sending' or status=='uncertain' then indexStatus(status,safescore(state.score) or claimScore,ARGV[4]) return status end if status~='retryable' then indexStatus('uncertain',safescore(state.score) or claimScore,ARGV[4]) return 'uncertain' end end redis.call('SET',KEYS[1],ARGV[2]) indexStatus('sending',claimScore,ARGV[4]) return 'acquired'
+`;
 
 const TRANSITION_SCRIPT = `
-local raw=redis.call('GET',KEYS[1])
-if not raw or raw=='done' then return 0 end
-local ok,current=pcall(cjson.decode,raw)
-if not ok or type(current)~='table' or tostring(current.token or '')~=ARGV[1] then return 0 end
-redis.call('SET',KEYS[1],ARGV[2])
-redis.call('ZREM',KEYS[2],ARGV[5])
-redis.call('ZREM',KEYS[3],ARGV[5])
-redis.call('ZREM',KEYS[4],ARGV[5])
-if ARGV[3]=='sending' then redis.call('ZADD',KEYS[2],ARGV[4],ARGV[5]) end
-if ARGV[3]=='uncertain' then redis.call('ZADD',KEYS[3],ARGV[4],ARGV[5]) end
-if ARGV[3]=='retryable' then redis.call('ZADD',KEYS[4],ARGV[4],ARGV[5]) end
-return 1`;
+local function validtype(key,expected) local value=redis.call('TYPE',key) local actual=type(value)=='table' and value.ok or value return actual=='none' or actual==expected end local function safescore(value) local score=tonumber(value) if not score or score~=score or score~=math.floor(score) or score<0 or score>9007199254740991 then return nil end return score end if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') or not validtype(KEYS[3],'zset') or not validtype(KEYS[4],'zset') then return redis.error_reply('delivery_storage_type_error') end local score=safescore(ARGV[4]) local replacementOk,replacement=pcall(cjson.decode,ARGV[2]) local replacementScore=replacementOk and type(replacement)=='table' and safescore(replacement.score) or nil if ARGV[1]=='' or ARGV[5]=='' or ARGV[5]~=KEYS[1] or (ARGV[3]~='sending' and ARGV[3]~='uncertain' and ARGV[3]~='retryable') or not score or not replacementOk or type(replacement)~='table' or tostring(replacement.status or '')~=ARGV[3] or type(replacement.token)~='string' or replacement.token~=ARGV[1] or replacementScore~=score then return redis.error_reply('delivery_invalid_transition') end local raw=redis.call('GET',KEYS[1]) if not raw or raw=='done' then return 0 end local ok,current=pcall(cjson.decode,raw) if not ok or type(current)~='table' or tostring(current.token or '')~=ARGV[1] then return 0 end redis.call('SET',KEYS[1],ARGV[2]) redis.call('ZREM',KEYS[2],ARGV[5]) redis.call('ZREM',KEYS[3],ARGV[5]) redis.call('ZREM',KEYS[4],ARGV[5]) if ARGV[3]=='sending' then redis.call('ZADD',KEYS[2],score,ARGV[5]) end if ARGV[3]=='uncertain' then redis.call('ZADD',KEYS[3],score,ARGV[5]) end if ARGV[3]=='retryable' then redis.call('ZADD',KEYS[4],score,ARGV[5]) end return 1
+`;
 
 const DONE_SCRIPT = `
 -- Legacy test/storage compatibility marker: redis.call('SET',KEYS[1],'done')
-local raw=redis.call('GET',KEYS[1])
-if raw=='done' then
-  redis.call('ZREM',KEYS[2],ARGV[2]); redis.call('ZREM',KEYS[3],ARGV[2]); redis.call('ZREM',KEYS[4],ARGV[2])
-  return 1
-end
-local ok,current=pcall(cjson.decode,raw or '')
-if not ok or type(current)~='table' or tostring(current.token or '')~=ARGV[1] then return 0 end
-redis.call('SET',KEYS[1],ARGV[3])
-redis.call('ZREM',KEYS[2],ARGV[2]); redis.call('ZREM',KEYS[3],ARGV[2]); redis.call('ZREM',KEYS[4],ARGV[2])
-return 1`;
+local function validtype(key,expected) local value=redis.call('TYPE',key) local actual=type(value)=='table' and value.ok or value return actual=='none' or actual==expected end local function safescore(value) local score=tonumber(value) if not score or score~=score or score~=math.floor(score) or score<0 or score>9007199254740991 then return nil end return score end if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') or not validtype(KEYS[3],'zset') or not validtype(KEYS[4],'zset') then return redis.error_reply('delivery_storage_type_error') end local replacementOk,replacement=pcall(cjson.decode,ARGV[3]) if ARGV[1]=='' or ARGV[2]=='' or ARGV[2]~=KEYS[1] or not replacementOk or type(replacement)~='table' or tostring(replacement.status or '')~='done' or type(replacement.token)~='string' or replacement.token~=ARGV[1] or not safescore(replacement.score) or type(replacement.result)~='table' or replacement.result.ok~=true then return redis.error_reply('delivery_invalid_completion') end local raw=redis.call('GET',KEYS[1]) if raw=='done' then redis.call('ZREM',KEYS[2],ARGV[2]); redis.call('ZREM',KEYS[3],ARGV[2]); redis.call('ZREM',KEYS[4],ARGV[2]) return 1 end local ok,current=pcall(cjson.decode,raw or '') if not ok or type(current)~='table' or tostring(current.token or '')~=ARGV[1] then return 0 end redis.call('SET',KEYS[1],ARGV[3]) redis.call('ZREM',KEYS[2],ARGV[2]); redis.call('ZREM',KEYS[3],ARGV[2]); redis.call('ZREM',KEYS[4],ARGV[2]) return 1
+`;
 
 function deliveryKey(id) {
   const normalized = clean(id, 300);
@@ -110,7 +61,7 @@ function statusIndex(status) {
 }
 
 async function transitionDelivery(key, token, status, extra = {}) {
-  const record = journalRecord(status, token, extra);
+  const record = journalRecord(status, token, { ...extra, storageKey: key });
   const saved = await redisCmd([
     "EVAL", TRANSITION_SCRIPT, "4",
     key, DELIVERY_SENDING_INDEX, DELIVERY_UNCERTAIN_INDEX, DELIVERY_RETRYABLE_INDEX,
@@ -120,7 +71,7 @@ async function transitionDelivery(key, token, status, extra = {}) {
 }
 
 async function completeDelivery(key, token, result) {
-  const finalRecord = journalEntry("done", token, { result: serializableResult(result) });
+  const finalRecord = journalEntry("done", token, { result: serializableResult(result), storageKey: key });
   return Number(await redisCmd([
     "EVAL", DONE_SCRIPT, "4",
     key, DELIVERY_SENDING_INDEX, DELIVERY_UNCERTAIN_INDEX, DELIVERY_RETRYABLE_INDEX,
@@ -136,18 +87,29 @@ export async function deliverOnce(id, deliver) {
   if (!stableId || typeof deliver !== "function") return { ok: false, error: "invalid_delivery" };
   const key = deliveryKey(stableId);
   const token = randomBytes(18).toString("hex");
-  const sendingRecord = journalRecord("sending", token);
-  const claim = await redisCmd([
+  const sendingRecord = journalRecord("sending", token, { storageKey: key });
+  const sendingRaw = JSON.stringify(sendingRecord);
+  let claim = await redisCmd([
     "EVAL", CLAIM_SCRIPT, "4",
     key, DELIVERY_SENDING_INDEX, DELIVERY_UNCERTAIN_INDEX, DELIVERY_RETRYABLE_INDEX,
-    token, JSON.stringify(sendingRecord), String(sendingRecord.score), key,
+    token, sendingRaw, String(sendingRecord.score), key,
   ]);
+  if (!["acquired", "done", "sending", "uncertain", "pending"].includes(String(claim || ""))
+      && !(typeof claim === "string" && claim.startsWith("{"))) {
+    for (let attempt = 0; attempt < 3 && claim !== "acquired"; attempt += 1) {
+      const recovered = checkedPipelineValues(await redisPipeline([
+        ["GET", key], ["ZSCORE", DELIVERY_SENDING_INDEX, key], ["PING"],
+      ]), 3);
+      if (recovered && recovered[0] === sendingRaw
+          && Number(recovered[1]) === sendingRecord.score && recovered[2] === "PONG") claim = "acquired";
+    }
+  }
   if (claim === "done") return { ok: true, idempotent: true, recorded: true, delivered: true };
   const prior = typeof claim === "string" && claim.startsWith("{") ? parseJournal(claim) : null;
   if (prior?.status === "done") {
-    return prior.result && typeof prior.result === "object"
+    return prior.storageKey === key && prior.result && typeof prior.result === "object" && !Array.isArray(prior.result) && prior.result.ok === true
       ? { ...prior.result, idempotent: true, recorded: true }
-      : { ok: true, idempotent: true, recorded: true, delivered: true };
+      : { ok: false, uncertain: true, error: "delivery_result_uncertain" };
   }
   if (claim === "sending") return { ok: false, pending: true, uncertain: true };
   if (claim === "uncertain") return { ok: false, uncertain: true, error: "delivery_result_uncertain" };
@@ -252,7 +214,9 @@ export async function backfillDeliveryStatusIndexes({ count = 100 } = {}) {
   let indexed = 0;
   keys.forEach((key, index) => {
     const record = parseJournal(values[index]);
-    const status = ["sending", "uncertain", "retryable"].includes(record?.status) ? record.status : "done";
+    const status = (values[index] === "done" || (record?.status === "done" && record.storageKey === key && record.result && typeof record.result === "object" && !Array.isArray(record.result) && record.result.ok === true))
+      ? "done"
+      : ["sending", "uncertain", "retryable"].includes(record?.status) ? record.status : "uncertain";
     commands.push(
       ["ZREM", DELIVERY_SENDING_INDEX, key],
       ["ZREM", DELIVERY_UNCERTAIN_INDEX, key],

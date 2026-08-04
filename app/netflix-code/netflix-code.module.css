@@ -41,6 +41,9 @@
 .sectionTitle > button { border: 0; background: transparent; color: #0f766e; font-size: 11px; font-weight: 800; cursor: pointer; }
 
 .loading { min-height: 90px; display: flex; align-items: center; justify-content: center; gap: 8px; color: #64748b; font-size: 12px; }
+.accountLoadError { min-height: 90px; display: grid; place-items: center; align-content: center; gap: 10px; color: #9a3412; text-align: center; }
+.accountLoadError p { margin: 0; font-size: 12px; line-height: 1.6; }
+.accountLoadError button { min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 0 15px; border: 1px solid #fdba74; border-radius: 9px; background: #fff7ed; color: #9a3412; font-size: 11px; font-weight: 850; cursor: pointer; }
 .orderList { margin-top: 18px; border-top: 1px solid #e2e8f0; }
 .orderList > button { width: 100%; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 2px; border: 0; border-bottom: 1px solid #e2e8f0; background: transparent; text-align: left; cursor: pointer; }
 .orderList > button:disabled { opacity: .55; cursor: wait; }

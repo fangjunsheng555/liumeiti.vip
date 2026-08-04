@@ -110,7 +110,7 @@ export async function requestAccountLoad({
 
     let me = null;
     try { me = await meRes.json(); } catch {}
-    if (!meRes.ok || !me?.ok) {
+    if (!meRes.ok || me?.ok !== true) {
       const serverMessage = String(me?.message || "").trim();
       controller.abort();
       return { ...failure(locale, meRes.status >= 500 ? "service" : "response", serverMessage), status: Number(meRes.status || 0) };
@@ -150,7 +150,7 @@ export async function requestAccountLoad({
         bal?.ok === true
         && authenticatedUserMatches(bal, me.email, me.accountLifecycleId)
         && typeof balanceNumber === "number"
-        && Number.isFinite(balanceNumber)
+        && Number.isFinite(balanceNumber) && balanceNumber >= 0 && Number.isSafeInteger(Math.round(balanceNumber * 100)) && Math.abs(balanceNumber * 100 - Math.round(balanceNumber * 100)) < 1e-8
         && Array.isArray(bal?.transactions)
         && Array.isArray(bal?.withdrawals)
         && Array.isArray(bal?.coupons)

@@ -79,7 +79,13 @@ async function completeAfterSalesHandler(request, { params }) {
     });
   }
   if (operation.state === "done") {
-    return Response.json({ ...(operation.record.result || { ok: true }), idempotent: true });
+    const replay = operation.record.result;
+    if (!replay || typeof replay !== "object" || Array.isArray(replay) || replay.ok !== true
+        || clean(replay.ticket?.ticketId, 100).toUpperCase() !== ticketId || replay.ticket?.status !== "completed"
+        || typeof replay.changed !== "boolean") {
+      return Response.json({ ok: false, error: "durable_operation_record_invalid" }, { status: 409 });
+    }
+    return Response.json({ ...replay, idempotent: true });
   }
   const result = await completeAfterSalesTicket(ticketId, {
     ...completion,
@@ -89,7 +95,7 @@ async function completeAfterSalesHandler(request, { params }) {
   if (!result.ok) {
     const status = ["ticket_not_found", "order_not_found", "order_item_not_found"].includes(result.error)
       ? 404
-      : result.error === "ticket_busy" || result.error === "idempotency_conflict" || result.error === "stale_order_credentials"
+      : result.error === "ticket_busy" || result.error === "idempotency_conflict" || result.error === "stale_order_credentials" || result.error === "already_completed"
         ? 409
         : result.error === "order_sync_failed" || result.error === "storage_failed"
           ? 500

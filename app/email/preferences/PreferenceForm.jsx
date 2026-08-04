@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { clientFetch as fetch, isClientRequestTimeout } from "../../lib/client-fetch";
 
 function suppressionNotice(suppression, L) {
   const scope = String(suppression?.scope || "none");
@@ -52,13 +53,29 @@ export default function PreferenceForm({ token, initialPreferences, initialSuppr
           },
         }),
       });
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || L("保存失败", "Could not save"));
+      let data = null;
+      try { data = await response.json(); } catch {}
+      if (!data || typeof data !== "object") {
+        throw new Error(L("邮件偏好服务响应异常，请稍后重试。", "The email preference service returned an invalid response. Please try again."));
+      }
+      if (!response.ok || !data.ok) {
+        throw new Error(response.status >= 500
+          ? L("邮件偏好服务暂时不可用，请稍后重试。", "The email preference service is temporarily unavailable. Please try again.")
+          : L("保存失败，请确认链接有效后重试。", "Could not save. Check that the link is valid and try again."));
+      }
       if (data.preferences) setPreferences((current) => ({ ...current, ...data.preferences }));
       if (data.suppression) setSuppression(data.suppression);
       setState({ saving: false, error: "", saved: true });
     } catch (error) {
-      setState({ saving: false, error: error.message || L("保存失败", "Could not save"), saved: false });
+      setState({
+        saving: false,
+        error: isClientRequestTimeout(error)
+          ? L("请求超时，请检查网络后重试。", "The request timed out. Check your connection and try again.")
+          : (error?.name === "TypeError"
+            ? L("网络连接失败，请检查网络后重试。", "The network request failed. Check your connection and try again.")
+            : (error?.message || L("保存失败，请稍后重试。", "Could not save. Please try again."))),
+        saved: false,
+      });
     }
   }
 

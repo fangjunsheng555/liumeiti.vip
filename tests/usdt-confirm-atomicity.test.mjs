@@ -7,6 +7,7 @@ process.env.KV_REST_API_URL = "http://usdt.redis.test";
 process.env.KV_REST_API_TOKEN = "test-token";
 
 const money = await import("../app/api/_money.js");
+const usdtConfirm = await import("../app/api/_usdt-confirm.js");
 
 const RECORD_PREFIX = "liumeiti:orders:record:";
 const CLAIM_PREFIX = "lm:usdt:confirmed-tx:";
@@ -157,6 +158,7 @@ class UsdtRedisMock {
   command(command) {
     const [name, ...args] = command;
     if (name === "GET") return this.strings.get(args[0]) ?? null;
+    if (name === "HGET") return this.hashes.get(args[0])?.get(args[1]) ?? null;
     throw new Error(`unhandled mock command ${name}`);
   }
 
@@ -181,6 +183,28 @@ async function withFetch(fetchImpl, callback) {
   global.fetch = fetchImpl;
   try { return await callback(); } finally { global.fetch = original; }
 }
+
+test("chain normalization requires an identified USDT contract and its fixed decimals", () => {
+  const receivingAddress = "TReceiver";
+  const row = {
+    transaction_id: "a".repeat(64),
+    to: receivingAddress,
+    value: "1000000",
+    block_timestamp: Date.parse("2026-08-02T01:30:00.000Z"),
+  };
+  const normalize = (tokenInfo) => usdtConfirm.normalizeConfirmedUsdtTransfers({
+    data: [{ ...row, ...(tokenInfo === undefined ? {} : { token_info: tokenInfo }) }],
+  }, receivingAddress);
+
+  assert.equal(normalize(undefined).length, 0);
+  assert.equal(normalize({ decimals: 6 }).length, 0);
+  assert.equal(normalize({ address: "", decimals: 6 }).length, 0);
+  assert.equal(normalize({ address: "TWrongToken", decimals: 6 }).length, 0);
+  assert.equal(normalize({ address: usdtConfirm.USDT_TRC20_CONTRACT }).length, 0);
+  assert.equal(normalize({ address: usdtConfirm.USDT_TRC20_CONTRACT, decimals: 5 }).length, 0);
+  assert.equal(normalize({ address: usdtConfirm.USDT_TRC20_CONTRACT, decimals: 6 }).length, 1);
+  assert.equal(normalize({ contract_address: usdtConfirm.USDT_TRC20_CONTRACT, decimals: "6" })[0].amount, 1);
+});
 
 test("one chain transaction cannot confirm two different orders", async () => {
   const redis = new UsdtRedisMock();

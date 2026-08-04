@@ -17,6 +17,8 @@ let redisDelayMs = 0;
 let failNextJobWrite = false;
 let failNextTerminalTransition = false;
 let failNextDispatchLockWrite = false;
+let loseNextSaveJobResponse = false;
+let loseNextTransitionResponse = false;
 let failNextPipelineCommand = "";
 let activeRedisRequests = 0;
 let maxActiveRedisRequests = 0;
@@ -56,6 +58,8 @@ function execute(command) {
   const name = String(rawName).toUpperCase();
   if (name === "PING") return "PONG";
   if (name === "GET") return currentEntry(args[0])?.value ?? null;
+  if (name === "SISMEMBER") return currentEntry(args[0])?.value?.has(String(args[1])) ? 1 : 0;
+  if (name === "SMISMEMBER") return args.slice(1).map((member) => currentEntry(args[0])?.value?.has(String(member)) ? 1 : 0);
   if (name === "SET") {
     const key = args[0];
     const value = String(args[1]);
@@ -79,6 +83,14 @@ function execute(command) {
     const keyCount = Number(args[1] || 0);
     const keys = args.slice(2, 2 + keyCount);
     const argv = args.slice(2 + keyCount);
+    if (script.includes("CONTACT_CAS_V2")) {
+      const existing = currentEntry(keys[0])?.value;
+      const revision = existing ? Number(JSON.parse(existing).revision || 0) : 0;
+      if (revision !== Number(argv[0])) return 0;
+      ensureZset(keys[1]).set(String(argv[3]), Number(argv[2]));
+      store.set(keys[0], { type: "string", value: String(argv[1]) });
+      return 1;
+    }
     if (script.includes("doc.requestHash") && script.includes("return -1")) {
       const existing = currentEntry(keys[0])?.value;
       if (existing) {
@@ -94,18 +106,18 @@ function execute(command) {
     if (script.includes("__in_flight__") && script.includes("SMEMBERS")) {
       const raw = currentEntry(keys[0])?.value;
       if (!raw) return "__missing__";
+      if (raw !== String(argv[2] || "")) return "__conflict__";
       const doc = JSON.parse(raw);
       if (String(doc.status || "") === String(argv[0] || "")) return JSON.stringify(doc);
       if (!String(argv[1] || "").split("|").includes(String(doc.status || ""))) return `__invalid__:${doc.status || ""}`;
       for (const jobId of ensureSet(keys[2])) {
-        const jobRaw = currentEntry(String(argv[6]) + jobId)?.value;
+        const jobRaw = currentEntry(String(argv[7]) + jobId)?.value;
         const job = jobRaw ? JSON.parse(jobRaw) : null;
-        if (job?.status === "sending" && currentEntry(String(argv[7]) + jobId)) return "__in_flight__";
+        if (job?.status === "sending" && currentEntry(String(argv[8]) + jobId)) return "__in_flight__";
       }
-      Object.assign(doc, JSON.parse(String(argv[2] || "{}")), { status: String(argv[0]) });
-      store.set(keys[0], { type: "string", value: JSON.stringify(doc) });
-      if (!ensureZset(keys[1]).has(String(argv[5]))) ensureZset(keys[1]).set(String(argv[5]), Number(argv[4]));
-      return JSON.stringify(doc);
+      store.set(keys[0], { type: "string", value: String(argv[3]) });
+      if (!ensureZset(keys[1]).has(String(argv[6]))) ensureZset(keys[1]).set(String(argv[6]), Number(argv[5]));
+      return String(argv[3]);
     }
     if (script.includes("__active__:") && script.includes("__terminal__") && script.includes("ZREM")) {
       const raw = currentEntry(keys[0])?.value;
@@ -121,15 +133,15 @@ function execute(command) {
       store.delete(keys[3]);
       return raw ? "__terminal__" : "__missing__";
     }
-    if (script.includes("__invalid__:") && script.includes("patchOk") && !script.includes("__in_flight__")) {
+    if (script.includes("__corrupt_patch__") && !script.includes("__in_flight__")) {
       const raw = currentEntry(keys[0])?.value;
       if (!raw) return "__missing__";
+      if (raw !== String(argv[2] || "")) return "__conflict__";
       const doc = JSON.parse(raw);
       if (!String(argv[1] || "").split("|").includes(String(doc.status || ""))) return `__invalid__:${doc.status || ""}`;
-      Object.assign(doc, JSON.parse(String(argv[2] || "{}")), { status: String(argv[0]) });
-      store.set(keys[0], { type: "string", value: JSON.stringify(doc) });
-      if (!ensureZset(keys[1]).has(String(argv[5]))) ensureZset(keys[1]).set(String(argv[5]), Number(argv[4]));
-      return JSON.stringify(doc);
+      store.set(keys[0], { type: "string", value: String(argv[3]) });
+      if (!ensureZset(keys[1]).has(String(argv[6]))) ensureZset(keys[1]).set(String(argv[6]), Number(argv[5]));
+      return String(argv[3]);
     }
     if (script.includes("local queueScore=tonumber(doc.queueScore or ARGV[1])")) {
       const existing = currentEntry(keys[0])?.value;
@@ -148,9 +160,10 @@ function execute(command) {
       store.set(keys[0], { type: "string", value: String(argv[4]) });
       ensureZset(keys[1]).set(String(argv[1]), Number(argv[0]));
       ensureSet(keys[3]).add(String(argv[1]));
+      if (loseNextSaveJobResponse) { loseNextSaveJobResponse = false; return null; }
       return 1;
     }
-    if (script.includes("campaignStatus=campaign and campaign.status")) {
+    if (script.includes("__campaign_conflict__") && script.includes("responseEncoded")) {
       if (failNextJobWrite || (failNextTerminalTransition && argv[4] === "terminal")) {
         failNextJobWrite = false;
         failNextTerminalTransition = false;
@@ -162,6 +175,7 @@ function execute(command) {
       if (!String(argv[0] || "").split("|").includes(String(current.status || ""))) return `__invalid__:${current.status || ""}`;
       const campaignRaw = currentEntry(keys[5])?.value;
       const campaign = campaignRaw ? JSON.parse(campaignRaw) : null;
+      if (campaignRaw ? String(campaignRaw) !== String(argv[13]) : argv[13] !== "__lm_marketing_missing__") return "__campaign_conflict__";
       if (argv[8] === "sending") {
         if (!campaign) return "__campaign_missing__";
         if (!["scheduled", "sending"].includes(campaign.status)) return `__campaign_blocked__:${campaign.status}`;
@@ -183,29 +197,14 @@ function execute(command) {
         store.set(keys[7], { type: "string", value: String(Number(currentEntry(keys[7])?.value || 0) + 1) });
       }
       if (campaign) {
-        if (argv[8] === "sending" && campaign.status === "scheduled") {
-          campaign.status = "sending";
-          campaign.startedAt ||= argv[9];
-        }
-        if (argv[4] === "terminal") {
-          const field = `${argv[8]}Count`;
-          campaign[field] = Number(campaign[field] || 0) + 1;
-          campaign.terminalCount = Number(campaign.terminalCount || 0) + 1;
-          if (ensureSet(keys[2]).size === 0 && campaign.enqueueCompletedAt && campaign.status !== "cancelled") {
-            if (Number(campaign.failedCount || 0) > 0 || Number(campaign.enqueueFailedCount || 0) > 0) {
-              campaign.status = "failed";
-              campaign.failedAt = argv[9];
-            } else {
-              campaign.status = "completed";
-              campaign.completedAt = argv[9];
-            }
-          }
-        }
-        campaign.updatedAt = argv[9];
-        store.set(keys[5], { type: "string", value: JSON.stringify(campaign) });
+        const useFinal = argv[4] === "terminal" && ensureSet(keys[2]).size === 0;
+        store.set(keys[5], { type: "string", value: String(useFinal ? argv[15] : argv[14]) });
         if (!ensureZset(keys[6]).has(String(argv[6]))) ensureZset(keys[6]).set(String(argv[6]), Number(argv[12]));
+        if (loseNextTransitionResponse) { loseNextTransitionResponse = false; return null; }
+        return String(useFinal ? argv[17] : argv[16]);
       }
-      return JSON.stringify({ ok: true, status: argv[8], campaignStatus: campaign?.status || "" });
+      if (loseNextTransitionResponse) { loseNextTransitionResponse = false; return null; }
+      return String(argv[16]);
     }
     if (script.includes("__duplicate__") && script.includes("HINCRBYFLOAT")) {
       if (argv[0] !== "0") {
@@ -313,6 +312,7 @@ function execute(command) {
     args.slice(1).forEach((member) => { if (zset.delete(String(member))) removed += 1; });
     return removed;
   }
+  if (name === "ZSCORE") return ensureZset(args[0]).has(String(args[1])) ? String(ensureZset(args[0]).get(String(args[1]))) : null;
   if (name === "ZREVRANGE") return [];
   if (name === "INCR") {
     const next = Number(store.get(args[0])?.value || 0) + 1;
@@ -534,6 +534,52 @@ test("dispatch fails closed when the atomic sending transition cannot be persist
   assert.equal(dispatched.ok, false);
   assert.equal(dispatched.results[0].reason, "storage_failed_before_send");
   assert.equal(resendRequests.length, before, "provider must not be called before sending is durable");
+});
+
+test("a committed enqueue job write with a lost response is reported as queued, not failed", async () => {
+  ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+  const scheduledAt = "2026-09-11T11:30:00.000Z";
+  loseNextSaveJobResponse = true;
+  const result = await queue.enqueueMarketingCampaign({
+    campaignId: "campaign-save-response-loss",
+    recipients: ["save-loss@example.com"],
+    scheduledAt,
+    subject: "save response loss",
+    html: "<p>save response loss</p>",
+    text: "save response loss",
+    preview: "save response loss",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.queuedCount, 1);
+  assert.equal(result.failedCount, 0);
+});
+
+test("a committed sending transition with a lost response still sends exactly once", async () => {
+  ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+  const scheduledAt = "2026-09-11T12:30:00.000Z";
+  const result = await queue.enqueueMarketingCampaign({
+    campaignId: "campaign-transition-response-loss",
+    recipients: ["transition-loss@example.com"],
+    scheduledAt,
+    subject: "transition response loss",
+    html: "<p>transition response loss</p>",
+    text: "transition response loss",
+    preview: "transition response loss",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+  assert.equal(result.ok, true);
+  const before = resendRequests.length;
+  loseNextTransitionResponse = true;
+  const dispatched = await queue.dispatchDueMarketingCampaigns({ now: Date.parse(scheduledAt), interJobDelayMs: 0 });
+  const replay = await queue.dispatchDueMarketingCampaigns({ now: Date.parse(scheduledAt) + 60_000, interJobDelayMs: 0 });
+  assert.equal(dispatched.submitted, 1);
+  assert.equal(replay.submitted, 0);
+  assert.equal(resendRequests.length, before + 1);
 });
 
 test("lease heartbeat prevents a second worker after the original TTL and compare-release preserves a new owner", async () => {
@@ -1074,4 +1120,158 @@ test("500-recipient enqueue uses bounded concurrency under Redis latency", async
   assert.ok(maxActiveRedisRequests > 1, `expected concurrent Redis requests, saw ${maxActiveRedisRequests}`);
   assert.ok(maxActiveRedisRequests <= queue.marketingCampaignQueueInternals.ENQUEUE_CONCURRENCY, `concurrency ${maxActiveRedisRequests} exceeded bound`);
   assert.ok(elapsed < 8_000, `bounded enqueue took ${elapsed}ms`);
+});
+
+test("campaign status CAS preserves untouched legacy JSON tokens byte for byte", async () => {
+  const campaignId = "campaign-raw-bytes-01";
+  const key = `lm:mail:marketing:campaign:${campaignId}`;
+  const raw = `{"id":"${campaignId}","status":"scheduled","legacyEmpty":[],"legacyNull":null,"legacyLong":900719925474099312345,"createdAtMs":1}`;
+  store.set(key, { type: "string", value: raw });
+  const result = await queue.updateMarketingCampaignStatus(campaignId, "paused");
+  assert.equal(result.ok, true);
+  const saved = currentEntry(key)?.value || "";
+  assert.match(saved, /"legacyEmpty":\[\]/);
+  assert.match(saved, /"legacyNull":null/);
+  assert.match(saved, /"legacyLong":900719925474099312345/);
+  assert.equal(JSON.parse(saved).status, "paused");
+});
+
+test("an overlong recipient cannot be queued as a truncated address alias", async () => {
+  const overlong = `${"a".repeat(242)}@example.comX`;
+  const campaignId = "campaign-overlong-recipient";
+  const result = await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [overlong],
+    scheduledAt: "2026-09-21T10:30:00.000Z",
+    subject: "alias", html: "<p>alias</p>", text: "alias",
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "invalid_campaign");
+  assert.equal(currentEntry(`lm:mail:marketing:campaign:${campaignId}`), null);
+});
+
+test("a campaign index or key cannot cancel or dispatch content whose body belongs to another campaign", async () => {
+  ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+  const scheduledAt = "2027-01-10T10:30:00.000Z";
+  const campaignA = "campaign-identity-key-a";
+  const campaignB = "campaign-identity-key-b";
+  const emailA = "campaign-key-a@example.com";
+  const emailB = "campaign-key-b@example.com";
+  const input = (campaignId, recipient, subject) => ({
+    campaignId,
+    recipients: [recipient],
+    scheduledAt,
+    subject,
+    html: `<p>${subject}</p>`,
+    text: subject,
+    preview: subject,
+    brandName: "identity-test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+  assert.equal((await queue.enqueueMarketingCampaign(input(campaignA, emailA, "campaign A"))).ok, true);
+  assert.equal((await queue.enqueueMarketingCampaign(input(campaignB, emailB, "campaign B"))).ok, true);
+
+  const jobAId = queue.marketingCampaignQueueInternals.makeJobId(campaignA, emailA, scheduledAt);
+  const jobAKey = `lm:mail:marketing:job:${jobAId}`;
+  const jobA = JSON.parse(currentEntry(jobAKey)?.value || "null");
+  const campaignAKey = `lm:mail:marketing:campaign:${campaignA}`;
+  const campaignBKey = `lm:mail:marketing:campaign:${campaignB}`;
+  const campaignARaw = currentEntry(campaignAKey)?.value;
+  const campaignBRaw = currentEntry(campaignBKey)?.value;
+  const jobARaw = currentEntry(jobAKey)?.value;
+  const recipientAKey = `lm:mail:marketing:recipient:${campaignA}:${jobA.contactId}`;
+  const recipientARaw = currentEntry(recipientAKey)?.value;
+  const sendsBefore = resendRequests.length;
+  assert.equal(ensureZset("lm:mail:marketing:campaign:index").has(campaignA), true);
+
+  store.set(campaignAKey, { type: "string", value: campaignBRaw });
+  try {
+    const cancelled = await queue.updateMarketingCampaignStatus(campaignA, "cancelled", { staffId: 1, staffUsername: "admin" });
+    assert.equal(cancelled.ok, false);
+    assert.equal(currentEntry(campaignAKey)?.value, campaignBRaw);
+    assert.equal(currentEntry(campaignBKey)?.value, campaignBRaw, "the real campaign B must remain byte-identical");
+    assert.equal(currentEntry(jobAKey)?.value, jobARaw, "cancellation must not mutate campaign A's job");
+    assert.equal(currentEntry(recipientAKey)?.value, recipientARaw, "cancellation must not mutate the recipient");
+
+    ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+    ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).set(jobAId, Date.parse(scheduledAt));
+    resendBehavior = "ok";
+    const dispatched = await queue.dispatchDueMarketingCampaigns({ now: Date.parse(scheduledAt), interJobDelayMs: 0 });
+    assert.equal(dispatched.failed, 1);
+    assert.equal(dispatched.results[0]?.reason, "invalid_campaign_record");
+    assert.equal(resendRequests.length, sendsBefore, "mismatched campaign content must never reach the provider");
+    assert.equal(currentEntry(jobAKey)?.value, jobARaw);
+    assert.equal(currentEntry(recipientAKey)?.value, recipientARaw);
+    assert.equal(currentEntry(campaignBKey)?.value, campaignBRaw);
+  } finally {
+    store.set(campaignAKey, { type: "string", value: campaignARaw });
+    ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+  }
+});
+
+test("a marketing job key cannot cancel, dispatch, or rewrite a recipient when its body belongs to another job", async () => {
+  ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+  const scheduledAt = "2027-01-11T10:30:00.000Z";
+  const campaignA = "campaign-job-identity-a";
+  const campaignB = "campaign-job-identity-b";
+  const emailA = "job-key-a@example.com";
+  const emailB = "job-key-b@example.com";
+  const input = (campaignId, recipient) => ({
+    campaignId,
+    recipients: [recipient],
+    scheduledAt,
+    subject: campaignId,
+    html: `<p>${campaignId}</p>`,
+    text: campaignId,
+    preview: campaignId,
+    brandName: "identity-test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+  assert.equal((await queue.enqueueMarketingCampaign(input(campaignA, emailA))).ok, true);
+  assert.equal((await queue.enqueueMarketingCampaign(input(campaignB, emailB))).ok, true);
+
+  const jobAId = queue.marketingCampaignQueueInternals.makeJobId(campaignA, emailA, scheduledAt);
+  const jobBId = queue.marketingCampaignQueueInternals.makeJobId(campaignB, emailB, scheduledAt);
+  const jobAKey = `lm:mail:marketing:job:${jobAId}`;
+  const jobBKey = `lm:mail:marketing:job:${jobBId}`;
+  const jobARaw = currentEntry(jobAKey)?.value;
+  const jobBRaw = currentEntry(jobBKey)?.value;
+  const jobA = JSON.parse(jobARaw || "null");
+  const jobB = JSON.parse(jobBRaw || "null");
+  const campaignAKey = `lm:mail:marketing:campaign:${campaignA}`;
+  const campaignARaw = currentEntry(campaignAKey)?.value;
+  const recipientAKey = `lm:mail:marketing:recipient:${campaignA}:${jobA.contactId}`;
+  const recipientBKey = `lm:mail:marketing:recipient:${campaignB}:${jobB.contactId}`;
+  const recipientARaw = currentEntry(recipientAKey)?.value;
+  const recipientBRaw = currentEntry(recipientBKey)?.value;
+  const sendsBefore = resendRequests.length;
+
+  store.set(jobAKey, { type: "string", value: jobBRaw });
+  try {
+    const cancelled = await queue.updateMarketingCampaignStatus(campaignA, "cancelled", { staffId: 1, staffUsername: "admin" });
+    assert.equal(cancelled.ok, false);
+    assert.equal(currentEntry(campaignAKey)?.value, campaignARaw, "campaign state must not change before every job validates");
+    assert.equal(currentEntry(jobAKey)?.value, jobBRaw);
+    assert.equal(currentEntry(jobBKey)?.value, jobBRaw, "the real job B must remain byte-identical");
+    assert.equal(currentEntry(recipientAKey)?.value, recipientARaw);
+    assert.equal(currentEntry(recipientBKey)?.value, recipientBRaw);
+
+    ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+    ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).set(jobAId, Date.parse(scheduledAt));
+    resendBehavior = "ok";
+    const dispatched = await queue.dispatchDueMarketingCampaigns({ now: Date.parse(scheduledAt), interJobDelayMs: 0 });
+    assert.equal(dispatched.failed, 1);
+    assert.equal(dispatched.results[0]?.reason, "invalid_job_record");
+    assert.equal(resendRequests.length, sendsBefore, "mismatched job content must never reach the provider");
+    assert.equal(currentEntry(jobAKey)?.value, jobBRaw);
+    assert.equal(currentEntry(jobBKey)?.value, jobBRaw);
+    assert.equal(currentEntry(recipientAKey)?.value, recipientARaw);
+    assert.equal(currentEntry(recipientBKey)?.value, recipientBRaw);
+  } finally {
+    store.set(jobAKey, { type: "string", value: jobARaw });
+    ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+  }
 });

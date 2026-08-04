@@ -53,6 +53,18 @@ function executeEval(args) {
   const keys = args.slice(2, 2 + keyCount);
   const argv = args.slice(2 + keyCount);
 
+  if (script.includes("local current=redis.call('GET',KEYS[1])")
+    && script.includes("redis.call('LPUSH', KEYS[2], encoded)")) {
+    const current = strings.get(keys[0]);
+    if (argv[2] === "0" ? current != null : current == null || current !== argv[3]) return "__conflict__";
+    const encoded = String(argv[0]);
+    strings.set(keys[0], encoded);
+    const history = lists.get(keys[1]) || [];
+    history.unshift(encoded);
+    lists.set(keys[1], history.slice(0, Number(argv[1])));
+    return encoded;
+  }
+
   if (script.includes("local existing=redis.call('HGET',KEYS[2],ARGV[1])") && script.includes("LPUSH")) {
     const existing = hash(keys[1]).get(argv[0]);
     strings.set(keys[2], argv[4]);
@@ -98,44 +110,50 @@ function executeEval(args) {
     return JSON.stringify({ ok: true, record: next });
   }
 
-  if (script.includes("startedAtMs") && script.includes("isNew=false") && script.includes("idempotency_conflict")) {
+  if (script.includes("durable_claim_v2_lossless")) {
+    if (keys[0] !== `liumeiti:durable-operation:v1:${argv[1]}`) return ["error", "invalid_operation_record"];
     durableClaimCalls += 1;
     if (failDurableClaimAt && durableClaimCalls === failDurableClaimAt) return null;
-    const existing = parseJson(strings.get(keys[0]));
-    if (existing) {
-      if (existing.requestHash !== argv[0]) return JSON.stringify({ ok: false, error: "idempotency_conflict" });
+    const existingRaw = strings.get(keys[0]);
+    if (existingRaw != null) {
+      const existing = parseJson(existingRaw);
+      if (!existing || typeof existing.requestHash !== "string") return ["error", "operation_record_corrupt"];
+      if (existing.operationId !== argv[1]) return ["error", "operation_record_corrupt"];
+      if (existing.requestHash !== argv[0]) return ["error", "idempotency_conflict"];
       const state = String(existing.state || "started");
       if (state === "done") sortedSet(keys[1]).delete(argv[1]);
       else sortedSet(keys[1]).set(argv[1], Number(existing.startedAtMs || argv[3]));
-      return JSON.stringify({ ok: true, state, record: existing, isNew: false });
+      return ["ok", state, existingRaw, "0"];
     }
-    const record = {
-      version: 1,
-      state: "started",
-      operationId: argv[1],
-      requestHash: argv[0],
-      createdAt: argv[2],
-      startedAtMs: Number(argv[3]),
-    };
-    strings.set(keys[0], JSON.stringify(record));
+    const record = parseJson(argv[4]);
+    if (!record || record.requestHash !== argv[0] || record.operationId !== argv[1] || record.state !== "started") {
+      return ["error", "invalid_operation_record"];
+    }
+    strings.set(keys[0], argv[4]);
     sortedSet(keys[1]).set(argv[1], Number(argv[3]));
-    return JSON.stringify({ ok: true, state: "started", record, isNew: true });
+    return ["ok", "started", argv[4], "1"];
   }
 
-  if (script.includes("invalid_operation_result") && script.includes("record.state='done'")) {
-    const record = parseJson(strings.get(keys[0]));
-    if (!record) return JSON.stringify({ ok: false, error: "operation_record_missing" });
-    if (record.requestHash !== argv[0]) return JSON.stringify({ ok: false, error: "idempotency_conflict" });
+  if (script.includes("durable_complete_v2_lossless")) {
+    if (keys[0] !== `liumeiti:durable-operation:v1:${argv[2]}`) return ["error", "invalid_operation_record"];
+    const raw = strings.get(keys[0]);
+    const record = parseJson(raw);
+    if (!record) return ["error", "operation_record_missing"];
+    if (record.operationId !== argv[2]) return ["error", "operation_record_corrupt"];
+    if (record.requestHash !== argv[0]) return ["error", "idempotency_conflict"];
     if (record.state === "done") {
-      sortedSet(keys[1]).delete(record.operationId || argv[3]);
-      return JSON.stringify({ ok: true, state: "done", record, idempotent: true });
+      sortedSet(keys[1]).delete(record.operationId || argv[2]);
+      return ["done", raw, "1"];
     }
-    record.state = "done";
-    record.result = parseJson(argv[1]);
-    record.completedAt = argv[2];
-    strings.set(keys[0], JSON.stringify(record));
-    sortedSet(keys[1]).delete(record.operationId || argv[3]);
-    return JSON.stringify({ ok: true, state: "done", record, idempotent: false });
+    if (raw !== argv[1]) return ["stale", raw];
+    const replacement = parseJson(argv[3]);
+    if (!replacement || replacement.requestHash !== argv[0] || replacement.operationId !== argv[2]
+      || replacement.state !== "done" || !replacement.result) {
+      return ["error", "invalid_operation_result"];
+    }
+    strings.set(keys[0], argv[3]);
+    sortedSet(keys[1]).delete(record.operationId || argv[2]);
+    return ["done", argv[3], "0"];
   }
 
   if (script.includes("local marked=redis.call('SET',KEYS[1],'1','NX')")) {
@@ -213,12 +231,33 @@ function execute(command) {
     const target = lists.get(args[0]) || [];
     return target.slice(Number(args[1]), Number(args[2]) < 0 ? undefined : Number(args[2]) + 1);
   }
+  if (name === "LINDEX") {
+    const target = lists.get(args[0]) || [];
+    const index = Number(args[1]);
+    return target[index < 0 ? target.length + index : index] ?? null;
+  }
   if (name === "ZADD") {
     sortedSet(args[0]).set(args[2], Number(args[1]));
     return 1;
   }
   if (name === "ZREM") return sortedSet(args[0]).delete(args[1]) ? 1 : 0;
+  if (name === "ZREMRANGEBYRANK") {
+    const target = sortedSet(args[0]);
+    const entries = sortedEntries(args[0]);
+    const start = Number(args[1]);
+    const rawStop = Number(args[2]);
+    const stop = rawStop < 0 ? entries.length + rawStop : rawStop;
+    let removed = 0;
+    entries.slice(Math.max(0, start), Math.max(0, stop + 1)).forEach(([member]) => {
+      if (target.delete(member)) removed += 1;
+    });
+    return removed;
+  }
   if (name === "ZCARD") return sortedSet(args[0]).size;
+  if (name === "ZSCORE") {
+    const score = sortedSet(args[0]).get(args[1]);
+    return score == null ? null : String(score);
+  }
   if (name === "ZCOUNT") {
     const min = args[1] === "-inf" ? -Infinity : Number(args[1]);
     const max = args[2] === "+inf" ? Infinity : Number(args[2]);
@@ -292,6 +331,13 @@ globalThis.fetch = async (input, options = {}) => {
           : { result: execute(command) }
       )));
     }
+    if (redisFaultMode === "health_history_outage"
+      && commands[0]?.[0] === "LRANGE"
+      && String(commands[0]?.[1] || "").startsWith("lm:health:history:v1:")) {
+      return Response.json(commands.map((command, index) => (
+        index === 0 ? { result: null } : { result: execute(command) }
+      )));
+    }
     return Response.json(commands.map((command) => ({ result: execute(command) })));
   }
   const command = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
@@ -306,6 +352,18 @@ globalThis.fetch = async (input, options = {}) => {
     execute(command);
     return Response.json({ result: null });
   }
+  if (["incident_create_response_lost", "incident_create_response_lost_bad_event"].includes(redisFaultMode)
+      && command[0] === "EVAL" && String(command[1] || "").includes("incident_id_conflict")
+      && String(command[1] || "").includes("fingerprint_conflict")) {
+    const fault = redisFaultMode;
+    execute(command);
+    redisFaultMode = "";
+    if (fault === "incident_create_response_lost_bad_event") {
+      const events = lists.get(command[6]) || [];
+      if (events.length) events[0] = JSON.stringify({ ...parseJson(events[0]), id: "IE-WRONG-EVENT" });
+    }
+    return Response.json({ result: null });
+  }
   if (partialPushStats && command[0] === "HLEN" && command[1] === "lm:push:subscriptions:v1") {
     return Response.json({ result: null });
   }
@@ -316,6 +374,7 @@ const utils = await import("../app/api/_utils.js");
 const incidents = await import("../app/api/_incidents.js");
 const observability = await import("../app/api/_observability.js");
 const jobsModule = await import("../app/api/_job-runner.js");
+const healthModule = await import("../app/api/_health.js");
 const durable = await import("../app/api/_durable-operation.js");
 const metricsRoute = await import("../app/api/admin/health/metrics/route.js");
 const jobsRoute = await import("../app/api/admin/health/jobs/route.js");
@@ -479,7 +538,7 @@ test("health overview derives Push state from PUSH_ENABLED and complete server c
   }
 });
 
-test("health overview and jobs route reject corrupt Redis records", async () => {
+test("health overview degrades corrupt component records while strict stores still fail", async () => {
   const settingsKey = "lm:settings";
   const hadSettings = strings.has(settingsKey);
   const previousSettings = strings.get(settingsKey);
@@ -498,8 +557,16 @@ test("health overview and jobs route reject corrupt Redis records", async () => 
     else strings.delete(settingsKey);
     strings.set(apiHealthKey, JSON.stringify({}));
     response = await healthRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health"));
-    assert.equal(response.status, 503);
-    assert.equal((await response.json()).error, "health_status_store_corrupt");
+    assert.equal(response.status, 200);
+    const healthPayload = await response.json();
+    const apiComponent = healthPayload.components.find((component) => component.component === "api");
+    assert.equal(apiComponent.status, "warning");
+    assert.equal(apiComponent.error, "health_status_record_corrupt");
+    assert.deepEqual(healthPayload.statusDiagnostics, [{
+      component: "api",
+      code: "health_status_record_corrupt",
+      corruptRecords: 1,
+    }]);
 
     if (hadApiHealth) strings.set(apiHealthKey, previousApiHealth);
     else strings.delete(apiHealthKey);
@@ -514,6 +581,53 @@ test("health overview and jobs route reject corrupt Redis records", async () => 
     else strings.delete(apiHealthKey);
     if (previousJob == null) jobs.delete("order_transition");
     else jobs.set("order_transition", previousJob);
+  }
+});
+
+test("health overview skips isolated corrupt history records and reports the degradation", async () => {
+  const key = "lm:health:history:v1:api";
+  const previous = lists.has(key) ? [...lists.get(key)] : null;
+  const valid = {
+    component: "api",
+    status: "ok",
+    summary: "valid historical sample",
+    metrics: { requests: 12 },
+    checkedAt: "2026-08-04T01:00:00.000Z",
+  };
+  try {
+    lists.set(key, [
+      "",
+      "{not-json",
+      JSON.stringify(valid),
+      JSON.stringify({ ...valid, component: "redis" }),
+    ]);
+    const response = await healthRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health"));
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.history.api, [valid]);
+    assert.deepEqual(payload.historyDiagnostics, [{
+      component: "api",
+      code: "health_history_record_corrupt",
+      corruptRecords: 3,
+    }]);
+    await assert.rejects(
+      () => healthModule.readAllHealthHistory(12),
+      (error) => error?.code === "health_history_store_corrupt",
+    );
+  } finally {
+    if (previous) lists.set(key, previous);
+    else lists.delete(key);
+  }
+});
+
+test("health history storage outages still fail closed", async () => {
+  redisFaultMode = "health_history_outage";
+  try {
+    const response = await healthRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health"));
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error, "health_history_store_unavailable");
+  } finally {
+    redisFaultMode = "";
   }
 });
 
@@ -558,6 +672,40 @@ test("incident PATCH is permanently idempotent and exposes investigating events"
   assert.equal(detailPayload.events.some((event) => event.detail?.operationId), true);
 });
 
+test("incident creation recovers only after a lost response proves every committed artifact", async () => {
+  redisFaultMode = "incident_create_response_lost";
+  try {
+    const created = await incidents.openOrUpdateIncident({
+      fingerprint: "route:test:create-response-lost",
+      component: "redis",
+      title: "create response lost",
+    });
+    assert.equal(created.ok, true);
+    assert.equal(created.created, true);
+    assert.equal(created.recovered, true);
+    assert.equal((await incidents.getIncident(created.record.id)).id, created.record.id);
+    const events = await incidents.incidentEvents(created.record.id);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].type, "opened");
+  } finally {
+    redisFaultMode = "";
+  }
+});
+
+test("incident creation does not recover a partial or mismatched response-loss commit", async () => {
+  redisFaultMode = "incident_create_response_lost_bad_event";
+  try {
+    const result = await incidents.openOrUpdateIncident({
+      fingerprint: "route:test:create-response-lost-bad-event",
+      component: "redis",
+      title: "create response lost bad event",
+    });
+    assert.deepEqual(result, { ok: false, error: "storage_unavailable" });
+  } finally {
+    redisFaultMode = "";
+  }
+});
+
 test("a failed second durable claim releases the original operation lock", async () => {
   const created = await incidents.openOrUpdateIncident({
     fingerprint: "route:test:second-claim",
@@ -578,7 +726,7 @@ test("a failed second durable claim releases the original operation lock", async
   assert.equal((await recovered.json()).incident.status, "acknowledged");
 });
 
-test("incident detail/list outages and corrupt records are 503 rather than 404/empty", async () => {
+test("incident storage outages stay 503 while corrupt derived records degrade without locking the panel", async () => {
   const created = await incidents.openOrUpdateIncident({
     fingerprint: "route:test:strict-incident-reads",
     component: "redis",
@@ -607,11 +755,66 @@ test("incident detail/list outages and corrupt records are 503 rather than 404/e
       adminRequest(`https://www.liumeiti.vip/api/admin/health/incidents/${id}`),
       { params: Promise.resolve({ id }) },
     );
-    assert.equal(response.status, 503);
-    assert.equal((await response.json()).error, "incident_record_corrupt");
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).error, "incident_not_found");
+
+    response = await incidentsRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health/incidents"));
+    assert.equal(response.status, 200);
+    const list = await response.json();
+    assert.equal(list.ok, true);
+    assert.equal(list.diagnostics.corruptCount >= 1, true);
+
+    strings.set(key, "");
+    response = await incidentsRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health/incidents"));
+    assert.equal(response.status, 200);
+    const emptyList = await response.json();
+    assert.equal(emptyList.ok, true);
+    assert.equal(emptyList.diagnostics.corruptCount >= 1, true);
+    assert.equal(emptyList.incidents.some((incident) => incident == null), false);
   } finally {
     redisFaultMode = "";
     strings.set(key, raw);
+  }
+});
+
+test("incident event history skips corrupt rows but keeps healthy events", async () => {
+  const created = await incidents.openOrUpdateIncident({
+    fingerprint: "route:test:corrupt-event-degrade",
+    component: "scheduler",
+    title: "corrupt event degradation",
+  });
+  const id = created.record.id;
+  const key = `lm:incident:events:v1:${id}`;
+  const healthy = [...(lists.get(key) || [])];
+  lists.set(key, ["{broken", ...healthy]);
+  try {
+    const response = await incidentRoute.GET(
+      adminRequest(`https://www.liumeiti.vip/api/admin/health/incidents/${id}`),
+      { params: Promise.resolve({ id }) },
+    );
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.events.length, healthy.length);
+    assert.equal(body.events.every((event) => event.id && event.type), true);
+  } finally {
+    lists.set(key, healthy);
+  }
+});
+
+test("a corrupt fingerprint target is released so monitoring can create a healthy replacement", async () => {
+  const fingerprint = "route:test:corrupt-fingerprint-target";
+  const created = await incidents.openOrUpdateIncident({ fingerprint, component: "redis", title: "first lifecycle" });
+  const oldKey = `lm:incident:record:v1:${created.record.id}`;
+  const oldRaw = strings.get(oldKey);
+  strings.set(oldKey, "{broken");
+  try {
+    const replacement = await incidents.openOrUpdateIncident({ fingerprint, component: "redis", title: "replacement lifecycle" });
+    assert.equal(replacement.ok, true);
+    assert.equal(replacement.created, true);
+    assert.notEqual(replacement.record.id, created.record.id);
+    assert.equal((await incidents.getIncident(replacement.record.id)).id, replacement.record.id);
+  } finally {
+    strings.set(oldKey, oldRaw);
   }
 });
 
@@ -733,6 +936,68 @@ test("resolved fingerprints create a new incident and old reopen cannot steal it
   assert.equal((await incidents.getIncident(created.record.id)).status, "resolved");
 });
 
+test("runObservedJob persists every malformed handler result as failed and only an explicit disabled result as disabled", async () => {
+  const malformed = [undefined, {}, [], null, { ok: "false" }];
+  for (let index = 0; index < malformed.length; index += 1) {
+    const job = `adversarial_result_${index}`;
+    const result = await jobsModule.runObservedJob(job, { trigger: "adversarial-test" }, async () => malformed[index]);
+    assert.equal(result.ok, false, `shape ${index} must fail`);
+    assert.equal(result.error, "invalid_job_result", `shape ${index} must use the stable error code`);
+    assert.equal(result.run.status, "failed", `shape ${index} must return a failed run`);
+    const persisted = JSON.parse(hash(jobsModule.jobRunnerInternals.JOB_LAST_KEY).get(job) || "null");
+    assert.equal(persisted?.status, "failed", `shape ${index} must persist failed`);
+    assert.equal(persisted?.errorCode, "invalid_job_result");
+  }
+
+  const disabled = await jobsModule.runObservedJob(
+    "adversarial_disabled",
+    { trigger: "adversarial-test" },
+    async () => ({ ok: true, disabled: true }),
+  );
+  assert.equal(disabled.ok, true);
+  assert.equal(disabled.run.status, "disabled");
+  assert.equal(
+    JSON.parse(hash(jobsModule.jobRunnerInternals.JOB_LAST_KEY).get("adversarial_disabled") || "null")?.status,
+    "disabled",
+  );
+});
+
+test("an incident key or index entry cannot transition a record whose body belongs to another incident", async () => {
+  const first = await incidents.openOrUpdateIncident({
+    fingerprint: "route:test:identity-first",
+    component: "redis",
+    title: "identity first",
+  });
+  const second = await incidents.openOrUpdateIncident({
+    fingerprint: "route:test:identity-second",
+    component: "redis",
+    title: "identity second",
+  });
+  assert.equal(first.ok, true);
+  assert.equal(second.ok, true);
+  const firstKey = `lm:incident:record:v1:${first.record.id}`;
+  const secondKey = `lm:incident:record:v1:${second.record.id}`;
+  const firstRaw = strings.get(firstKey);
+  const secondRaw = strings.get(secondKey);
+  strings.set(firstKey, secondRaw);
+  try {
+    const result = await incidents.transitionIncident(first.record.id, {
+      action: "acknowledge",
+      expectedVersion: second.record.version,
+    }, { staffId: 1, staffUsername: "root-admin" });
+    assert.equal(result.ok, false);
+    assert.equal(strings.get(firstKey), secondRaw, "the corrupt keyed value must not be rewritten");
+    assert.equal(strings.get(secondKey), secondRaw, "the real second incident must remain byte-identical");
+
+    const listed = await incidents.listIncidents({ limit: 100 });
+    assert.equal(listed.incidents.some((record) => record.id === first.record.id), false);
+    assert.equal(listed.incidents.filter((record) => record.id === second.record.id).length, 1);
+    assert.equal(strings.get(secondKey), secondRaw);
+  } finally {
+    strings.set(firstKey, firstRaw);
+  }
+});
+
 test("partial queue sampling fails closed without overwriting the last snapshot", async () => {
   execute(["HSET", "lm:ops:queue:last:v1", "order_transitions", JSON.stringify({
     name: "order_transitions",
@@ -844,7 +1109,7 @@ test("trace route resolves either an order id or its strict business Trace mappi
   assert.equal((await missing.json()).error, "trace_not_found");
 });
 
-test("trace route never turns order/trace storage outages or corruption into 404/empty history", async () => {
+test("trace route keeps canonical order corruption fail-closed but skips corrupt derived trace events", async () => {
   const orderId = "LMTRACEFAILCLOSED2026";
   const orderKey = `liumeiti:orders:record:${orderId}`;
   const traceKey = `lm:trace:order:v1:${orderId}`;
@@ -875,8 +1140,10 @@ test("trace route never turns order/trace storage outages or corruption into 404
     strings.set(orderKey, orderRaw);
     lists.set(traceKey, [JSON.stringify({})]);
     response = await request();
-    assert.equal(response.status, 503);
-    assert.equal((await response.json()).error, "trace_store_corrupt");
+    assert.equal(response.status, 200);
+    const degraded = await response.json();
+    assert.deepEqual(degraded.events, []);
+    assert.equal(degraded.corruptCount, 1);
   } finally {
     redisFaultMode = "";
     strings.set(orderKey, orderRaw);
@@ -1042,5 +1309,95 @@ test("telemetry writers reject a successful HTTP pipeline with a failed Redis ro
     );
   } finally {
     telemetryPipelineErrorAt = -1;
+  }
+});
+
+test("preview QA cannot write production telemetry while production keeps the established keys", async () => {
+  const previousEnvironment = process.env.VERCEL_ENV;
+  const at = Date.parse("2031-04-05T06:07:08.000Z");
+  const apiFiveKey = `lm:obs:api:5m:v1:${Math.floor(at / 300_000) * 300_000}`;
+  const depFiveKey = `lm:obs:dep:5m:v1:${Math.floor(at / 300_000) * 300_000}`;
+  hashes.delete(apiFiveKey);
+  hashes.delete(depFiveKey);
+  strings.delete("lm:health:catalog");
+  lists.delete("lm:health:history:v1:catalog");
+  const queueWritesBefore = queueSnapshotWrites;
+  try {
+    process.env.VERCEL_ENV = "preview";
+    assert.equal(await observability.recordApiMetric("auth_login", { status: 503, durationMs: 25, at }), true);
+    assert.equal(await observability.recordDependencyMetric("redis_ping", { status: 503, durationMs: 10, at }), true);
+    const previewHealth = await healthModule.recordHealthStatus("catalog", {
+      status: "error",
+      summary: "preview-only failure",
+      error: "preview_qa",
+    });
+    const previewQueues = await observability.sampleOperationalQueues({ now: at });
+    assert.equal(previewHealth?.error, "preview_qa");
+    assert.equal(Array.isArray(previewQueues), true);
+    assert.equal(hashes.has(apiFiveKey), false);
+    assert.equal(hashes.has(depFiveKey), false);
+    assert.equal(strings.has("lm:health:catalog"), false);
+    assert.equal(lists.has("lm:health:history:v1:catalog"), false);
+    assert.equal(queueSnapshotWrites, queueWritesBefore);
+
+    process.env.VERCEL_ENV = "production";
+    assert.equal(await observability.recordApiMetric("auth_login", { status: 200, durationMs: 12, at }), true);
+    assert.equal(await observability.recordDependencyMetric("redis_ping", { status: 200, durationMs: 8, at }), true);
+    assert.equal(hash(apiFiveKey).get("all:requests"), "1");
+    assert.equal(hash(apiFiveKey).get("all:status_2xx"), "1");
+    assert.equal(hash(depFiveKey).get("all:requests"), "1");
+    assert.equal(hash(depFiveKey).get("all:status_2xx"), "1");
+    const productionHealth = await healthModule.recordHealthStatus("catalog", {
+      status: "ok",
+      summary: "production health sample",
+    });
+    assert.equal(productionHealth?.status, "ok");
+    assert.equal(parseJson(strings.get("lm:health:catalog"))?.summary, "production health sample");
+    assert.equal(lists.get("lm:health:history:v1:catalog")?.length, 1);
+    await observability.sampleOperationalQueues({ now: at + 1 });
+    assert.ok(queueSnapshotWrites > queueWritesBefore);
+  } finally {
+    if (previousEnvironment == null) delete process.env.VERCEL_ENV;
+    else process.env.VERCEL_ENV = previousEnvironment;
+  }
+});
+
+test("health CAS preserves top-level history when metrics reuse the same field names", async () => {
+  const previousEnv = process.env.VERCEL_ENV;
+  const key = "lm:health:catalog";
+  const historyKey = "lm:health:history:v1:catalog";
+  const previousValue = strings.get(key);
+  const previousHistory = lists.get(historyKey);
+  process.env.VERCEL_ENV = "production";
+  strings.set(key, JSON.stringify({
+    component: "catalog",
+    status: "ok",
+    checkedAt: "2026-08-03T00:00:00.000Z",
+    lastSuccessAt: "2026-08-03T00:00:00.000Z",
+    lastSuccessAtBeijing: "2026-08-03 08:00:00",
+    lastFailureAt: "2026-08-02T00:00:00.000Z",
+    lastFailureAtBeijing: "2026-08-02 08:00:00",
+    metrics: { lastSuccessAt: "legacy-metric" },
+  }));
+  try {
+    const saved = await healthModule.recordHealthStatus("catalog", {
+      status: "warning",
+      summary: "adversarial metric names",
+      metrics: {
+        lastSuccessAt: "",
+        lastSuccessAtBeijing: "",
+        lastFailureAt: "",
+        lastFailureAtBeijing: "",
+      },
+    });
+    assert.equal(saved.lastSuccessAt, "2026-08-03T00:00:00.000Z");
+    assert.equal(saved.lastSuccessAtBeijing, "2026-08-03 08:00:00");
+    assert.equal(saved.lastFailureAt, "2026-08-02T00:00:00.000Z");
+    assert.equal(saved.metrics.lastSuccessAt, "");
+    assert.equal(saved.metrics.lastFailureAt, "");
+  } finally {
+    if (previousValue == null) strings.delete(key); else strings.set(key, previousValue);
+    if (previousHistory == null) lists.delete(historyKey); else lists.set(historyKey, previousHistory);
+    if (previousEnv == null) delete process.env.VERCEL_ENV; else process.env.VERCEL_ENV = previousEnv;
   }
 });

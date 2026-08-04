@@ -36,7 +36,7 @@ export async function POST(request) {
   if (!result.ok) {
     const status = ["storage_unavailable", "storage_failed"].includes(result.error)
       ? 503
-      : (result.error === "invalid_token" ? 400 : 404);
+      : (result.error === "contact_repair_required" ? 409 : (result.error === "invalid_token" ? 400 : 404));
     return Response.json({ ok: false, error: result.error, retryable: Boolean(result.retryable) }, { status, headers: noStore });
   }
   return Response.json({ ok: true, unsubscribed: true }, { headers: noStore });

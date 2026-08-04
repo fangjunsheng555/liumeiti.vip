@@ -314,7 +314,7 @@ test("archive idempotency survives staff changes and still binds key to payload"
     assert.deepEqual(JSON.parse(redis.values.get(RECORD_PREFIX + "WD-RETRY")).actor, firstActor);
     assert.deepEqual(JSON.parse(redis.values.get(RECORD_PREFIX + "WD-OTHER")).actor, retryActor);
   });
-  assert.equal(redis.evalCalls, 4);
+  assert.equal(redis.evalCalls, 2, "durable retries resolve before rereading or mutating business records");
   assert.equal(Array.from(redis.values.keys())
     .filter((key) => key.startsWith("liumeiti:admin:operation:withdrawal-archive:"))
     .length, 2);
@@ -465,8 +465,32 @@ test("real Redis executes durable withdrawal archive and target-state retry", {
     }
     assert.equal(ready, true, "Redis container did not become ready");
     const redis = realRedisFetch(container);
+    const missing = await withRedis({ fetch: redis.fetch }, () => utils.deleteWithdrawals(
+      ["WD-REAL-MISSING"],
+      { staffId: 10, staffUsername: "owner-preflight" },
+      { operationId: "withdrawal-real-missing-001" },
+    ));
+    assert.equal(missing.ok, false);
+    assert.equal(missing.error, "withdrawal_not_found");
+
+    const activeRaw = record("WD-REAL-ACTIVE", "pending", { revision: 1 })[1];
+    redis.run(["RPUSH", LIST_KEY, "WD-REAL-ACTIVE"]);
+    redis.run(["SET", RECORD_PREFIX + "WD-REAL-ACTIVE", activeRaw]);
+    const active = await withRedis({ fetch: redis.fetch }, () => utils.deleteWithdrawals(
+      ["WD-REAL-ACTIVE"],
+      { staffId: 10, staffUsername: "owner-preflight" },
+      { operationId: "withdrawal-real-active-001" },
+    ));
+    assert.equal(active.ok, false);
+    assert.equal(active.error, "withdrawal_active");
+    assert.equal(redis.run(["GET", RECORD_PREFIX + "WD-REAL-ACTIVE"]), activeRaw);
+    redis.run(["LREM", LIST_KEY, "0", "WD-REAL-ACTIVE"]);
+    redis.run(["DEL", RECORD_PREFIX + "WD-REAL-ACTIVE"]);
+
     redis.run(["RPUSH", LIST_KEY, "WD-REAL-A", "WD-REAL-B", "WD-REAL-C"]);
-    redis.run(["SET", RECORD_PREFIX + "WD-REAL-A", record("WD-REAL-A", "success", { revision: 2 })[1]]);
+    const losslessWithdrawalRaw = record("WD-REAL-A", "success", { revision: 2, legacyRows: [], legacyNull: null })[1]
+      .replace(/}$/, ',"legacyHuge":123456789012345678901234567890}');
+    redis.run(["SET", RECORD_PREFIX + "WD-REAL-A", losslessWithdrawalRaw]);
     redis.run(["SET", RECORD_PREFIX + "WD-REAL-B", record("WD-REAL-B", "failed", { revision: 8 })[1]]);
     redis.run(["SET", RECORD_PREFIX + "WD-REAL-C", record("WD-REAL-C", "success", { revision: 4 })[1]]);
 
@@ -481,7 +505,11 @@ test("real Redis executes durable withdrawal archive and target-state retry", {
     assert.equal(first.ok, true);
     assert.deepEqual(first.archivedIds, ["WD-REAL-A", "WD-REAL-B"]);
     assert.deepEqual(redis.run(["LRANGE", LIST_KEY, "0", "-1"]), ["WD-REAL-C"]);
-    assert.equal(JSON.parse(redis.run(["GET", RECORD_PREFIX + "WD-REAL-A"])).revision, 3);
+    const archivedLosslessRaw = redis.run(["GET", RECORD_PREFIX + "WD-REAL-A"]);
+    assert.equal(JSON.parse(archivedLosslessRaw).revision, 3);
+    assert.match(archivedLosslessRaw, /"legacyRows":\[\]/);
+    assert.match(archivedLosslessRaw, /"legacyNull":null/);
+    assert.match(archivedLosslessRaw, /"legacyHuge":123456789012345678901234567890/);
     assert.equal(JSON.parse(redis.run(["GET", RECORD_PREFIX + "WD-REAL-B"])).revision, 9);
     assert.deepEqual(JSON.parse(redis.run(["GET", RECORD_PREFIX + "WD-REAL-A"])).actor, firstActor);
     const operationKeys = redis.run(["KEYS", "liumeiti:admin:operation:withdrawal-archive:*"]);

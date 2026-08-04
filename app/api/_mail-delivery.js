@@ -95,7 +95,7 @@ function checkedPipelineRows(response, expectedLength) {
 
 function normalizeRecipients(value) {
   return Array.from(new Set((Array.isArray(value) ? value : [value])
-    .map((item) => clean(item, 200).toLowerCase())
+    .map((item) => String(item || "").trim().toLowerCase())
     .filter(validEmail)))
     .slice(0, 50);
 }
@@ -108,7 +108,7 @@ function normalizedCategory(value, marketing = false) {
 }
 
 function deliveryRecoveryFingerprint(record) {
-  const recipient = clean(record?.to || record?.recipients?.[0] || "", 200).toLowerCase();
+  const recipient = normalizeRecipients(record?.to || record?.recipients?.[0] || "")[0] || "";
   const subject = clean(record?.subject || "", 180).toLowerCase();
   if (!recipient || !subject) return "";
   return [
@@ -198,7 +198,7 @@ async function readRecordByMessageId(messageId) {
   const storedRows = checkedPipelineRows(stored, 1);
   if (!storedRows) return { ok: false, error: "storage_failed", record: null };
   const record = storedRows[0] == null ? null : parseJson(storedRows[0]);
-  if (storedRows[0] != null && (!record || typeof record !== "object" || Array.isArray(record))) {
+  if (storedRows[0] != null && (!record || typeof record !== "object" || Array.isArray(record) || clean(record.id, 120) !== id || ![record.messageId, record.providerMessageId].map(canonicalMessageId).includes(safeMessageId))) {
     return { ok: false, error: "storage_failed", record: null };
   }
   return { ok: true, record };
@@ -308,16 +308,20 @@ async function applyRecipientFeedback(record, item) {
 }
 
 export async function registerEmailDelivery({ args = {}, result = {} } = {}) {
-  const now = new Date();
+  const now = new Date(), resultValid = Boolean(result && typeof result === "object" && !Array.isArray(result) && typeof result.ok === "boolean");
   const messageId = canonicalMessageId(result?.messageId);
   const existingRead = messageId ? await readRecordByMessageId(messageId) : { ok: true, record: null };
   if (!existingRead.ok) return null;
   const existing = existingRead.record;
   const recipients = normalizeRecipients(args.to);
-  const requestedStatus = DELIVERY_STATUSES.includes(result?.status) ? result.status : "";
-  const status = requestedStatus || (result?.ok ? (result?.scheduled ? "scheduled" : "sent") : "failed");
+  if (!recipients.length && !existing?.recipients?.length) return null;
+  const requestedStatus = resultValid && DELIVERY_STATUSES.includes(result?.status) ? result.status : "";
+  const positiveStatus = ["scheduled", "sent", "delivered", "recovered"].includes(requestedStatus);
+  const status = requestedStatus && (!positiveStatus || result.ok === true)
+    ? requestedStatus
+    : (resultValid && result.ok === true ? (result?.scheduled ? "scheduled" : "sent") : "failed");
   const fallbackError = clean(result?.fallbackError || "", 260);
-  const sendError = clean(result?.error || result?.reason || "send_failed", 260);
+  const sendError = clean(resultValid ? (result?.error || result?.reason || "send_failed") : "invalid_delivery_result", 260);
   const fallbackLabel = result?.fallbackProvider === "brevo"
     ? "Brevo"
     : (result?.fallbackProvider === "smtp2go" ? "历史 SMTP2GO" : "备用 SMTP");
@@ -343,7 +347,7 @@ export async function registerEmailDelivery({ args = {}, result = {} } = {}) {
     relatedType: clean(args.relatedType || existing?.relatedType || "", 40),
     relatedId: clean(args.relatedId || existing?.relatedId || "", 120),
     status: result?.forceStatus ? status : nextStatus(existing?.status, status),
-    reason: result?.ok ? (existing?.reason || "") : failureReason,
+    reason: resultValid && result.ok === true ? (existing?.reason || "") : failureReason,
     attempt: Number(result?.attempt || 1),
     events: Array.isArray(existing?.events) ? existing.events.slice(-MAX_EVENTS) : [],
     createdAt: existing?.createdAt || now.toISOString(),
@@ -618,7 +622,8 @@ export function verifyResendWebhookSignature({ payload, id, timestamp, signature
 
 export async function applyResendWebhookEvent(event, eventId) {
   const safeEventId = clean(eventId, 160);
-  if (!safeEventId || !String(event?.type || "").startsWith("email.")) return { ok: true, ignored: true };
+  const incoming = EVENT_STATUS[event?.type] || "";
+  if (!safeEventId || !String(event?.type || "").startsWith("email.") || !incoming) return { ok: true, ignored: true };
   const lockKey = DELIVERY_EVENT_PREFIX + safeEventId;
   const lease = await acquireEventLease(lockKey);
   if (lease.duplicate) return { ok: true, duplicate: true };
@@ -629,7 +634,6 @@ export async function applyResendWebhookEvent(event, eventId) {
     if (!lookup.ok) throw new Error("delivery_lookup_failed");
     let record = lookup.record;
     const now = new Date();
-    const incoming = EVENT_STATUS[event.type] || "";
     const tags = event?.data?.tags && typeof event.data.tags === "object" ? event.data.tags : {};
     const recipients = normalizeRecipients(event?.data?.to);
     const item = eventItem(event, safeEventId);

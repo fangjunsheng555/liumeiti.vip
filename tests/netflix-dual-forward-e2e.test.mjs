@@ -508,6 +508,34 @@ test("dual forward E2E: a current matching SRC wins over a different quoted hist
   assert.equal(selectedValue([settings, failedRule]), "4827");
 });
 
+test("dual forward E2E: current HTML SRC fills a missing plain-text SRC without reading quoted HTML", async () => {
+  const settings = await parsedRecord(settingsForward(SETTINGS_A), {
+    receivedAt: BASE, eventId: "html-fallback-settings", sequence: 217, envelopeFrom: "info@account.netflix.com",
+  });
+  const plain = [
+    "Forwarded message", "From: Netflix <info@account.netflix.com>", `To: ${ACCOUNT}`,
+    "Subject: Netflix: Your sign-in code", "Netflix could not display a supported sign-in code in this message.",
+  ].join("\n");
+  const currentHtml = `<html><body><p>Forwarded message</p><p>From: Netflix &lt;info@account.netflix.com&gt;</p><p>Netflix could not display a supported sign-in code.</p><p>SRC: current_${SRC_A}_en</p></body></html>`;
+  const quotedHtml = `<html><body><p>Forwarded message</p><p>From: Netflix &lt;info@account.netflix.com&gt;</p><p>Netflix could not display a supported sign-in code.</p><div id="divRplyFwdMsg"><p>SRC: old_${SRC_A}_en</p></div></body></html>`;
+  const headers = [
+    `From: ${ACCOUNT}`, `To: ${INBOX}`, "Subject: Fwd: Netflix", "Message-ID: <html-fallback-rule@outlook.com>",
+    "Date: Tue, 4 Aug 2026 04:22:30 +0000",
+  ];
+  const currentRule = await parsedRecord(alternativeMime({ headers, text: plain, html: currentHtml }), {
+    receivedAt: BASE + 30_000, eventId: "html-fallback-current", sequence: 218, envelopeFrom: ACCOUNT,
+  });
+  const quotedRule = await parsedRecord(alternativeMime({
+    headers: headers.map((line) => line.replace("html-fallback-rule", "html-quoted-rule")), text: plain, html: quotedHtml,
+  }), { receivedAt: BASE + 30_000, eventId: "html-fallback-quoted", sequence: 219, envelopeFrom: ACCOUNT });
+  assert.equal(currentRule.parsed.deliveryFingerprint, settings.parsed.deliveryFingerprint);
+  assert.equal(currentRule.parsed.deliveryFingerprintFromCurrent, true);
+  assert.equal(selectedValue([settings, currentRule]), "4827");
+  assert.equal(quotedRule.parsed.deliveryFingerprint, "");
+  assert.equal(quotedRule.parsed.deliveryFingerprintFromCurrent, false);
+  assert.equal(selectedValue([settings, quotedRule]), "");
+});
+
 test("dual forward E2E: different current SRC values remain a hard rejection", async () => {
   const settings = await parsedRecord(settingsForward(SETTINGS_A), {
     receivedAt: BASE,
@@ -640,6 +668,54 @@ test("dual forward E2E: a standalone Z timezone is portable", async () => {
   assert.equal(row.parsed.requestSentAtPortable, true);
 });
 
+test("dual forward E2E: an impossible numeric timezone never participates in cross-copy ordering", () => {
+  const raw = ruleForward({
+    ...RULE_A,
+    wrapperMessageId: "<invalid-offset@outlook.com>",
+    includeIdentityHeaders: false,
+    sentLine: "Sent: Tue, 4 Aug 2026 04:22:00 +2500",
+  });
+  const envelope = { from: ACCOUNT, to: INBOX, inboxAddress: INBOX, receivedAt: new Date(BASE).toISOString() };
+  for (const timezone of ["UTC", "Asia/Shanghai"]) {
+    const parsed = parseInTimezone(raw, envelope, timezone);
+    assert.equal(parsed.accepted, true);
+    assert.equal(parsed.requestSentAt, "");
+    assert.equal(parsed.requestSentAtPortable, false);
+  }
+});
+
+test("dual forward E2E: hyphens inside a local date never impersonate a numeric timezone", () => {
+  const raw = ruleForward({
+    ...RULE_A, wrapperMessageId: "<hyphenated-local-date@outlook.com>", includeIdentityHeaders: false,
+    sentLine: "Sent: 08-04-2026 04:22",
+  });
+  const envelope = { from: ACCOUNT, to: INBOX, inboxAddress: INBOX, receivedAt: new Date(BASE).toISOString() };
+  const parsedRows = ["UTC", "Asia/Shanghai"].map((timezone) => parseInTimezone(raw, envelope, timezone));
+  for (const parsed of parsedRows) {
+    assert.equal(parsed.requestSentAt, "");
+    assert.equal(parsed.requestSentAtPortable, false);
+  }
+  assert.deepEqual(parsedRows[0], parsedRows[1]);
+});
+
+test("dual forward E2E: RFC unknown -0000 is non-portable while +0000 remains UTC", () => {
+  const envelope = { from: ACCOUNT, to: INBOX, inboxAddress: INBOX, receivedAt: new Date(BASE).toISOString() };
+  for (const timezone of ["UTC", "Asia/Shanghai"]) {
+    const unknown = parseInTimezone(ruleForward({
+      ...RULE_A, wrapperMessageId: "<unknown-zone@outlook.com>", includeIdentityHeaders: false,
+      sentLine: "Sent: Tue, 4 Aug 2026 04:22:00 -0000",
+    }), envelope, timezone);
+    const utc = parseInTimezone(ruleForward({
+      ...RULE_A, wrapperMessageId: "<known-zone@outlook.com>", includeIdentityHeaders: false,
+      sentLine: "Sent: Tue, 4 Aug 2026 04:22:00 +0000",
+    }), envelope, timezone);
+    assert.equal(unknown.requestSentAt, "");
+    assert.equal(unknown.requestSentAtPortable, false);
+    assert.equal(utc.requestSentAt, "2026-08-04T04:22:00.000Z");
+    assert.equal(utc.requestSentAtPortable, true);
+  }
+});
+
 test("dual forward E2E: unzoned forwarded time has identical ordering in UTC and Asia/Shanghai", () => {
   const unzonedRaw = ruleForward({
     ...RULE_A,
@@ -704,4 +780,370 @@ test("dual forward E2E: structured MIME Date is also timezone-independent", () =
     assert.equal(result.explicit.requestSentAt, "2026-08-04T04:22:00.000Z");
     assert.equal(result.explicit.requestSentAtPortable, true);
   }
+});
+
+test("convergence round 1: localized unzoned forwarded dates stay non-portable in every runtime", async (t) => {
+  const localizedLines = [
+    ["Chinese full-width sent", "发送时间： Tuesday, August 4, 2026 4:22 AM"],
+    ["Chinese full-width date", "日期： Tuesday, August 4, 2026 4:22 AM"],
+    ["Japanese full-width sent", "送信日時： Tuesday, August 4, 2026 4:22 AM"],
+    ["Spanish sent", "Enviado: Tuesday, August 4, 2026 4:22 AM"],
+    ["German full-width sent", "Gesendet： Tuesday, August 4, 2026 4:22 AM"],
+    ["French sent", "Envoyé: Tuesday, August 4, 2026 4:22 AM"],
+  ];
+  for (const [label, sentLine] of localizedLines) {
+    await t.test(label, () => {
+      const raw = ruleForward({
+        ...RULE_A,
+        wrapperMessageId: `<round-one-${Buffer.from(label).toString("hex")}@outlook.com>`,
+        includeIdentityHeaders: false,
+        sentLine,
+      });
+      const envelope = {
+        from: ACCOUNT,
+        to: INBOX,
+        inboxAddress: INBOX,
+        receivedAt: new Date(BASE).toISOString(),
+      };
+      const parsedByTimezone = ["UTC", "Asia/Shanghai"].map((timezone) => parseInTimezone(raw, envelope, timezone));
+      for (const parsed of parsedByTimezone) {
+        assert.equal(parsed.accepted, true);
+        assert.equal(parsed.kind, "code");
+        assert.equal(parsed.value, "4827");
+        assert.equal(parsed.requestSentAt, "");
+        assert.equal(parsed.requestSentAtPortable, false);
+      }
+      assert.deepEqual(parsedByTimezone[0], parsedByTimezone[1]);
+    });
+  }
+});
+
+test("convergence round 1: a localized full-width label with +0800 is portable", () => {
+  const raw = ruleForward({
+    ...RULE_A,
+    wrapperMessageId: "<round-one-offset@outlook.com>",
+    includeIdentityHeaders: false,
+    sentLine: "日期： Tue, 4 Aug 2026 12:22:00 +0800",
+  });
+  const envelope = {
+    from: ACCOUNT,
+    to: INBOX,
+    inboxAddress: INBOX,
+    receivedAt: new Date(BASE).toISOString(),
+  };
+  const parsedByTimezone = ["UTC", "Asia/Shanghai"].map((timezone) => parseInTimezone(raw, envelope, timezone));
+  for (const parsed of parsedByTimezone) {
+    assert.equal(parsed.requestSentAt, "2026-08-04T04:22:00.000Z");
+    assert.equal(parsed.requestSentAtPortable, true);
+  }
+  assert.deepEqual(parsedByTimezone[0], parsedByTimezone[1]);
+});
+
+test("convergence round 1: matching current SRC is case-insensitive without shared headers", async () => {
+  const settings = await parsedRecord(settingsForward(SETTINGS_A), {
+    receivedAt: BASE,
+    eventId: "round-one-src-settings",
+    sequence: 301,
+    envelopeFrom: "info@account.netflix.com",
+  });
+  const failedRule = await parsedRecord(ruleForward({
+    ...RULE_A,
+    src: SRC_A.toUpperCase(),
+    wrapperMessageId: "<round-one-src-rule@outlook.com>",
+    includeIdentityHeaders: false,
+    parses: false,
+  }), {
+    receivedAt: BASE + 60_000,
+    eventId: "round-one-src-rule",
+    sequence: 302,
+    envelopeFrom: ACCOUNT,
+  });
+
+  assert.deepEqual(settings.parsed.requestEvidence.filter((value) => failedRule.parsed.requestEvidence.includes(value)), []);
+  assert.equal(failedRule.parsed.deliveryFingerprintFromCurrent, true);
+  assert.equal(failedRule.parsed.deliveryFingerprint, settings.parsed.deliveryFingerprint);
+  assert.equal(selectedValue([settings, failedRule]), "4827");
+  assert.equal(selectedValue([failedRule, settings]), "4827");
+});
+
+test("post-fix convergence round 2: Chinese full-width label with colon offset is portable in every runtime", () => {
+  const raw = ruleForward({
+    ...RULE_A, wrapperMessageId: "<round-two-colon-offset@outlook.com>", includeIdentityHeaders: false,
+    sentLine: "寄件日期： Tue, 4 Aug 2026 12:22:00 +08:00",
+  });
+  const envelope = { from: ACCOUNT, to: INBOX, inboxAddress: INBOX, receivedAt: new Date(BASE).toISOString() };
+  const parsedRows = ["UTC", "Asia/Shanghai"].map((timezone) => parseInTimezone(raw, envelope, timezone));
+  for (const parsed of parsedRows) {
+    assert.equal(parsed.requestSentAt, "2026-08-04T04:22:00.000Z");
+    assert.equal(parsed.requestSentAtPortable, true);
+  }
+  assert.deepEqual(parsedRows[0], parsedRows[1]);
+});
+
+test("post-fix convergence round 2: a folded References header bridges the failed Exchange copy", async () => {
+  const settings = await parsedRecord(settingsForward(SETTINGS_A), {
+    receivedAt: BASE, eventId: "round-two-folded-settings", sequence: 410, envelopeFrom: "info@account.netflix.com",
+  });
+  let raw = ruleForward({
+    ...RULE_A, wrapperMessageId: "<round-two-folded-rule@outlook.com>", src: "", parses: false,
+    referenceIds: ["<folded-old@outlook.com>", ORIGINAL_A],
+  });
+  raw = raw
+    .replace(`X-MS-Exchange-Parent-Message-Id: ${ORIGINAL_A}\r\n`, "")
+    .replace(`In-Reply-To: ${ORIGINAL_A}\r\n`, "")
+    .replace(`X-Microsoft-Original-Message-Id: ${ORIGINAL_A}\r\n`, "")
+    .replace(`References: <folded-old@outlook.com> ${ORIGINAL_A}`, `References: <folded-old@outlook.com>\r\n\t${ORIGINAL_A}`);
+  const failedRule = await parsedRecord(raw, {
+    receivedAt: BASE + 60_000, eventId: "round-two-folded-rule", sequence: 411, envelopeFrom: ACCOUNT,
+  });
+  assert.equal(failedRule.parsed.accepted, false);
+  assert.ok(settings.parsed.requestEvidence.some((value) => failedRule.parsed.requestEvidence.includes(value)));
+  assert.equal(selectedValue([settings, failedRule]), "4827");
+  assert.equal(selectedValue([failedRule, settings]), "4827");
+});
+
+test("post-fix convergence round 2: an Outlook HTML quote cannot lend an old SRC or localized time", async () => {
+  const oldSettings = await parsedRecord(settingsForward(SETTINGS_A), {
+    receivedAt: BASE - 30_000, eventId: "round-two-html-old", sequence: 420, envelopeFrom: "info@account.netflix.com",
+  });
+  const html = `<html><body><p>Forwarded message</p><p>From: Netflix &lt;info@account.netflix.com&gt;</p><p>Netflix could not display a supported sign-in code.</p><div id="divRplyFwdMsg"><p>From: Netflix &lt;info@account.netflix.com&gt;</p><p>日期： Tue, 4 Aug 2026 04:22:00 +0000</p><p>SRC: old_${SRC_A}_en</p></div></body></html>`;
+  const raw = [
+    `From: ${ACCOUNT}`, `To: ${INBOX}`, "Subject: Fwd: Netflix", "Message-ID: <round-two-html-quote@outlook.com>",
+    "Date: Tue, 4 Aug 2026 04:22:30 +0000", "MIME-Version: 1.0", "Content-Type: text/html; charset=utf-8", "", html,
+  ].join("\r\n");
+  const failedRule = await parsedRecord(raw, {
+    receivedAt: BASE, eventId: "round-two-html-failed", sequence: 421, envelopeFrom: ACCOUNT,
+  });
+  assert.equal(failedRule.parsed.accepted, false);
+  assert.equal(failedRule.parsed.deliveryFingerprint, "");
+  assert.equal(failedRule.parsed.deliveryFingerprintFromCurrent, false);
+  assert.equal(failedRule.parsed.requestSentAt, "");
+  assert.equal(selectedValue([oldSettings, failedRule]), "");
+});
+
+test("post-fix convergence round 2: SRC-only failure-first delivery returns the later successful copy", async () => {
+  const failedRule = await parsedRecord(ruleForward({
+    ...RULE_A, wrapperMessageId: "<round-two-src-first@outlook.com>", includeIdentityHeaders: false, parses: false,
+  }), { receivedAt: BASE, eventId: "round-two-src-first", sequence: 430, envelopeFrom: ACCOUNT });
+  const settings = await parsedRecord(settingsForward(SETTINGS_A), {
+    receivedAt: BASE + 60_000, eventId: "round-two-settings-last", sequence: 431, envelopeFrom: "info@account.netflix.com",
+  });
+  assert.deepEqual(settings.parsed.requestEvidence.filter((value) => failedRule.parsed.requestEvidence.includes(value)), []);
+  assert.equal(failedRule.parsed.deliveryFingerprintFromCurrent, true);
+  assert.equal(settings.parsed.deliveryFingerprintFromCurrent, true);
+  assert.equal(selectedRecord([failedRule, settings])?.eventId, "round-two-settings-last");
+  assert.equal(selectedValue([settings, failedRule]), "4827");
+});
+
+test("post-fix convergence round 2: multipart HTML quoted SRC cannot override the current plain SRC", async () => {
+  const currentBody = netflixBody(SETTINGS_A);
+  const raw = alternativeMime({
+    headers: [
+      "From: Netflix <info@account.netflix.com>", `To: ${ACCOUNT}`, "Subject: Netflix: Your sign-in code",
+      "Message-ID: <round-two-alternative@netflix.com>", "Date: Tue, 4 Aug 2026 04:22:00 +0000",
+    ],
+    text: currentBody,
+    html: `<html><body><p>Enter this code to sign in to Netflix: 4827.</p><p>SRC: current_${SRC_A}_en</p><div id="divRplyFwdMsg"><p>SRC: quoted_${SRC_B}_en</p></div></body></html>`,
+  });
+  const settings = await parsedRecord(raw, {
+    receivedAt: BASE, eventId: "round-two-alternative", sequence: 440, envelopeFrom: "info@account.netflix.com",
+  });
+  const failedRule = await parsedRecord(ruleForward({
+    ...RULE_A, wrapperMessageId: "<round-two-alternative-rule@outlook.com>", includeIdentityHeaders: false, parses: false,
+  }), { receivedAt: BASE + 30_000, eventId: "round-two-alternative-rule", sequence: 441, envelopeFrom: ACCOUNT });
+  assert.equal(settings.parsed.deliveryFingerprintFromCurrent, true);
+  assert.equal(settings.parsed.deliveryFingerprint, failedRule.parsed.deliveryFingerprint);
+  assert.equal(selectedValue([settings, failedRule]), "4827");
+});
+
+test("final convergence A: five new MIME timestamp shapes are runtime-portable", async (t) => {
+  const cases = [
+    ["half-hour numeric offset", "Sent: Tue, 4 Aug 2026 09:52:00 +05:30", "2026-08-04T04:22:00.000Z", true],
+    ["named GMT zone", "Sent: Tue, 4 Aug 2026 04:22:00 GMT", "2026-08-04T04:22:00.000Z", true],
+    ["ISO Z timestamp", "Sent: 2026-08-04T04:22:00Z", "2026-08-04T04:22:00.000Z", true],
+    ["unzoned ISO local timestamp", "Sent: 2026-08-04 04:22:00", "", false],
+    ["unzoned slash local timestamp", "Sent: 08/04/2026 04:22:00", "", false],
+  ];
+  for (const [label, sentLine, requestSentAt, portable] of cases) {
+    await t.test(label, () => {
+      const raw = ruleForward({
+        ...RULE_A,
+        wrapperMessageId: `<final-a-${label.replaceAll(" ", "-")}@outlook.com>`,
+        includeIdentityHeaders: false,
+        sentLine,
+      });
+      const envelope = { from: ACCOUNT, to: INBOX, inboxAddress: INBOX, receivedAt: new Date(BASE).toISOString() };
+      const parsedRows = ["UTC", "Asia/Shanghai"].map((timezone) => parseInTimezone(raw, envelope, timezone));
+      for (const parsed of parsedRows) {
+        assert.equal(parsed.requestSentAt, requestSentAt);
+        assert.equal(parsed.requestSentAtPortable, portable);
+      }
+      assert.deepEqual(parsedRows[0], parsedRows[1]);
+    });
+  }
+});
+
+test("repair convergence round two: each preserved Outlook identity shape independently bridges the failed copy", async (t) => {
+  const settings = await parsedRecord(settingsForward(SETTINGS_A), {
+    receivedAt: BASE,
+    eventId: "repair-r2-settings",
+    sequence: 600,
+    envelopeFrom: "info@account.netflix.com",
+  });
+  const identityHeaderNames = [
+    "x-ms-exchange-parent-message-id",
+    "x-microsoft-original-message-id",
+    "in-reply-to",
+    "references",
+  ];
+  const cases = [
+    ["bare uppercase Exchange parent", ["X-MS-Exchange-Parent-Message-Id: NETFLIX-REQUEST-A@MAILER.NETFLIX.COM"]],
+    ["Microsoft original message id", [`X-Microsoft-Original-Message-Id: ${ORIGINAL_A}`]],
+    ["In-Reply-To only", [`In-Reply-To: ${ORIGINAL_A}`]],
+    ["multi-value References only", [`References: <older-thread@outlook.com> ${ORIGINAL_A}`]],
+    ["repeated References fields", ["References: <older-thread@outlook.com>", `References: ${ORIGINAL_A}`]],
+  ];
+  for (const [label, identityLines] of cases) {
+    await t.test(label, async () => {
+      const wrapperId = `<repair-r2-${Buffer.from(label).toString("hex")}@outlook.com>`;
+      const baseRaw = ruleForward({
+        ...RULE_A,
+        wrapperMessageId: wrapperId,
+        src: "",
+        parses: false,
+      });
+      const lines = baseRaw.split("\r\n");
+      const firstBodyLine = lines.indexOf("");
+      const headers = lines.slice(0, firstBodyLine).filter((line) => {
+        const name = line.split(":", 1)[0].trim().toLowerCase();
+        return !identityHeaderNames.includes(name);
+      });
+      const raw = [...headers, ...identityLines, ...lines.slice(firstBodyLine)].join("\r\n");
+      const failedRule = await parsedRecord(raw, {
+        receivedAt: BASE + 60_000,
+        eventId: `repair-r2-${label}`,
+        sequence: 601,
+        envelopeFrom: ACCOUNT,
+      });
+
+      assert.equal(failedRule.parsed.accepted, false);
+      assert.ok(settings.parsed.requestEvidence.some((value) => failedRule.parsed.requestEvidence.includes(value)));
+      assert.equal(selectedValue([settings, failedRule]), "4827");
+      assert.equal(selectedValue([failedRule, settings]), "4827");
+    });
+  }
+});
+
+test("repair convergence round three: five hostile MIME histories never create a timezone-dependent or stale result", async (t) => {
+  const envelope = {
+    from: "info@account.netflix.com",
+    to: INBOX,
+    inboxAddress: INBOX,
+    receivedAt: new Date(BASE).toISOString(),
+  };
+
+  await t.test("structured MIME Date -0000 is non-portable in every runtime", () => {
+    const raw = settingsForward({ ...SETTINGS_A, dateHeader: "Tue, 4 Aug 2026 04:22:00 -0000" });
+    const parsedRows = ["UTC", "Asia/Shanghai"].map((timezone) => parseInTimezone(raw, envelope, timezone));
+    for (const parsed of parsedRows) {
+      assert.equal(parsed.accepted, true);
+      assert.equal(parsed.value, "4827");
+      assert.equal(parsed.requestSentAt, "");
+      assert.equal(parsed.requestSentAtPortable, false);
+    }
+    assert.deepEqual(parsedRows[0], parsedRows[1]);
+  });
+
+  const settings = await parsedRecord(settingsForward(SETTINGS_A), {
+    receivedAt: BASE,
+    eventId: "repair-r3-settings",
+    sequence: 700,
+    envelopeFrom: "info@account.netflix.com",
+  });
+
+  await t.test("plaintext Original Message history cannot lend an SRC or localized time", async () => {
+    const failedRule = await parsedRecord(ruleForward({
+      ...RULE_A,
+      wrapperMessageId: "<repair-r3-plaintext-quote@outlook.com>",
+      includeIdentityHeaders: false,
+      src: "",
+      parses: false,
+      quotedHistory: `-----Original Message-----\nFrom: Netflix <info@account.netflix.com>\n发送时间： Tue, 4 Aug 2026 04:22:00 +0000\nSRC: old_${SRC_A}_en`,
+    }), {
+      receivedAt: BASE + 30_000,
+      eventId: "repair-r3-plaintext-quote",
+      sequence: 701,
+      envelopeFrom: ACCOUNT,
+    });
+    assert.equal(failedRule.parsed.deliveryFingerprint, "");
+    assert.equal(failedRule.parsed.deliveryFingerprintFromCurrent, false);
+    assert.equal(failedRule.parsed.requestSentAt, "");
+    assert.equal(selectedValue([settings, failedRule]), "");
+  });
+
+  await t.test("ambiguous strong identities cannot borrow a matching current SRC", async () => {
+    const failedRule = await parsedRecord(ruleForward({
+      ...RULE_A,
+      wrapperMessageId: "<repair-r3-strong-ambiguous@outlook.com>",
+      originalMessageId: ORIGINAL_A,
+      microsoftOriginalMessageId: ORIGINAL_B,
+      inReplyTo: ORIGINAL_B,
+      referenceIds: [ORIGINAL_B],
+      parses: false,
+    }), {
+      receivedAt: BASE + 40_000,
+      eventId: "repair-r3-strong-ambiguous",
+      sequence: 702,
+      envelopeFrom: ACCOUNT,
+    });
+    assert.equal(failedRule.parsed.requestIdentityAmbiguous, true);
+    assert.equal(failedRule.parsed.deliveryFingerprint, settings.parsed.deliveryFingerprint);
+    assert.equal(selectedValue([settings, failedRule]), "");
+  });
+
+  await t.test("ambiguous weak identities cannot borrow a matching current SRC", async () => {
+    let raw = ruleForward({
+      ...RULE_A,
+      wrapperMessageId: "<repair-r3-weak-ambiguous@outlook.com>",
+      originalMessageId: ORIGINAL_A,
+      microsoftOriginalMessageId: ORIGINAL_A,
+      inReplyTo: ORIGINAL_A,
+      referenceIds: [ORIGINAL_B],
+      parses: false,
+    });
+    raw = raw
+      .replace(`X-MS-Exchange-Parent-Message-Id: ${ORIGINAL_A}\r\n`, "")
+      .replace(`X-Microsoft-Original-Message-Id: ${ORIGINAL_A}\r\n`, "");
+    const failedRule = await parsedRecord(raw, {
+      receivedAt: BASE + 50_000,
+      eventId: "repair-r3-weak-ambiguous",
+      sequence: 703,
+      envelopeFrom: ACCOUNT,
+    });
+    assert.equal(failedRule.parsed.requestIdentityAmbiguous, true);
+    assert.equal(failedRule.parsed.deliveryFingerprint, settings.parsed.deliveryFingerprint);
+    assert.equal(selectedValue([settings, failedRule]), "");
+  });
+
+  await t.test("an A duplicate cannot bridge across an immediately newer failed B request", async () => {
+    const duplicateA = await parsedRecord(ruleForward({
+      ...RULE_A,
+      wrapperMessageId: "<repair-r3-duplicate-a@outlook.com>",
+      includeIdentityHeaders: false,
+      parses: false,
+    }), { receivedAt: BASE + 30_000, eventId: "repair-r3-duplicate-a", sequence: 704, envelopeFrom: ACCOUNT });
+    const failedB = await parsedRecord(ruleForward({
+      ...RULE_A,
+      wrapperMessageId: "<repair-r3-failed-b@outlook.com>",
+      includeIdentityHeaders: false,
+      src: SRC_B,
+      parses: false,
+    }), { receivedAt: BASE + 31_000, eventId: "repair-r3-failed-b", sequence: 705, envelopeFrom: ACCOUNT });
+    const permutations = [
+      [settings, duplicateA, failedB], [settings, failedB, duplicateA],
+      [duplicateA, settings, failedB], [duplicateA, failedB, settings],
+      [failedB, settings, duplicateA], [failedB, duplicateA, settings],
+    ];
+    for (const rows of permutations) assert.equal(selectedValue(rows), "");
+  });
 });

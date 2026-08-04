@@ -11,31 +11,50 @@ const OPEN_STATUSES = new Set(["open", "acknowledged", "investigating", "recover
 const INCIDENT_STATUSES = new Set([...OPEN_STATUSES, "resolved"]);
 
 const CREATE_SCRIPT = `
+local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'string') or not validtype(KEYS[3],'zset') or not validtype(KEYS[4],'list') then return cjson.encode({ok=false,error='storage_type_error'}) end
+local score=tonumber(ARGV[3]); local limit=tonumber(ARGV[5])
+if not score or score~=score or score<-9007199254740991 or score>9007199254740991 or not limit or limit~=math.floor(limit) or limit<1 or limit>10000 then return cjson.encode({ok=false,error='invalid_incident'}) end
 local mapped=redis.call('GET',KEYS[1])
-if mapped then return cjson.encode({ok=false,error='fingerprint_conflict',incidentId=mapped}) end
+if mapped then
+  local encodedOk,encoded=pcall(cjson.encode,{ok=false,error='fingerprint_conflict',incidentId=mapped})
+  if not encodedOk then return redis.error_reply('incident_response_encode_failed') end
+  return encoded
+end
 if redis.call('EXISTS',KEYS[2])==1 then return cjson.encode({ok=false,error='incident_id_conflict'}) end
+local recordOk,record=pcall(cjson.decode,ARGV[2])
+if not recordOk or type(record)~='table' or tostring(record.id or '')~=ARGV[1] then return cjson.encode({ok=false,error='invalid_incident'}) end
 redis.call('SET',KEYS[1],ARGV[1])
 redis.call('SET',KEYS[2],ARGV[2])
 redis.call('ZADD',KEYS[3],ARGV[3],ARGV[1])
 redis.call('LPUSH',KEYS[4],ARGV[4])
-redis.call('LTRIM',KEYS[4],0,tonumber(ARGV[5])-1)
+redis.call('LTRIM',KEYS[4],0,limit-1)
 return cjson.encode({ok=true})`;
 
 const UPDATE_SCRIPT = `
+local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'string') or not validtype(KEYS[3],'list') then return cjson.encode({ok=false,error='storage_type_error'}) end
+local limit=tonumber(ARGV[6]); local mappingAction=tostring(ARGV[3] or 'keep')
+if not limit or limit~=math.floor(limit) or limit<1 or limit>10000 or (mappingAction~='keep' and mappingAction~='claim' and mappingAction~='release') then return cjson.encode({ok=false,error='invalid_incident'}) end
 local raw=redis.call('GET',KEYS[1])
 if not raw then return cjson.encode({ok=false,error='incident_not_found'}) end
 local ok,current=pcall(cjson.decode,raw)
-if not ok or type(current)~='table' then return cjson.encode({ok=false,error='incident_record_corrupt'}) end
+if not ok or type(current)~='table' or tostring(current.id or '')~=ARGV[4] then return cjson.encode({ok=false,error='incident_record_corrupt'}) end
 if tonumber(current.version or 0)~=tonumber(ARGV[1]) then
-  return cjson.encode({ok=false,error='stale_version',current=current})
+  local encodedOk,encoded=pcall(cjson.encode,{ok=false,error='stale_version',current=current})
+  if not encodedOk then return redis.error_reply('incident_response_encode_failed') end
+  return encoded
 end
 local nextOk,next=pcall(cjson.decode,ARGV[2])
-if not nextOk or type(next)~='table' then return cjson.encode({ok=false,error='invalid_incident'}) end
-local mappingAction=tostring(ARGV[3] or 'keep')
+if not nextOk or type(next)~='table' or tostring(next.id or '')~=ARGV[4] or tostring(next.fingerprint or '')~=tostring(current.fingerprint or '') then return cjson.encode({ok=false,error='invalid_incident'}) end
+local responseOk,response=pcall(cjson.encode,{ok=true,record=next})
+if not responseOk then return redis.error_reply('incident_response_encode_failed') end
 if mappingAction=='claim' then
   local mapped=redis.call('GET',KEYS[2])
   if mapped and mapped~=ARGV[4] then
-    return cjson.encode({ok=false,error='fingerprint_conflict',incidentId=mapped})
+    local encodedOk,encoded=pcall(cjson.encode,{ok=false,error='fingerprint_conflict',incidentId=mapped})
+    if not encodedOk then return redis.error_reply('incident_response_encode_failed') end
+    return encoded
   end
   redis.call('SET',KEYS[2],ARGV[4])
 elseif mappingAction=='release' then
@@ -43,8 +62,8 @@ elseif mappingAction=='release' then
 end
 redis.call('SET',KEYS[1],ARGV[2])
 redis.call('LPUSH',KEYS[3],ARGV[5])
-redis.call('LTRIM',KEYS[3],0,tonumber(ARGV[6])-1)
-return cjson.encode({ok=true,record=next})`;
+redis.call('LTRIM',KEYS[3],0,limit-1)
+return response`;
 
 function parseJson(value) {
   if (!value) return null;
@@ -82,11 +101,15 @@ function parseStoredRecord(value, code = "incident_record_corrupt") {
   return parsed;
 }
 
-function parseIncidentRecord(value) {
+function parseIncidentRecord(value, expectedId = "", expectedFingerprint = "") {
   const record = parseStoredRecord(value, "incident_record_corrupt");
   if (!record) return null;
-  const valid = Boolean(clean(record.id, 80))
-    && Boolean(clean(record.fingerprint, 200))
+  const id = clean(record.id, 80).toUpperCase();
+  const fingerprint = normalizeFingerprint(record.fingerprint);
+  const valid = Boolean(id) && id === record.id
+    && (!expectedId || id === clean(expectedId, 80).toUpperCase())
+    && Boolean(fingerprint) && fingerprint === record.fingerprint
+    && (!expectedFingerprint || fingerprint === normalizeFingerprint(expectedFingerprint))
     && INCIDENT_STATUSES.has(record.status)
     && Number.isSafeInteger(Number(record.version))
     && Number(record.version) >= 1;
@@ -166,6 +189,7 @@ function incidentEvent(type, record, actor = null, detail = {}) {
 }
 
 async function compareAndSet(record, expectedVersion, { mappingAction = "keep", event } = {}) {
+  try { parseIncidentRecord(record, record?.id, record?.fingerprint); } catch { return { ok: false, error: "invalid_incident" }; }
   const nextEvent = event || incidentEvent("updated", record);
   const raw = await redisCmd([
     "EVAL", UPDATE_SCRIPT, "3",
@@ -173,7 +197,9 @@ async function compareAndSet(record, expectedVersion, { mappingAction = "keep", 
     String(expectedVersion), JSON.stringify(record), mappingAction, record.id, JSON.stringify(nextEvent), String(MAX_EVENTS),
   ]);
   const result = parseJson(raw);
-  return result?.ok ? { ok: true, record: result.record || record } : {
+  let returned = null;
+  try { returned = result?.ok ? parseIncidentRecord(result.record || record, record.id, record.fingerprint) : null; } catch { return { ok: false, error: "storage_unavailable" }; }
+  return result?.ok && returned ? { ok: true, record: returned } : {
     ok: false,
     error: result?.error || "storage_unavailable",
     current: result?.current || null,
@@ -201,9 +227,35 @@ async function readMappedIncident(fingerprint) {
     ["PING"],
   ]), 2);
   if (stored[1] !== "PONG") throw storageError();
-  const record = parseIncidentRecord(stored[0]);
+  let record = null;
+  try { record = parseIncidentRecord(stored[0], id, fingerprint); } catch (error) {
+    if (error?.code !== "incident_record_corrupt") throw error;
+    console.warn(`[incidents] ignored corrupt fingerprint target ${id}`);
+    return { id, missing: true, corrupt: true };
+  }
   if (!record) return { id, missing: true };
   return record;
+}
+
+async function recoverCreatedIncident({ fingerprint, id, recordRaw, eventRaw, score }) {
+  let recovered;
+  try {
+    recovered = strictPipelineRows(await redisPipeline([
+      ["GET", fingerprintKey(fingerprint)],
+      ["GET", recordKey(id)],
+      ["ZSCORE", INCIDENT_INDEX_KEY, id],
+      ["LINDEX", eventKey(id), "0"],
+      ["PING"],
+    ]), 5);
+  } catch {
+    return false;
+  }
+  return recovered[0] === id
+    && recovered[1] === recordRaw
+    && recovered[2] != null
+    && Number(recovered[2]) === score
+    && recovered[3] === eventRaw
+    && recovered[4] === "PONG";
 }
 
 async function createIncident(input) {
@@ -234,12 +286,24 @@ async function createIncident(input) {
     version: 1,
   };
   const openedEvent = incidentEvent("opened", record, null, record.detail);
-  const saved = parseJson(await redisCmd([
+  const recordRaw = JSON.stringify(record);
+  const eventRaw = JSON.stringify(openedEvent);
+  const savedRaw = await redisCmd([
     "EVAL", CREATE_SCRIPT, "4",
     fingerprintKey(fingerprint), recordKey(id), INCIDENT_INDEX_KEY, eventKey(id),
-    id, JSON.stringify(record), String(now.getTime()), JSON.stringify(openedEvent), String(MAX_EVENTS),
-  ]));
+    id, recordRaw, String(now.getTime()), eventRaw, String(MAX_EVENTS),
+  ]);
+  const saved = parseJson(savedRaw);
   if (!saved?.ok) {
+    if (savedRaw == null && await recoverCreatedIncident({
+      fingerprint,
+      id,
+      recordRaw,
+      eventRaw,
+      score: now.getTime(),
+    })) {
+      return { ok: true, record, created: true, recovered: true };
+    }
     return saved?.error === "fingerprint_conflict"
       ? { ok: false, conflict: true, incidentId: clean(saved.incidentId, 80) }
       : { ok: false, error: saved?.error || "storage_unavailable" };
@@ -320,7 +384,11 @@ export async function getIncident(id) {
     ["PING"],
   ]), 2);
   if (stored[1] !== "PONG") throw storageError();
-  return parseIncidentRecord(stored[0]);
+  try { return parseIncidentRecord(stored[0], safeId); } catch (error) {
+    if (error?.code !== "incident_record_corrupt") throw error;
+    console.warn(`[incidents] ignored corrupt incident record ${safeId}`);
+    return null;
+  }
 }
 
 export async function transitionIncident(id, input = {}, actor = {}) {
@@ -412,7 +480,16 @@ export async function incidentEvents(id, limit = MAX_EVENTS) {
   ]), 2, "incident_events_unavailable");
   const rows = result[0];
   if (!Array.isArray(rows) || result[1] !== "PONG") throw storageError("incident_events_unavailable");
-  return rows.map(parseIncidentEvent);
+  const events = [];
+  let corruptCount = 0;
+  for (const value of rows) {
+    try { events.push(parseIncidentEvent(value)); } catch (error) {
+      if (error?.code !== "incident_event_corrupt") throw error;
+      corruptCount += 1;
+    }
+  }
+  if (corruptCount) console.warn(`[incidents] ignored ${corruptCount} corrupt event(s) for ${safeId}`);
+  return events;
 }
 
 export async function listIncidents({ status = "all", severity = "all", offset = 0, limit = 50 } = {}) {
@@ -425,15 +502,34 @@ export async function listIncidents({ status = "all", severity = "all", offset =
   ]), 2, "incident_list_unavailable");
   const ids = index[0];
   if (!Array.isArray(ids) || index[1] !== "PONG") throw storageError("incident_list_unavailable");
-  if (!ids.length) return { incidents: [], total: 0, counts: {} };
+  if (ids.some((id, index) => clean(id, 80).toUpperCase() !== id || ids.indexOf(id) !== index)) throw storageError("incident_record_corrupt");
+  if (!ids.length) return { incidents: [], total: 0, counts: {}, diagnostics: { corruptCount: 0, missingCount: 0 } };
   const rows = strictPipelineRows(
     await redisPipeline(ids.map((incidentId) => ["GET", recordKey(incidentId)])),
     ids.length,
     "incident_list_unavailable",
   );
-  let records = rows.map((value) => {
-    if (value == null) throw storageError("incident_list_unavailable");
-    return parseIncidentRecord(value);
+  let corruptCount = 0;
+  let missingCount = 0;
+  let records = [];
+  rows.forEach((value, index) => {
+    if (value == null) {
+      missingCount += 1;
+      return;
+    }
+    try {
+      const record = parseIncidentRecord(value, ids[index]);
+      if (!record) {
+        corruptCount += 1;
+        console.warn(`[incidents] ignored empty indexed incident ${clean(ids[index], 80).toUpperCase()}`);
+        return;
+      }
+      records.push(record);
+    } catch (error) {
+      if (error?.code !== "incident_record_corrupt") throw error;
+      corruptCount += 1;
+      console.warn(`[incidents] ignored corrupt indexed incident ${clean(ids[index], 80).toUpperCase()}`);
+    }
   });
   const counts = records.reduce((out, record) => {
     out[record.status] = (out[record.status] || 0) + 1;
@@ -441,7 +537,12 @@ export async function listIncidents({ status = "all", severity = "all", offset =
   }, {});
   if (status !== "all") records = records.filter((record) => record.status === status);
   if (severity !== "all") records = records.filter((record) => record.severity === severity);
-  return { incidents: records.slice(safeOffset, safeOffset + safeLimit), total: records.length, counts };
+  return {
+    incidents: records.slice(safeOffset, safeOffset + safeLimit),
+    total: records.length,
+    counts,
+    diagnostics: { corruptCount, missingCount },
+  };
 }
 
 export async function reportOperationalFailure(input = {}) {

@@ -7,6 +7,7 @@ import {
   pushAdminMailLog,
   redisCmd,
   redisPipeline,
+  replaceTopLevelJsonFields,
   sendSimpleEmail,
   validEmail,
 } from "./_utils.js";
@@ -75,9 +76,10 @@ function safeCampaignId(value) {
 }
 
 function normalizeEmail(value) {
-  const email = clean(value, 200).toLowerCase();
+  const email = String(value || "").trim().toLowerCase();
   return validEmail(email) ? email : "";
 }
+function normalizeRecipients(value) { return (Array.isArray(value) ? value : [value]).map(normalizeEmail).filter(Boolean); }
 
 function offerDispatchBlockReason(offer, now = Date.now()) {
   if (!offer || typeof offer !== "object" || Array.isArray(offer)) return "";
@@ -132,6 +134,33 @@ function makeJobId(campaignId, email, scheduledAt) {
 
 function deliveryMessageId(jobId) { return `marketing-queue-${clean(jobId, 80)}`; }
 
+const CAMPAIGN_STATUSES = new Set(["draft", "scheduled", "sending", "paused", "completed", "cancelled", "failed"]);
+const JOB_STATUSES = new Set(["queued", "sending", "submitted", "suppressed", "failed", "cancelled"]);
+function plain(value) { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }
+function validCampaign(campaign, expectedId = "") {
+  const id = safeCampaignId(campaign?.id);
+  return plain(campaign) && Boolean(id) && id === campaign.id && (!expectedId || id === expectedId)
+    && CAMPAIGN_STATUSES.has(campaign.status)
+    && (!Object.hasOwn(campaign, "requestHash") || /^[a-f0-9]{64}$/i.test(String(campaign.requestHash)))
+    && (!Object.hasOwn(campaign, "scheduledAt") || Number.isFinite(Date.parse(campaign.scheduledAt || "")));
+}
+function validNewCampaign(campaign, expectedId = "") {
+  return validCampaign(campaign, expectedId) && /^[a-f0-9]{64}$/i.test(String(campaign.requestHash || ""))
+    && typeof campaign.subject === "string" && typeof campaign.html === "string"
+    && Number.isFinite(Date.parse(campaign.scheduledAt || ""));
+}
+function validJob(job, expectedId = "", expectedCampaignId = "", expectedTo = "", expectedScheduledAt = "") {
+  const id = clean(job?.id, 80);
+  const campaignId = safeCampaignId(job?.campaignId);
+  const to = normalizeEmail(job?.to);
+  const scheduledAt = String(job?.scheduledAt || "");
+  return plain(job) && Boolean(id && campaignId && to) && JOB_STATUSES.has(job.status)
+    && (!expectedId || id === expectedId) && (!expectedCampaignId || campaignId === expectedCampaignId)
+    && (!expectedTo || to === normalizeEmail(expectedTo)) && (!expectedScheduledAt || scheduledAt === expectedScheduledAt)
+    && makeJobId(campaignId, to, scheduledAt) === id && job.deliveryMessageId === deliveryMessageId(id)
+    && Number.isFinite(Date.parse(scheduledAt));
+}
+
 function beijingDayKey(now = Date.now()) {
   return new Date(now + 8 * 60 * 60 * 1000).toISOString().slice(0, 10).replace(/-/g, "");
 }
@@ -161,79 +190,23 @@ function retryTimestamp(result, now = Date.now()) {
 }
 
 const CREATE_CAMPAIGN_SCRIPT = `
-local existing=redis.call('GET',KEYS[1])
-if existing then
-  local ok,doc=pcall(cjson.decode,existing)
-  if not ok then return -2 end
-  if tostring(doc.requestHash or '')~=ARGV[1] then return -1 end
-  redis.call('EXPIRE',KEYS[1],ARGV[4])
-  redis.call('ZADD',KEYS[2],'NX',ARGV[2],ARGV[3])
-  return 0
-end
-redis.call('SET',KEYS[1],ARGV[5],'EX',ARGV[4])
-redis.call('ZADD',KEYS[2],'NX',ARGV[2],ARGV[3])
-return 1`;
+local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') then return '__storage_type__' end local score=tonumber(ARGV[2]); local ttl=tonumber(ARGV[4]) if not score or score~=score or not ttl or ttl~=math.floor(ttl) or ttl<1 then return '__invalid_args__' end local existing=redis.call('GET',KEYS[1]) if existing then local ok,doc=pcall(cjson.decode,existing) if not ok or type(doc)~='table' or tostring(doc.id or '')~=ARGV[3] then return -2 end if tostring(doc.requestHash or '')~=ARGV[1] then return -1 end redis.call('EXPIRE',KEYS[1],ARGV[4]) redis.call('ZADD',KEYS[2],'NX',ARGV[2],ARGV[3]) return 0 end local nextOk,nextDoc=pcall(cjson.decode,ARGV[5]) if not nextOk or type(nextDoc)~='table' or tostring(nextDoc.id or '')~=ARGV[3] or tostring(nextDoc.requestHash or '')~=ARGV[1] then return -2 end redis.call('SET',KEYS[1],ARGV[5],'EX',ARGV[4]) redis.call('ZADD',KEYS[2],'NX',ARGV[2],ARGV[3]) return 1
+`;
 
 const UPDATE_CAMPAIGN_STATE_SCRIPT = `
-local raw=redis.call('GET',KEYS[1])
-if not raw then return '__missing__' end
-local ok,doc=pcall(cjson.decode,raw)
-if not ok then return '__corrupt__' end
-local current=tostring(doc.status or '')
-local allowed='|'..ARGV[2]..'|'
-if not string.find(allowed,'|'..current..'|',1,true) then return '__invalid__:'..current end
-local patchOk,patch=pcall(cjson.decode,ARGV[3])
-if not patchOk then return '__corrupt_patch__' end
-for key,value in pairs(patch) do doc[key]=value end
-doc.status=ARGV[1]
-redis.call('SET',KEYS[1],cjson.encode(doc),'EX',ARGV[4])
-redis.call('ZADD',KEYS[2],'NX',ARGV[5],ARGV[6])
-return cjson.encode(doc)`;
+local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') then return '__storage_type__' end local ttl=tonumber(ARGV[5]); local score=tonumber(ARGV[6]) if not ttl or ttl~=math.floor(ttl) or ttl<1 or not score or score~=score then return '__invalid_args__' end local raw=redis.call('GET',KEYS[1]) if not raw then return '__missing__' end if raw~=ARGV[3] then return '__conflict__' end local ok,doc=pcall(cjson.decode,raw) if not ok or type(doc)~='table' or tostring(doc.id or '')~=ARGV[7] then return '__corrupt__' end local current=tostring(doc.status or '') local allowed='|'..ARGV[2]..'|' if not string.find(allowed,'|'..current..'|',1,true) then return '__invalid__:'..current end local nextOk,nextDoc=pcall(cjson.decode,ARGV[4]) if not nextOk or type(nextDoc)~='table' or tostring(nextDoc.id or '')~=ARGV[7] or tostring(nextDoc.requestHash or '')~=tostring(doc.requestHash or '') or tostring(nextDoc.status or '')~=ARGV[1] then return '__corrupt_patch__' end redis.call('SET',KEYS[1],ARGV[4],'EX',ARGV[5]) redis.call('ZADD',KEYS[2],'NX',ARGV[6],ARGV[7]) return ARGV[4]
+`;
 
 const GUARDED_CAMPAIGN_STATE_SCRIPT = `
-local raw=redis.call('GET',KEYS[1])
-if not raw then return '__missing__' end
-local ok,doc=pcall(cjson.decode,raw)
-if not ok then return '__corrupt__' end
-local current=tostring(doc.status or '')
-if current==ARGV[1] then return cjson.encode(doc) end
-local allowed='|'..ARGV[2]..'|'
-if not string.find(allowed,'|'..current..'|',1,true) then return '__invalid__:'..current end
-local pending=redis.call('SMEMBERS',KEYS[3])
-for _,jobId in ipairs(pending) do
-  local jobRaw=redis.call('GET',ARGV[7]..jobId)
-  if jobRaw then
-    local jobOk,job=pcall(cjson.decode,jobRaw)
-    if jobOk and tostring(job.status or '')=='sending' and redis.call('EXISTS',ARGV[8]..jobId)==1 then
-      return '__in_flight__'
-    end
-  end
-end
-local patchOk,patch=pcall(cjson.decode,ARGV[3])
-if not patchOk then return '__corrupt_patch__' end
-for key,value in pairs(patch) do doc[key]=value end
-doc.status=ARGV[1]
-redis.call('SET',KEYS[1],cjson.encode(doc),'EX',ARGV[4])
-redis.call('ZADD',KEYS[2],'NX',ARGV[5],ARGV[6])
-return cjson.encode(doc)`;
+local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') or not validtype(KEYS[3],'set') then return '__storage_type__' end local ttl=tonumber(ARGV[5]); local score=tonumber(ARGV[6]) if not ttl or ttl~=math.floor(ttl) or ttl<1 or not score or score~=score then return '__invalid_args__' end local raw=redis.call('GET',KEYS[1]) if not raw then return '__missing__' end if raw~=ARGV[3] then return '__conflict__' end local ok,doc=pcall(cjson.decode,raw) if not ok or type(doc)~='table' or tostring(doc.id or '')~=ARGV[7] then return '__corrupt__' end local current=tostring(doc.status or '') if current==ARGV[1] then return raw end local allowed='|'..ARGV[2]..'|' if not string.find(allowed,'|'..current..'|',1,true) then return '__invalid__:'..current end local pending=redis.call('SMEMBERS',KEYS[3]) for _,jobId in ipairs(pending) do if not validtype(ARGV[8]..jobId,'string') then return '__storage_type__' end local jobRaw=redis.call('GET',ARGV[8]..jobId) if jobRaw then local jobOk,job=pcall(cjson.decode,jobRaw) if not jobOk or type(job)~='table' or tostring(job.id or '')~=jobId or tostring(job.campaignId or '')~=ARGV[7] then return '__corrupt_job__' end if tostring(job.status or '')=='sending' and redis.call('EXISTS',ARGV[9]..jobId)==1 then return '__in_flight__' end end end local nextOk,nextDoc=pcall(cjson.decode,ARGV[4]) if not nextOk or type(nextDoc)~='table' or tostring(nextDoc.id or '')~=ARGV[7] or tostring(nextDoc.requestHash or '')~=tostring(doc.requestHash or '') or tostring(nextDoc.status or '')~=ARGV[1] then return '__corrupt_patch__' end redis.call('SET',KEYS[1],ARGV[4],'EX',ARGV[5]) redis.call('ZADD',KEYS[2],'NX',ARGV[6],ARGV[7]) return ARGV[4]
+`;
 
 const CLEAN_TERMINAL_JOB_REFERENCES_SCRIPT = `
-local raw=redis.call('GET',KEYS[1])
-if raw then
-  local ok,doc=pcall(cjson.decode,raw)
-  if not ok then return '__corrupt__' end
-  local status=tostring(doc.status or '')
-  if status~='submitted' and status~='suppressed' and status~='failed' and status~='cancelled' then
-    return '__active__:'..status
-  end
-end
-redis.call('ZREM',KEYS[2],ARGV[1])
-redis.call('SREM',KEYS[3],ARGV[1])
-redis.call('DEL',KEYS[4])
-if raw then return '__terminal__' end
-return '__missing__'`;
+local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') or not validtype(KEYS[3],'set') then return '__storage_type__' end local raw=redis.call('GET',KEYS[1]) if raw then local ok,doc=pcall(cjson.decode,raw) if not ok or type(doc)~='table' or tostring(doc.id or '')~=ARGV[1] or tostring(doc.campaignId or '')~=ARGV[2] then return '__corrupt__' end local status=tostring(doc.status or '') if status~='submitted' and status~='suppressed' and status~='failed' and status~='cancelled' then return '__active__:'..status end end redis.call('ZREM',KEYS[2],ARGV[1]) redis.call('SREM',KEYS[3],ARGV[1]) redis.call('DEL',KEYS[4]) if raw then return '__terminal__' end return '__missing__'
+`;
 
 async function createCampaign(campaign) {
+  if (!validNewCampaign(campaign, safeCampaignId(campaign?.id))) return { ok: false, error: "invalid_campaign" };
   const score = Number(campaign.createdAtMs || Date.now());
   const result = await redisCmd([
     "EVAL",
@@ -257,54 +230,65 @@ async function updateCampaignState(campaignId, status, expectedStatuses, patch =
   const id = safeCampaignId(campaignId);
   if (!id) return { ok: false, error: "campaign_not_found" };
   const now = new Date().toISOString();
-  const result = await redisCmd([
-    "EVAL",
-    UPDATE_CAMPAIGN_STATE_SCRIPT,
-    "2",
-    campaignKey(id),
-    CAMPAIGN_INDEX_KEY,
-    status,
-    expectedStatuses.join("|"),
-    JSON.stringify({ ...patch, updatedAt: now }),
-    String(CAMPAIGN_TTL_SECONDS),
-    String(Date.now()),
-    id,
-  ]);
-  if (result === "__missing__") return { ok: false, error: "campaign_not_found" };
-  if (String(result || "").startsWith("__invalid__")) return { ok: false, error: "invalid_status_transition" };
-  const campaign = parseJson(result);
-  return campaign ? { ok: true, campaign } : { ok: false, error: "storage_failed" };
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const read = await readRedis([["GET", campaignKey(id)], ["PING"]]);
+    if (!read.ok || read.rows[1] !== "PONG") return { ok: false, error: "storage_failed" };
+    const raw = read.rows[0];
+    if (raw == null) return { ok: false, error: "campaign_not_found" };
+    const current = typeof raw === "string" ? parseJson(raw) : null;
+    if (!validCampaign(current, id)) return { ok: false, error: "storage_failed" };
+    const nextRaw = replaceTopLevelJsonFields(raw, { ...patch, updatedAt: now, status });
+    if (!nextRaw) return { ok: false, error: "storage_failed" };
+    const result = await redisCmd([
+      "EVAL", UPDATE_CAMPAIGN_STATE_SCRIPT, "2",
+      campaignKey(id), CAMPAIGN_INDEX_KEY,
+      status, expectedStatuses.join("|"), raw, nextRaw,
+      String(CAMPAIGN_TTL_SECONDS), String(Date.now()), id,
+    ]);
+    if (result === "__conflict__") continue;
+    if (result === "__missing__") return { ok: false, error: "campaign_not_found" };
+    if (String(result || "").startsWith("__invalid__")) return { ok: false, error: "invalid_status_transition" };
+    const campaign = parseJson(result);
+    return validCampaign(campaign, id) ? { ok: true, campaign } : { ok: false, error: "storage_failed" };
+  }
+  return { ok: false, error: "storage_conflict" };
 }
 
 async function updateCampaignStateGuarded(campaignId, status, expectedStatuses, patch = {}) {
   const id = safeCampaignId(campaignId);
   if (!id) return { ok: false, error: "campaign_not_found" };
-  const result = await redisCmd([
-    "EVAL",
-    GUARDED_CAMPAIGN_STATE_SCRIPT,
-    "3",
-    campaignKey(id),
-    CAMPAIGN_INDEX_KEY,
-    campaignPendingKey(id),
-    status,
-    expectedStatuses.join("|"),
-    JSON.stringify({ ...patch, updatedAt: new Date().toISOString() }),
-    String(CAMPAIGN_TTL_SECONDS),
-    String(Date.now()),
-    id,
-    JOB_PREFIX,
-    CLAIM_PREFIX,
-  ]);
-  if (result === "__missing__") return { ok: false, error: "campaign_not_found" };
-  if (result === "__in_flight__") return { ok: false, error: "campaign_in_flight" };
-  if (String(result || "").startsWith("__invalid__")) return { ok: false, error: "invalid_status_transition" };
-  const campaign = parseJson(result);
-  return campaign ? { ok: true, campaign } : { ok: false, error: "storage_failed" };
+  const updatedAt = new Date().toISOString();
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const read = await readRedis([["GET", campaignKey(id)], ["PING"]]);
+    if (!read.ok || read.rows[1] !== "PONG") return { ok: false, error: "storage_failed" };
+    const raw = read.rows[0];
+    if (raw == null) return { ok: false, error: "campaign_not_found" };
+    const current = typeof raw === "string" ? parseJson(raw) : null;
+    if (!validCampaign(current, id)) return { ok: false, error: "storage_failed" };
+    if (String(current.status || "") === status) return { ok: true, campaign: current };
+    const nextRaw = replaceTopLevelJsonFields(raw, { ...patch, updatedAt, status });
+    if (!nextRaw) return { ok: false, error: "storage_failed" };
+    const result = await redisCmd([
+      "EVAL", GUARDED_CAMPAIGN_STATE_SCRIPT, "3",
+      campaignKey(id), CAMPAIGN_INDEX_KEY, campaignPendingKey(id),
+      status, expectedStatuses.join("|"), raw, nextRaw,
+      String(CAMPAIGN_TTL_SECONDS), String(Date.now()), id, JOB_PREFIX, CLAIM_PREFIX,
+    ]);
+    if (result === "__conflict__") continue;
+    if (result === "__missing__") return { ok: false, error: "campaign_not_found" };
+    if (result === "__in_flight__") return { ok: false, error: "campaign_in_flight" };
+    if (String(result || "").startsWith("__invalid__")) return { ok: false, error: "invalid_status_transition" };
+    const campaign = parseJson(result);
+    return validCampaign(campaign, id) ? { ok: true, campaign } : { ok: false, error: "storage_failed" };
+  }
+  return { ok: false, error: "storage_conflict" };
 }
 
 export async function getMarketingCampaign(campaignId) {
   const id = safeCampaignId(campaignId);
-  return id ? parseJson(await redisCmd(["GET", campaignKey(id)])) : null;
+  if (!id) return null;
+  const campaign = parseJson(await redisCmd(["GET", campaignKey(id)]));
+  return validCampaign(campaign, id) ? campaign : null;
 }
 
 export async function readMarketingCampaign(campaignId) {
@@ -314,7 +298,7 @@ export async function readMarketingCampaign(campaignId) {
   if (!response.ok) return { ok: false, error: "storage_unavailable", campaign: null };
   if (response.rows[0] == null) return { ok: true, campaign: null };
   const campaign = parseJson(response.rows[0]);
-  return campaign && typeof campaign === "object"
+  return validCampaign(campaign, id)
     ? { ok: true, campaign }
     : { ok: false, error: "storage_corrupt", campaign: null };
 }
@@ -322,11 +306,30 @@ export async function readMarketingCampaign(campaignId) {
 export async function listMarketingCampaigns({ limit = 100 } = {}) {
   const indexRead = await readRedis([["ZREVRANGE", CAMPAIGN_INDEX_KEY, "0", String(Math.max(0, Math.min(300, Number(limit || 100)) - 1))]]);
   if (!indexRead.ok || !Array.isArray(indexRead.rows[0])) throw new Error("marketing_campaign_storage_unavailable");
-  const ids = indexRead.rows[0];
+  const ids = indexRead.rows[0].map(safeCampaignId);
+  if (ids.some((id, index) => !id || id !== indexRead.rows[0][index] || ids.indexOf(id) !== index)) throw new Error("marketing_campaign_storage_corrupt");
   if (!ids.length) return [];
   const campaignRead = await readRedis(ids.map((id) => ["GET", campaignKey(id)]));
   if (!campaignRead.ok) throw new Error("marketing_campaign_storage_unavailable");
-  return campaignRead.rows.map(parseJson).filter(Boolean);
+  const campaigns = campaignRead.rows.map(parseJson);
+  if (campaigns.some((campaign, index) => campaign != null && !validCampaign(campaign, ids[index]))) throw new Error("marketing_campaign_storage_corrupt");
+  return campaigns.filter(Boolean);
+}
+
+async function readCampaignJobs(campaignId) {
+  const id = safeCampaignId(campaignId);
+  const index = await readRedis([
+    ["SMEMBERS", campaignPendingKey(id)], ["SMEMBERS", campaignJobIndexKey(id)], ["PING"],
+  ]);
+  if (!index.ok || !Array.isArray(index.rows[0]) || !Array.isArray(index.rows[1]) || index.rows[2] !== "PONG") return null;
+  const rawIds = [...index.rows[0], ...index.rows[1]];
+  const jobIds = Array.from(new Set(rawIds.map((value) => clean(value, 80))));
+  if (jobIds.some((jobId) => !jobId) || rawIds.some((value) => !jobIds.includes(value))) return null;
+  if (!jobIds.length) return [];
+  const read = await readRedis([...jobIds.map((jobId) => ["GET", jobKey(jobId)]), ["PING"]]);
+  if (!read.ok || read.rows.at(-1) !== "PONG") return null;
+  const snapshots = jobIds.map((jobId, index) => ({ id: jobId, raw: read.rows[index], job: parseJson(read.rows[index]) }));
+  return snapshots.some(({ raw, job, id: jobId }) => raw != null && !validJob(job, jobId, id)) ? null : snapshots;
 }
 
 export async function updateMarketingCampaignStatus(campaignId, status, actor = null) {
@@ -340,40 +343,14 @@ export async function updateMarketingCampaignStatus(campaignId, status, actor = 
     staffId: Number(actor.staffId || 1),
     staffUsername: clean(actor.staffUsername || "admin", 60),
   } : null;
+  const snapshots = status === "cancelled" ? await readCampaignJobs(campaignId) : [];
+  if (snapshots == null) return { ok: false, error: "storage_failed", cancelledJobs: 0 };
   const result = await updateCampaignStateGuarded(campaignId, status, transitions[status], {
     ...(updatedBy ? { updatedBy } : {}),
     ...(status === "cancelled" ? { cancelledAt: new Date().toISOString() } : {}),
   });
   if (!result.ok || status !== "cancelled") return result;
-
-  // Read both indexes strictly. The all-jobs index is needed for an idempotent retry:
-  // a prior attempt may have transitioned a job (and removed it from pending) before
-  // its recipient record or campaign metric could be persisted.
-  const indexRead = await readRedis([
-    ["SMEMBERS", campaignPendingKey(campaignId)],
-    ["SMEMBERS", campaignJobIndexKey(campaignId)],
-    ["PING"],
-  ]);
-  if (!indexRead.ok || !Array.isArray(indexRead.rows[0]) || !Array.isArray(indexRead.rows[1]) || indexRead.rows[2] !== "PONG") {
-    return { ok: false, error: "storage_failed", campaign: result.campaign, cancelledJobs: 0 };
-  }
-  const jobIds = Array.from(new Set([...indexRead.rows[0], ...indexRead.rows[1]].map((rawId) => clean(rawId, 80)).filter(Boolean)));
-  if (!jobIds.length) return { ...result, cancelledJobs: 0 };
-
-  // Fetch every job before mutating any queue references. A missing GET is only
-  // accepted after the containing pipeline (and its PING) succeeded, so a Redis
-  // outage can never be mistaken for a deleted job.
-  const jobsRead = await readRedis([...jobIds.map((id) => ["GET", jobKey(id)]), ["PING"]]);
-  if (!jobsRead.ok || jobsRead.rows.at(-1) !== "PONG") {
-    return { ok: false, error: "storage_failed", campaign: result.campaign, cancelledJobs: 0 };
-  }
-  const snapshots = jobIds.map((id, index) => {
-    const raw = jobsRead.rows[index];
-    return { id, raw, job: raw == null ? null : parseJson(raw) };
-  });
-  if (snapshots.some(({ raw, job }) => raw != null && (!job || typeof job !== "object"))) {
-    return { ok: false, error: "storage_failed", campaign: result.campaign, cancelledJobs: 0 };
-  }
+  if (!snapshots.length) return { ...result, cancelledJobs: 0 };
 
   const outcomes = await mapWithConcurrency(snapshots, ENQUEUE_CONCURRENCY, async ({ id, job }) => {
     if (!job) return { ok: true, cleanup: true, cancelled: false };
@@ -415,6 +392,7 @@ export async function updateMarketingCampaignStatus(campaignId, status, actor = 
       campaignPendingKey(campaignId),
       claimKey(id),
       id,
+      safeCampaignId(campaignId),
     ]));
     cleanupOk = cleanupRead.ok && cleanupRead.rows.every((row) => row === "__terminal__" || row === "__missing__");
   }
@@ -442,18 +420,8 @@ const CAMPAIGN_METRICS = new Set([
 ]);
 
 const RECORD_CAMPAIGN_METRIC_SCRIPT = `
-if ARGV[1]~='0' then
-  local accepted=redis.call('SET',KEYS[1],'1','NX','EX',ARGV[4])
-  if not accepted then return '__duplicate__' end
-end
-local value
-if ARGV[3]=='integer' then
-  value=redis.call('HINCRBY',KEYS[2],ARGV[2],ARGV[5])
-else
-  value=redis.call('HINCRBYFLOAT',KEYS[2],ARGV[2],ARGV[5])
-end
-redis.call('EXPIRE',KEYS[2],ARGV[4])
-return tostring(value)`;
+local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end if (ARGV[1]~='0' and not validtype(KEYS[1],'string')) or not validtype(KEYS[2],'hash') then return '__storage_type__' end local ttl=tonumber(ARGV[4]); local amount=tonumber(ARGV[5]) if not ttl or ttl~=math.floor(ttl) or ttl<1 or ttl>2147483647 or not amount or amount~=amount then return '__invalid_args__' end if ARGV[1]~='0' then if redis.call('EXISTS',KEYS[1])==1 then return '__duplicate__' end end local value if ARGV[3]=='integer' then if amount~=math.floor(amount) or amount<-9007199254740991 or amount>9007199254740991 then return '__invalid_args__' end local currentRaw=redis.call('HGET',KEYS[2],ARGV[2]); local current=0 if currentRaw then current=tonumber(currentRaw) end if not current or current~=math.floor(current) or current<-9007199254740991 or current>9007199254740991 or current+amount<-9007199254740991 or current+amount>9007199254740991 then return '__invalid_metric__' end value=redis.call('HINCRBY',KEYS[2],ARGV[2],amount) else local currentRaw=redis.call('HGET',KEYS[2],ARGV[2]); local current=0 if currentRaw then current=tonumber(currentRaw) end if not current or current~=current or current+amount~=current+amount or current+amount==math.huge or current+amount==-math.huge then return '__invalid_metric__' end value=redis.call('HINCRBYFLOAT',KEYS[2],ARGV[2],amount) end if ARGV[1]~='0' then redis.call('SET',KEYS[1],'1','EX',ttl) end redis.call('EXPIRE',KEYS[2],ARGV[4]) return tostring(value)
+`;
 
 export async function recordMarketingCampaignMetric(campaignId, metric, eventId = "", amount = 1) {
   const id = safeCampaignId(campaignId);
@@ -463,6 +431,10 @@ export async function recordMarketingCampaignMetric(campaignId, metric, eventId 
     ? createHash("sha256").update(`${id}\u0000${safeMetric}\u0000${eventId}`).digest("hex")
     : "";
   const increment = Number(amount || 0);
+  if (!Number.isFinite(increment) || Math.abs(increment) > Number.MAX_SAFE_INTEGER
+    || (Number.isInteger(increment) && !Number.isSafeInteger(increment))) {
+    return { ok: false, error: "invalid_metric" };
+  }
   const result = await redisCmd([
     "EVAL",
     RECORD_CAMPAIGN_METRIC_SCRIPT,
@@ -476,7 +448,16 @@ export async function recordMarketingCampaignMetric(campaignId, metric, eventId 
     String(increment),
   ]);
   if (result === "__duplicate__") return { ok: true, duplicate: true };
-  return result == null ? { ok: false, error: "storage_failed" } : { ok: true, value: Number(result || 0) };
+  if (result === "__invalid_args__" || result === "__invalid_metric__") {
+    return { ok: false, error: "invalid_metric" };
+  }
+  if (result == null || (typeof result === "string" && result.startsWith("__"))) {
+    return { ok: false, error: "storage_failed" };
+  }
+  const value = Number(result);
+  return Number.isFinite(value)
+    ? { ok: true, value }
+    : { ok: false, error: "storage_failed" };
 }
 
 export async function getMarketingCampaignCounters(campaignId) {
@@ -498,34 +479,13 @@ export async function getMarketingCampaignCountersBatch(campaignIds) {
 }
 
 const SAVE_JOB_SCRIPT = `
-local existing=redis.call('GET',KEYS[1])
-if existing then
-  local ok,doc=pcall(cjson.decode,existing)
-  if not ok then return -2 end
-  redis.call('SADD',KEYS[3],ARGV[2])
-  redis.call('EXPIRE',KEYS[3],ARGV[4])
-  local status=tostring(doc.status or '')
-  if status=='queued' or status=='sending' then
-    local queueScore=tonumber(doc.queueScore or ARGV[1]) or tonumber(ARGV[1])
-    redis.call('ZADD',KEYS[2],queueScore,ARGV[2])
-    redis.call('SADD',KEYS[4],ARGV[2])
-    redis.call('EXPIRE',KEYS[4],ARGV[4])
-  else
-    redis.call('ZREM',KEYS[2],ARGV[2])
-    redis.call('SREM',KEYS[4],ARGV[2])
-  end
-  redis.call('EXPIRE',KEYS[1],ARGV[3])
-  return 0
-end
-redis.call('SET',KEYS[1],ARGV[5],'EX',ARGV[3])
-redis.call('ZADD',KEYS[2],ARGV[1],ARGV[2])
-redis.call('SADD',KEYS[3],ARGV[2])
-redis.call('SADD',KEYS[4],ARGV[2])
-redis.call('EXPIRE',KEYS[3],ARGV[4])
-redis.call('EXPIRE',KEYS[4],ARGV[4])
-return 1`;
+local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') or not validtype(KEYS[3],'set') or not validtype(KEYS[4],'set') then return -3 end local score=tonumber(ARGV[1]); local recordTtl=tonumber(ARGV[3]); local campaignTtl=tonumber(ARGV[4]) if not score or score~=score or score<-9007199254740991 or score>9007199254740991 or not recordTtl or recordTtl~=math.floor(recordTtl) or recordTtl<1 or recordTtl>2147483647 or not campaignTtl or campaignTtl~=math.floor(campaignTtl) or campaignTtl<1 or campaignTtl>2147483647 then return -3 end local nextOk,nextDoc=pcall(cjson.decode,ARGV[5]) if not nextOk or type(nextDoc)~='table' or tostring(nextDoc.id or '')~=ARGV[2] then return -3 end local existing=redis.call('GET',KEYS[1]) if existing then local ok,doc=pcall(cjson.decode,existing) if not ok or type(doc)~='table' or tostring(doc.id or '')~=ARGV[2] or tostring(doc.campaignId or '')~=tostring(nextDoc.campaignId or '') or tostring(doc.to or '')~=tostring(nextDoc.to or '') or tostring(doc.scheduledAt or '')~=tostring(nextDoc.scheduledAt or '') or tostring(doc.deliveryMessageId or '')~=tostring(nextDoc.deliveryMessageId or '') then return -2 end local status=tostring(doc.status or '') local queueScore=tonumber(doc.queueScore or ARGV[1]) if not queueScore or queueScore~=queueScore or queueScore<-9007199254740991 or queueScore>9007199254740991 then return -2 end redis.call('SADD',KEYS[3],ARGV[2]) redis.call('EXPIRE',KEYS[3],ARGV[4]) if status=='queued' or status=='sending' then redis.call('ZADD',KEYS[2],queueScore,ARGV[2]) redis.call('SADD',KEYS[4],ARGV[2]) redis.call('EXPIRE',KEYS[4],ARGV[4]) else redis.call('ZREM',KEYS[2],ARGV[2]) redis.call('SREM',KEYS[4],ARGV[2]) end redis.call('EXPIRE',KEYS[1],ARGV[3]) return 0 end redis.call('SET',KEYS[1],ARGV[5],'EX',ARGV[3]) redis.call('ZADD',KEYS[2],ARGV[1],ARGV[2]) redis.call('SADD',KEYS[3],ARGV[2]) redis.call('SADD',KEYS[4],ARGV[2]) redis.call('EXPIRE',KEYS[3],ARGV[4]) redis.call('EXPIRE',KEYS[4],ARGV[4]) return 1
+`;
 
 async function saveJob(job, score) {
+  if (!validJob(job, job?.id, safeCampaignId(job?.campaignId))) return { ok: false, error: "invalid_job_record" };
+  const queueScore = Number(score);
+  const raw = JSON.stringify({ ...job, queueScore });
   const result = await redisCmd([
     "EVAL",
     SAVE_JOB_SCRIPT,
@@ -534,82 +494,99 @@ async function saveJob(job, score) {
     QUEUE_KEY,
     campaignJobIndexKey(job.campaignId),
     campaignPendingKey(job.campaignId),
-    String(score),
+    String(queueScore),
     job.id,
     String(RECORD_TTL_SECONDS),
     String(CAMPAIGN_TTL_SECONDS),
-    JSON.stringify({ ...job, queueScore: Number(score) }),
+    raw,
   ]);
   if (Number(result) === 1) return { ok: true, created: true };
   if (Number(result) === 0) return { ok: true, created: false, duplicate: true };
+  const recovery = await readRedis([
+    ["GET", jobKey(job.id)], ["ZSCORE", QUEUE_KEY, job.id],
+    ["SISMEMBER", campaignJobIndexKey(job.campaignId), job.id],
+    ["SISMEMBER", campaignPendingKey(job.campaignId), job.id], ["PING"],
+  ]);
+  const active = ["queued", "sending"].includes(job.status);
+  if (recovery.ok && recovery.rows[0] === raw && Number(recovery.rows[2]) === 1
+      && recovery.rows[4] === "PONG"
+      && (active ? Number(recovery.rows[1]) === queueScore && Number(recovery.rows[3]) === 1
+        : recovery.rows[1] == null && Number(recovery.rows[3]) === 0)) {
+    return { ok: true, created: true, recovered: true };
+  }
   return { ok: false, error: "storage_failed" };
 }
 
+function campaignTransitionDocuments(raw, job, mode, timestamp) {
+  const emptyResponse = JSON.stringify({ ok: true, status: job.status, campaignStatus: "" });
+  if (typeof raw !== "string") {
+    return {
+      expectedRaw: "__lm_marketing_missing__",
+      campaignNextRaw: "__lm_marketing_missing__",
+      campaignFinalRaw: "__lm_marketing_missing__",
+      responseNext: emptyResponse,
+      responseFinal: emptyResponse,
+    };
+  }
+  const campaign = parseJson(raw);
+  if (!validCampaign(campaign, safeCampaignId(job?.campaignId))) {
+    return {
+      expectedRaw: raw,
+      campaignNextRaw: "__lm_marketing_missing__",
+      campaignFinalRaw: "__lm_marketing_missing__",
+      responseNext: emptyResponse,
+      responseFinal: emptyResponse,
+    };
+  }
+  const patch = { updatedAt: timestamp };
+  if (job.status === "sending" && String(campaign.status || "") === "scheduled") {
+    patch.status = "sending";
+    if (!Object.hasOwn(campaign, "startedAt") || campaign.startedAt === false) patch.startedAt = timestamp;
+  }
+  if (mode === "terminal") {
+    const field = `${job.status}Count`;
+    const count = Number(campaign[field] ?? 0);
+    const terminalCount = Number(campaign.terminalCount ?? 0);
+    if (!Number.isSafeInteger(count) || count < 0 || count >= Number.MAX_SAFE_INTEGER
+      || !Number.isSafeInteger(terminalCount) || terminalCount < 0 || terminalCount >= Number.MAX_SAFE_INTEGER) return null;
+    patch[field] = count + 1;
+    patch.terminalCount = terminalCount + 1;
+  }
+  const campaignNextRaw = replaceTopLevelJsonFields(raw, patch);
+  if (!campaignNextRaw) return null;
+  const nextStatus = String(patch.status ?? campaign.status ?? "");
+  const finalPatch = { ...patch };
+  if (mode === "terminal" && campaign.enqueueCompletedAt && nextStatus !== "cancelled") {
+    const failedCount = Number(finalPatch.failedCount ?? campaign.failedCount ?? 0);
+    const enqueueFailedCount = Number(campaign.enqueueFailedCount ?? 0);
+    if (!Number.isSafeInteger(failedCount) || failedCount < 0
+      || !Number.isSafeInteger(enqueueFailedCount) || enqueueFailedCount < 0) return null;
+    if (failedCount > 0 || enqueueFailedCount > 0) {
+      finalPatch.status = "failed";
+      finalPatch.failedAt = timestamp;
+    } else {
+      finalPatch.status = "completed";
+      finalPatch.completedAt = timestamp;
+    }
+  }
+  const campaignFinalRaw = replaceTopLevelJsonFields(raw, finalPatch);
+  if (!campaignFinalRaw) return null;
+  return {
+    expectedRaw: raw,
+    campaignNextRaw,
+    campaignFinalRaw,
+    responseNext: JSON.stringify({ ok: true, status: job.status, campaignStatus: nextStatus }),
+    responseFinal: JSON.stringify({
+      ok: true,
+      status: job.status,
+      campaignStatus: String(finalPatch.status ?? campaign.status ?? ""),
+    }),
+  };
+}
+
 const TRANSITION_JOB_SCRIPT = `
-local raw=redis.call('GET',KEYS[1])
-if not raw then return '__missing__' end
-local ok,current=pcall(cjson.decode,raw)
-if not ok then return '__corrupt__' end
-local currentStatus=tostring(current.status or '')
-local expected='|'..ARGV[1]..'|'
-if not string.find(expected,'|'..currentStatus..'|',1,true) then return '__invalid__:'..currentStatus end
-local campaignRaw=redis.call('GET',KEYS[6])
-local campaign=nil
-if campaignRaw then
-  local campaignOk,decoded=pcall(cjson.decode,campaignRaw)
-  if campaignOk then campaign=decoded end
-end
-if ARGV[9]=='sending' then
-  if not campaign then return '__campaign_missing__' end
-  local campaignStatus=tostring(campaign.status or '')
-  if campaignStatus~='scheduled' and campaignStatus~='sending' then return '__campaign_blocked__:'..campaignStatus end
-end
-local nextOk,nextDoc=pcall(cjson.decode,ARGV[2])
-if not nextOk then return '__corrupt_next__' end
-redis.call('SET',KEYS[1],ARGV[2],'EX',ARGV[3])
-redis.call('SADD',KEYS[5],ARGV[8])
-redis.call('EXPIRE',KEYS[5],ARGV[4])
-if ARGV[5]=='terminal' then
-  redis.call('ZREM',KEYS[2],ARGV[8])
-  redis.call('SREM',KEYS[3],ARGV[8])
-  redis.call('DEL',KEYS[4])
-elseif ARGV[5]=='schedule' then
-  redis.call('ZADD',KEYS[2],ARGV[6],ARGV[8])
-  redis.call('SADD',KEYS[3],ARGV[8])
-  redis.call('EXPIRE',KEYS[3],ARGV[4])
-  redis.call('DEL',KEYS[4])
-else
-  redis.call('SADD',KEYS[3],ARGV[8])
-  redis.call('EXPIRE',KEYS[3],ARGV[4])
-end
-if ARGV[11]=='1' then
-  redis.call('INCR',KEYS[8])
-  redis.call('EXPIRE',KEYS[8],ARGV[12])
-end
-if campaign then
-  if ARGV[9]=='sending' and tostring(campaign.status or '')=='scheduled' then
-    campaign.status='sending'
-    if not campaign.startedAt then campaign.startedAt=ARGV[10] end
-  end
-  if ARGV[5]=='terminal' then
-    local field=ARGV[9]..'Count'
-    campaign[field]=tonumber(campaign[field] or 0)+1
-    campaign.terminalCount=tonumber(campaign.terminalCount or 0)+1
-    if redis.call('SCARD',KEYS[3])==0 and campaign.enqueueCompletedAt and tostring(campaign.status or '')~='cancelled' then
-      if tonumber(campaign.failedCount or 0)>0 or tonumber(campaign.enqueueFailedCount or 0)>0 then
-        campaign.status='failed'
-        campaign.failedAt=ARGV[10]
-      else
-        campaign.status='completed'
-        campaign.completedAt=ARGV[10]
-      end
-    end
-  end
-  campaign.updatedAt=ARGV[10]
-  redis.call('SET',KEYS[6],cjson.encode(campaign),'EX',ARGV[4])
-  redis.call('ZADD',KEYS[7],'NX',ARGV[13],ARGV[7])
-end
-return cjson.encode({ok=true,status=ARGV[9],campaignStatus=campaign and campaign.status or ''})`;
+local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end local expectedTypes={'string','zset','set','string','set','string','zset','string'} for index,key in ipairs(KEYS) do if not validtype(key,expectedTypes[index]) then return '__storage_type__' end end local recordTtl=tonumber(ARGV[3]); local campaignTtl=tonumber(ARGV[4]); local queueScore=tonumber(ARGV[6]); local dailyTtl=tonumber(ARGV[12]); local campaignScore=tonumber(ARGV[13]) if not recordTtl or recordTtl~=math.floor(recordTtl) or recordTtl<1 or not campaignTtl or campaignTtl~=math.floor(campaignTtl) or campaignTtl<1 or not queueScore or queueScore~=queueScore or queueScore<-9007199254740991 or queueScore>9007199254740991 or not dailyTtl or dailyTtl~=math.floor(dailyTtl) or dailyTtl<1 or not campaignScore or campaignScore~=campaignScore or campaignScore<-9007199254740991 or campaignScore>9007199254740991 then return '__invalid_args__' end if ARGV[11]=='1' then local dailyRaw=redis.call('GET',KEYS[8]); local dailyCount=dailyRaw and tonumber(dailyRaw) or 0 if not dailyCount or dailyCount~=math.floor(dailyCount) or dailyCount<0 or dailyCount>=9007199254740991 then return '__invalid_daily_count__' end end local raw=redis.call('GET',KEYS[1]) if not raw then return '__missing__' end local ok,current=pcall(cjson.decode,raw) if not ok or type(current)~='table' or tostring(current.id or '')~=ARGV[8] or tostring(current.campaignId or '')~=ARGV[7] then return '__corrupt__' end local currentStatus=tostring(current.status or '') local expected='|'..ARGV[1]..'|' if not string.find(expected,'|'..currentStatus..'|',1,true) then return '__invalid__:'..currentStatus end local campaignRaw=redis.call('GET',KEYS[6]) if campaignRaw then if campaignRaw~=ARGV[14] then return '__campaign_conflict__' end elseif ARGV[14]~='__lm_marketing_missing__' then return '__campaign_conflict__' end local campaign=nil if campaignRaw then local campaignOk,decoded=pcall(cjson.decode,campaignRaw) if not campaignOk or type(decoded)~='table' or tostring(decoded.id or '')~=ARGV[7] then return '__campaign_corrupt__' end campaign=decoded end if ARGV[9]=='sending' then if not campaign then return '__campaign_missing__' end local campaignStatus=tostring(campaign.status or '') if campaignStatus~='scheduled' and campaignStatus~='sending' then return '__campaign_blocked__:'..campaignStatus end end local nextOk,nextDoc=pcall(cjson.decode,ARGV[2]) if not nextOk or type(nextDoc)~='table' or tostring(nextDoc.id or '')~=ARGV[8] or tostring(nextDoc.campaignId or '')~=ARGV[7] then return '__corrupt_next__' end local responseNextOk,responseNext=pcall(cjson.decode,ARGV[17]) local responseFinalOk,responseFinal=pcall(cjson.decode,ARGV[18]) if not responseNextOk or type(responseNext)~='table' or responseNext.ok~=true or not responseFinalOk or type(responseFinal)~='table' or responseFinal.ok~=true then return '__corrupt_next__' end if campaign then local campaignNextOk,campaignNext=pcall(cjson.decode,ARGV[15]) local campaignFinalOk,campaignFinal=pcall(cjson.decode,ARGV[16]) if not campaignNextOk or type(campaignNext)~='table' or tostring(campaignNext.id or '')~=ARGV[7] or not campaignFinalOk or type(campaignFinal)~='table' or tostring(campaignFinal.id or '')~=ARGV[7] then return '__corrupt_next__' end end redis.call('SET',KEYS[1],ARGV[2],'EX',ARGV[3]) redis.call('SADD',KEYS[5],ARGV[8]) redis.call('EXPIRE',KEYS[5],ARGV[4]) if ARGV[5]=='terminal' then redis.call('ZREM',KEYS[2],ARGV[8]) redis.call('SREM',KEYS[3],ARGV[8]) redis.call('DEL',KEYS[4]) elseif ARGV[5]=='schedule' then redis.call('ZADD',KEYS[2],ARGV[6],ARGV[8]) redis.call('SADD',KEYS[3],ARGV[8]) redis.call('EXPIRE',KEYS[3],ARGV[4]) redis.call('DEL',KEYS[4]) else redis.call('SADD',KEYS[3],ARGV[8]) redis.call('EXPIRE',KEYS[3],ARGV[4]) end if ARGV[11]=='1' then redis.call('INCR',KEYS[8]) redis.call('EXPIRE',KEYS[8],ARGV[12]) end if campaign then local campaignEncoded=ARGV[15] local responseEncoded=ARGV[17] if ARGV[5]=='terminal' and redis.call('SCARD',KEYS[3])==0 then campaignEncoded=ARGV[16] responseEncoded=ARGV[18] end redis.call('SET',KEYS[6],campaignEncoded,'EX',ARGV[4]) redis.call('ZADD',KEYS[7],'NX',ARGV[13],ARGV[7]) return responseEncoded end return ARGV[17]
+`;
 
 async function transitionJob(job, {
   expectedStatuses,
@@ -620,44 +597,64 @@ async function transitionJob(job, {
 } = {}) {
   const id = clean(job?.id, 80);
   const campaignId = safeCampaignId(job?.campaignId);
-  if (!id || !campaignId || !Array.isArray(expectedStatuses) || !expectedStatuses.length) {
+  if (!validJob(job, id, campaignId) || !Array.isArray(expectedStatuses) || !expectedStatuses.length) {
     return { ok: false, error: "invalid_transition" };
   }
   const timestamp = job.updatedAt || new Date().toISOString();
-  const result = await redisCmd([
-    "EVAL",
-    TRANSITION_JOB_SCRIPT,
-    "8",
-    jobKey(id),
-    QUEUE_KEY,
-    campaignPendingKey(campaignId),
-    claimKey(id),
-    campaignJobIndexKey(campaignId),
-    campaignKey(campaignId),
-    CAMPAIGN_INDEX_KEY,
-    dailyKey || `${DAILY_COUNT_PREFIX}noop`,
-    expectedStatuses.join("|"),
-    JSON.stringify(job),
-    String(RECORD_TTL_SECONDS),
-    String(CAMPAIGN_TTL_SECONDS),
-    mode,
-    String(Number(score || job.queueScore || 0)),
-    campaignId,
-    id,
-    job.status,
-    timestamp,
-    incrementDaily ? "1" : "0",
-    String(3 * 24 * 60 * 60),
-    String(Date.now()),
-  ]);
-  if (String(result || "").startsWith("{")) return { ok: true, ...parseJson(result) };
-  if (result === "__missing__") return { ok: false, error: "job_not_found" };
-  if (String(result || "").startsWith("__invalid__")) return { ok: false, error: "invalid_job_transition" };
-  if (String(result || "").startsWith("__campaign_blocked__")) {
-    return { ok: false, error: "campaign_blocked", campaignStatus: String(result).split(":")[1] || "" };
+  const jobRaw = JSON.stringify(job);
+  const indexScore = String(Date.now());
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const read = await readRedis([["GET", campaignKey(campaignId)], ["PING"]]);
+    if (!read.ok || read.rows[1] !== "PONG") return { ok: false, error: "storage_failed" };
+    const campaignRaw = read.rows[0];
+    const campaign = parseJson(campaignRaw);
+    if (campaignRaw != null && !validCampaign(campaign, campaignId)) return { ok: false, error: "storage_failed" };
+    const documents = campaignTransitionDocuments(campaignRaw, job, mode, timestamp);
+    if (!documents) return { ok: false, error: "storage_failed" };
+    let result = await redisCmd([
+      "EVAL", TRANSITION_JOB_SCRIPT, "8",
+      jobKey(id), QUEUE_KEY, campaignPendingKey(campaignId), claimKey(id),
+      campaignJobIndexKey(campaignId), campaignKey(campaignId), CAMPAIGN_INDEX_KEY,
+      dailyKey || `${DAILY_COUNT_PREFIX}noop`,
+      expectedStatuses.join("|"), jobRaw,
+      String(RECORD_TTL_SECONDS), String(CAMPAIGN_TTL_SECONDS), mode,
+      String(Number(score || job.queueScore || 0)), campaignId, id, job.status, timestamp,
+      incrementDaily ? "1" : "0", String(3 * 24 * 60 * 60), indexScore,
+      documents.expectedRaw, documents.campaignNextRaw, documents.campaignFinalRaw,
+      documents.responseNext, documents.responseFinal,
+    ]);
+    if (result == null) {
+      const recovery = await readRedis([
+        ["GET", jobKey(id)], ["ZSCORE", QUEUE_KEY, id],
+        ["SISMEMBER", campaignPendingKey(campaignId), id], ["GET", claimKey(id)],
+        ["GET", campaignKey(campaignId)], ["PING"],
+      ]);
+      const queueOk = mode === "terminal" ? recovery.rows[1] == null
+        : mode === "schedule" ? Number(recovery.rows[1]) === Number(score || job.queueScore || 0) : true;
+      const membershipOk = Number(recovery.rows[2]) === (mode === "terminal" ? 0 : 1);
+      const claimOk = (mode !== "terminal" && mode !== "schedule") || recovery.rows[3] == null;
+      const campaignStored = recovery.rows[4];
+      const campaignOk = campaignRaw == null ? campaignStored == null
+        : campaignStored === documents.campaignNextRaw || campaignStored === documents.campaignFinalRaw;
+      if (recovery.ok && recovery.rows[0] === jobRaw && queueOk && membershipOk && claimOk
+          && campaignOk && recovery.rows[5] === "PONG") {
+        result = campaignStored === documents.campaignFinalRaw ? documents.responseFinal : documents.responseNext;
+      }
+    }
+    if (result === "__campaign_conflict__") continue;
+    if (String(result || "").startsWith("{")) {
+      const parsed = parseJson(result);
+      return parsed?.ok ? { ok: true, ...parsed } : { ok: false, error: "storage_failed" };
+    }
+    if (result === "__missing__") return { ok: false, error: "job_not_found" };
+    if (String(result || "").startsWith("__invalid__")) return { ok: false, error: "invalid_job_transition" };
+    if (String(result || "").startsWith("__campaign_blocked__")) {
+      return { ok: false, error: "campaign_blocked", campaignStatus: String(result).split(":")[1] || "" };
+    }
+    if (result === "__campaign_missing__") return { ok: false, error: "campaign_not_found" };
+    return { ok: false, error: "storage_failed" };
   }
-  if (result === "__campaign_missing__") return { ok: false, error: "campaign_not_found" };
-  return { ok: false, error: "storage_failed" };
+  return { ok: false, error: "storage_conflict" };
 }
 
 async function refreshCampaignLifecycle(campaignId) {
@@ -672,29 +669,6 @@ async function refreshCampaignLifecycle(campaignId) {
   return result.ok;
 }
 
-async function updateRecipientStatus(job, status, extra = {}) {
-  const contactId = job?.contactId || mailContactId(job?.to);
-  if (!job?.campaignId || !contactId) return;
-  const existing = parseJson(await redisCmd(["GET", recipientKey(job.campaignId, contactId)]));
-  await redisCmd([
-    "SET",
-    recipientKey(job.campaignId, contactId),
-    JSON.stringify({
-      ...(existing || {}),
-      campaignId: job.campaignId,
-      contactId,
-      email: job.to,
-      jobId: job.id,
-      messageId: job.deliveryMessageId,
-      status,
-      ...extra,
-      updatedAt: new Date().toISOString(),
-    }),
-    "EX",
-    String(CAMPAIGN_TTL_SECONDS),
-  ]);
-}
-
 async function updateRecipientStatusStrict(job, status, extra = {}) {
   const contactId = job?.contactId || mailContactId(job?.to);
   if (!job?.campaignId || !contactId) return { ok: false, error: "invalid_recipient" };
@@ -702,7 +676,11 @@ async function updateRecipientStatusStrict(job, status, extra = {}) {
   const existingRead = await readRedis([["GET", key], ["PING"]]);
   if (!existingRead.ok || existingRead.rows[1] !== "PONG") return { ok: false, error: "storage_failed" };
   const existing = existingRead.rows[0] == null ? null : parseJson(existingRead.rows[0]);
-  if (existingRead.rows[0] != null && (!existing || typeof existing !== "object")) {
+  if (existingRead.rows[0] != null && (!plain(existing)
+    || (existing.campaignId && existing.campaignId !== job.campaignId)
+    || (existing.contactId && existing.contactId !== contactId)
+    || (existing.email && normalizeEmail(existing.email) !== normalizeEmail(job.to))
+    || (existing.jobId && existing.jobId !== job.id))) {
     return { ok: false, error: "storage_failed" };
   }
   const saved = await readRedis([
@@ -858,7 +836,7 @@ export async function enqueueMarketingCampaign({
     return { ok: false, error: "storage_failed", queuedCount: 0, failedCount: uniqueRecipients.length };
   }
   let storedCampaign = parseJson(storedCampaignRead.rows[0]);
-  if (!storedCampaign) {
+  if (!validCampaign(storedCampaign, id)) {
     return { ok: false, error: "storage_failed", queuedCount: 0, failedCount: uniqueRecipients.length };
   }
   if (campaignCreation.duplicate && storedCampaign.status === "failed" && Number(storedCampaign.enqueueFailedCount || 0) > 0) {
@@ -876,6 +854,9 @@ export async function enqueueMarketingCampaign({
     const existingRead = await readRedis([["GET", jobKey(idempotencyId)]]);
     if (!existingRead.ok) return { to, ok: false, retryable: true, reason: "storage_failed" };
     const existing = parseJson(existingRead.rows[0]);
+    if (existingRead.rows[0] != null && !validJob(existing, idempotencyId, id, to, scheduledIso)) {
+      return { to, ok: false, retryable: true, reason: "storage_failed" };
+    }
     if (existing) {
       if (["queued", "sending"].includes(existing.status)) {
         const repaired = await saveJob(existing, Number(existing.queueScore || scheduledMs));
@@ -1038,6 +1019,9 @@ export async function enqueueMarketingCampaign({
     return { ok: false, error: "storage_failed", campaignId: id, scheduledAt: scheduledIso, queuedCount, suppressedCount, failedCount, results: results.map(({ to: _recipient, ...item }) => item) };
   }
   const latestCampaign = parseJson(latestRead.rows[0]);
+  if (!validCampaign(latestCampaign, id)) {
+    return { ok: false, error: "storage_failed", campaignId: id, scheduledAt: scheduledIso, queuedCount, suppressedCount, failedCount, results: [] };
+  }
   const summaryStatus = ["scheduled", "sending"].includes(latestCampaign?.status) ? latestCampaign.status : "";
   const summary = summaryStatus ? await updateCampaignState(id, summaryStatus, [summaryStatus], {
     recipientCount: uniqueRecipients.length,
@@ -1064,7 +1048,7 @@ export async function enqueueMarketingCampaign({
 }
 
 async function recordDispatch(job, campaign, result) {
-  const reason = result?.ok ? "" : clean(result?.reason || result?.error || result?.code || "send_failed", 200);
+  const reason = result?.ok === true ? "" : clean(result?.reason || result?.error || result?.code || "send_failed", 200);
   const delivery = await registerEmailDelivery({
     args: {
       to: job.to,
@@ -1080,7 +1064,7 @@ async function recordDispatch(job, campaign, result) {
       messageId: job.deliveryMessageId,
       providerMessageId: result?.messageId || "",
       scheduledAt: job.scheduledAt,
-      status: result?.suppressed ? "suppressed" : (result?.ok ? "sent" : "failed"),
+      status: result?.suppressed ? "suppressed" : (result?.ok === true ? "sent" : "failed"),
       forceStatus: true,
     },
   });
@@ -1089,7 +1073,7 @@ async function recordDispatch(job, campaign, result) {
     subject: campaign.subject,
     content: campaign.preview,
     preview: campaign.preview,
-    ok: Boolean(result?.ok),
+    ok: result?.ok === true,
     reason,
     messageId: result?.messageId || job.deliveryMessageId,
     category: "marketing",
@@ -1104,29 +1088,16 @@ async function recordDispatch(job, campaign, result) {
 }
 
 const RENEW_DISPATCH_LEASE_SCRIPT = `
-if redis.call('GET',KEYS[1])==ARGV[1] then
-  return redis.call('EXPIRE',KEYS[1],ARGV[2])
-end
-return 0`;
+if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('EXPIRE',KEYS[1],ARGV[2]) end return 0
+`;
 
 const RELEASE_DISPATCH_LEASE_SCRIPT = `
-if redis.call('GET',KEYS[1])==ARGV[1] then
-  return redis.call('DEL',KEYS[1])
-end
-return 0`;
+if redis.call('GET',KEYS[1])==ARGV[1] then return redis.call('DEL',KEYS[1]) end return 0
+`;
 
 const VERIFY_SEND_OWNERSHIP_SCRIPT = `
-if redis.call('GET',KEYS[1])~=ARGV[1] then return 0 end
-if redis.call('GET',KEYS[2])~=ARGV[1] then return 0 end
-local jobRaw=redis.call('GET',KEYS[3])
-local campaignRaw=redis.call('GET',KEYS[4])
-if not jobRaw or not campaignRaw then return 0 end
-local jobOk,job=pcall(cjson.decode,jobRaw)
-local campaignOk,campaign=pcall(cjson.decode,campaignRaw)
-if not jobOk or not campaignOk then return 0 end
-if tostring(job.status or '')~='sending' then return 0 end
-if tostring(campaign.status or '')~='sending' then return 0 end
-return 1`;
+if redis.call('GET',KEYS[1])~=ARGV[1] then return 0 end if redis.call('GET',KEYS[2])~=ARGV[1] then return 0 end local jobRaw=redis.call('GET',KEYS[3]) local campaignRaw=redis.call('GET',KEYS[4]) if not jobRaw or not campaignRaw then return 0 end local jobOk,job=pcall(cjson.decode,jobRaw) local campaignOk,campaign=pcall(cjson.decode,campaignRaw) if not jobOk or not campaignOk then return 0 end if tostring(job.id or '')~=ARGV[2] or tostring(job.campaignId or '')~=ARGV[3] or tostring(campaign.id or '')~=ARGV[3] then return 0 end if tostring(job.status or '')~='sending' then return 0 end if tostring(campaign.status or '')~='sending' then return 0 end return 1
+`;
 
 async function renewDispatchLease(token, ttlSeconds) {
   return Number(await redisCmd(["EVAL", RENEW_DISPATCH_LEASE_SCRIPT, "1", DISPATCH_LOCK_KEY, token, String(ttlSeconds)])) === 1;
@@ -1146,6 +1117,8 @@ async function verifySendOwnership({ lockToken, job }) {
     jobKey(job.id),
     campaignKey(job.campaignId),
     lockToken,
+    job.id,
+    job.campaignId,
   ])) === 1;
 }
 
@@ -1194,15 +1167,12 @@ export async function dispatchDueMarketingCampaigns({
   const lockToken = randomBytes(18).toString("hex");
   const acquired = await redisCmd(["SET", DISPATCH_LOCK_KEY, lockToken, "NX", "EX", String(ttlSeconds)]);
   if (acquired !== "OK") {
-    // redisCmd intentionally maps transport failures to null, which is also
-    // Redis' normal SET NX response when another worker owns the lock. Probe
-    // the lock through the strict pipeline reader so an outage is never
-    // reported as a healthy competing worker.
+    // Distinguish a healthy competing lock from a storage outage.
     const lockRead = await readRedis([["GET", DISPATCH_LOCK_KEY]]);
     if (!lockRead.ok || !lockRead.rows[0]) {
       return { ok: false, skipped: true, reason: "lock_store_unavailable", submitted: 0, failed: 0 };
     }
-    return { ok: true, skipped: true, reason: "locked", submitted: 0, failed: 0 };
+    if (lockRead.rows[0] !== lockToken) return { ok: true, skipped: true, reason: "locked", submitted: 0, failed: 0 };
   }
 
   let submitted = 0;
@@ -1256,7 +1226,11 @@ export async function dispatchDueMarketingCampaigns({
       const id = clean(rawJobId, 80);
       if (!id) continue;
       const claimed = await redisCmd(["SET", claimKey(id), lockToken, "NX", "EX", "180"]);
-      if (claimed !== "OK") continue;
+      if (claimed !== "OK") {
+        const claimRead = await readRedis([["GET", claimKey(id)]]);
+        if (!claimRead.ok) { failed += 1; results.push({ id, ok: false, retryable: true, reason: "claim_store_unavailable" }); break; }
+        if (claimRead.rows[0] !== lockToken) continue;
+      }
       if (!canContinue()) {
         deadlineExceeded = true;
         await redisCmd(["DEL", claimKey(id)]);
@@ -1274,7 +1248,8 @@ export async function dispatchDueMarketingCampaigns({
         break;
       }
       const job = parseJson(jobRead.rows[0]);
-      if (!job || ["submitted", "suppressed", "failed", "cancelled"].includes(job.status)) {
+      if (!validJob(job, id)) { await redisCmd(["DEL", claimKey(id)]); failed += 1; results.push({ id, ok: false, retryable: false, reason: "invalid_job_record" }); continue; }
+      if (["submitted", "suppressed", "failed", "cancelled"].includes(job.status)) {
         await redisPipeline([["ZREM", QUEUE_KEY, id], ["DEL", claimKey(id)], ...(job?.campaignId ? [["SREM", campaignPendingKey(job.campaignId), id]] : [])]);
         if (job?.campaignId) await refreshCampaignLifecycle(job.campaignId);
         continue;
@@ -1299,7 +1274,7 @@ export async function dispatchDueMarketingCampaigns({
           continue;
         }
         const delivery = deliveryRead.record;
-        if (delivery && ["sent", "delivered", "recovered"].includes(delivery.status) && delivery.relatedId === job.campaignId) {
+        if (delivery && ["sent", "delivered", "recovered"].includes(delivery.status) && delivery.category === "marketing" && delivery.relatedType === "scheduled_campaign" && delivery.relatedId === job.campaignId && normalizeRecipients(delivery.recipients?.length ? delivery.recipients : delivery.to).includes(normalizeEmail(job.to))) {
           const recoveredJob = {
             ...job,
             status: "submitted",
@@ -1329,7 +1304,7 @@ export async function dispatchDueMarketingCampaigns({
             results.push({ id, to: job.to, ok: false, retryable: true, reason: "delivery_commit_pending" });
             continue;
           }
-          await updateRecipientStatus(job, "submitted", { provider: recoveredJob.provider, providerMessageId: recoveredJob.providerMessageId, submittedAt: recoveredJob.submittedAt });
+          await updateRecipientStatusStrict(job, "submitted", { provider: recoveredJob.provider, providerMessageId: recoveredJob.providerMessageId, submittedAt: recoveredJob.submittedAt });
           submitted += 1;
           results.push({ id, to: job.to, ok: true, recovered: true, messageId: recoveredJob.providerMessageId });
           continue;
@@ -1358,7 +1333,7 @@ export async function dispatchDueMarketingCampaigns({
         }
         const quarantined = await transitionJob(unknownJob, { expectedStatuses: ["sending"], mode: "terminal" });
         if (quarantined.ok) {
-          await updateRecipientStatus(job, "failed", { reason: unknownJob.lastError });
+          await updateRecipientStatusStrict(job, "failed", { reason: unknownJob.lastError });
         }
         failed += 1;
         results.push({ id, to: job.to, ok: false, permanent: quarantined.ok, reason: quarantined.ok ? "delivery_outcome_unknown" : "delivery_commit_pending" });
@@ -1372,6 +1347,12 @@ export async function dispatchDueMarketingCampaigns({
         break;
       }
       const campaign = parseJson(campaignRead.rows[0]);
+      if (campaignRead.rows[0] != null && !validCampaign(campaign, job.campaignId)) {
+        await redisCmd(["DEL", claimKey(id)]);
+        failed += 1;
+        results.push({ id, to: job.to, ok: false, retryable: false, reason: "invalid_campaign_record" });
+        continue;
+      }
       if (!campaign) {
         const failedJob = { ...job, status: "failed", lastError: "campaign_missing", updatedAt: new Date(now).toISOString() };
         const stored = await transitionJob(failedJob, { expectedStatuses: ["queued"], mode: "terminal" });
@@ -1391,7 +1372,7 @@ export async function dispatchDueMarketingCampaigns({
         await transitionJob({ ...job, status: "cancelled", cancelledAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() }, {
           expectedStatuses: ["queued"], mode: "terminal",
         });
-        await updateRecipientStatus(job, "cancelled");
+        await updateRecipientStatusStrict(job, "cancelled");
         await refreshCampaignLifecycle(job.campaignId);
         results.push({ id, to: job.to, ok: true, skipped: true, reason: "campaign_cancelled" });
         continue;
@@ -1407,6 +1388,12 @@ export async function dispatchDueMarketingCampaigns({
         await transitionJob(inactiveJob, { expectedStatuses: ["queued"], mode: "terminal" });
         failed += 1;
         results.push({ id, to: job.to, ok: false, permanent: true, reason: inactiveJob.lastError });
+        continue;
+      }
+      if (typeof campaign.subject !== "string" || typeof campaign.html !== "string") {
+        await redisCmd(["DEL", claimKey(id)]);
+        failed += 1;
+        results.push({ id, to: job.to, ok: false, retryable: false, reason: "invalid_campaign_record" });
         continue;
       }
 
@@ -1462,8 +1449,10 @@ export async function dispatchDueMarketingCampaigns({
       }
       if (!(await verifySendOwnership({ lockToken, job: sendingJob }))) {
         const currentRead = await readRedis([["GET", campaignKey(job.campaignId)], ["GET", jobKey(id)]]);
-        const currentCampaign = currentRead.ok ? parseJson(currentRead.rows[0]) : null;
-        const currentJob = currentRead.ok ? parseJson(currentRead.rows[1]) : null;
+        const candidateCampaign = currentRead.ok ? parseJson(currentRead.rows[0]) : null;
+        const candidateJob = currentRead.ok ? parseJson(currentRead.rows[1]) : null;
+        const currentCampaign = validCampaign(candidateCampaign, job.campaignId) ? candidateCampaign : null;
+        const currentJob = validJob(candidateJob, id, job.campaignId) ? candidateJob : null;
         if (currentJob?.status === "sending" && currentCampaign?.status === "paused") {
           const nextAttemptMs = now + RETRY_DELAY_MS;
           await transitionJob({ ...currentJob, status: "queued", queueScore: nextAttemptMs, nextAttemptAt: new Date(nextAttemptMs).toISOString(), updatedAt: new Date(now).toISOString() }, {
@@ -1542,7 +1531,7 @@ export async function dispatchDueMarketingCampaigns({
           results.push({ id, to: job.to, ok: false, retryable: true, reason: "delivery_commit_pending" });
           continue;
         }
-        await updateRecipientStatus(job, "suppressed", { reason: suppressedJob.lastError });
+        await updateRecipientStatusStrict(job, "suppressed", { reason: suppressedJob.lastError });
         results.push({ id, to: job.to, ok: false, suppressed: true, reason: suppressedJob.lastError });
       } else if (result?.ok) {
         const completedJob = {
@@ -1573,7 +1562,7 @@ export async function dispatchDueMarketingCampaigns({
           results.push({ id, to: job.to, ok: false, retryable: true, deliveryRecorded: Boolean(deliveryRecord?.ok), reason: "delivery_commit_pending" });
           continue;
         }
-        await updateRecipientStatus(job, "submitted", {
+        await updateRecipientStatusStrict(job, "submitted", {
           provider: completedJob.provider,
           providerMessageId: completedJob.providerMessageId,
           submittedAt: completedJob.submittedAt,
@@ -1609,7 +1598,7 @@ export async function dispatchDueMarketingCampaigns({
             results.push({ id, to: job.to, ok: false, retryable: true, reason: "delivery_commit_pending" });
             continue;
           }
-          await updateRecipientStatus(job, "failed", { reason: lastError });
+          await updateRecipientStatusStrict(job, "failed", { reason: lastError });
           failed += 1;
           results.push({ id, to: job.to, ok: false, reason: lastError, permanent: true });
         } else {

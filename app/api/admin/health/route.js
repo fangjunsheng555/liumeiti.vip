@@ -1,6 +1,6 @@
 import { adminSessionFromRequest, isRootAdminSession } from "../../_utils.js";
 import { getSettingsStrict } from "../../_settings.js";
-import { checkRedisHealth, readAllHealthHistory, readHealthStatuses } from "../../_health.js";
+import { checkRedisHealth, readAllHealthHistoryWithDiagnostics, readHealthStatusesWithDiagnostics } from "../../_health.js";
 import { pushServerConfiguration, readPushQueueStats } from "../../_push.js";
 import { withApiTelemetry } from "../../_observability.js";
 
@@ -66,17 +66,17 @@ async function healthOverviewHandler(request) {
   }
 
   let redis;
-  let stored;
+  let statusResult;
   let settings;
   let pushStats;
-  let history;
+  let historyResult;
   try {
-    [redis, stored, settings, pushStats, history] = await Promise.all([
+    [redis, statusResult, settings, pushStats, historyResult] = await Promise.all([
       checkRedisHealth(),
-      readHealthStatuses(),
+      readHealthStatusesWithDiagnostics(),
       getSettingsStrict(),
       readPushQueueStats(),
-      readAllHealthHistory(12),
+      readAllHealthHistoryWithDiagnostics(12),
     ]);
   } catch (error) {
     return Response.json({
@@ -84,6 +84,10 @@ async function healthOverviewHandler(request) {
       error: String(error?.code || error?.message || "health_store_unavailable").slice(0, 160),
     }, { status: 503, headers: { "Cache-Control": "no-store" } });
   }
+  const stored = statusResult.statuses;
+  const statusDiagnostics = statusResult.diagnostics;
+  const history = historyResult.history;
+  const historyDiagnostics = historyResult.diagnostics;
   stored.redis = redis;
 
   if (!stored.resend) {
@@ -148,7 +152,15 @@ async function healthOverviewHandler(request) {
     out[item.status] = (out[item.status] || 0) + 1;
     return out;
   }, {});
-  return Response.json({ ok: true, components, counts, history, generatedAt: new Date().toISOString() }, { headers: { "Cache-Control": "no-store" } });
+  return Response.json({
+    ok: true,
+    components,
+    counts,
+    history,
+    statusDiagnostics,
+    historyDiagnostics,
+    generatedAt: new Date().toISOString(),
+  }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export const GET = withApiTelemetry("admin_health", healthOverviewHandler);

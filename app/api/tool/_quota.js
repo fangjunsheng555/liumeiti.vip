@@ -58,7 +58,11 @@ function parseScriptReply(raw) {
 // when Redis actually executed the command, including for an absent key.
 const READ_QUOTA_SCRIPT = `
 local raw=redis.call('GET',KEYS[1])
-if raw then return cjson.encode({ok=true,exists=true,raw=raw}) end
+if raw then
+  local encodedOk,encoded=pcall(cjson.encode,{ok=true,exists=true,raw=raw})
+  if not encodedOk then return redis.error_reply('quota_response_encode_failed') end
+  return encoded
+end
 return cjson.encode({ok=true,exists=false})`;
 
 const CAS_QUOTA_SCRIPT = `

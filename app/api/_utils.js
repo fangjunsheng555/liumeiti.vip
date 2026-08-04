@@ -52,6 +52,129 @@ export function clean(value, limit = 500) {
   return String(value || "").replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, limit);
 }
 
+function jsonStringEnd(source, start) {
+  if (source[start] !== '"') return -1;
+  let escaped = false;
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (escaped) escaped = false;
+    else if (character === "\\") escaped = true;
+    else if (character === '"') return index + 1;
+  }
+  return -1;
+}
+
+function jsonValueEnd(source, start) {
+  if (source[start] === '"') return jsonStringEnd(source, start);
+  if (source[start] === "{" || source[start] === "[") {
+    const stack = [source[start]];
+    let inString = false;
+    let escaped = false;
+    for (let index = start + 1; index < source.length; index += 1) {
+      const character = source[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') inString = true;
+      else if (character === "{" || character === "[") stack.push(character);
+      else if (character === "}" || character === "]") {
+        const opening = stack.pop();
+        if ((opening === "{" && character !== "}") || (opening === "[" && character !== "]")) return -1;
+        if (stack.length === 0) return index + 1;
+      }
+    }
+    return -1;
+  }
+  let end = start;
+  while (end < source.length && source[end] !== "," && source[end] !== "}") end += 1;
+  while (end > start && /\s/.test(source[end - 1])) end -= 1;
+  return end;
+}
+
+export function replaceTopLevelJsonFields(raw, replacements) {
+  if (typeof raw !== "string" || !raw || !replacements || typeof replacements !== "object") return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  } catch {
+    return null;
+  }
+  const requested = replacements instanceof Map ? [...replacements.entries()] : Object.entries(replacements);
+  const encoded = new Map();
+  try {
+    for (const [key, value] of requested) {
+      if (typeof key !== "string" || !key || encoded.has(key)) return null;
+      const valueJson = JSON.stringify(value);
+      if (valueJson === undefined) return null;
+      encoded.set(key, valueJson);
+    }
+  } catch {
+    return null;
+  }
+
+  let index = 0;
+  while (index < raw.length && /\s/.test(raw[index])) index += 1;
+  if (raw[index] !== "{") return null;
+  const openIndex = index;
+  index += 1;
+  const spans = new Map();
+  let propertyCount = 0;
+  let lastValueEnd = index;
+  let closeIndex = -1;
+  while (index < raw.length) {
+    while (index < raw.length && /\s/.test(raw[index])) index += 1;
+    if (raw[index] === "}") { closeIndex = index; break; }
+    const keyStart = index;
+    const keyEnd = jsonStringEnd(raw, keyStart);
+    if (keyEnd < 0) return null;
+    let key;
+    try { key = JSON.parse(raw.slice(keyStart, keyEnd)); } catch { return null; }
+    if (typeof key !== "string" || spans.has(key)) return null;
+    index = keyEnd;
+    while (index < raw.length && /\s/.test(raw[index])) index += 1;
+    if (raw[index] !== ":") return null;
+    index += 1;
+    while (index < raw.length && /\s/.test(raw[index])) index += 1;
+    const valueStart = index;
+    const valueEnd = jsonValueEnd(raw, valueStart);
+    if (valueEnd <= valueStart) return null;
+    try { JSON.parse(raw.slice(valueStart, valueEnd)); } catch { return null; }
+    spans.set(key, { start: valueStart, end: valueEnd });
+    propertyCount += 1;
+    lastValueEnd = valueEnd;
+    index = valueEnd;
+    while (index < raw.length && /\s/.test(raw[index])) index += 1;
+    if (raw[index] === ",") { index += 1; continue; }
+    if (raw[index] === "}") { closeIndex = index; break; }
+    return null;
+  }
+  if (closeIndex < 0) return null;
+  for (let tail = closeIndex + 1; tail < raw.length; tail += 1) if (!/\s/.test(raw[tail])) return null;
+
+  const edits = [];
+  const missing = [];
+  for (const [key, valueJson] of encoded) {
+    const span = spans.get(key);
+    if (span) edits.push({ ...span, text: valueJson });
+    else missing.push(`${JSON.stringify(key)}:${valueJson}`);
+  }
+  if (missing.length) {
+    edits.push({
+      start: propertyCount ? lastValueEnd : openIndex + 1,
+      end: propertyCount ? lastValueEnd : openIndex + 1,
+      text: `${propertyCount ? "," : ""}${missing.join(",")}`,
+    });
+  }
+  edits.sort((left, right) => right.start - left.start);
+  let next = raw;
+  for (const edit of edits) next = next.slice(0, edit.start) + edit.text + next.slice(edit.end);
+  try { JSON.parse(next); } catch { return null; }
+  return next;
+}
+
 export function validEmail(value) {
   const email = String(value || "").trim();
   return email.length > 3
@@ -105,12 +228,27 @@ export async function redisPipeline(commands) {
   } catch (e) { return null; }
 }
 
+async function readRedisStringState(key) {
+  const rows = pipelineResults(await redisPipeline([["GET", key], ["PING"]]));
+  if (rows.length !== 2 || rows.some((row) => row && typeof row === "object"
+    && Object.hasOwn(row, "error") && row.error != null)) {
+    return { ok: false, exists: false, raw: null, error: "storage_failed" };
+  }
+  const raw = pipelineResultValue(rows[0]);
+  const pong = pipelineResultValue(rows[1]);
+  if (pong !== "PONG") return { ok: false, exists: false, raw: null, error: "storage_failed" };
+  if (raw == null) return { ok: true, exists: false, raw: null };
+  return typeof raw === "string"
+    ? { ok: true, exists: true, raw }
+    : { ok: false, exists: true, raw: null, error: "storage_failed" };
+}
+
 function normalizeOrderIdForStorage(value) {
   return clean(value, 80).replace(/\s+/g, "").toUpperCase();
 }
 
 function normalizeEmailForStorage(value) {
-  return clean(value, 200).toLowerCase().trim();
+  const email = String(value || "").trim().toLowerCase(); return validEmail(email) ? email : "";
 }
 
 export function normalizeInternalReference(value) {
@@ -240,10 +378,15 @@ function orderOverviewSnapshot(order) {
   };
 }
 
-function parseOrderJson(value) {
+function parseOrderJson(value, expectedId = "") {
   if (!value) return null;
-  if (typeof value === "object") return value;
-  try { return JSON.parse(value); } catch (e) { return null; }
+  let order = value;
+  if (typeof value !== "object") {
+    try { order = JSON.parse(value); } catch (e) { return null; }
+  }
+  if (!order || typeof order !== "object" || Array.isArray(order)) return null;
+  const id = normalizeOrderIdForStorage(order.orderId);
+  return id && (!expectedId || id === normalizeOrderIdForStorage(expectedId)) ? order : null;
 }
 
 function pipelineResults(value) {
@@ -286,7 +429,8 @@ async function getOrdersByIds(orderIds) {
       const raw = entry && typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, "result")
         ? entry.result
         : entry;
-      const order = parseOrderJson(raw);
+      const order = parseOrderJson(raw, batchIds[index]);
+      if (raw != null && !order) throw new Error("order_store_corrupt");
       if (order) entries.push({ orderId: batchIds[index], order });
     });
   }
@@ -330,20 +474,7 @@ async function scanOrderRecordIds() {
 }
 
 const ADD_ORDER_INDEX_MEMBER_SCRIPT = `
-local function keytype(key)
-  local result=redis.call('TYPE',key)
-  if type(result)=='table' then return result.ok end
-  return result
-end
-local function validtype(key,expected)
-  local actual=keytype(key)
-  return actual=='none' or actual==expected
-end
-if not validtype(KEYS[1],'set') then return redis.error_reply('storage_type_error:key1') end
-if not validtype(KEYS[2],'list') then return redis.error_reply('storage_type_error:key2') end
-local added=redis.call('SADD',KEYS[1],ARGV[1])
-if added==1 then redis.call('RPUSH',KEYS[2],ARGV[1]) end
-return cjson.encode({ok=true,added=added})
+local function keytype(key) local result=redis.call('TYPE',key) if type(result)=='table' then return result.ok end return result end local function validtype(key,expected) local actual=keytype(key) return actual=='none' or actual==expected end if not validtype(KEYS[1],'set') then return redis.error_reply('storage_type_error:key1') end if not validtype(KEYS[2],'list') then return redis.error_reply('storage_type_error:key2') end local added=redis.call('SADD',KEYS[1],ARGV[1]) if added==1 then redis.call('RPUSH',KEYS[2],ARGV[1]) end return '{"ok":true,"added":'..tostring(added)..'}'
 `;
 
 function addOrderIndexMemberCommand(orderId) {
@@ -454,7 +585,8 @@ export async function getOrderById(orderId) {
   const id = normalizeOrderIdForStorage(orderId);
   if (!id) return null;
   const raw = await redisCmd(["GET", orderRecordKey(id)]);
-  const stored = parseOrderJson(raw);
+  const stored = parseOrderJson(raw, id);
+  if (raw != null && !stored) return null;
   if (stored) return stored.deleted ? null : stored;
   const legacy = await getLegacyOrderEntries();
   const found = legacy.find((entry) => normalizeOrderIdForStorage(entry.order?.orderId) === id);
@@ -482,7 +614,7 @@ export async function getOrderByIdStrict(orderId) {
   }
   const raw = pipelineResultValue(rows[0]);
   if (raw != null) {
-    const stored = parseOrderJson(raw);
+    const stored = parseOrderJson(raw, id);
     if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
       const error = new Error("order_store_corrupt");
       error.code = "order_store_corrupt";
@@ -516,7 +648,10 @@ export async function getOrderEntryById(orderId) {
   const id = normalizeOrderIdForStorage(orderId);
   if (!id) return null;
   const raw = await redisCmd(["GET", orderRecordKey(id)]);
-  const stored = parseOrderJson(raw);
+  const stored = parseOrderJson(raw, id);
+  if (raw != null && !stored) {
+    const error = new Error("order_store_corrupt"); error.code = "order_store_corrupt"; throw error;
+  }
   if (stored) {
     return stored.deleted ? null : { index: { orderId: id, legacyIndex: null }, order: stored };
   }
@@ -558,7 +693,10 @@ export async function getOrderEntryByIdIncludingDeleted(orderId) {
   const id = normalizeOrderIdForStorage(orderId);
   if (!id) return null;
   const raw = await redisCmd(["GET", orderRecordKey(id)]);
-  const stored = parseOrderJson(raw);
+  const stored = parseOrderJson(raw, id);
+  if (raw != null && !stored) {
+    const error = new Error("order_store_corrupt"); error.code = "order_store_corrupt"; throw error;
+  }
   if (stored) return { index: { orderId: id, legacyIndex: null }, order: stored };
   const legacy = await getLegacyOrderEntries();
   const found = legacy.find((entry) => normalizeOrderIdForStorage(entry.order?.orderId) === id);
@@ -643,7 +781,7 @@ export async function getAllOrdersStrict() {
     }
     rows.forEach((entry, index) => {
       const raw = pipelineResultValue(entry);
-      const order = parseOrderJson(raw);
+      const order = parseOrderJson(raw, batchIds[index]);
       if (raw == null || !order || typeof order !== "object" || Array.isArray(order)) {
         throw new Error("order_store_corrupt");
       }
@@ -767,124 +905,27 @@ export async function getPendingUsdtOrderEntries(limit = 500) {
 }
 
 const SET_ORDER_AT_SCRIPT = `
-local function keytype(key)
-  local result=redis.call('TYPE',key)
-  if type(result)=='table' then return result.ok end
-  return result
-end
-local function validtype(key,expected)
-  local actual=keytype(key)
-  return actual=='none' or actual==expected
-end
-local function decode(value)
-  local ok,result=pcall(cjson.decode,value)
-  if not ok or type(result)~='table' then return nil end
-  return result
-end
-local function response(value) return cjson.encode(value) end
-
-local expectedTypes={'string','list','list','zset','zset','hash','zset','string','set','set','set','list','list','list','list','set'}
-for index,key in ipairs(KEYS) do
-  local required=true
-  if index==9 then required=ARGV[12]=='1' end
-  if index==10 then required=ARGV[13]=='1' end
-  if index>=12 and index<=15 then required=ARGV[index+3]=='1' end
-  if required and not validtype(key,expectedTypes[index]) then return response({ok=false,error='storage_type_error',keyIndex=index}) end
-end
-
-local absent='__LM_ORDER_RECORD_ABSENT__'
-local current=redis.call('GET',KEYS[1])
-if (ARGV[1]==absent and current) or (ARGV[1]~=absent and current~=ARGV[1]) then
-  return response({ok=false,error='stale_order'})
-end
-local baseRaw=current
-local legacyIndex=tonumber(ARGV[3]) or -1
-if legacyIndex>=0 then
-  if legacyIndex~=math.floor(legacyIndex) then return response({ok=false,error='invalid_legacy_index'}) end
-  local legacy=redis.call('LINDEX',KEYS[3],tostring(legacyIndex))
-  if ARGV[2]==absent or legacy~=ARGV[2] then return response({ok=false,error='stale_order'}) end
-  if not baseRaw then baseRaw=legacy end
-end
-
-local order=decode(ARGV[4])
-if not order or tostring(order.orderId or '')~=ARGV[5] then return response({ok=false,error='invalid_order_record'}) end
-local expectedRevision=tonumber(ARGV[19])
-if not expectedRevision or expectedRevision~=math.floor(expectedRevision) or expectedRevision<0 or expectedRevision>9007199254740990 then
-  return response({ok=false,error='invalid_expected_revision'})
-end
-local existing=ARGV[20]=='1'
-if existing then
-  local baseOrder=decode(baseRaw)
-  if not baseOrder then return response({ok=false,error='invalid_order_record'}) end
-  local storedRevision=tonumber(baseOrder.revision or 0)
-  if not storedRevision or storedRevision~=math.floor(storedRevision) or storedRevision<0 or storedRevision>9007199254740990 then
-    return response({ok=false,error='invalid_order_revision'})
-  end
-  if storedRevision~=expectedRevision then return response({ok=false,error='stale_order'}) end
-elseif baseRaw then
-  return response({ok=false,error='stale_order'})
-end
-local nextRevision=tonumber(order.revision)
-local requiredRevision=existing and (expectedRevision+1) or 1
-if not nextRevision or nextRevision~=requiredRevision then return response({ok=false,error='invalid_order_revision'}) end
-local createdScore=tonumber(ARGV[7])
-if not createdScore or createdScore~=createdScore or createdScore<-9007199254740991 or createdScore>9007199254740991 then
-  return response({ok=false,error='invalid_order_score'})
-end
-local quoteScore=tonumber(ARGV[9]) or 0
-if ARGV[8]=='1' and (quoteScore<=0 or quoteScore~=quoteScore or quoteScore>9007199254740991) then
-  return response({ok=false,error='invalid_quote_score'})
-end
-local revisionRaw=redis.call('GET',KEYS[8]); local listRevision=0
-if revisionRaw then
-  if not string.match(revisionRaw,'^%d+$') then return response({ok=false,error='invalid_order_revision'}) end
-  listRevision=tonumber(revisionRaw)
-  if not listRevision or listRevision~=math.floor(listRevision) or listRevision<0 or listRevision>9007199254740990 then
-    return response({ok=false,error='invalid_order_revision'})
-  end
-end
-
+local function keytype(key) local result=redis.call('TYPE',key) if type(result)=='table' then return result.ok end return result end local function validtype(key,expected) local actual=keytype(key) return actual=='none' or actual==expected end local function decode(value) local ok,result=pcall(cjson.decode,value) if not ok or type(result)~='table' then return nil end return result end local function response(value) local ok,encoded=pcall(cjson.encode,value) if not ok then return redis.error_reply('json_encode_failed') end return encoded end local expectedTypes={'string','list','list','zset','zset','hash','zset','string','set','set','set','list','list','list','list','set'} for index,key in ipairs(KEYS) do local required=true if index==9 then required=ARGV[12]=='1' end if index==10 then required=ARGV[13]=='1' end if index>=12 and index<=15 then required=ARGV[index+3]=='1' end if required and not validtype(key,expectedTypes[index]) then return response({ok=false,error='storage_type_error',keyIndex=index}) end end local absent='__LM_ORDER_RECORD_ABSENT__' local current=redis.call('GET',KEYS[1]) if (ARGV[1]==absent and current) or (ARGV[1]~=absent and current~=ARGV[1]) then return response({ok=false,error='stale_order'}) end local baseRaw=current local legacyIndex=tonumber(ARGV[3]) or -1 if legacyIndex>=0 then if legacyIndex~=math.floor(legacyIndex) then return response({ok=false,error='invalid_legacy_index'}) end local legacy=redis.call('LINDEX',KEYS[3],tostring(legacyIndex)) if ARGV[2]==absent or legacy~=ARGV[2] then return response({ok=false,error='stale_order'}) end if not baseRaw then baseRaw=legacy end end local order=decode(ARGV[4]) if not order or tostring(order.orderId or '')~=ARGV[5] then return response({ok=false,error='invalid_order_record'}) end local expectedRevision=tonumber(ARGV[19]) if not expectedRevision or expectedRevision~=math.floor(expectedRevision) or expectedRevision<0 or expectedRevision>9007199254740990 then return response({ok=false,error='invalid_expected_revision'}) end local existing=ARGV[20]=='1' if existing then local baseOrder=decode(baseRaw) if not baseOrder then return response({ok=false,error='invalid_order_record'}) end local storedRevision=tonumber(baseOrder.revision or 0) if not storedRevision or storedRevision~=math.floor(storedRevision) or storedRevision<0 or storedRevision>9007199254740990 then return response({ok=false,error='invalid_order_revision'}) end if storedRevision~=expectedRevision then return response({ok=false,error='stale_order'}) end elseif baseRaw then return response({ok=false,error='stale_order'}) end local nextRevision=tonumber(order.revision) local requiredRevision=existing and (expectedRevision+1) or 1 if not nextRevision or nextRevision~=requiredRevision then return response({ok=false,error='invalid_order_revision'}) end local createdScore=tonumber(ARGV[7]) if not createdScore or createdScore~=createdScore or createdScore<-9007199254740991 or createdScore>9007199254740991 then return response({ok=false,error='invalid_order_score'}) end local quoteScore=tonumber(ARGV[9]) or 0 if ARGV[8]=='1' and (quoteScore<=0 or quoteScore~=quoteScore or quoteScore>9007199254740991) then return response({ok=false,error='invalid_quote_score'}) end local revisionRaw=redis.call('GET',KEYS[8]); local listRevision=0 if revisionRaw then if not string.match(revisionRaw,'^%d+$') then return response({ok=false,error='invalid_order_revision'}) end listRevision=tonumber(revisionRaw) if not listRevision or listRevision~=math.floor(listRevision) or listRevision<0 or listRevision>9007199254740990 then return response({ok=false,error='invalid_order_revision'}) end end local finalResponseOk,finalResponse=pcall(cjson.encode,{ok=true,listRevision=listRevision+1}) if not finalResponseOk then return redis.error_reply('json_encode_failed') end
 -- No command below can fail after the complete read/validation phase.
-redis.call('SET',KEYS[1],ARGV[4])
-if redis.call('SADD',KEYS[16],ARGV[5])==1 then redis.call('RPUSH',KEYS[2],ARGV[5]) end
-if legacyIndex>=0 then redis.call('LSET',KEYS[3],tostring(legacyIndex),ARGV[4]) end
-if ARGV[6]=='1' then redis.call('ZADD',KEYS[4],ARGV[7],ARGV[5]) else redis.call('ZREM',KEYS[4],ARGV[5]) end
-if ARGV[8]=='1' then redis.call('ZADD',KEYS[5],ARGV[9],ARGV[5]) else redis.call('ZREM',KEYS[5],ARGV[5]) end
-if ARGV[10]=='1' then
-  redis.call('HSET',KEYS[6],ARGV[5],ARGV[11]); redis.call('ZADD',KEYS[7],ARGV[7],ARGV[5])
-else
-  redis.call('HDEL',KEYS[6],ARGV[5]); redis.call('ZREM',KEYS[7],ARGV[5])
-end
-redis.call('SET',KEYS[8],tostring(listRevision+1))
-if ARGV[12]=='1' and (ARGV[13]~='1' or KEYS[9]~=KEYS[10]) then redis.call('SREM',KEYS[9],ARGV[5]) end
-if ARGV[13]=='1' then redis.call('SADD',KEYS[10],ARGV[5]) end
-if ARGV[14]=='1' then redis.call('SADD',KEYS[11],ARGV[5]) else redis.call('SREM',KEYS[11],ARGV[5]) end
-for slot=12,13 do
-  local enabled=ARGV[slot+3]=='1'; local newSlot=slot+2; local newEnabled=ARGV[newSlot+3]=='1'
-  if enabled and (not newEnabled or KEYS[slot]~=KEYS[newSlot]) then redis.call('LREM',KEYS[slot],'0',ARGV[5]) end
-end
-for slot=14,15 do
-  if ARGV[slot+3]=='1' and not redis.call('LPOS',KEYS[slot],ARGV[5]) then redis.call('LPUSH',KEYS[slot],ARGV[5]) end
-end
-return response({ok=true,listRevision=listRevision+1})
+redis.call('SET',KEYS[1],ARGV[4]) if redis.call('SADD',KEYS[16],ARGV[5])==1 then redis.call('RPUSH',KEYS[2],ARGV[5]) end if legacyIndex>=0 then redis.call('LSET',KEYS[3],tostring(legacyIndex),ARGV[4]) end if ARGV[6]=='1' then redis.call('ZADD',KEYS[4],ARGV[7],ARGV[5]) else redis.call('ZREM',KEYS[4],ARGV[5]) end if ARGV[8]=='1' then redis.call('ZADD',KEYS[5],ARGV[9],ARGV[5]) else redis.call('ZREM',KEYS[5],ARGV[5]) end if ARGV[10]=='1' then redis.call('HSET',KEYS[6],ARGV[5],ARGV[11]); redis.call('ZADD',KEYS[7],ARGV[7],ARGV[5]) else redis.call('HDEL',KEYS[6],ARGV[5]); redis.call('ZREM',KEYS[7],ARGV[5]) end redis.call('SET',KEYS[8],tostring(listRevision+1)) if ARGV[12]=='1' and (ARGV[13]~='1' or KEYS[9]~=KEYS[10]) then redis.call('SREM',KEYS[9],ARGV[5]) end if ARGV[13]=='1' then redis.call('SADD',KEYS[10],ARGV[5]) end if ARGV[14]=='1' then redis.call('SADD',KEYS[11],ARGV[5]) else redis.call('SREM',KEYS[11],ARGV[5]) end for slot=12,13 do local enabled=ARGV[slot+3]=='1'; local newSlot=slot+2; local newEnabled=ARGV[newSlot+3]=='1' if enabled and (not newEnabled or KEYS[slot]~=KEYS[newSlot]) then redis.call('LREM',KEYS[slot],'0',ARGV[5]) end end for slot=14,15 do if ARGV[slot+3]=='1' and not redis.call('LPOS',KEYS[slot],ARGV[5]) then redis.call('LPUSH',KEYS[slot],ARGV[5]) end end return finalResponse
 `;
 
 // Atomically compare-and-set the order record and every derived index. The
 // exact raw record read here is compared inside Lua, so a concurrent writer can
 // no longer leave the main record and indexes at different revisions.
 export async function setOrderAt(index, order, options = {}) {
-  if (!redisConfig() || !order || typeof order !== "object") return false;
+  if (!redisConfig() || !order || typeof order !== "object" || Array.isArray(order)) return false;
   const handle = typeof index === "object" && index !== null ? index : { legacyIndex: index, orderId: order?.orderId };
   const orderId = normalizeOrderIdForStorage(handle.orderId || order?.orderId);
-  if (!orderId) return false;
+  if (!orderId || normalizeOrderIdForStorage(order.orderId) !== orderId) return false;
   if (!await ensureOrderIndexMembership()) return false;
 
   const recordKey = orderRecordKey(orderId);
   const currentRaw = await redisCmd(["GET", recordKey]);
-  let previous = parseOrderJson(currentRaw);
+  let previous = parseOrderJson(currentRaw, orderId);
   const legacyIndex = Number.isInteger(handle.legacyIndex) && handle.legacyIndex >= 0 ? handle.legacyIndex : -1;
   const legacyRaw = legacyIndex >= 0 ? await redisCmd(["LINDEX", ORDERS_KEY, String(legacyIndex)]) : null;
-  if (!previous && legacyRaw) previous = parseOrderJson(legacyRaw);
+  if (!previous && legacyRaw) previous = parseOrderJson(legacyRaw, orderId);
   if (!previous && currentRaw) return false;
 
   const pendingTransitionId = clean(previous?.pendingTransition?.id, 100);
@@ -1003,7 +1044,7 @@ export async function archiveOrderAt(index, order, meta = {}) {
   };
   const saved = await setOrderAt(index, archived, { expectedRevision: currentRevision });
   if (saved) return { ok: true, order: archived };
-  const latest = parseOrderJson(await redisCmd(["GET", orderRecordKey(order.orderId)]));
+  const latest = parseOrderJson(await redisCmd(["GET", orderRecordKey(order.orderId)]), order.orderId);
   return latest?.deleted && latest.archiveOperationId === archiveOperationId
     ? { ok: true, order: latest, idempotent: true }
     : { ok: false, error: "stale_revision" };
@@ -1100,7 +1141,7 @@ export async function getOrderSummariesPageFast(offset = 0, limit = 50) {
   }
   const byId = new Map();
   ids.forEach((id, index) => {
-    const summary = parseOrderJson(rawValues?.[index]);
+    const summary = parseOrderJson(rawValues?.[index], id);
     if (summary && !summary.deleted) byId.set(id, summary);
   });
 
@@ -1364,7 +1405,7 @@ if proposed<fence then proposed=fence end
 if proposed<=current then proposed=current+1 end
 if proposed>9007199254740991 then return cjson.encode({ok=false,error='invalid_session_state'}) end
 redis.call('SET',KEYS[1],tostring(proposed))
-return cjson.encode({ok=true,kickTs=proposed})
+return '{"ok":true,"kickTs":'..tostring(proposed)..'}'
 `;
 
 const REVOKE_ADMIN_SESSION_SCRIPT = ADMIN_SESSION_INTEGER_HELPERS + `
@@ -1372,7 +1413,7 @@ local current=readinteger(KEYS[1]); local fence=readinteger(KEYS[2])
 if not current or not fence then return cjson.encode({ok=false,error='invalid_session_state'}) end
 local issuedAt=tonumber(ARGV[1]) or 0
 if current>0 and issuedAt<=current then
-  return cjson.encode({ok=false,error='session_revoked',kickTs=current})
+  return '{"ok":false,"error":"session_revoked","kickTs":'..tostring(current)..'}'
 end
 local proposed=tonumber(ARGV[2]) or 0
 if proposed<issuedAt then proposed=issuedAt end
@@ -1380,7 +1421,7 @@ if proposed<fence then proposed=fence end
 if proposed<=current then proposed=current+1 end
 if proposed>9007199254740991 then return cjson.encode({ok=false,error='invalid_session_state'}) end
 redis.call('SET',KEYS[1],tostring(proposed))
-return cjson.encode({ok=true,kickTs=proposed})
+return '{"ok":true,"kickTs":'..tostring(proposed)..'}'
 `;
 
 const RESERVE_ADMIN_SESSION_ISSUANCE_SCRIPT = ADMIN_SESSION_INTEGER_HELPERS + `
@@ -1389,7 +1430,7 @@ local current=readinteger(KEYS[1]); local fence=readinteger(KEYS[2])
 if not current or not fence then return cjson.encode({ok=false,error='invalid_session_state'}) end
 local expected=tonumber(ARGV[1]); local proposed=tonumber(ARGV[2])
 if not expected or expected<0 or expected~=math.floor(expected) or current~=expected then
-  return cjson.encode({ok=false,error='session_state_changed',kickTs=current})
+  return '{"ok":false,"error":"session_state_changed","kickTs":'..tostring(current)..'}'
 end
 if not proposed or proposed<0 or proposed~=math.floor(proposed) then
   return cjson.encode({ok=false,error='invalid_session_state'})
@@ -1399,7 +1440,7 @@ if issuedAt<=current then issuedAt=current+1 end
 if issuedAt<=fence then issuedAt=fence+1 end
 if issuedAt>9007199254740991 then return cjson.encode({ok=false,error='invalid_session_state'}) end
 redis.call('SET',KEYS[2],tostring(issuedAt))
-return cjson.encode({ok=true,issuedAt=issuedAt,kickTs=current})
+return '{"ok":true,"issuedAt":'..tostring(issuedAt)..',"kickTs":'..tostring(current)..'}'
 `;
 
 export async function revokeAdminStaffSessions(id, proposedTs = Date.now()) {
@@ -1650,7 +1691,7 @@ if proposed<=current then proposed=current+1 end
 if proposed>9007199254740991 then return cjson.encode({ok=false,error='invalid_session_state'}) end
 redis.call('DEL',KEYS[1])
 redis.call('SET',KEYS[2],tostring(proposed))
-return cjson.encode({ok=true,kickTs=proposed})`;
+return '{"ok":true,"kickTs":'..tostring(proposed)..'}'`;
   const result = await redisEvalAtomic(
     script,
     [staff2faKey(staffId), staffKickKey(staffId), staffIssueFenceKey(staffId)],
@@ -1674,55 +1715,37 @@ export function generateBackupCodes() {
 }
 
 const CONSUME_STAFF_2FA_BACKUP_SCRIPT = `
--- admin_2fa_backup_consume_v1
-local raw=redis.call('GET',KEYS[1])
-if not raw then return cjson.encode({ok=false,error='not_enabled'}) end
-local decodedOk,record=pcall(cjson.decode,raw)
-if not decodedOk or type(record)~='table' or type(record.secretEnc)~='string' or record.secretEnc=='' then
-  return cjson.encode({ok=false,error='invalid_storage_response'})
-end
-local hashes=record.backupHashes
-if type(hashes)~='table' then
-  return cjson.encode({ok=false,error='invalid_storage_response'})
-end
-local found=false
-local remaining={}
-for _,stored in ipairs(hashes) do
-  if type(stored)~='string' then
-    return cjson.encode({ok=false,error='invalid_storage_response'})
-  end
-  if not found and stored==ARGV[1] then
-    found=true
-  else
-    table.insert(remaining,stored)
-  end
-end
-if not found then return cjson.encode({ok=false,error='invalid_code'}) end
-record.backupHashes=remaining
-local encoded=cjson.encode(record)
-if #remaining==0 then
-  encoded=string.gsub(encoded,'"backupHashes":{}','"backupHashes":[]')
-end
-redis.call('SET',KEYS[1],encoded)
-return cjson.encode({ok=true,method='backup',remainingBackup=#remaining})
+-- admin_2fa_backup_consume_lossless_v2
+local raw=redis.call('GET',KEYS[1]) if not raw then return {'error','not_enabled'} end if raw~=ARGV[2] then return {'stale'} end local decodedOk,record=pcall(cjson.decode,raw) if not decodedOk or type(record)~='table' or type(record.secretEnc)~='string' or record.secretEnc=='' then return {'error','invalid_storage_response'} end local hashes=record.backupHashes if type(hashes)~='table' then return {'error','invalid_storage_response'} end local found=false local remaining={} for _,stored in ipairs(hashes) do if type(stored)~='string' then return {'error','invalid_storage_response'} end if not found and stored==ARGV[1] then found=true else table.insert(remaining,stored) end end if not found then return {'error','invalid_code'} end local replacementOk,replacement=pcall(cjson.decode,ARGV[3]) if not replacementOk or type(replacement)~='table' or type(replacement.backupHashes)~='table' or replacement.secretEnc~=record.secretEnc or #replacement.backupHashes~=#remaining then return {'error','invalid_storage_response'} end for index,value in ipairs(remaining) do if replacement.backupHashes[index]~=value then return {'error','invalid_storage_response'} end end redis.call('SET',KEYS[1],ARGV[3]) return {'ok',tostring(#remaining)}
 `;
 
 async function consumeStaff2faBackupCode(id, hash) {
-  const result = await redisEvalAtomic(CONSUME_STAFF_2FA_BACKUP_SCRIPT, [staff2faKey(id)], [hash]);
-  if (!result.ok) return { ok: false, error: result.error || "storage_failed", storageError: true };
-  if (result.value?.ok !== true) {
-    const error = clean(result.value?.error, 80) || "invalid_code";
-    return {
-      ok: false,
-      error,
-      storageError: error === "invalid_storage_response" || error === "storage_failed",
-    };
+  const key = staff2faKey(id);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const raw = await redisCmd(["GET", key]);
+    if (typeof raw !== "string" || !raw) return { ok: false, error: "storage_failed", storageError: true };
+    let record;
+    try { record = JSON.parse(raw); } catch { record = null; }
+    if (!validStaff2faRecord(record)) return { ok: false, error: "invalid_storage_response", storageError: true };
+    const index = record.backupHashes.indexOf(hash);
+    if (index < 0) return { ok: false, error: "invalid_code", storageError: false };
+    const remaining = record.backupHashes.filter((_, itemIndex) => itemIndex !== index);
+    const replacement = replaceTopLevelJsonFields(raw, { backupHashes: remaining });
+    if (!replacement) return { ok: false, error: "invalid_storage_response", storageError: true };
+    const result = await redisEvalAtomic(CONSUME_STAFF_2FA_BACKUP_SCRIPT, [key], [hash, raw, replacement]);
+    const tuple = Array.isArray(result.value) ? result.value : [];
+    if (result.ok && tuple[0] === "stale") continue;
+    if (!result.ok || tuple[0] !== "ok") {
+      const error = tuple[0] === "error" ? clean(tuple[1], 80) : result.error || "storage_failed";
+      return {
+        ok: false,
+        error,
+        storageError: ["invalid_storage_response", "storage_failed", "storage_unavailable", "storage_error"].includes(error),
+      };
+    }
+    return { ok: true, method: "backup", remainingBackup: Number(tuple[1]) || 0 };
   }
-  return {
-    ok: true,
-    method: "backup",
-    remainingBackup: Number(result.value.remainingBackup) || 0,
-  };
+  return { ok: false, error: "storage_failed", storageError: true };
 }
 
 // 校验登录提供的动态码:TOTP 或备用码(备用码命中即消耗)。
@@ -1861,6 +1884,39 @@ export async function deleteUser(email) {
     };
   }
   try {
+    const quotaKey = "lm:tool:quota";
+    let quotaRaw = "";
+    let nextQuotaRaw = "";
+    let quotaCleanupRequested = false;
+    let quotaPreparationSkipped = false;
+    try {
+      const typeResult = await redisCmd(["TYPE", quotaKey]);
+      const quotaType = typeResult && typeof typeResult === "object" ? typeResult.ok : typeResult;
+      if (quotaType === "string") {
+        const stored = await redisCmd(["GET", quotaKey]);
+        quotaRaw = typeof stored === "string" ? stored : "";
+        let quota;
+        try { quota = quotaRaw ? JSON.parse(quotaRaw) : null; } catch { quota = null; }
+        const overrides = quota?.overrides == null ? [] : Array.isArray(quota.overrides) ? quota.overrides : null;
+        const requests = quota?.requests == null ? [] : Array.isArray(quota.requests) ? quota.requests : null;
+        if (quota && typeof quota === "object" && !Array.isArray(quota) && overrides && requests) {
+          nextQuotaRaw = replaceTopLevelJsonFields(quotaRaw, {
+            overrides: overrides.filter((entry) => entry && typeof entry === "object"
+              && String(entry.email || "").toLowerCase() !== lower),
+            requests: requests.filter((entry) => entry && typeof entry === "object"
+              && String(entry.email || "").toLowerCase() !== lower),
+          }) || "";
+          quotaCleanupRequested = Boolean(nextQuotaRaw);
+          quotaPreparationSkipped = !nextQuotaRaw;
+        } else {
+          quotaPreparationSkipped = true;
+        }
+      } else if (quotaType !== "none" && quotaType != null) {
+        quotaPreparationSkipped = true;
+      }
+    } catch {
+      quotaPreparationSkipped = true;
+    }
     // 删除前读出上下级,清理返佣反向索引(从上级名下移除 + 删除自身下级集合)。
     const script = `
 local function keytype(key)
@@ -1870,64 +1926,56 @@ local function keytype(key)
 end
 local userType=keytype(KEYS[1])
 if userType=='none' then return cjson.encode({ok=false,error='user_not_found'}) end
-if userType~='string' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
-local expected={'string','list','set','string','string','string','string','string','string','string','string'}
-for index=2,#KEYS do
-  local actual=keytype(KEYS[index])
-  if actual~='none' and actual~=expected[index-1] then
-    return cjson.encode({ok=false,error='auth_record_invalid'})
-  end
+local emailSetType=keytype(KEYS[4])
+if emailSetType~='none' and emailSetType~='set' then return cjson.encode({ok=false,error='storage_unavailable'}) end
+local profileCorrupt=false
+local user={}
+if userType=='string' then
+  local raw=redis.call('GET',KEYS[1])
+  local decoded,value=pcall(cjson.decode,raw)
+  if decoded and type(value)=='table' then user=value else profileCorrupt=true end
+else
+  profileCorrupt=true
 end
-local raw=redis.call('GET',KEYS[1])
-local decoded,user=pcall(cjson.decode,raw)
-if not decoded or type(user)~='table' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
 local inviteCode=string.upper(tostring(user.inviteCode or ''))
 inviteCode=string.gsub(inviteCode,'[^A-Z0-9]','')
 local inviteKey=''
 if inviteCode~='' then
   inviteKey=ARGV[2]..inviteCode
   local inviteType=keytype(inviteKey)
-  if inviteType~='none' and inviteType~='string' then return cjson.encode({ok=false,error='auth_record_invalid'}) end
+  if inviteType~='string' then inviteKey='' end
 end
 local nextQuotaRaw=nil
-if keytype(KEYS[11])=='string' then
+local quotaCleanupSkipped=false
+if ARGV[3]=='1' and keytype(KEYS[11])=='string' then
   local quotaRaw=redis.call('GET',KEYS[11])
-  local quotaDecoded,quota=pcall(cjson.decode,quotaRaw)
-  if not quotaDecoded or type(quota)~='table' or type(quota.overrides)~='table' or type(quota.requests)~='table' then
-    return cjson.encode({ok=false,error='auth_record_invalid'})
+  if quotaRaw==ARGV[4] then
+    local quotaDecoded,quota=pcall(cjson.decode,ARGV[5])
+    if quotaDecoded and type(quota)=='table' and type(quota.overrides)=='table' and type(quota.requests)=='table' then
+      nextQuotaRaw=ARGV[5]
+    else
+      quotaCleanupSkipped=true
+    end
+  else
+    quotaCleanupSkipped=true
   end
-  local overrides=cjson.decode('[]')
-  for _,entry in ipairs(quota.overrides) do
-    if type(entry)=='table' and string.lower(tostring(entry.email or ''))~=ARGV[1] then overrides[#overrides+1]=entry end
-  end
-  local requests=cjson.decode('[]')
-  for _,entry in ipairs(quota.requests) do
-    if type(entry)=='table' and string.lower(tostring(entry.email or ''))~=ARGV[1] then requests[#requests+1]=entry end
-  end
-  quota.overrides=overrides
-  quota.requests=requests
-  local quotaEncoded,nextQuota=pcall(cjson.encode,quota)
-  if not quotaEncoded then return cjson.encode({ok=false,error='auth_record_invalid'}) end
-  nextQuotaRaw=nextQuota
+elseif ARGV[3]=='1' then
+  quotaCleanupSkipped=true
 end
 local current=1
 if keytype(KEYS[5])=='string' then
   local versionRaw=redis.call('GET',KEYS[5])
-  if not string.match(versionRaw or '','^%d+$') then return cjson.encode({ok=false,error='auth_record_invalid'}) end
-  current=tonumber(versionRaw)
+  if string.match(versionRaw or '','^%d+$') then current=tonumber(versionRaw) end
 end
 if not current or current<1 or current~=math.floor(current) or current>9007199254740990 then
-  return cjson.encode({ok=false,error='auth_record_invalid'})
+  current=1
 end
 local nextVersion=current+1
-redis.call('SET',KEYS[5],tostring(nextVersion))
-redis.call('DEL',KEYS[1],KEYS[2],KEYS[3],KEYS[6],KEYS[7],KEYS[8],KEYS[9],KEYS[10],KEYS[12])
-redis.call('SREM',KEYS[4],ARGV[1])
-if inviteKey~='' and redis.call('GET',inviteKey)==ARGV[1] then redis.call('DEL',inviteKey) end
-if nextQuotaRaw then redis.call('SET',KEYS[11],nextQuotaRaw) end
-return cjson.encode({
+local responseOk,response=pcall(cjson.encode,{
   ok=true,
   authVersion=nextVersion,
+  profileCorrupt=profileCorrupt,
+  quotaCleanupSkipped=quotaCleanupSkipped,
   user={
     email=ARGV[1],
     username=tostring(user.username or ''),
@@ -1935,7 +1983,14 @@ return cjson.encode({
     invitedBy2Email=tostring(user.invitedBy2Email or ''),
     inviteCode=tostring(user.inviteCode or '')
   }
-})`;
+})
+if not responseOk then return redis.error_reply('json_encode_failed') end
+redis.call('SET',KEYS[5],tostring(nextVersion))
+redis.call('DEL',KEYS[1],KEYS[2],KEYS[3],KEYS[6],KEYS[7],KEYS[8],KEYS[9],KEYS[10],KEYS[12])
+if emailSetType=='set' then redis.call('SREM',KEYS[4],ARGV[1]) end
+if inviteKey~='' and redis.call('GET',inviteKey)==ARGV[1] then redis.call('DEL',inviteKey) end
+if nextQuotaRaw then redis.call('SET',KEYS[11],nextQuotaRaw) end
+return response`;
     const deleted = await redisEvalAtomic(
       script,
       [
@@ -1949,19 +2004,21 @@ return cjson.encode({
        "liumeiti:tool:data:" + lower + ":favs",
        "liumeiti:tool:data:" + lower + ":recent_tools",
        "liumeiti:tool:data:" + lower + ":ai_history",
-       "lm:tool:quota",
+       quotaKey,
        accountLifecycleKey(lower),
        ],
-      [lower, INVITE_CODE_PREFIX_KEY],
+      [lower, INVITE_CODE_PREFIX_KEY, quotaCleanupRequested ? "1" : "0", quotaRaw, nextQuotaRaw],
     );
     if (!deleted.ok) return deleted;
-    if (!deleted.value?.ok) return deleted.value || { ok: false, error: "delete_failed" };
+    if (deleted.value?.ok !== true) return { ok: false, error: clean(deleted.value?.error, 80) || "delete_failed" };
 
     // Referral indexes are derived and readers verify every member against the
     // canonical user record. Clean them only after the delete/tombstone commit,
     // so an auxiliary-index outage can never leave an authenticated account.
     await deindexReferralRelation(deleted.value.user);
-    return { ...deleted.value, email: lower };
+    const cleanupSkipped = Boolean(quotaPreparationSkipped || deleted.value.quotaCleanupSkipped);
+    if (cleanupSkipped) console.warn(`[user-delete] retained unreadable or concurrently changed tool quota entries for ${lower}`);
+    return { ...deleted.value, quotaCleanupSkipped: cleanupSkipped, email: lower };
   } catch (e) { return { ok: false, error: "delete_failed" }; }
 }
 
@@ -2080,17 +2137,21 @@ export function validUsername(value) {
 
 export async function getUser(email) {
   try {
-    // One round trip: JSON profile plus canonical integer-cents shadow.
-    const values = await redisCmd(["MGET", userKey(email), balanceCentsKey(email)]);
+    const normalized = String(email || "").trim().toLowerCase();
+    if (!validEmail(normalized)) return null;
+    const shadowKey = balanceCentsKey(normalized);
+    const values = await redisCmd(["MGET", userKey(normalized), shadowKey]);
     if (!Array.isArray(values) || !values[0]) return null;
     const user = JSON.parse(values[0]);
-    if (!user || typeof user !== "object") return null;
+    if (!user || typeof user !== "object" || Array.isArray(user)) return null;
+    const storedEmail = String(user.email || "").trim().toLowerCase();
+    if (storedEmail && storedEmail !== normalized) return null;
+    if (!storedEmail) user.email = normalized;
     if (values[1] != null) {
       const raw = String(values[1]);
-      if (!/^-?\d+$/.test(raw)) return null;
       const storedCents = Number(raw);
-      if (!Number.isSafeInteger(storedCents)) return null;
-      user.balance = storedCents / 100;
+      if (/^-?\d+$/.test(raw) && Number.isSafeInteger(storedCents)) user.balance = storedCents / 100;
+      else await redisCmd(["DEL", shadowKey]);
     }
     return user;
   } catch (e) { return null; }
@@ -2204,18 +2265,7 @@ export async function getBalanceTxs(email) {
 function resetKey(email) { return "liumeiti:reset:" + String(email).toLowerCase().trim(); }
 
 const GET_OR_CREATE_RESET_CODE_SCRIPT = `
-local keyType=redis.call('TYPE',KEYS[1])
-if type(keyType)=='table' then keyType=keyType.ok end
-if keyType~='none' and keyType~='string' then
-  redis.call('DEL',KEYS[1])
-end
-local existing=redis.call('GET',KEYS[1])
-if existing and string.match(existing,'^%d%d%d%d%d%d$') then
-  redis.call('EXPIRE',KEYS[1],ARGV[2])
-  return existing
-end
-redis.call('SET',KEYS[1],ARGV[1],'EX',ARGV[2])
-return ARGV[1]
+local keyType=redis.call('TYPE',KEYS[1]) if type(keyType)=='table' then keyType=keyType.ok end if keyType~='none' and keyType~='string' then redis.call('DEL',KEYS[1]) end local existing=redis.call('GET',KEYS[1]) if existing and string.match(existing,'^%d%d%d%d%d%d$') then redis.call('EXPIRE',KEYS[1],ARGV[2]) return existing end redis.call('SET',KEYS[1],ARGV[1],'EX',ARGV[2]) return ARGV[1]
 `;
 
 export async function getOrCreateResetCode(email, proposedCode, ttlSec = 600) {
@@ -2995,7 +3045,7 @@ function parseDurableAdminOperation(raw, requestHash) {
     else if (typeof record.resultJson === "string") result = JSON.parse(record.resultJson);
     else if (record.result && typeof record.result === "object" && !Array.isArray(record.result)) result = record.result;
   } catch (e) { return { ok: false, error: "storage_failed" }; }
-  if (!result || typeof result !== "object" || Array.isArray(result)) return { ok: false, error: "storage_failed" };
+  if (!result || typeof result !== "object" || Array.isArray(result) || result.ok !== true) return { ok: false, error: "storage_failed" };
   return { ...result, idempotent: true, recovered: true };
 }
 
@@ -3066,30 +3116,8 @@ function rateLimitIdentityFingerprint(identity = "") {
 }
 
 const STRICT_DUAL_RATE_LIMIT_SCRIPT = `
-local function kind(key)
-  local value=redis.call('TYPE',key)
-  if type(value)=='table' then return value.ok end
-  return value
-end
-for _,key in ipairs(KEYS) do
-  local value=kind(key)
-  if value~='none' and value~='string' then return cjson.encode({ok=false,error='rate_limit_record_invalid'}) end
-end
-local window=tonumber(ARGV[1])
-local identityLimit=tonumber(ARGV[2])
-local ipLimit=tonumber(ARGV[3])
-if not window or window<1 or not identityLimit or identityLimit<1 or not ipLimit or ipLimit<1 then
-  return cjson.encode({ok=false,error='rate_limit_config_invalid'})
-end
-local identityCount=redis.call('INCR',KEYS[1])
-local ipCount=redis.call('INCR',KEYS[2])
-if identityCount==1 then redis.call('EXPIRE',KEYS[1],tostring(window)) end
-if ipCount==1 then redis.call('EXPIRE',KEYS[2],tostring(window)) end
-local identityTtl=redis.call('TTL',KEYS[1])
-local ipTtl=redis.call('TTL',KEYS[2])
-if identityTtl<0 then redis.call('EXPIRE',KEYS[1],tostring(window)); identityTtl=window end
-if ipTtl<0 then redis.call('EXPIRE',KEYS[2],tostring(window)); ipTtl=window end
-return cjson.encode({ok=true,identityCount=identityCount,ipCount=ipCount,identityTtl=identityTtl,ipTtl=ipTtl})`;
+local function kind(key) local value=redis.call('TYPE',key) if type(value)=='table' then return value.ok end return value end local window=tonumber(ARGV[1]) local identityLimit=tonumber(ARGV[2]) local ipLimit=tonumber(ARGV[3]) if not window or window~=math.floor(window) or window<1 or window>2147483647 or not identityLimit or identityLimit~=math.floor(identityLimit) or identityLimit<1 or identityLimit>9007199254740991 or not ipLimit or ipLimit~=math.floor(ipLimit) or ipLimit<1 or ipLimit>9007199254740991 then return cjson.encode({ok=false,error='rate_limit_config_invalid'}) end local function repaircount(key) local value=kind(key) if value=='none' then return 0 end if value~='string' then redis.call('DEL',key); return 1 end local raw=redis.call('GET',key) if not string.match(raw,'^%d+$') then redis.call('DEL',key); return 1 end local count=tonumber(raw) if not count or count~=math.floor(count) or count<0 or count>=9007199254740991 then redis.call('DEL',key); return 1 end return 0 end local repaired=repaircount(KEYS[1])+repaircount(KEYS[2]) local identityCount=redis.call('INCR',KEYS[1]) local ipCount=redis.call('INCR',KEYS[2]) if identityCount==1 then redis.call('EXPIRE',KEYS[1],tostring(window)) end if ipCount==1 then redis.call('EXPIRE',KEYS[2],tostring(window)) end local identityTtl=redis.call('TTL',KEYS[1]) local ipTtl=redis.call('TTL',KEYS[2]) if identityTtl<0 then redis.call('EXPIRE',KEYS[1],tostring(window)); identityTtl=window end if ipTtl<0 then redis.call('EXPIRE',KEYS[2],tostring(window)); ipTtl=window end return '{"ok":true,"identityCount":'..tostring(identityCount)..',"ipCount":'..tostring(ipCount)..',"identityTtl":'..tostring(identityTtl)..',"ipTtl":'..tostring(ipTtl)..',"repaired":'..tostring(repaired)..'}'
+`;
 
 // Authentication and verification endpoints use independent identity-only and
 // IP-only buckets. User-Agent is intentionally absent because clients can
@@ -3129,6 +3157,7 @@ export async function checkCriticalRateLimit(request, {
       retryAfter: 5,
     };
   }
+  if (Number(result.repaired) > 0) console.warn("[rate-limit] repaired invalid ephemeral counters", { namespace: safeNamespace, repaired: Number(result.repaired) });
   const identityExceeded = Number(result.identityCount) > Number(identityLimit);
   const ipExceeded = Number(result.ipCount) > Number(ipLimit);
   if (identityExceeded || ipExceeded) {
@@ -4155,7 +4184,7 @@ if proposed<=currentKick then proposed=currentKick+1 end
 if proposed>9007199254740991 then return cjson.encode({ok=false,error='invalid_session_state'}) end
 redis.call('SET',KEYS[1],ARGV[2])
 redis.call('SET',KEYS[2],tostring(proposed))
-return cjson.encode({ok=true,kickTs=proposed})
+return '{"ok":true,"kickTs":'..tostring(proposed)..'}'
 `;
 
 async function commitAdminStaffMutation(expectedRaw, records, staffId) {
@@ -4392,19 +4421,8 @@ export async function deleteAdminStaff(id, actor) {
 }
 
 const PUSH_ADMIN_ACTION_ONCE_SCRIPT = `
-local markerType=redis.call('TYPE',KEYS[1])
-if type(markerType)=='table' then markerType=markerType.ok end
-local listType=redis.call('TYPE',KEYS[2])
-if type(listType)=='table' then listType=listType.ok end
-if markerType~='none' and markerType~='string' then return -2 end
-if listType~='none' and listType~='list' then return -2 end
-local marked=redis.call('SET',KEYS[1],'1','NX')
-if marked then
-  redis.call('LPUSH',KEYS[2],ARGV[1])
-  redis.call('LTRIM',KEYS[2],0,499)
-  return 1
-end
-return 0`;
+local markerType=redis.call('TYPE',KEYS[1]) if type(markerType)=='table' then markerType=markerType.ok end local listType=redis.call('TYPE',KEYS[2]) if type(listType)=='table' then listType=listType.ok end if markerType~='none' and markerType~='string' then return -2 end if listType~='none' and listType~='list' then return -2 end local marked=redis.call('SET',KEYS[1],'1','NX') if marked then redis.call('LPUSH',KEYS[2],ARGV[1]) redis.call('LTRIM',KEYS[2],0,499) return 1 end return 0
+`;
 
 export async function pushAdminActionLog({ action, actor, target, detail, operationId = "" }) {
   const staff = adminActorFromSession(actor);
@@ -4695,6 +4713,11 @@ local function keyType(key)
   local reply = redis.call('TYPE', key)
   return type(reply) == 'table' and reply.ok or reply
 end
+local function response(value)
+  local ok,encoded=pcall(cjson.encode,value)
+  if not ok then return redis.error_reply('json_encode_failed') end
+  return encoded
+end
 
 local opType = keyType(KEYS[1])
 if opType == 'string' then
@@ -4744,7 +4767,7 @@ if not batchOk or type(batch) ~= 'table'
   return cjson.encode({ok=false,error='storage_failed'})
 end
 
-local encodedItems = {}
+local rawItems = {}
 local seenCodes = {}
 for itemIndex = 1, #items do
   local item = items[itemIndex]
@@ -4754,15 +4777,20 @@ for itemIndex = 1, #items do
   end
   seenCodes[code] = true
   if keyType(KEYS[itemIndex + 5]) ~= 'none' then
-    return cjson.encode({ok=false,error=ARGV[8]})
+    local errorOk,errorJson=pcall(cjson.encode,{ok=false,error=ARGV[8]})
+    if not errorOk then return redis.error_reply('json_encode_failed') end
+    return errorJson
   end
-  local encodedOk, encoded = pcall(cjson.encode, item)
-  if not encodedOk then return cjson.encode({ok=false,error='storage_failed'}) end
-  encodedItems[itemIndex] = encoded
+  local itemRaw=ARGV[8+itemIndex]
+  local rawOk,rawItem=pcall(cjson.decode,itemRaw)
+  if not rawOk or type(rawItem)~='table' or tostring(rawItem.code or '')~=code then
+    return cjson.encode({ok=false,error='storage_failed'})
+  end
+  rawItems[itemIndex] = itemRaw
 end
 
 for itemIndex = 1, #items do
-  redis.call('SET', KEYS[itemIndex + 5], encodedItems[itemIndex])
+  redis.call('SET', KEYS[itemIndex + 5], rawItems[itemIndex])
   redis.call('LPUSH', KEYS[2], tostring(items[itemIndex].code))
 end
 redis.call('SET', KEYS[3], ARGV[3])
@@ -4793,9 +4821,10 @@ return ARGV[5]`;
       JSON.stringify(operationRecord),
       JSON.stringify(audit),
       customCode ? "custom_code_exists" : "code_exists",
+      ...items.map((item) => JSON.stringify(item)),
     ],
   );
-  if (execution.ok) return execution.value;
+  if (execution.ok && execution.value && typeof execution.value === "object" && !Array.isArray(execution.value) && typeof execution.value.ok === "boolean") return execution.value;
   return await recoverDurableAdminOperation(operationKey, requestHash)
     || { ok: false, error: "storage_failed" };
 }
@@ -4900,23 +4929,25 @@ async function mutateRedeemCodeAtomic(codeValue, action, actor = null) {
   const code = normalizeRedeemCode(codeValue);
   if (!code) return { ok: false, error: "code_not_found" };
   if (action !== "void" && action !== "delete") return { ok: false, error: "invalid_action" };
-  const now = new Date();
   const actorInfo = adminActorFromSession(actor);
-  const audit = adminActionEntry("redeem_code_" + action, actorInfo, "redeem-code:" + code, {}, now);
   // REDEEM_CODE_MANAGEMENT_CAS_V1: the authoritative status is inspected and
   // changed inside one script, so a concurrent redemption to `used` wins and
   // can never be overwritten or removed by an earlier admin read.
   const script = `
+-- redeem_code_management_lossless_v2
 local function keyType(key)
   local reply = redis.call('TYPE', key)
   return type(reply) == 'table' and reply.ok or reply
 end
+local function response(value)
+  local ok,encoded=pcall(cjson.encode,value)
+  if not ok then return redis.error_reply('json_encode_failed') end
+  return encoded
+end
 
 local codeType = keyType(KEYS[1])
 if codeType == 'none' then
-  if ARGV[1] == 'delete' then
-    return cjson.encode({ok=true,deleted=true,idempotent=true,code=ARGV[2]})
-  end
+  if ARGV[1] == 'delete' then return ARGV[7] end
   return cjson.encode({ok=false,error='code_not_found'})
 elseif codeType ~= 'string' then
   return cjson.encode({ok=false,error='storage_failed'})
@@ -4928,12 +4959,13 @@ if (listType ~= 'none' and listType ~= 'list') or (auditType ~= 'none' and audit
   return cjson.encode({ok=false,error='storage_failed'})
 end
 local raw = redis.call('GET', KEYS[1])
+if raw ~= ARGV[3] then return cjson.encode({ok=false,error='code_conflict'}) end
 local decodedOk, item = pcall(cjson.decode, raw)
-local actorOk, actor = pcall(cjson.decode, ARGV[5])
-local auditOk, audit = pcall(cjson.decode, ARGV[6])
-if not decodedOk or type(item) ~= 'table'
-  or not actorOk or type(actor) ~= 'table'
-  or not auditOk or type(audit) ~= 'table' then
+local auditOk, audit = pcall(cjson.decode, ARGV[5])
+local resultOk, result = pcall(cjson.decode, ARGV[6])
+if not decodedOk or type(item) ~= 'table' or tostring(item.code or '') ~= ARGV[2]
+  or not auditOk or type(audit) ~= 'table'
+  or not resultOk or type(result) ~= 'table' or result.ok ~= true then
   return cjson.encode({ok=false,error='storage_failed'})
 end
 local status = tostring(item.status or 'active')
@@ -4942,68 +4974,77 @@ if status == 'used' then
 end
 
 if ARGV[1] == 'void' and status == 'void' then
-  return cjson.encode({ok=true,code=item,idempotent=true})
+  return ARGV[7]
 end
 if ARGV[1] == 'void' and status ~= 'active' then
   return cjson.encode({ok=false,error='code_unavailable'})
 end
-if ARGV[1] ~= 'void' and ARGV[1] ~= 'delete' then
-  return cjson.encode({ok=false,error='invalid_action'})
-end
-
-audit.detail = {
-  batchId=tostring(item.batchId or ''),
-  type=tostring(item.type or item.kind or 'balance'),
-  amount=tonumber(item.amount or 0) or 0
-}
-local encodedAuditOk, encodedAudit = pcall(cjson.encode, audit)
-if not encodedAuditOk then return cjson.encode({ok=false,error='storage_failed'}) end
-
-local encodedItem = nil
-local encodedResult = nil
 if ARGV[1] == 'void' then
-  item.status = 'void'
-  item.updatedAt = ARGV[3]
-  item.updatedAtBeijing = ARGV[4]
-  item.voidedAt = ARGV[3]
-  item.voidedAtBeijing = ARGV[4]
-  item.voidedByStaffId = tonumber(actor.staffId or 1) or 1
-  item.voidedByStaffUsername = tostring(actor.staffUsername or 'admin')
-  local itemOk
-  itemOk, encodedItem = pcall(cjson.encode, item)
-  if not itemOk then return cjson.encode({ok=false,error='storage_failed'}) end
-  local resultOk
-  resultOk, encodedResult = pcall(cjson.encode, {ok=true,code=item})
-  if not resultOk then return cjson.encode({ok=false,error='storage_failed'}) end
-else
-  local resultOk
-  resultOk, encodedResult = pcall(cjson.encode, {ok=true,deleted=true,code=ARGV[2]})
-  if not resultOk then return cjson.encode({ok=false,error='storage_failed'}) end
-end
-
-if ARGV[1] == 'void' then
-  redis.call('SET', KEYS[1], encodedItem)
+  local replacementOk,replacement = pcall(cjson.decode,ARGV[4])
+  if not replacementOk or type(replacement)~='table' or tostring(replacement.code or '')~=ARGV[2]
+    or tostring(replacement.status or '')~='void' then return cjson.encode({ok=false,error='storage_failed'}) end
+  redis.call('SET', KEYS[1], ARGV[4])
 else
   redis.call('DEL', KEYS[1])
   redis.call('LREM', KEYS[2], 0, ARGV[2])
 end
-redis.call('LPUSH', KEYS[3], encodedAudit)
+redis.call('LPUSH', KEYS[3], ARGV[5])
 redis.call('LTRIM', KEYS[3], 0, 499)
-return encodedResult`;
+return ARGV[6]`;
   const keys = [redeemCodeKey(code), REDEEM_LIST_KEY, ADMIN_ACTION_LOG_KEY];
-  const args = [
-    action,
-    code,
-    now.toISOString(),
-    formatBeijingTime(now),
-    JSON.stringify(actorInfo),
-    JSON.stringify(audit),
-  ];
-  let execution = await redisEvalAtomic(script, keys, args);
-  // A second execution is safe and recovers the target state when the first
-  // Redis response was lost after commit.
-  if (!execution.ok) execution = await redisEvalAtomic(script, keys, args);
-  return execution.ok ? execution.value : { ok: false, error: "storage_failed" };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const state = await readRedisStringState(keys[0]);
+    if (!state.ok) return { ok: false, error: "storage_failed" };
+    if (!state.exists) {
+      return action === "delete"
+        ? { ok: true, deleted: true, idempotent: true, code }
+        : { ok: false, error: "code_not_found" };
+    }
+    const raw = state.raw;
+    let item;
+    try { item = JSON.parse(raw); } catch { item = null; }
+    if (!item || typeof item !== "object" || Array.isArray(item) || normalizeRedeemCode(item.code) !== code) {
+      return { ok: false, error: "storage_failed" };
+    }
+    const status = String(item.status || "active");
+    if (status === "used") return { ok: false, error: "code_already_used" };
+    if (action === "void" && status === "void") return { ok: true, code: item, idempotent: true };
+    if (action === "void" && status !== "active") return { ok: false, error: "code_unavailable" };
+    const now = new Date();
+    const audit = adminActionEntry("redeem_code_" + action, actorInfo, "redeem-code:" + code, {
+      batchId: clean(item.batchId, 80),
+      type: clean(item.type || item.kind || "balance", 40),
+      amount: Number(item.amount || 0) || 0,
+    }, now);
+    const replacement = action === "void" ? replaceTopLevelJsonFields(raw, {
+      status: "void",
+      updatedAt: now.toISOString(),
+      updatedAtBeijing: formatBeijingTime(now),
+      voidedAt: now.toISOString(),
+      voidedAtBeijing: formatBeijingTime(now),
+      voidedByStaffId: Number(actorInfo.staffId || 1) || 1,
+      voidedByStaffUsername: clean(actorInfo.staffUsername || "admin", 60),
+    }) : "";
+    if (action === "void" && !replacement) return { ok: false, error: "storage_failed" };
+    const resultValue = action === "void"
+      ? { ok: true, code: JSON.parse(replacement) }
+      : { ok: true, deleted: true, code };
+    const idempotentValue = action === "void"
+      ? { ok: true, code: item, idempotent: true }
+      : { ok: true, deleted: true, idempotent: true, code };
+    const execution = await redisEvalAtomic(script, keys, [
+      action,
+      code,
+      raw,
+      replacement,
+      JSON.stringify(audit),
+      JSON.stringify(resultValue),
+      JSON.stringify(idempotentValue),
+    ]);
+    if (execution.ok && execution.value?.ok === false && execution.value?.error === "code_conflict") continue;
+    if (execution.ok && execution.value && typeof execution.value === "object" && !Array.isArray(execution.value) && typeof execution.value.ok === "boolean") return execution.value;
+  }
+  return { ok: false, error: "storage_failed" };
 }
 
 export async function updateRedeemCodeStatus(codeValue, status, actor = null) {
@@ -5062,8 +5103,10 @@ async function mutateRedeemBatchAtomic(batchId, action, actor = null) {
   const id = clean(batchId, 80);
   if (!id) return { ok: false, error: "batch_not_found" };
   if (action !== "void" && action !== "delete") return { ok: false, error: "invalid_action" };
-  const batchRaw = await redisCmd(["GET", redeemBatchKey(id)]);
-  if (typeof batchRaw !== "string" || !batchRaw) return { ok: false, error: "batch_not_found" };
+  const batchState = await readRedisStringState(redeemBatchKey(id));
+  if (!batchState.ok) return { ok: false, error: "storage_failed" };
+  if (!batchState.exists) return { ok: false, error: "batch_not_found" };
+  const batchRaw = batchState.raw;
   let batch = null;
   try { batch = JSON.parse(batchRaw); } catch (e) { return { ok: false, error: "storage_failed" }; }
   if (!batch || typeof batch !== "object" || Array.isArray(batch)) return { ok: false, error: "storage_failed" };
@@ -5075,7 +5118,55 @@ async function mutateRedeemBatchAtomic(batchId, action, actor = null) {
   }
   const actorInfo = adminActorFromSession(actor);
   const now = new Date();
-  const audit = adminActionEntry("redeem_batch_" + action, actorInfo, "redeem-batch:" + id, {}, now);
+  const nowIso = now.toISOString();
+  const nowBeijing = formatBeijingTime(now);
+  const absentCode = "__LM_REDEEM_CODE_ABSENT__";
+  const codeRaws = await Promise.all(codes.map((code) => redisCmd(["GET", redeemCodeKey(code)])));
+  const parsedCodes = codeRaws.map((raw) => {
+    if (typeof raw !== "string") return null;
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch { return null; }
+  });
+  if (codeRaws.some((raw, index) => typeof raw === "string" && !parsedCodes[index])) {
+    return { ok: false, error: "storage_failed" };
+  }
+  const replacements = codeRaws.map((raw, index) => {
+    const item = parsedCodes[index];
+    if (action !== "void" || typeof raw !== "string" || String(item?.status || "active") !== "active") return "";
+    return replaceTopLevelJsonFields(raw, {
+      status: "void",
+      updatedAt: nowIso,
+      updatedAtBeijing: nowBeijing,
+      voidedAt: nowIso,
+      voidedAtBeijing: nowBeijing,
+      voidedByStaffId: Number(actorInfo.staffId || 1) || 1,
+      voidedByStaffUsername: clean(actorInfo.staffUsername || "admin", 60),
+    }) || "";
+  });
+  if (action === "void" && replacements.some((replacement, index) => parsedCodes[index]
+    && String(parsedCodes[index].status || "active") === "active" && !replacement)) {
+    return { ok: false, error: "storage_failed" };
+  }
+  const batchReplacement = action === "void" ? replaceTopLevelJsonFields(batchRaw, {
+    status: "void",
+    updatedAt: nowIso,
+    updatedAtBeijing: nowBeijing,
+    voidedAt: nowIso,
+    voidedAtBeijing: nowBeijing,
+    voidedByStaffId: Number(actorInfo.staffId || 1) || 1,
+    voidedByStaffUsername: clean(actorInfo.staffUsername || "admin", 60),
+  }) : "";
+  if (action === "void" && !batchReplacement) return { ok: false, error: "storage_failed" };
+  const audit = adminActionEntry("redeem_batch_" + action, actorInfo, "redeem-batch:" + id, {
+    total: codes.length,
+    changed: parsedCodes.filter((item) => item && String(item.status || "active") !== "used").length,
+    deleted: action === "delete" ? parsedCodes.filter((item) => item && String(item.status || "active") !== "used").length : 0,
+    preservedUsed: parsedCodes.filter((item) => item?.status === "used").length,
+    type: clean(batch.type || batch.kind || "balance", 40),
+    amount: Number(batch.amount || 0) || 0,
+  }, now);
   // REDEEM_BATCH_MANAGEMENT_CAS_V1: the batch record is compared with the
   // exact snapshot used to declare KEYS, then every current code status is
   // evaluated in the same script. `used` records are always preserved.
@@ -5105,13 +5196,13 @@ if (batchListType ~= 'none' and batchListType ~= 'list')
 end
 
 local batchOk, currentBatch = pcall(cjson.decode, currentRaw)
-local codesOk, codes = pcall(cjson.decode, ARGV[8])
-local actorOk, actor = pcall(cjson.decode, ARGV[6])
-local auditOk, audit = pcall(cjson.decode, ARGV[7])
+local codesOk, codes = pcall(cjson.decode, ARGV[15])
+local expectedOk, expectedRaws = pcall(cjson.decode, ARGV[16])
+local replacementsOk, replacementRaws = pcall(cjson.decode, ARGV[17])
 if not batchOk or type(currentBatch) ~= 'table'
   or not codesOk or type(codes) ~= 'table' or #codes ~= (#KEYS - 4)
-  or not actorOk or type(actor) ~= 'table'
-  or not auditOk or type(audit) ~= 'table' then
+  or not expectedOk or type(expectedRaws) ~= 'table' or #expectedRaws ~= #codes
+  or not replacementsOk or type(replacementRaws) ~= 'table' or #replacementRaws ~= #codes then
   return cjson.encode({ok=false,error='storage_failed'})
 end
 
@@ -5124,34 +5215,42 @@ for codeIndex = 1, #codes do
   local code = tostring(codes[codeIndex] or '')
   local recordType = keyType(KEYS[codeIndex + 4])
   if recordType == 'none' then
+    if tostring(expectedRaws[codeIndex] or '') ~= '__LM_REDEEM_CODE_ABSENT__' then
+      return cjson.encode({ok=false,error='batch_conflict'})
+    end
     results[#results + 1] = {code=code,ok=false,skipped=true,reason='missing'}
   elseif recordType ~= 'string' then
-    return cjson.encode({ok=false,error='storage_failed',code=code})
+    local responseOk,response=pcall(cjson.encode,{ok=false,error='storage_failed',code=code})
+    if not responseOk then return redis.error_reply('json_encode_failed') end
+    return response
   else
     local raw = redis.call('GET', KEYS[codeIndex + 4])
     local itemOk, item = pcall(cjson.decode, raw)
     if not itemOk or type(item) ~= 'table' or tostring(item.code or '') ~= code then
-      return cjson.encode({ok=false,error='storage_failed',code=code})
+      local responseOk,response=pcall(cjson.encode,{ok=false,error='storage_failed',code=code})
+      if not responseOk then return redis.error_reply('json_encode_failed') end
+      return response
     end
     local status = tostring(item.status or 'active')
     if status == 'used' then
       preservedUsed[#preservedUsed + 1] = code
       results[#results + 1] = {code=code,ok=false,skipped=true,reason='used'}
+    elseif raw ~= tostring(expectedRaws[codeIndex] or '') then
+      return cjson.encode({ok=false,error='batch_conflict'})
     elseif ARGV[1] == 'delete' then
       deletions[#deletions + 1] = {key=KEYS[codeIndex + 4],code=code}
       changed = changed + 1
       results[#results + 1] = {code=code,ok=true}
     elseif ARGV[1] == 'void' and status == 'active' then
-      item.status = 'void'
-      item.updatedAt = ARGV[4]
-      item.updatedAtBeijing = ARGV[5]
-      item.voidedAt = ARGV[4]
-      item.voidedAtBeijing = ARGV[5]
-      item.voidedByStaffId = tonumber(actor.staffId or 1) or 1
-      item.voidedByStaffUsername = tostring(actor.staffUsername or 'admin')
-      local encodedOk, encoded = pcall(cjson.encode, item)
-      if not encodedOk then return cjson.encode({ok=false,error='storage_failed',code=code}) end
-      updates[#updates + 1] = {key=KEYS[codeIndex + 4],value=encoded}
+      local replacementRaw=tostring(replacementRaws[codeIndex] or '')
+      local replacementOk,replacement=pcall(cjson.decode,replacementRaw)
+      if not replacementOk or type(replacement)~='table' or tostring(replacement.code or '')~=code
+        or tostring(replacement.status or '')~='void' then
+        local responseOk,response=pcall(cjson.encode,{ok=false,error='storage_failed',code=code})
+        if not responseOk then return redis.error_reply('json_encode_failed') end
+        return response
+      end
+      updates[#updates + 1] = {key=KEYS[codeIndex + 4],value=replacementRaw}
       changed = changed + 1
       results[#results + 1] = {code=code,ok=true}
     elseif ARGV[1] == 'void' and status == 'void' then
@@ -5169,17 +5268,11 @@ local result = nil
 local encodedBatch = nil
 if ARGV[1] == 'void' then
   local wasVoid = tostring(currentBatch.status or '') == 'void'
-  currentBatch.status = 'void'
-  currentBatch.updatedAt = ARGV[4]
-  currentBatch.updatedAtBeijing = ARGV[5]
-  currentBatch.voidedAt = ARGV[4]
-  currentBatch.voidedAtBeijing = ARGV[5]
-  currentBatch.voidedByStaffId = tonumber(actor.staffId or 1) or 1
-  currentBatch.voidedByStaffUsername = tostring(actor.staffUsername or 'admin')
-  local encodedOk
-  encodedOk, encodedBatch = pcall(cjson.encode, currentBatch)
-  if not encodedOk then return cjson.encode({ok=false,error='storage_failed'}) end
-  result = {ok=true,batch=currentBatch,results=results,changedCount=changed,preservedUsed=preservedUsed}
+  local nextBatchOk,nextBatch=pcall(cjson.decode,ARGV[18])
+  if not nextBatchOk or type(nextBatch)~='table' or tostring(nextBatch.id or '')~=ARGV[2]
+    or tostring(nextBatch.status or '')~='void' then return cjson.encode({ok=false,error='storage_failed'}) end
+  encodedBatch = ARGV[18]
+  result = {ok=true,batch=nextBatch,results=results,changedCount=changed,preservedUsed=preservedUsed}
   if wasVoid and changed == 0 then result.idempotent = true end
 else
   result = {ok=true,deletedCount=changed,deletedCodes={},preservedUsed=preservedUsed,results=results}
@@ -5188,21 +5281,33 @@ else
   end
 end
 
-audit.detail = {
-  total=#codes,
-  changed=changed,
-  deleted=ARGV[1] == 'delete' and changed or 0,
-  preservedUsed=#preservedUsed,
-  type=tostring(currentBatch.type or currentBatch.kind or 'balance'),
-  amount=tonumber(currentBatch.amount or 0) or 0
-}
-local auditEncodedOk, encodedAudit = pcall(cjson.encode, audit)
 local resultEncodedOk, encodedResult = pcall(cjson.encode, result)
-if not auditEncodedOk or not resultEncodedOk then
+if not resultEncodedOk then
   return cjson.encode({ok=false,error='storage_failed'})
 end
 
 if result.idempotent == true then return encodedResult end
+local deletedForAudit=0
+if ARGV[1]=='delete' then deletedForAudit=changed end
+local auditRecord={
+  id=ARGV[6],
+  action=ARGV[7],
+  target=ARGV[8],
+  detail={
+    total=#codes,
+    changed=changed,
+    deleted=deletedForAudit,
+    preservedUsed=#preservedUsed,
+    type=ARGV[9],
+    amount=tonumber(ARGV[10]) or 0
+  },
+  staffId=tonumber(ARGV[11]) or 1,
+  staffUsername=ARGV[12],
+  createdAt=ARGV[13],
+  createdAtBeijing=ARGV[14]
+}
+local auditEncodedOk,auditEncoded=pcall(cjson.encode,auditRecord)
+if not auditEncodedOk then return redis.error_reply('json_encode_failed') end
 if ARGV[1] == 'void' then
   for updateIndex = 1, #updates do
     redis.call('SET', updates[updateIndex].key, updates[updateIndex].value)
@@ -5216,7 +5321,7 @@ else
   redis.call('DEL', KEYS[1])
   redis.call('LREM', KEYS[2], 0, ARGV[2])
 end
-redis.call('LPUSH', KEYS[4], encodedAudit)
+redis.call('LPUSH', KEYS[4], auditEncoded)
 redis.call('LTRIM', KEYS[4], 0, 499)
 return encodedResult`;
   const keys = [
@@ -5230,16 +5335,26 @@ return encodedResult`;
     action,
     id,
     batchRaw,
-    now.toISOString(),
-    formatBeijingTime(now),
-    JSON.stringify(actorInfo),
-    JSON.stringify(audit),
+    nowIso,
+    nowBeijing,
+    audit.id,
+    audit.action,
+    audit.target,
+    clean(audit.detail?.type, 40),
+    String(Number(audit.detail?.amount || 0) || 0),
+    String(Number(audit.staffId || 1) || 1),
+    clean(audit.staffUsername || "admin", 60),
+    audit.createdAt,
+    audit.createdAtBeijing,
     JSON.stringify(codes),
+    JSON.stringify(codeRaws.map((raw) => typeof raw === "string" ? raw : absentCode)),
+    JSON.stringify(replacements),
+    batchReplacement,
   ];
   let execution = await redisEvalAtomic(script, keys, args);
   if (!execution.ok) {
     execution = await redisEvalAtomic(script, keys, args);
-    if (execution.ok && action === "delete" && execution.value?.error === "batch_not_found") {
+    if (execution.ok && execution.value?.ok === false && action === "delete" && execution.value?.error === "batch_not_found") {
       return {
         ok: true,
         deletedCount: 0,
@@ -5250,7 +5365,7 @@ return encodedResult`;
         recovered: true,
       };
     }
-    if (execution.ok && action === "void" && execution.value?.error === "batch_conflict") {
+    if (execution.ok && execution.value?.ok === false && action === "void" && execution.value?.error === "batch_conflict") {
       const recoveredRaw = await redisCmd(["GET", redeemBatchKey(id)]);
       try {
         const recoveredBatch = JSON.parse(recoveredRaw);
@@ -5260,7 +5375,7 @@ return encodedResult`;
       } catch (e) {}
     }
   }
-  return execution.ok ? execution.value : { ok: false, error: "storage_failed" };
+  return execution.ok && execution.value && typeof execution.value === "object" && !Array.isArray(execution.value) && typeof execution.value.ok === "boolean" ? execution.value : { ok: false, error: "storage_failed" };
 }
 
 export async function deleteRedeemBatch(batchId, actor = null) {
@@ -5351,6 +5466,15 @@ export async function deleteWithdrawals(ids, actor = null, options = {}) {
   const operationKey = rawOperationId
     ? durableAdminOperationKey("withdrawal-archive", rawOperationId)
     : durableAdminOperationKey("withdrawal-archive-target", requestHash);
+  const priorOperation = await recoverDurableAdminOperation(operationKey, requestHash);
+  if (priorOperation) {
+    return priorOperation.ok === true ? priorOperation : {
+      ok: false,
+      error: clean(priorOperation.error, 80) || "storage_failed",
+      id: clean(priorOperation.id, 120),
+      status: clean(priorOperation.status, 40),
+    };
+  }
   const resultValue = {
     ok: true,
     archivedCount: archivedIds.length,
@@ -5372,6 +5496,28 @@ export async function deleteWithdrawals(ids, actor = null, options = {}) {
     { ids: archivedIds, archivedCount: archivedIds.length },
     now,
   );
+  const withdrawalRaws = await Promise.all(archivedIds.map((id) => redisCmd(["GET", withdrawalKey(id)])));
+  const withdrawalReplacements = withdrawalRaws.map((raw) => {
+    if (typeof raw !== "string") return "";
+    let withdrawal;
+    try { withdrawal = JSON.parse(raw); } catch { return null; }
+    if (!withdrawal || typeof withdrawal !== "object" || Array.isArray(withdrawal)) return null;
+    if (withdrawal.archived === true) return "";
+    const revision = Number(withdrawal.revision || 0);
+    if (!Number.isSafeInteger(revision) || revision < 0 || !["success", "failed"].includes(String(withdrawal.status || ""))) {
+      return "";
+    }
+    return replaceTopLevelJsonFields(raw, {
+      archived: true,
+      archivedAt,
+      actor: archiveActor,
+      revision: revision + 1,
+    });
+  });
+  const invalidWithdrawalIndex = withdrawalReplacements.findIndex((replacement) => replacement === null);
+  if (invalidWithdrawalIndex >= 0) {
+    return { ok: false, error: "storage_failed", id: archivedIds[invalidWithdrawalIndex] };
+  }
   // WITHDRAWAL_ARCHIVE_DURABLE_V2: validate and pre-encode every record before
   // the first write, then atomically commit records, index removals, audit, and
   // the permanent operation result. An existing operation result is returned
@@ -5381,6 +5527,11 @@ export async function deleteWithdrawals(ids, actor = null, options = {}) {
 local function keyType(key)
   local reply = redis.call('TYPE', key)
   return type(reply) == 'table' and reply.ok or reply
+end
+local function response(value)
+  local ok,encoded=pcall(cjson.encode,value)
+  if not ok then return redis.error_reply('withdrawal_archive_response_encode_failed') end
+  return encoded
 end
 
 local opType = keyType(KEYS[1])
@@ -5407,12 +5558,16 @@ local idsOk, ids = pcall(cjson.decode, ARGV[4])
 local resultOk, result = pcall(cjson.decode, ARGV[5])
 local operationOk, operation = pcall(cjson.decode, ARGV[6])
 local auditOk, audit = pcall(cjson.decode, ARGV[7])
+local expectedOk, expectedRaws = pcall(cjson.decode, ARGV[8])
+local replacementsOk, replacementRaws = pcall(cjson.decode, ARGV[9])
 if not actorOk or type(archiveActor) ~= 'table'
   or not idsOk or type(ids) ~= 'table' or #ids ~= (#KEYS - 3)
   or not resultOk or type(result) ~= 'table' or result.ok ~= true
   or not operationOk or type(operation) ~= 'table' or tostring(operation.requestHash or '') ~= ARGV[1]
     or type(operation.resultJson) ~= 'string' or type(operation.retryResultJson) ~= 'string'
-  or not auditOk or type(audit) ~= 'table' then
+  or not auditOk or type(audit) ~= 'table'
+  or not expectedOk or type(expectedRaws) ~= 'table' or #expectedRaws ~= #ids
+  or not replacementsOk or type(replacementRaws) ~= 'table' or #replacementRaws ~= #ids then
   return cjson.encode({ok=false,error='storage_failed'})
 end
 
@@ -5425,40 +5580,41 @@ for recordIndex = 1, #ids do
   local recordKey = KEYS[recordIndex + 3]
   local recordType = keyType(recordKey)
   if recordType == 'none' then
-    return cjson.encode({ok=false,error='withdrawal_not_found',id=id})
+    return response({ok=false,error='withdrawal_not_found',id=id})
   end
   if recordType ~= 'string' then
-    return cjson.encode({ok=false,error='storage_failed',id=id})
+    return response({ok=false,error='storage_failed',id=id})
   end
 
   local raw = redis.call('GET', recordKey)
   local decodeOk, withdrawal = pcall(cjson.decode, raw)
   if not decodeOk or type(withdrawal) ~= 'table' then
-    return cjson.encode({ok=false,error='storage_failed',id=id})
+    return response({ok=false,error='storage_failed',id=id})
   end
   if withdrawal.archived == true then
     archivedCount = archivedCount + 1
     if firstArchivedId == '' then firstArchivedId = id end
   else
+    if raw ~= tostring(expectedRaws[recordIndex] or '') then
+      return response({ok=false,error='withdrawal_conflict',id=id})
+    end
     local status = tostring(withdrawal.status or '')
     if status ~= 'success' and status ~= 'failed' then
-      return cjson.encode({ok=false,error='withdrawal_active',id=id,status=status})
+      return response({ok=false,error='withdrawal_active',id=id,status=status})
     end
-
-    withdrawal.archived = true
-    withdrawal.archivedAt = ARGV[2]
-    withdrawal.actor = archiveActor
     local revision = tonumber(withdrawal.revision or 0)
     if not revision or revision < 0 or revision ~= math.floor(revision) or revision > 9007199254740990 then
-      return cjson.encode({ok=false,error='storage_failed',id=id})
+      return response({ok=false,error='storage_failed',id=id})
     end
-    withdrawal.revision = revision + 1
-    local encodeOk, encoded = pcall(cjson.encode, withdrawal)
-    if not encodeOk then
-      return cjson.encode({ok=false,error='storage_failed',id=id})
+    local replacementRaw=tostring(replacementRaws[recordIndex] or '')
+    local replacementOk,replacement=pcall(cjson.decode,replacementRaw)
+    if not replacementOk or type(replacement)~='table' or tostring(replacement.id or '')~=id
+      or replacement.archived~=true
+      or tonumber(replacement.revision)~=revision+1 then
+      return response({ok=false,error='storage_failed',id=id})
     end
     replacements[#replacements + 1] = recordKey
-    replacements[#replacements + 1] = encoded
+    replacements[#replacements + 1] = replacementRaw
     resultIds[#resultIds + 1] = id
   end
 end
@@ -5471,14 +5627,14 @@ if archivedCount == #ids then
   redis.call('SET', KEYS[1], ARGV[6])
   return operation.retryResultJson
 elseif archivedCount > 0 then
-  return cjson.encode({ok=false,error='withdrawal_already_archived',id=firstArchivedId})
+  return response({ok=false,error='withdrawal_already_archived',id=firstArchivedId})
 end
 
 local listType = keyType(KEYS[2])
 local auditType = keyType(KEYS[3])
 if listType ~= 'list' then
   if listType == 'none' then
-    return cjson.encode({ok=false,error='withdrawal_not_indexed',id=tostring(ids[1] or '')})
+    return response({ok=false,error='withdrawal_not_indexed',id=tostring(ids[1] or '')})
   end
   return cjson.encode({ok=false,error='storage_failed'})
 end
@@ -5492,17 +5648,15 @@ for _, currentId in ipairs(currentIds) do indexed[tostring(currentId)] = true en
 for idIndex = 1, #ids do
   local id = tostring(ids[idIndex] or '')
   if not indexed[id] then
-    return cjson.encode({ok=false,error='withdrawal_not_indexed',id=id})
+    return response({ok=false,error='withdrawal_not_indexed',id=id})
   end
 end
-local encodedAuditOk, encodedAudit = pcall(cjson.encode, audit)
-if not encodedAuditOk then return cjson.encode({ok=false,error='storage_failed'}) end
 
 redis.call('MSET', unpack(replacements))
 for idIndex = 1, #resultIds do
   redis.call('LREM', KEYS[2], 0, resultIds[idIndex])
 end
-redis.call('LPUSH', KEYS[3], encodedAudit)
+redis.call('LPUSH', KEYS[3], ARGV[7])
 redis.call('LTRIM', KEYS[3], 0, 499)
 redis.call('SET', KEYS[1], ARGV[6])
 return ARGV[5]`;
@@ -5523,9 +5677,11 @@ return ARGV[5]`;
       JSON.stringify(resultValue),
       JSON.stringify(operationRecord),
       JSON.stringify(audit),
+      JSON.stringify(withdrawalRaws.map((raw) => typeof raw === "string" ? raw : "__LM_WITHDRAWAL_ABSENT__")),
+      JSON.stringify(withdrawalReplacements),
     ],
   );
-  let result = execution.ok ? execution.value : null;
+  let result = execution.ok && execution.value && typeof execution.value === "object" && !Array.isArray(execution.value) && typeof execution.value.ok === "boolean" ? execution.value : null;
   if (!result) result = await recoverDurableAdminOperation(operationKey, requestHash);
   if (!result) return { ok: false, error: "storage_failed" };
   if (result.ok !== true) {

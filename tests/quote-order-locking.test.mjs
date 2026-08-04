@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { executeDurableOperationEval } from "./helpers/durable-operation-redis-mock.mjs";
 
 process.env.AUTH_SECRET = "quote-lock-test-secret-at-least-32-chars";
 process.env.KV_REST_API_URL = "http://quote-lock-redis.test";
@@ -64,21 +65,12 @@ function execute(command, source = "direct") {
   }
   if (name === "EXPIRE" || name === "TTL") return 1;
   if (name === "EVAL") {
+    const durable = executeDurableOperationEval(command, { values, sortedSet });
+    if (durable.handled) return durable.result;
     const script = String(args[0] || "");
     const keyCount = Number(args[1] || 0);
     const keys = args.slice(2, 2 + keyCount);
     const argv = args.slice(2 + keyCount);
-    if (script.includes("state='started'") && script.includes("isNew=true")) {
-      const existing = values.get(keys[0]);
-      if (existing) {
-        const record = JSON.parse(existing);
-        if (record.requestHash !== argv[0]) return JSON.stringify({ ok: false, error: "idempotency_conflict" });
-        return JSON.stringify({ ok: true, state: record.state, record, isNew: false });
-      }
-      const record = { version: 1, state: "started", requestHash: argv[0], operationId: argv[1], createdAt: argv[2] };
-      values.set(keys[0], JSON.stringify(record));
-      return JSON.stringify({ ok: true, state: "started", record, isNew: true });
-    }
     if (keyCount > 1) {
       const absent = "__LM_ORDER_RECORD_ABSENT__";
       const currentRaw = values.get(keys[0]) ?? null;

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { after } from "next/server";
+import { after } from "next/server.js";
 import { buildOrderEmailHtml, buildOrderEmailText } from "./email-template.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { getMergedCatalog } from "../_catalog.js";
@@ -74,7 +74,7 @@ function formatBeijingTime(value = new Date()) {
 }
 
 function validUsername(value) { return /^[A-Za-z0-9]{4,10}$/.test(String(value || "").trim()); }
-function validEmail(value) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim()); }
+function validEmail(value) { const email = String(value || "").trim(); return email.length <= 254 && !/[\x00-\x1f\x7f]/.test(email) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email); }
 
 function bundleDiscountRate(itemCount) {
   if (itemCount >= 3) return 0.10;
@@ -282,7 +282,7 @@ async function handler(request) {
     return Response.json({ ok: false, error: "missing_items" }, { status: 400 });
   }
 
-  const email = clean(body.email, 200);
+  const email = String(body.email || "").trim().toLowerCase();
   const contact = clean(body.contact, 200);
   const remark = clean(body.remark, 1500);
   const allowedMethods = ["alipay", "usdt", "balance", "redeem"];
@@ -299,10 +299,10 @@ async function handler(request) {
   let userEmail = null;
   let userAuthVersion = 0;
   let userAccountLifecycleId = "";
-  const expectedIdentityHeader = clean(request.headers.get("x-order-expected-account"), 200).toLowerCase();
+  const expectedIdentityHeader = String(request.headers.get("x-order-expected-account") || "").trim().toLowerCase();
   const expectedIdentityHeaderProvided = request.headers.has("x-order-expected-account");
   const expectedBodyProvided = Object.prototype.hasOwnProperty.call(body, "expectedAccountEmail");
-  const expectedBodyAccount = clean(body.expectedAccountEmail, 200).toLowerCase();
+  const expectedBodyAccount = String(body.expectedAccountEmail || "").trim().toLowerCase();
   const expectedHeaderAccount = expectedIdentityHeader === "__guest__" ? "" : expectedIdentityHeader;
   const expectedLifecycleHeaderRaw = clean(request.headers.get("x-operation-expected-lifecycle"), 80).toLowerCase();
   const expectedLifecycleHeaderProvided = request.headers.has("x-operation-expected-lifecycle");

@@ -1,30 +1,28 @@
 import { clean, formatBeijingTime, redisCmd, redisPipeline } from "./_utils.js";
-import { recordDependencyMetric } from "./_observability.js";
+import { observabilityWritesEnabled, recordDependencyMetric } from "./_observability.js";
 import { JOB_POLICIES, MAINTENANCE_SCHEDULER } from "./_job-runner.js";
 
 const HEALTH_PREFIX = "lm:health:";
 const HEALTH_HISTORY_PREFIX = "lm:health:history:v1:";
 const HEALTH_HISTORY_LIMIT = 500;
 const RECORD_HEALTH_SCRIPT = `
-local next = cjson.decode(ARGV[1])
-local previousRaw = redis.call('GET', KEYS[1])
-if previousRaw then
-  local decoded, previous = pcall(cjson.decode, previousRaw)
-  if decoded and type(previous) == 'table' then
-    if next.status ~= 'ok' then
-      next.lastSuccessAt = previous.lastSuccessAt or ''
-      next.lastSuccessAtBeijing = previous.lastSuccessAtBeijing or ''
-    end
-    if next.status ~= 'error' then
-      next.lastFailureAt = previous.lastFailureAt or ''
-      next.lastFailureAtBeijing = previous.lastFailureAtBeijing or ''
-    end
-  end
+local function validtype(key,expected)
+  local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value
+  return actual=='none' or actual==expected
 end
-local encoded = cjson.encode(next)
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'list') then return '__storage_type_error__' end
+local limit=tonumber(ARGV[2])
+if not limit or limit~=math.floor(limit) or limit<1 or limit>10000 then return '__invalid_limit__' end
+local current=redis.call('GET',KEYS[1])
+if ARGV[3]=='0' then
+  if current then return '__conflict__' end
+elseif not current or current~=ARGV[4] then
+  return '__conflict__'
+end
+local encoded=ARGV[1]
 redis.call('SET', KEYS[1], encoded)
 redis.call('LPUSH', KEYS[2], encoded)
-redis.call('LTRIM', KEYS[2], 0, tonumber(ARGV[2]) - 1)
+redis.call('LTRIM', KEYS[2], 0, limit - 1)
 return encoded`;
 export const HEALTH_COMPONENTS = [
   "redis",
@@ -160,26 +158,81 @@ export async function recordHealthStatus(component, { status = "ok", summary = "
     lastFailureAt: state === "error" ? now.toISOString() : "",
     lastFailureAtBeijing: state === "error" ? formatBeijingTime(now) : "",
   };
-  const saved = await redisCmd([
-    "EVAL", RECORD_HEALTH_SCRIPT, "2",
-    HEALTH_PREFIX + name, HEALTH_HISTORY_PREFIX + name,
-    JSON.stringify(record), String(HEALTH_HISTORY_LIMIT),
-  ]);
-  try { return parseStoredJson(saved, "health_status_write_failed"); } catch { return null; }
+  if (!observabilityWritesEnabled()) return record;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    let read;
+    try {
+      read = strictPipelineRows(await redisPipeline([
+        ["GET", HEALTH_PREFIX + name],
+        ["PING"],
+      ]), 2, "health_status_store_unavailable");
+    } catch { return null; }
+    if (read[1] !== "PONG") return null;
+    const previousRaw = typeof read[0] === "string" ? read[0] : "";
+    const previous = previousRaw ? parseJson(previousRaw) : null;
+    const next = { ...record };
+    if (previous && typeof previous === "object" && !Array.isArray(previous)) {
+      if (state !== "ok") {
+        if (typeof previous.lastSuccessAt === "string") next.lastSuccessAt = previous.lastSuccessAt;
+        if (typeof previous.lastSuccessAtBeijing === "string") next.lastSuccessAtBeijing = previous.lastSuccessAtBeijing;
+      }
+      if (state !== "error") {
+        if (typeof previous.lastFailureAt === "string") next.lastFailureAt = previous.lastFailureAt;
+        if (typeof previous.lastFailureAtBeijing === "string") next.lastFailureAtBeijing = previous.lastFailureAtBeijing;
+      }
+    }
+    const saved = await redisCmd([
+      "EVAL", RECORD_HEALTH_SCRIPT, "2",
+      HEALTH_PREFIX + name, HEALTH_HISTORY_PREFIX + name,
+      JSON.stringify(next), String(HEALTH_HISTORY_LIMIT), previousRaw ? "1" : "0", previousRaw || "__lm_health_missing__",
+    ]);
+    if (saved === "__conflict__") continue;
+    try { return parseStoredJson(saved, "health_status_write_failed"); } catch { return null; }
+  }
+  return null;
 }
 
-export async function readHealthStatuses() {
+function corruptStoredHealthStatus(component) {
+  return {
+    component,
+    status: "warning",
+    summary: "状态记录格式异常，已忽略；等待下一次探测自动覆盖",
+    error: "health_status_record_corrupt",
+    metrics: {},
+    checkedAt: "",
+    checkedAtBeijing: "",
+    lastSuccessAt: "",
+    lastSuccessAtBeijing: "",
+    lastFailureAt: "",
+    lastFailureAtBeijing: "",
+    stale: false,
+    ageMs: null,
+  };
+}
+
+export async function readHealthStatusesWithDiagnostics() {
   const result = strictPipelineRows(
     await redisPipeline(HEALTH_COMPONENTS.map((name) => ["GET", HEALTH_PREFIX + name])),
     HEALTH_COMPONENTS.length,
     "health_status_store_unavailable",
   );
   const statuses = {};
+  const diagnostics = [];
   const now = Date.now();
   HEALTH_COMPONENTS.forEach((name, index) => {
-    statuses[name] = healthStatusWithFreshness(name, parseHealthRecord(result[index], name, "health_status_store_corrupt"), now);
+    try {
+      statuses[name] = healthStatusWithFreshness(name, parseHealthRecord(result[index], name, "health_status_store_corrupt"), now);
+    } catch (error) {
+      if (error?.code !== "health_status_store_corrupt") throw error;
+      statuses[name] = corruptStoredHealthStatus(name);
+      diagnostics.push({ component: name, code: "health_status_record_corrupt", corruptRecords: 1 });
+    }
   });
-  return statuses;
+  return { statuses, diagnostics };
+}
+
+export async function readHealthStatuses() {
+  return (await readHealthStatusesWithDiagnostics()).statuses;
 }
 
 export async function checkRedisHealth() {
@@ -218,16 +271,42 @@ export async function readHealthHistory(component, limit = 100) {
 }
 
 export async function readAllHealthHistory(limitPerComponent = 30) {
+  const result = await readAllHealthHistoryWithDiagnostics(limitPerComponent);
+  if (result.diagnostics.length > 0) throw unavailable("health_history_store_corrupt");
+  return result.history;
+}
+
+export async function readAllHealthHistoryWithDiagnostics(limitPerComponent = 30) {
   const safeLimit = Math.max(1, Math.min(100, Number(limitPerComponent || 30)));
   const result = strictPipelineRows(await redisPipeline(HEALTH_COMPONENTS.map((name) => [
     "LRANGE", HEALTH_HISTORY_PREFIX + name, "0", String(safeLimit - 1),
   ])), HEALTH_COMPONENTS.length, "health_history_store_unavailable");
   const history = {};
+  const diagnostics = [];
   HEALTH_COMPONENTS.forEach((name, index) => {
     if (!Array.isArray(result[index])) throw unavailable("health_history_store_unavailable");
-    history[name] = result[index].map((value) => parseHealthRecord(value, name, "health_history_store_corrupt"));
+    const records = [];
+    let corruptRecords = 0;
+    for (const value of result[index]) {
+      try {
+        const record = parseHealthRecord(value, name, "health_history_store_corrupt");
+        if (record) records.push(record);
+        else corruptRecords += 1;
+      } catch (error) {
+        if (error?.code !== "health_history_store_corrupt") throw error;
+        corruptRecords += 1;
+      }
+    }
+    history[name] = records;
+    if (corruptRecords > 0) {
+      diagnostics.push({
+        component: name,
+        code: "health_history_record_corrupt",
+        corruptRecords,
+      });
+    }
   });
-  return history;
+  return { history, diagnostics };
 }
 
 export const healthKeys = { HEALTH_PREFIX, HEALTH_HISTORY_PREFIX, RECORD_HEALTH_SCRIPT };

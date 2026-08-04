@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { clientFetch as fetch, isClientRequestTimeout } from "../../lib/client-fetch";
 
 export default function UnsubscribeConfirmation({ token, locale = "zh", initiallyUnsubscribed = false }) {
   const L = (zh, en) => locale === "en" ? en : zh;
@@ -22,14 +23,26 @@ export default function UnsubscribeConfirmation({ token, locale = "zh", initiall
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body: "List-Unsubscribe=One-Click",
       });
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || L("退订失败，请稍后重试", "Could not unsubscribe. Please try again."));
+      let data = null;
+      try { data = await response.json(); } catch {}
+      if (!data || typeof data !== "object") {
+        throw new Error(L("退订服务响应异常，请稍后重试。", "The unsubscribe service returned an invalid response. Please try again."));
+      }
+      if (!response.ok || !data.ok) {
+        throw new Error(response.status >= 500
+          ? L("退订服务暂时不可用，请稍后重试。", "The unsubscribe service is temporarily unavailable. Please try again.")
+          : L("退订失败，请确认链接有效后重试。", "Could not unsubscribe. Check that the link is valid and try again."));
+      }
       setState({ submitting: false, unsubscribed: true, error: "" });
     } catch (error) {
       setState({
         submitting: false,
         unsubscribed: false,
-        error: error?.message || L("退订失败，请稍后重试", "Could not unsubscribe. Please try again."),
+        error: isClientRequestTimeout(error)
+          ? L("请求超时，请检查网络后重试。", "The request timed out. Check your connection and try again.")
+          : (error?.name === "TypeError"
+            ? L("网络连接失败，请检查网络后重试。", "The network request failed. Check your connection and try again.")
+            : (error?.message || L("退订失败，请稍后重试。", "Could not unsubscribe. Please try again."))),
       });
     }
   }

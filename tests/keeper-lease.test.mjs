@@ -10,6 +10,7 @@ const strings = new Map();
 const originalFetch = globalThis.fetch;
 let failPushRecovery = false;
 let failHealthWrite = false;
+let loseSetResponseKey = "";
 
 function current(key) {
   const entry = strings.get(key);
@@ -33,7 +34,7 @@ function execute(command) {
     const exIndex = options.findIndex((item) => String(item).toUpperCase() === "EX");
     const expiresAt = exIndex >= 0 ? Date.now() + Number(options[exIndex + 1]) * 1000 : 0;
     strings.set(key, { value, expiresAt });
-    return "OK";
+    return key === loseSetResponseKey ? null : "OK";
   }
   if (name === "DEL") return strings.delete(args[0]) ? 1 : 0;
   if (name === "EXPIRE") return 1;
@@ -50,7 +51,7 @@ function execute(command) {
     const keys = args.slice(2, 2 + keyCount);
     const argv = args.slice(2 + keyCount);
     const entry = current(keys[0]);
-    if (script.includes("local next = cjson.decode(ARGV[1])") && script.includes("LPUSH")) {
+    if (script.includes("local encoded=ARGV[1]") && script.includes("LPUSH")) {
       if (failHealthWrite) return null;
       strings.set(keys[0], { value: String(argv[0]), expiresAt: 0 });
       return String(argv[0]);
@@ -141,6 +142,31 @@ test("a failed tick compare-deletes its lease for immediate recovery", async () 
   const recovered = await keeper.keeperInternals.runTick({ ...options, handler: async () => ({ ok: true, processed: 1 }) });
   assert.equal(recovered.ok, true);
   assert.equal(recovered.skipped, undefined);
+});
+
+test("a committed tick lease with a lost SET response is recovered by its token", async () => {
+  strings.clear();
+  const lockKey = "lm:test:ambiguous-tick-lock";
+  loseSetResponseKey = lockKey;
+  let executions = 0;
+  const result = await keeper.keeperInternals.runTick({
+    job: "order_transition", lockKey, intervalSec: 60, trigger: "test",
+    handler: async () => { executions += 1; return { ok: true }; },
+  });
+  loseSetResponseKey = "";
+  assert.equal(result.ok, true);
+  assert.equal(executions, 1);
+});
+
+test("an invalid keeper result fails and releases its lease for immediate retry", async () => {
+  strings.clear();
+  const options = { job: "order_transition", lockKey: "lm:test:invalid-result", intervalSec: 60, trigger: "test" };
+  const invalid = await keeper.keeperInternals.runTick({ ...options, handler: async () => ({}) });
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.error, "invalid_job_result");
+  const retry = await keeper.keeperInternals.runTick({ ...options, handler: async () => ({ ok: true }) });
+  assert.equal(retry.ok, true);
+  assert.equal(retry.skipped, undefined);
 });
 
 test("a monitoring write failure never repeats an already successful business tick", async () => {

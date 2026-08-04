@@ -141,23 +141,20 @@ function installFakeRedis(initial = {}) {
           return { result: strictRateLimitResult(keys, args) };
         }
 
-        if (script.includes("admin_2fa_backup_consume_v1")) {
+        if (script.includes("admin_2fa_backup_consume_lossless_v2")) {
           const raw = store.get(keys[0]);
-          if (raw == null) return { result: JSON.stringify({ ok: false, error: "not_enabled" }) };
+          if (raw == null) return { result: ["error", "not_enabled"] };
+          if (raw !== args[1]) return { result: ["stale"] };
           let record = null;
           try { record = JSON.parse(raw); } catch (error) {}
           if (!record || typeof record.secretEnc !== "string" || !Array.isArray(record.backupHashes)) {
-            return { result: JSON.stringify({ ok: false, error: "invalid_storage_response" }) };
+            return { result: ["error", "invalid_storage_response"] };
           }
           const index = record.backupHashes.indexOf(args[0]);
-          if (index < 0) return { result: JSON.stringify({ ok: false, error: "invalid_code" }) };
-          record.backupHashes.splice(index, 1);
-          store.set(keys[0], JSON.stringify(record));
-          return { result: JSON.stringify({
-            ok: true,
-            method: "backup",
-            remainingBackup: record.backupHashes.length,
-          }) };
+          if (index < 0) return { result: ["error", "invalid_code"] };
+          const replacement = JSON.parse(args[2]);
+          store.set(keys[0], args[2]);
+          return { result: ["ok", String(replacement.backupHashes.length)] };
         }
 
         if (script.includes("staff_concurrent_update")) {
@@ -777,18 +774,25 @@ test("real Redis executes monotonic revocation and atomic concurrent staff chang
     assert.equal(redis.run(["GET", kickKey(2)]), boundary);
 
     const { codes, hashes } = utils.generateBackupCodes();
-    redis.run(["SET", twoFaKey(2), JSON.stringify({
+    const twoFaLosslessRaw = JSON.stringify({
       secretEnc: utils.encryptTotpSecret(utils.generateTotpSecret()),
       backupHashes: [hashes[0]],
-    })]);
+      legacyRows: [],
+      legacyNull: null,
+    }).replace(/}$/, ',"legacyHuge":123456789012345678901234567890}');
+    redis.run(["SET", twoFaKey(2), twoFaLosslessRaw]);
     const backupAttempts = await withFetch(redis.fetch, () => Promise.all([
       utils.verifyStaff2faCode(2, codes[0]),
       utils.verifyStaff2faCode(2, codes[0]),
     ]));
     assert.equal(backupAttempts.filter((attempt) => attempt.ok).length, 1);
     assert.equal(backupAttempts.filter((attempt) => !attempt.ok && attempt.error === "invalid_code").length, 1);
-    const twoFaAfter = JSON.parse(redis.run(["GET", twoFaKey(2)]));
+    const twoFaAfterRaw = redis.run(["GET", twoFaKey(2)]);
+    const twoFaAfter = JSON.parse(twoFaAfterRaw);
     assert.deepEqual(twoFaAfter.backupHashes, []);
+    assert.match(twoFaAfterRaw, /"legacyRows":\[\]/);
+    assert.match(twoFaAfterRaw, /"legacyNull":null/);
+    assert.match(twoFaAfterRaw, /"legacyHuge":123456789012345678901234567890/);
     const strictState = await withFetch(redis.fetch, () => utils.getStaff2faState(2));
     assert.equal(strictState.ok, true);
     assert.deepEqual(strictState.record.backupHashes, []);

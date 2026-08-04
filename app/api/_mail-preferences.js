@@ -20,8 +20,8 @@ const MARKETING_FOOTER_SLOT = "<!-- LM_MARKETING_PREFERENCES_SLOT_V1 -->";
 const SCOPE_PRIORITY = { none: 0, marketing: 1, optional: 2, all: 3 };
 
 function normalizeEmail(value) {
-  const email = clean(value, 254).toLowerCase();
-  return validEmail(email) ? email : "";
+  const email = String(value || "").trim().toLowerCase();
+  return email.length <= 254 && validEmail(email) ? email : "";
 }
 
 function mailSecret() {
@@ -99,6 +99,10 @@ function normalizedSuppression(value = {}) {
 function normalizedContact(record, email = "") {
   const normalized = normalizeEmail(record?.email || email);
   const contactId = clean(record?.contactId, 64) || mailContactId(normalized);
+  const rawRevision = Number(record?.revision);
+  const revision = Number.isSafeInteger(rawRevision) && rawRevision >= 0 && rawRevision < Number.MAX_SAFE_INTEGER
+    ? rawRevision
+    : 0;
   return {
     contactId,
     email: normalized,
@@ -111,19 +115,103 @@ function normalizedContact(record, email = "") {
     suppression: normalizedSuppression(record?.suppression),
     softBounce: record?.softBounce && typeof record.softBounce === "object" ? record.softBounce : {},
     cooldown: record?.cooldown && typeof record.cooldown === "object" ? record.cooldown : {},
-    revision: Math.max(0, Number(record?.revision || 0)),
+    repairTombstone: !normalized && record?.repairTombstone === true,
+    revision,
     createdAt: clean(record?.createdAt, 80),
     updatedAt: clean(record?.updatedAt, 80),
   };
 }
 
+function conservativeContact(email, contactId, { source = "automatic_repair", locale = "", suppressionScope = "marketing" } = {}) {
+  const now = new Date();
+  const scope = ["marketing", "optional", "all"].includes(suppressionScope) ? suppressionScope : "marketing";
+  return normalizedContact({
+    contactId,
+    email,
+    sources: [source],
+    locale,
+    preferences: {
+      marketing: "unknown",
+      orderUpdates: true,
+      renewal: true,
+      serviceNotices: true,
+    },
+    consent: {},
+    repairTombstone: true,
+    suppression: {
+      scope,
+      reason: "contact_record_repaired_fail_safe",
+      source: "automatic_repair",
+      createdAt: now.toISOString(),
+      createdAtBeijing: formatBeijingTime(now),
+    },
+    revision: 1,
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  }, email);
+}
+
+function isRepairTombstone(contact, expectedContactId = "") {
+  return Boolean(contact
+    && !contact.email
+    && contact.contactId === expectedContactId
+    && contact.repairTombstone === true);
+}
+
+const CORRUPT_CONTACT_REPAIR_SCRIPT = `
+-- CORRUPT_CONTACT_REPAIR_V1
+local contactType=redis.call('TYPE',KEYS[1])
+if type(contactType)=='table' then contactType=contactType.ok end
+local contactMissing=contactType=='none'
+if contactMissing then
+  if ARGV[1]~='missing' then return 0 end
+elseif contactType=='string' then
+  local raw=redis.call('GET',KEYS[1])
+  if not raw or redis.sha1hex(raw)~=ARGV[1] then return 0 end
+elseif ARGV[1]~='type:any' and ARGV[1]~='type:'..contactType then
+  return 0
+end
+local indexType=redis.call('TYPE',KEYS[2])
+if type(indexType)=='table' then indexType=indexType.ok end
+if indexType~='none' and indexType~='zset' then return -4 end
+for index=3,5 do
+  local kind=redis.call('TYPE',KEYS[index])
+  if type(kind)=='table' then kind=kind.ok end
+  if kind~='none' and kind~='set' then return -4 end
+end
+local scope='marketing'
+local replacement=ARGV[2]
+local indexed=false
+if redis.call('SISMEMBER',KEYS[5],ARGV[6])==1 then scope='all'; replacement=ARGV[4]; indexed=true
+elseif redis.call('SISMEMBER',KEYS[4],ARGV[6])==1 then scope='optional'; replacement=ARGV[3]; indexed=true
+elseif redis.call('SISMEMBER',KEYS[3],ARGV[6])==1 then indexed=true end
+if contactMissing and not indexed then return 0 end
+local newOk,next=pcall(cjson.decode,replacement)
+if not newOk or type(next)~='table' or type(next.preferences)~='table'
+  or type(next.suppression)~='table' or next.suppression.scope~=scope then return -3 end
+redis.call('ZADD',KEYS[2],ARGV[5],ARGV[6])
+redis.call('SREM',KEYS[3],ARGV[6])
+redis.call('SREM',KEYS[4],ARGV[6])
+redis.call('SREM',KEYS[5],ARGV[6])
+if scope=='marketing' then redis.call('SADD',KEYS[3],ARGV[6])
+elseif scope=='optional' then redis.call('SADD',KEYS[4],ARGV[6])
+else redis.call('SADD',KEYS[5],ARGV[6]) end
+redis.call('SET',KEYS[1],replacement)
+if scope=='all' then return 3 elseif scope=='optional' then return 2 else return 1 end
+`;
+
 const CONTACT_CAS_SCRIPT = `
+-- CONTACT_CAS_V2
 local raw=redis.call('GET',KEYS[1])
 local current=0
 if raw then
   local ok,doc=pcall(cjson.decode,raw)
-  if not ok then return -2 end
-  current=tonumber(doc.revision or 0)
+  if not ok or type(doc)~='table' then return -2 end
+  local revision=doc.revision
+  if type(revision)=='number' or type(revision)=='string' then
+    local parsed=tonumber(revision)
+    if parsed and parsed>=0 and parsed==math.floor(parsed) and parsed<=9007199254740990 then current=parsed end
+  end
 end
 if current~=tonumber(ARGV[1]) then return 0 end
 -- Update the secondary index before the contact record. Redis scripts are
@@ -136,21 +224,94 @@ return 1
 `;
 
 async function saveContact(contact, expectedRevision) {
-  if (!contact?.contactId || !contact?.email) return false;
+  if (!contact?.contactId || (!contact?.email && !isRepairTombstone(contact, contact.contactId))) return false;
+  const nextRaw = JSON.stringify(contact);
   const saved = await redisCmd([
     "EVAL", CONTACT_CAS_SCRIPT, "2", contactKey(contact.contactId), CONTACT_INDEX_KEY,
-    String(Math.max(0, Number(expectedRevision || 0))), JSON.stringify(contact),
+    String(Math.max(0, Number(expectedRevision || 0))), nextRaw,
     String(Date.now()), contact.contactId,
   ]);
-  return Number(saved) === 1;
+  if (Number(saved) === 1) return true;
+  if (saved != null) return false;
+  const recovered = checkedPipelineRows(await redisPipeline([["GET", contactKey(contact.contactId)], ["PING"]]), 2);
+  return Boolean(recovered && recovered[0] === nextRaw && recovered[1] === "PONG");
+}
+
+async function repairCorruptContact({ contactId, email, raw, wrongType = "", missing = false, source = "automatic_repair", locale = "" }) {
+  const replacements = ["marketing", "optional", "all"].map((suppressionScope) => conservativeContact(email, contactId, { source, locale, suppressionScope }));
+  if (replacements.some((item) => item.contactId !== contactId || (!item.email && !isRepairTombstone(item, contactId)))) return null;
+  const expectedDigest = missing ? "missing" : wrongType ? "type:any" : createHash("sha1").update(String(raw)).digest("hex");
+  const repaired = await redisCmd([
+    "EVAL", CORRUPT_CONTACT_REPAIR_SCRIPT, "5",
+    contactKey(contactId), CONTACT_INDEX_KEY,
+    SUPPRESSED_MARKETING_KEY, SUPPRESSED_OPTIONAL_KEY, SUPPRESSED_ALL_KEY,
+    expectedDigest, ...replacements.map(JSON.stringify), String(Date.now()), contactId,
+  ]);
+  return replacements[Number(repaired) - 1] || null;
+}
+
+async function readMailContactStateById(contactId) {
+  const safeId = clean(contactId, 64).replace(/[^a-f0-9]/gi, "").toLowerCase();
+  if (!safeId) return { raw: null, contact: null, corrupt: false, unavailable: false };
+  const response = await redisPipeline([
+    ["GET", contactKey(safeId)], ["SISMEMBER", SUPPRESSED_ALL_KEY, safeId],
+    ["SISMEMBER", SUPPRESSED_OPTIONAL_KEY, safeId], ["SISMEMBER", SUPPRESSED_MARKETING_KEY, safeId], ["PING"],
+  ]);
+  const entries = Array.isArray(response?.result) ? response.result : response;
+  const entryValue = (entry) => entry && typeof entry === "object" && Object.hasOwn(entry, "result") ? entry.result : entry;
+  if (!Array.isArray(entries) || entries.length !== 5 || pipelineEntryHasError(entries[4])
+      || entryValue(entries[4]) !== "PONG") {
+    return { raw: null, contact: null, corrupt: false, unavailable: true };
+  }
+  const indexUnavailable = entries.slice(1, 4).some(pipelineEntryHasError);
+  const suppressionScope = indexUnavailable ? "" : Number(entryValue(entries[1])) === 1 ? "all"
+    : Number(entryValue(entries[2])) === 1 ? "optional"
+      : Number(entryValue(entries[3])) === 1 ? "marketing" : "";
+  if (pipelineEntryHasError(entries[0])) {
+    const detail = entries[0]?.error ?? entries[0]?.result?.error ?? "";
+    return /wrongtype/i.test(String(detail))
+      ? (indexUnavailable ? { raw: null, contact: null, corrupt: false, unavailable: true }
+        : { raw: null, contact: null, corrupt: true, unavailable: false, wrongType: "any", suppressionScope })
+      : { raw: null, contact: null, corrupt: false, unavailable: true };
+  }
+  const stored = entryValue(entries[0]);
+  if (stored == null) return indexUnavailable
+    ? { raw: null, contact: null, corrupt: false, unavailable: true }
+    : { raw: null, contact: null, corrupt: false, unavailable: false, suppressionScope };
+  const raw = typeof stored === "string" ? stored : JSON.stringify(stored);
+  const record = parseJson(stored);
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return indexUnavailable ? { raw: null, contact: null, corrupt: false, unavailable: true }
+      : { raw, contact: null, corrupt: true, unavailable: false, suppressionScope };
+  }
+  const contact = normalizedContact(record);
+  if ((!contact.email && !isRepairTombstone(contact, safeId)) || contact.contactId !== safeId
+      || (contact.email && mailContactId(contact.email) !== safeId)) {
+    return indexUnavailable ? { raw: null, contact: null, corrupt: false, unavailable: true }
+      : { raw, contact: null, corrupt: true, unavailable: false, suppressionScope };
+  }
+  if (suppressionScope && SCOPE_PRIORITY[suppressionScope] > SCOPE_PRIORITY[contact.suppression?.scope || "none"]) {
+    contact.suppression = normalizedSuppression({ ...contact.suppression, scope: suppressionScope, reason: contact.suppression?.reason || "suppression_index_recovered" });
+  }
+  return { raw, contact, corrupt: false, unavailable: false, suppressionScope };
 }
 
 async function mutateContact({ email = "", contactId = "", source = "", locale = "" } = {}, mutation = (contact) => contact) {
   const normalizedEmail = normalizeEmail(email);
-  const resolvedId = clean(contactId, 64).replace(/[^a-f0-9]/gi, "").toLowerCase() || mailContactId(normalizedEmail);
+  const suppliedId = String(contactId || "").trim().toLowerCase();
+  const emailId = mailContactId(normalizedEmail);
+  if ((normalizedEmail && !emailId) || (suppliedId && !/^[a-f0-9]{40}$/.test(suppliedId)) || (suppliedId && emailId && suppliedId !== emailId)) return null;
+  const resolvedId = suppliedId || emailId;
   if (!resolvedId) return null;
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const existing = await getMailContactById(resolvedId);
+    const state = await readMailContactStateById(resolvedId);
+    if (state.unavailable) return null;
+    if (state.corrupt || (!state.contact && state.suppressionScope)) {
+      await repairCorruptContact({ contactId: resolvedId, email: normalizedEmail, raw: state.raw,
+        wrongType: state.wrongType, missing: !state.corrupt, source, locale });
+      continue;
+    }
+    const existing = state.contact;
     if (!existing && !normalizedEmail) return null;
     const now = new Date();
     const base = normalizedContact(existing || {
@@ -158,7 +319,7 @@ async function mutateContact({ email = "", contactId = "", source = "", locale =
       email: normalizedEmail,
       createdAt: now.toISOString(),
     }, normalizedEmail);
-    if (!base.email) return null;
+    if (!base.email && !isRepairTombstone(base, resolvedId)) return null;
     if (source && !base.sources.includes(clean(source, 40).toLowerCase())) base.sources.push(clean(source, 40).toLowerCase());
     if (locale === "en" || locale === "zh") base.locale = locale;
     const expectedRevision = Math.max(0, Number(existing?.revision || 0));
@@ -193,24 +354,30 @@ async function appendPreferenceEvent(contactId, event) {
 }
 
 export async function getMailContactById(contactId) {
-  const safeId = clean(contactId, 64).replace(/[^a-f0-9]/gi, "").toLowerCase();
-  if (!safeId) return null;
-  const record = parseJson(await redisCmd(["GET", contactKey(safeId)]));
-  return record ? normalizedContact(record) : null;
+  return (await readMailContactStateById(contactId)).contact || null;
 }
 
 async function readMailContactByIdStrict(contactId) {
   const safeId = clean(contactId, 64).replace(/[^a-f0-9]/gi, "").toLowerCase();
   if (!safeId) return { ok: true, contact: null };
-  const commands = [["GET", contactKey(safeId)], ["PING"]];
-  const rows = checkedPipelineRows(await redisPipeline(commands), commands.length);
-  if (!rows || rows[1] !== "PONG") return { ok: false, error: "storage_unavailable", contact: null };
-  if (rows[0] == null) return { ok: true, contact: null };
-  const parsed = parseJson(rows[0]);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { ok: false, error: "storage_unavailable", contact: null };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const state = await readMailContactStateById(safeId);
+    if (state.unavailable) return { ok: false, error: "storage_unavailable", contact: null };
+    if (!state.corrupt && (state.contact || !state.suppressionScope)) return { ok: true, contact: state.contact, repaired: attempt > 0 };
+    if (attempt === 0) {
+      const repaired = await repairCorruptContact({
+        contactId: safeId,
+        email: "",
+        raw: state.raw,
+        wrongType: state.wrongType,
+        missing: !state.corrupt,
+      });
+      if (repaired) return { ok: true, contact: repaired, repaired: true };
+      continue;
+    }
+    return { ok: false, error: "contact_repair_required", contact: null };
   }
-  return { ok: true, contact: normalizedContact(parsed) };
+  return { ok: false, error: "contact_repair_required", contact: null };
 }
 
 export async function getMailContact(email) {
@@ -225,7 +392,7 @@ export async function ensureMailContact(email, { source = "", locale = "" } = {}
   if (!contactId) return null;
   const existing = await getMailContactById(contactId);
   const wantedSource = clean(source, 40).toLowerCase();
-  if (existing
+  if (existing?.email
       && (!wantedSource || existing.sources.includes(wantedSource))
       && (!locale || existing.locale === locale)) {
     const indexed = await redisCmd(["ZADD", CONTACT_INDEX_KEY, String(Date.now()), existing.contactId]);
@@ -285,20 +452,54 @@ export async function getMailSendDecisionsBatch({ emails, purpose = "", category
   if (!normalizedEmails.length) return { ok: true, decisions: new Map() };
   const ids = normalizedEmails.map(mailContactId);
   if (ids.some((id) => !id)) return { ok: false, error: "mail_policy_unavailable", decisions: new Map() };
-  const commands = [...ids.map((id) => ["GET", contactKey(id)]), ["PING"]];
-  const rows = checkedPipelineRows(await redisPipeline(commands), commands.length);
-  if (!rows || rows.at(-1) !== "PONG") {
+  const commands = [
+    ...ids.map((id) => ["GET", contactKey(id)]), ["SMISMEMBER", SUPPRESSED_ALL_KEY, ...ids],
+    ["SMISMEMBER", SUPPRESSED_OPTIONAL_KEY, ...ids], ["SMISMEMBER", SUPPRESSED_MARKETING_KEY, ...ids], ["PING"],
+  ];
+  const response = await redisPipeline(commands);
+  const entries = Array.isArray(response?.result) ? response.result : response;
+  const value = (entry) => entry && typeof entry === "object" && Object.hasOwn(entry, "result") ? entry.result : entry;
+  const membershipEntries = Array.isArray(entries) ? entries.slice(ids.length, ids.length + 3) : [];
+  const memberships = membershipEntries.map(value);
+  const rowEntries = Array.isArray(entries) ? entries.slice(0, ids.length) : [];
+  const fatalRowError = rowEntries.some((entry) => pipelineEntryHasError(entry)
+    && !/wrongtype/i.test(String(entry?.error ?? entry?.result?.error ?? "")));
+  const membershipsAvailable = memberships.length === 3
+    && !membershipEntries.some(pipelineEntryHasError)
+    && memberships.every((row) => Array.isArray(row) && row.length === ids.length);
+  if (!Array.isArray(entries) || entries.length !== commands.length || fatalRowError
+      || pipelineEntryHasError(entries.at(-1)) || value(entries.at(-1)) !== "PONG") {
     return { ok: false, error: "mail_policy_unavailable", decisions: new Map() };
   }
   const decisions = new Map();
   for (let index = 0; index < normalizedEmails.length; index += 1) {
     const email = normalizedEmails[index];
-    const raw = rows[index];
+    const wrongType = pipelineEntryHasError(rowEntries[index]);
+    const raw = wrongType ? null : value(rowEntries[index]);
+    const suppressionScope = !membershipsAvailable ? "" : Number(memberships[0][index]) === 1 ? "all"
+      : Number(memberships[1][index]) === 1 ? "optional"
+        : Number(memberships[2][index]) === 1 ? "marketing" : "";
     const parsed = raw == null ? null : parseJson(raw);
-    if (raw != null && (!parsed || typeof parsed !== "object" || Array.isArray(parsed))) {
-      return { ok: false, error: "mail_policy_unavailable", decisions: new Map() };
+    const contact = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? normalizedContact(parsed, email)
+      : null;
+    if (contact && suppressionScope && SCOPE_PRIORITY[suppressionScope] > SCOPE_PRIORITY[contact.suppression?.scope || "none"]) {
+      contact.suppression = normalizedSuppression({ ...contact.suppression, scope: suppressionScope, reason: contact.suppression?.reason || "suppression_index_recovered" });
     }
-    const contact = parsed ? normalizedContact(parsed, email) : null;
+    if (raw == null && !wrongType && !membershipsAvailable) {
+      decisions.set(email, { allowed: false, retryable: true, reason: "mail_policy_unavailable", purpose: resolvedPurpose, contact: null });
+      continue;
+    }
+    if (wrongType || (raw != null && (!contact || contact.email !== email || contact.contactId !== ids[index]))
+        || (raw == null && suppressionScope)) {
+      const repaired = await repairCorruptContact({ contactId: ids[index], email, raw,
+        wrongType: wrongType ? "any" : "", missing: raw == null && !wrongType, source: "batch_send_policy" });
+      const resolved = repaired || (await readMailContactStateById(ids[index])).contact;
+      decisions.set(email, resolved
+        ? decisionForContact(resolved, { resolvedPurpose, normalizedCategory })
+        : { allowed: false, retryable: true, reason: "mail_policy_unavailable", purpose: resolvedPurpose, contact: null });
+      continue;
+    }
     decisions.set(email, contact
       ? decisionForContact(contact, { resolvedPurpose, normalizedCategory })
       : { allowed: true, reason: "", purpose: resolvedPurpose, contact: null, defaultPolicy: true });
@@ -314,7 +515,19 @@ export async function getMailSendDecision({ email, purpose = "", category = "", 
   const optionalPolicy = resolvedPurpose === "marketing"
     || resolvedPurpose === "lifecycle"
     || (resolvedPurpose === "transactional" && OPTIONAL_ORDER_CATEGORIES.has(normalizedCategory));
-  let contact = await getMailContact(normalized);
+  const contactId = mailContactId(normalized);
+  const state = await readMailContactStateById(contactId);
+  let contact = state.contact;
+  if (state.corrupt || (!contact && state.suppressionScope)) {
+    contact = await repairCorruptContact({
+      contactId, email: normalized, raw: state.raw, wrongType: state.wrongType,
+      missing: !state.corrupt, source: "send_policy",
+    });
+    if (!contact) contact = (await readMailContactStateById(contactId)).contact;
+    if (!contact) {
+      return { allowed: false, retryable: true, policyUnavailable: true, reason: "mail_policy_unavailable", purpose: resolvedPurpose, contact: null };
+    }
+  }
   if (!contact && optionalPolicy) {
     contact = await ensureMailContact(normalized, { source: "send_policy" });
   }
@@ -431,7 +644,7 @@ export async function updateMailPreferences({ email, contactId = "", preferences
       }
     } else if (preferences.marketing === "granted"
         && current.suppression?.scope === "marketing"
-        && current.suppression?.reason === "marketing_unsubscribed") {
+        && ["marketing_unsubscribed", "contact_record_repaired_fail_safe"].includes(current.suppression?.reason)) {
       current.suppression = normalizedSuppression({ scope: "none" });
     }
     return current;
@@ -509,14 +722,18 @@ export async function getMailPreferencesByToken(token) {
   const payload = verifyToken(token, "preferences");
   if (!payload?.cid) return { ok: false, error: "invalid_token" };
   const read = await readMailContactByIdStrict(payload.cid);
-  if (!read.ok) return { ok: false, error: "storage_unavailable", retryable: true };
+  if (!read.ok) return {
+    ok: false,
+    error: read.error,
+    retryable: read.error === "storage_unavailable",
+  };
   const contact = read.contact;
   if (!contact) return { ok: false, error: "contact_not_found" };
   return {
     ok: true,
     contactId: contact.contactId,
     campaignId: clean(payload.cmp, 80),
-    maskedEmail: contact.email.replace(/^(.{1,2}).*(@.*)$/, "$1***$2"),
+    maskedEmail: contact.email ? contact.email.replace(/^(.{1,2}).*(@.*)$/, "$1***$2") : "***",
     locale: contact.locale,
     preferences: contact.preferences,
     suppression: contact.suppression,
@@ -527,7 +744,11 @@ export async function updateMailPreferencesByToken(token, preferences, source = 
   const payload = verifyToken(token, "preferences");
   if (!payload?.cid) return { ok: false, error: "invalid_token" };
   const read = await readMailContactByIdStrict(payload.cid);
-  if (!read.ok) return { ok: false, error: "storage_unavailable", retryable: true };
+  if (!read.ok) return {
+    ok: false,
+    error: read.error,
+    retryable: read.error === "storage_unavailable",
+  };
   if (!read.contact) return { ok: false, error: "contact_not_found" };
   const result = await updateMailPreferences({
     contactId: payload.cid,
@@ -544,7 +765,11 @@ export async function unsubscribeMailToken(token, source = "rfc8058") {
   const payload = verifyToken(token, "preferences");
   if (!payload?.cid) return { ok: false, error: "invalid_token" };
   const read = await readMailContactByIdStrict(payload.cid);
-  if (!read.ok) return { ok: false, error: "storage_unavailable", retryable: true };
+  if (!read.ok) return {
+    ok: false,
+    error: read.error,
+    retryable: read.error === "storage_unavailable",
+  };
   if (!read.contact) return { ok: false, error: "contact_not_found" };
   const result = await updateMailPreferences({
     contactId: payload.cid,
@@ -671,7 +896,7 @@ function isSoftBounce(eventType, reason) {
   const type = clean(eventType, 100).toLowerCase();
   const detail = clean(reason, 300).toLowerCase();
   if (type.includes("soft_bounce") || type.includes("deferred") || type.includes("delivery_delayed")) return true;
-  return /(?:mailbox full|temporar|try again|rate limit|4\d\d|4\.\d\.\d)/i.test(detail);
+  return !/(?:^|\s)5\d\d(?:[\s-]|$)|(?:^|\s)5\.\d\.\d(?:\s|$)|permanent|user unknown|invalid recipient|does not exist/i.test(detail) && /(?:mailbox full|temporar|try again|rate limit|(?:^|[\s;(])4\d\d(?:[\s;.,)]|$)|(?:^|\s)4\.\d\.\d(?:\s|$))/i.test(detail);
 }
 
 export async function applyMailFeedback({ email, status = "", eventType = "", reason = "", provider = "", eventId = "", campaignId = "" } = {}) {
@@ -692,15 +917,19 @@ export async function applyMailFeedback({ email, status = "", eventType = "", re
   }
   if (state === "bounced" || state === "delayed") {
     const contact = await mutateContact({ email: normalized, source: "webhook" }, (current) => {
+      const feedbackId = clean(eventId, 180);
+      const recentEventIds = Array.isArray(current.softBounce?.eventIds) ? current.softBounce.eventIds : [];
+      if (feedbackId && recentEventIds.includes(feedbackId)) return current;
       const now = new Date();
       const previousAt = new Date(current.softBounce?.lastAt || 0).getTime();
-      const withinWindow = Number.isFinite(previousAt) && Date.now() - previousAt <= 7 * 24 * 60 * 60 * 1000;
-      const count = withinWindow ? Number(current.softBounce?.count || 0) + 1 : 1;
+      const age = Date.now() - previousAt; const withinWindow = Number.isFinite(previousAt) && age >= 0 && age <= 7 * 24 * 60 * 60 * 1000;
+      const previousCount = Number(current.softBounce?.count); const count = withinWindow && Number.isSafeInteger(previousCount) && previousCount >= 0 && previousCount < Number.MAX_SAFE_INTEGER ? previousCount + 1 : 1;
       current.softBounce = {
         count,
         lastAt: now.toISOString(),
         reason: clean(reason, 200),
         provider: clean(provider, 40),
+        eventIds: [...recentEventIds, feedbackId].filter(Boolean).slice(-20),
       };
       if (count >= 3) {
         current.cooldown = {
@@ -805,25 +1034,48 @@ export async function listMailSuppressions({ limit = 200 } = {}) {
     return { ok: false, error: "mail_policy_unavailable", suppressions: [] };
   }
   const [indexed, allIds, optionalIds, marketingIds] = indexRows;
-  const ids = Array.from(new Set([
+  const indexedIds = Array.from(new Set([
     ...allIds,
     ...optionalIds,
     ...marketingIds,
     ...indexed,
-  ])).slice(0, safeLimit * 3);
+  ]));
+  const ids = indexedIds.filter((id) => /^[a-f0-9]{40}$/.test(String(id))).slice(0, safeLimit * 3);
+  if (ids.length !== indexedIds.length) console.warn(`[mail-preferences] ignored ${indexedIds.length - ids.length} invalid contact index member(s)`);
   if (!ids.length) return { ok: true, suppressions: [] };
   const detailCommands = [...ids.map((id) => ["GET", contactKey(id)]), ["PING"]];
-  const detailRows = checkedPipelineRows(await redisPipeline(detailCommands), detailCommands.length);
-  if (!detailRows || detailRows.at(-1) !== "PONG") {
+  const detailResponse = await redisPipeline(detailCommands);
+  const detailEntries = Array.isArray(detailResponse?.result) ? detailResponse.result : detailResponse;
+  const detailValue = (entry) => entry && typeof entry === "object" && Object.hasOwn(entry, "result") ? entry.result : entry;
+  const fatalDetailError = Array.isArray(detailEntries) && detailEntries.slice(0, -1).some((entry) => (
+    pipelineEntryHasError(entry) && !/wrongtype/i.test(String(entry?.error ?? entry?.result?.error ?? ""))
+  ));
+  if (!Array.isArray(detailEntries) || detailEntries.length !== detailCommands.length || fatalDetailError
+      || pipelineEntryHasError(detailEntries.at(-1)) || detailValue(detailEntries.at(-1)) !== "PONG") {
     return { ok: false, error: "mail_policy_unavailable", suppressions: [] };
   }
+  const wrongTypeRows = detailEntries.slice(0, -1).map(pipelineEntryHasError);
+  const detailRows = detailEntries.map((entry) => pipelineEntryHasError(entry) ? null : detailValue(entry));
   const parsedRows = detailRows.slice(0, -1).map((entry) => (entry == null ? null : parseJson(entry)));
-  if (parsedRows.some((entry, index) => detailRows[index] != null && (!entry || typeof entry !== "object" || Array.isArray(entry)))) {
-    return { ok: false, error: "mail_policy_unavailable", suppressions: [] };
-  }
+  const corruptCount = parsedRows.filter((entry, index) => wrongTypeRows[index] || (detailRows[index] != null
+    && (!entry || typeof entry !== "object" || Array.isArray(entry)))).length;
+  if (corruptCount) console.warn(`[mail-preferences] ignored ${corruptCount} corrupt derived contact record(s) while listing suppressions`);
   const suppressions = parsedRows
+    .map((entry, index) => {
+      const contactId = ids[index];
+      const indexedScope = allIds.includes(contactId) ? "all"
+        : optionalIds.includes(contactId) ? "optional" : marketingIds.includes(contactId) ? "marketing" : "";
+      const parsedContact = entry && typeof entry === "object" && !Array.isArray(entry) ? normalizedContact(entry) : null;
+      const contact = parsedContact && parsedContact.contactId === contactId
+        && (!parsedContact.email || mailContactId(parsedContact.email) === contactId)
+        && (parsedContact.email || isRepairTombstone(parsedContact, contactId)) ? parsedContact : indexedScope
+          ? conservativeContact("", contactId, { source: "suppression_index_recovery", suppressionScope: indexedScope }) : null;
+      if (contact && indexedScope && SCOPE_PRIORITY[indexedScope] > SCOPE_PRIORITY[contact.suppression?.scope || "none"]) {
+        contact.suppression = normalizedSuppression({ ...contact.suppression, scope: indexedScope, reason: contact.suppression?.reason || "suppression_index_recovered" });
+      }
+      return contact;
+    })
     .filter(Boolean)
-    .map((entry) => normalizedContact(entry))
     .filter((entry) => entry.suppression?.scope && entry.suppression.scope !== "none")
     .sort((a, b) => String(b.suppression?.createdAt || "").localeCompare(String(a.suppression?.createdAt || "")))
     .slice(0, safeLimit);

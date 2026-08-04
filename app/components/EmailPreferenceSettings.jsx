@@ -75,6 +75,10 @@ export default function EmailPreferenceSettings({ locale = "zh" }) {
     } catch (error) {
       if (requestId !== loadRequestRef.current) return;
       setState({ loading: false, loaded: false, saving: false, error: preferenceRequestMessage(locale, error, "load"), saved: false });
+    } finally {
+      if (requestId === loadRequestRef.current) {
+        setState((current) => ({ ...current, loading: false, saving: false }));
+      }
     }
   }, [locale]);
 
@@ -113,6 +117,8 @@ export default function EmailPreferenceSettings({ locale = "zh" }) {
       setState({ loading: false, loaded: true, saving: false, error: "", saved: true });
     } catch (error) {
       setState({ loading: false, loaded: true, saving: false, error: preferenceRequestMessage(locale, error, "save"), saved: false });
+    } finally {
+      setState((current) => ({ ...current, saving: false }));
     }
   }
 

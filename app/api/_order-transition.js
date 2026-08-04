@@ -31,6 +31,50 @@ function transitionId(orderId, revision, mutationId, mutationHash) {
     .digest("hex");
 }
 
+function canonicalOrderId(value) { return clean(value, 80).replace(/\s+/g, "").toUpperCase(); }
+
+function plain(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function validStockEffects(list, target) {
+  if (list === undefined) return true;
+  if (!Array.isArray(list) || (list.length && !Array.isArray(target?.items))) return false;
+  const seen = new Set();
+  return list.every((item) => {
+    const index = Number(item?.index), service = clean(item?.service, 40), plan = clean(item?.plan || item?.rocketPlan, 40);
+    const targetItem = Number.isSafeInteger(index) && index >= 0 ? target.items[index] : null;
+    if (!plain(item) || !targetItem || !service || !plan || seen.has(index)
+        || clean(targetItem.service, 40) !== service || clean(targetItem.plan || targetItem.rocketPlan, 40) !== plan) return false;
+    seen.add(index);
+    return true;
+  });
+}
+
+function validTransitionPlan(plan, target) {
+  if (!plain(plan) || ["refund", "reverseCommission", "reclaim", "settleCommission"].some((key) => plan[key] !== undefined && typeof plan[key] !== "boolean")) return false;
+  return validStockEffects(plan.restoreStock, target) && validStockEffects(plan.reserveStock, target);
+}
+
+function validTransitionSemantics(current, transition) {
+  const plan = transition.plan, from = transition.fromStatus, to = transition.targetOrder.status;
+  if ((plan.refund === true || (plan.restoreStock?.length || 0) > 0) && !(from !== "invalid" && to === "invalid")) return false;
+  if ((plan.reclaim === true || (plan.reserveStock?.length || 0) > 0) && !(from === "invalid" && to !== "invalid")) return false;
+  if (plan.settleCommission === true && !(from !== "completed" && to === "completed")) return false;
+  return !(plan.reverseCommission === true && !(from === "completed" && to !== "completed"));
+}
+
+function validPendingTransition(current, transition) {
+  if (!plain(current) || !plain(transition) || !plain(transition.targetOrder) || !plain(transition.plan)) return false;
+  const revision = Number(current.revision), attempts = transition.attempts === undefined ? 0 : transition.attempts, orderId = clean(current.orderId, 80);
+  const mutationId = clean(transition.mutationId, 160), mutationHash = clean(transition.mutationHash, 80);
+  if (!orderId || !Number.isSafeInteger(revision) || revision < 1 || !Number.isSafeInteger(attempts) || attempts < 0
+      || (!mutationId && !mutationHash) || transition.id !== transitionId(orderId, revision - 1 - attempts, mutationId, mutationHash)
+      || clean(transition.targetOrder.orderId, 80) !== orderId
+      || transition.fromStatus !== current.status) return false;
+  return validTransitionPlan(transition.plan, transition.targetOrder) && validTransitionSemantics(current, transition);
+}
+
 function actorSnapshot(actor) {
   return {
     staffId: Number(actor?.staffId || 1),
@@ -96,13 +140,13 @@ async function runEffects(target, transition) {
     results.stockRestorePush = restockPush;
   }
 
-  if (plan.refund) {
+  if (plan.refund === true) {
     const refund = await refundVoidedOrder(target, actor);
     if (!refund.ok) return { ok: false, error: refund.error || "refund_failed" };
     results.refund = refund;
   }
 
-  if (plan.reverseCommission) {
+  if (plan.reverseCommission === true) {
     const reversed = await reverseOrderReferralCommission(target, actor);
     if (!reversed.ok) return { ok: false, error: reversed.error || "commission_effect_failed" };
     results.commission = reversed;
@@ -125,7 +169,7 @@ async function runEffects(target, transition) {
     results.stockReserve = reserved;
   }
 
-  if (plan.reclaim) {
+  if (plan.reclaim === true) {
     const reclaim = await reclaimRefundOnReactivate(target, actor);
     if (!reclaim.ok) {
       // A coupon conflict happens before the refund balance is reclaimed.  If
@@ -156,7 +200,7 @@ async function runEffects(target, transition) {
     results.reclaim = reclaim;
   }
 
-  if (plan.settleCommission) {
+  if (plan.settleCommission === true) {
     const settled = await settleOrderReferralCommission(target, actor);
     if (!settled.ok) return { ok: false, error: settled.error || "commission_effect_failed" };
     results.commission = settled;
@@ -253,8 +297,12 @@ async function abortPendingOrderTransition(entry, transition, error) {
 export async function resumePendingOrderTransition(entry) {
   const current = entry?.order;
   const transition = current?.pendingTransition;
-  if (!current || !transition?.id || !transition.targetOrder || !transition.plan) {
-    return { ok: false, error: "order_transition_missing" };
+  if (!current || !transition) return { ok: false, error: "order_transition_missing" };
+  if (!plain(entry?.index) || canonicalOrderId(entry.index.orderId) !== canonicalOrderId(current.orderId)) {
+    return { ok: false, error: "invalid_order_transition", quarantined: true };
+  }
+  if (!validPendingTransition(current, transition)) {
+    return { ok: false, error: "invalid_order_transition", quarantined: true };
   }
 
   const target = copy(transition.targetOrder);
@@ -347,18 +395,27 @@ export async function resumePendingOrderTransition(entry) {
 }
 
 export async function beginOrderTransition(entry, targetOrder, plan, options = {}) {
-  if (!entry?.order || !targetOrder || typeof targetOrder !== "object") {
+  if (!plain(entry?.order) || !plain(targetOrder) || !validTransitionPlan(plan, targetOrder)) {
+    return { ok: false, error: "invalid_order_transition" };
+  }
+  if (!plain(entry.index) || canonicalOrderId(entry.index.orderId) !== canonicalOrderId(entry.order.orderId)) {
     return { ok: false, error: "invalid_order_transition" };
   }
   if (entry.order.pendingTransition) return resumePendingOrderTransition(entry);
 
   const currentRevision = Math.max(0, Number(entry.order.revision || 0));
+  if (!clean(entry.order.orderId, 80) || clean(targetOrder.orderId, 80) !== clean(entry.order.orderId, 80)
+      || !Number.isSafeInteger(Number(entry.order.revision || 0))
+      || typeof entry.order.status !== "string") return { ok: false, error: "invalid_order_transition" };
   const mutationId = clean(options.mutationId, 160);
   const mutationHash = clean(options.mutationHash, 80);
   const id = transitionId(entry.order.orderId, currentRevision, mutationId, mutationHash);
   const now = new Date();
   const target = copy(targetOrder);
   delete target.pendingTransition;
+  if (typeof target.status !== "string" || !validTransitionSemantics(entry.order, { fromStatus: entry.order.status, targetOrder: target, plan })) {
+    return { ok: false, error: "invalid_order_transition" };
+  }
   const pending = {
     ...copy(entry.order),
     revision: currentRevision + 1,
@@ -406,6 +463,10 @@ export async function resumeDueOrderTransitions({ now = Date.now(), limit = 50 }
     const entry = await getOrderEntryById(orderId);
     if (!entry?.order?.pendingTransition) {
       await removePendingIndex(orderId);
+      continue;
+    }
+    if (canonicalOrderId(entry.order.orderId) !== canonicalOrderId(orderId)) {
+      pending += 1;
       continue;
     }
     const result = await resumePendingOrderTransition(entry);

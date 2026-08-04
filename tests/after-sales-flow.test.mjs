@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { executeOrderCasEval } from "./helpers/order-cas-redis-mock.mjs";
+import { executeDurableOperationEval } from "./helpers/durable-operation-redis-mock.mjs";
 
 process.env.AUTH_SECRET = "after-sales-test-secret-at-least-32-characters";
 process.env.KV_REST_API_URL = "http://redis.test";
@@ -73,6 +74,8 @@ function execute(command) {
   const name = String(rawName || "").toUpperCase();
   if (name === "PING") return "PONG";
   if (name === "GET") return values.get(args[0]) ?? null;
+  if (name === "SISMEMBER") return sets.get(args[0])?.has(String(args[1])) ? 1 : 0;
+  if (name === "SMISMEMBER") return args.slice(1).map((member) => sets.get(args[0])?.has(String(member)) ? 1 : 0);
   if (name === "SET") {
     const [key, value, ...options] = args;
     if (options.map(String).includes("NX") && values.has(key)) return null;
@@ -97,6 +100,8 @@ function execute(command) {
   if (name === "EVAL") {
     const cas = executeOrderCasEval(command, { values, lists, sortedSets, sets });
     if (cas.handled) return cas.result;
+    const durable = executeDurableOperationEval(command, { values, sortedSet });
+    if (durable.handled) return durable.result;
     const script = String(args[0] || "");
     const keyCount = Number(args[1] || 0);
     const keys = args.slice(2, 2 + keyCount);
@@ -151,6 +156,14 @@ function execute(command) {
         repairedLifecycle,
       });
     }
+    if (script.includes("CONTACT_CAS_V2")) {
+      const existing = values.get(keys[0]);
+      const revision = existing ? Number(JSON.parse(existing).revision || 0) : 0;
+      if (revision !== Number(argv[0])) return 0;
+      sortedSet(keys[1]).set(String(argv[3]), Number(argv[2]));
+      values.set(keys[0], argv[1]);
+      return 1;
+    }
     if (script.includes("current=tonumber(doc.revision or 0)")) {
       const existing = values.get(keys[0]);
       const revision = existing ? Number(JSON.parse(existing).revision || 0) : 0;
@@ -185,26 +198,19 @@ function execute(command) {
       values.set(keys[0], argv[1]);
       sortedSet(keys[1]).delete(argv[2]);
       sortedSet(keys[2]).set(argv[2], Number(argv[3]));
-      if (argv[4]) sortedSet(keys[3]).set(argv[2], Number(argv[5]));
+      if (argv[6] === "1") sortedSet(keys[3]).set(argv[2], Number(argv[5]));
       if (values.get(keys[4]) === argv[2]) values.delete(keys[4]);
       return 1;
     }
-    if (script.includes("ticket.creationEffectsPending=false")) {
-      const ticket = JSON.parse(values.get(keys[0]) || "null");
-      if (!ticket || ticket.ticketId !== argv[0]) return 0;
-      ticket.creationEffectsPending = false;
-      ticket.creationEffectsCompletedAt = argv[1];
-      values.set(keys[0], JSON.stringify(ticket));
-      sortedSet(keys[1]).delete(argv[0]);
-      return 1;
-    }
-    if (script.includes("ticket.completionEffectsPending=false")) {
-      const ticket = JSON.parse(values.get(keys[0]) || "null");
-      if (!ticket || ticket.completionOperationId !== argv[0]) return 0;
-      ticket.completionEffectsPending = false;
-      ticket.completionEffectsCompletedAt = argv[1];
-      values.set(keys[0], JSON.stringify(ticket));
-      sortedSet(keys[1]).delete(argv[2]);
+    if (script.includes("if ARGV[3]=='completion'") && script.includes("raw~=ARGV[1]")) {
+      const raw = values.get(keys[0]);
+      if (!raw) return 0;
+      if (raw !== argv[0]) return -1;
+      const ticket = JSON.parse(raw);
+      if (argv[2] === "completion" && ticket.completionOperationId !== argv[3]) return 0;
+      if (argv[2] === "creation" && ticket.ticketId !== argv[4]) return 0;
+      values.set(keys[0], argv[1]);
+      sortedSet(keys[1]).delete(argv[4]);
       return 1;
     }
     if (script.includes("if ARGV[3]=='1' then redis.call('ZADD',KEYS[4]")) {
@@ -217,51 +223,6 @@ function execute(command) {
       if (argv[4] === "1") sortedSet(keys[5]).set(argv[1], Number(argv[0]));
       else sortedSet(keys[5]).delete(argv[1]);
       return 1;
-    }
-    if (script.includes("state='started'") && script.includes("createdAt=ARGV[3]")) {
-      const existingRaw = values.get(keys[0]);
-      if (existingRaw) {
-        const record = JSON.parse(existingRaw);
-        if (record.requestHash !== argv[0]) {
-          return JSON.stringify({ ok: false, error: "idempotency_conflict" });
-        }
-        return JSON.stringify({ ok: true, state: record.state || "started", record, isNew: false });
-      }
-      const record = {
-        version: 1,
-        state: "started",
-        operationId: argv[1],
-        requestHash: argv[0],
-        createdAt: argv[2],
-      };
-      values.set(keys[0], JSON.stringify(record));
-      return JSON.stringify({ ok: true, state: "started", record, isNew: true });
-    }
-    if (script.includes("if record.plan~=nil then") && script.includes("record.plan=plan")) {
-      const record = JSON.parse(values.get(keys[0]) || "null");
-      if (!record) return JSON.stringify({ ok: false, error: "operation_record_missing" });
-      if (record.requestHash !== argv[0]) return JSON.stringify({ ok: false, error: "idempotency_conflict" });
-      if (record.plan !== undefined) return JSON.stringify({ ok: true, record, created: false });
-      record.plan = JSON.parse(argv[1]);
-      record.planCreatedAt = argv[2];
-      values.set(keys[0], JSON.stringify(record));
-      return JSON.stringify({ ok: true, record, created: true });
-    }
-    if (script.includes("record.state='done'") && script.includes("completedAt=ARGV[3]")) {
-      const existingRaw = values.get(keys[0]);
-      if (!existingRaw) return JSON.stringify({ ok: false, error: "operation_record_missing" });
-      const record = JSON.parse(existingRaw);
-      if (record.requestHash !== argv[0]) {
-        return JSON.stringify({ ok: false, error: "idempotency_conflict" });
-      }
-      if (record.state === "done") {
-        return JSON.stringify({ ok: true, state: "done", record, idempotent: true });
-      }
-      record.state = "done";
-      record.result = JSON.parse(argv[1]);
-      record.completedAt = argv[2];
-      values.set(keys[0], JSON.stringify(record));
-      return JSON.stringify({ ok: true, state: "done", record, idempotent: false });
     }
     if (script.includes("local marked=redis.call('SET',KEYS[1],'1','NX')")) {
       if (failNextTimelineWrite && String(keys[1]).startsWith("liumeiti:order-timeline:")) {
@@ -443,7 +404,7 @@ globalThis.fetch = async (input, options = {}) => {
     const commands = JSON.parse(options.body || "[]");
     const rows = commands.map((command) => ({ result: execute(command) }));
     if (dropNextDurableCompletionResponse
-      && commands.some((command) => String(command?.[1] || "").includes("record.state='done'"))) {
+      && commands.some((command) => String(command?.[1] || "").includes("durable_complete_v2_lossless"))) {
       dropNextDurableCompletionResponse = false;
       // The completion Lua script committed, but the Upstash HTTP response was
       // lost. The route must read back the journal and still report success.
@@ -1796,4 +1757,26 @@ test("creation outbox drains oldest failures beyond the former latest-30 window"
   const remaining = await store.getAfterSalesCreationOutbox(30);
   assert.deepEqual(remaining.map((ticket) => ticket.ticketId), tickets.slice(30).map((ticket) => ticket.ticketId));
   assert.equal(sortedSet("liumeiti:after-sales:creation-outbox").size, 15);
+});
+
+test("effect completion CAS preserves legacy ticket JSON bytes outside patched fields", async () => {
+  const ticketId = "ASRAWBYTES01";
+  const operationId = "completion-raw-bytes-01";
+  const key = `liumeiti:after-sales:record:${ticketId}`;
+  const raw = `{"ticketId":"${ticketId}","status":"completed","legacyEmpty":[],"legacyNull":null,"legacyLong":900719925474099312345,"creationEffectsPending":true,"completionEffectsPending":true,"completionOperationId":"${operationId}"}`;
+  values.set(key, raw);
+  sortedSet("liumeiti:after-sales:creation-outbox").set(ticketId, 1);
+  sortedSet("liumeiti:after-sales:completion-outbox").set(ticketId, 1);
+
+  assert.equal(await store.markAfterSalesCreationEffectsDone(ticketId), true);
+  assert.equal(await store.markAfterSalesCompletionEffectsDone(ticketId, operationId), true);
+  const saved = values.get(key);
+  assert.match(saved, /"legacyEmpty":\[\]/);
+  assert.match(saved, /"legacyNull":null/);
+  assert.match(saved, /"legacyLong":900719925474099312345/);
+  const parsed = JSON.parse(saved);
+  assert.equal(parsed.creationEffectsPending, false);
+  assert.equal(parsed.completionEffectsPending, false);
+  assert.equal(typeof parsed.creationEffectsCompletedAt, "string");
+  assert.equal(typeof parsed.completionEffectsCompletedAt, "string");
 });

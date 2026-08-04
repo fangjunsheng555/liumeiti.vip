@@ -226,8 +226,19 @@ export default function AccountPage() {
       }));
       setLoadError(result.error || "");
       return result;
+    } catch (error) {
+      if (sequence !== loadRequestRef.current.sequence || controller.signal.aborted) return null;
+      const message = L(
+        "账户信息加载失败，请检查网络后重试。",
+        "We couldn't load your account. Check your connection and retry.",
+      );
+      setLoadError(message);
+      return { ok: false, loading: false, cancelled: false, retry: true, error: message, state: null };
     } finally {
       if (sequence === loadRequestRef.current.sequence) {
+        if (!controller.signal.aborted) {
+          setState((current) => ({ ...current, loading: false }));
+        }
         loadRequestRef.current = { sequence, controller: null };
       }
     }

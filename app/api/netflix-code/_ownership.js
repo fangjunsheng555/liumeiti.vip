@@ -1,9 +1,5 @@
 function normalizeEmail(value) {
-  return String(value || "")
-    .replace(/[\x00-\x1f\x7f]/g, " ")
-    .trim()
-    .toLowerCase()
-    .slice(0, 200);
+  const email = String(value || "").trim().toLowerCase(); return email.length <= 254 && !/[\x00-\x1f\x7f]/.test(email) ? email : "";
 }
 
 // A logged-in checkout may use a different delivery email. User-level

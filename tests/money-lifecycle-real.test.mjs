@@ -57,6 +57,19 @@ test("real Redis money commits validate auth version and lifecycle before side e
     redis.run(["SET", "lm:user:authver:a@example.com", "1"]);
     redis.run(["SET", "lm:user:lifecycle:a@example.com", lifecycle]);
 
+    const normalA = JSON.stringify({ email: "a@example.com", balance: 200, banned: false });
+    const deepLegacy = `{"email":"a@example.com","balance":200,"banned":false,"legacy":${"{\"v\":".repeat(998)}null${"}".repeat(998)}}`;
+    redis.run(["SET", "liumeiti:users:a@example.com", deepLegacy]);
+    const deepOperationId = "real-transfer-deep-json";
+    const deepRejected = await money.transferBalanceAtomic("a@example.com", "b@example.com", 1, {
+      operationId: deepOperationId, authVersion: 1, accountLifecycleId: lifecycle,
+    });
+    assert.equal(deepRejected.error, "invalid_user_record");
+    assert.equal(redis.run(["GET", money.balanceCentsKey("a@example.com")]), "20000");
+    assert.equal(redis.run(["GET", money.balanceCentsKey("b@example.com")]), "0");
+    assert.equal(redis.run(["EXISTS", money.moneyKeys.operationKey(`transfer:a@example.com:${lifecycle}`, deepOperationId)]), 0);
+    redis.run(["SET", "liumeiti:users:a@example.com", normalA]);
+
     const first = await money.transferBalanceAtomic("a@example.com", "b@example.com", 25, {
       operationId: "real-transfer-01", authVersion: 1, accountLifecycleId: lifecycle,
     });
@@ -71,11 +84,30 @@ test("real Redis money commits validate auth version and lifecycle before side e
     });
     assert.equal(replay.idempotent, true);
 
-    redis.run(["SET", "liumeiti:redeem-code:REALCODE1", JSON.stringify({ code: "REALCODE1", status: "active", type: "balance", amount: 10 })]);
+    const legacyRedeemRaw = '{"code":"REALCODE1","status":"active","type":"balance","amount":10,"legacyEmpty":[],"legacyNull":null,"legacyHuge":123456789012345678901234567890}';
+    redis.run(["SET", "liumeiti:redeem-code:REALCODE1", legacyRedeemRaw]);
     const redeemed = await money.redeemBalanceCodeAtomic("a@example.com", "REALCODE1", {}, {
       operationId: "real-redeem-01", authVersion: 2, accountLifecycleId: lifecycle,
     });
     assert.equal(redeemed.ok, true);
+    const redeemedRaw = redis.run(["GET", "liumeiti:redeem-code:REALCODE1"]);
+    assert.match(redeemedRaw, /"legacyEmpty":\[\]/);
+    assert.match(redeemedRaw, /"legacyNull":null/);
+    assert.match(redeemedRaw, /"legacyHuge":123456789012345678901234567890/);
+
+    const concurrentRaw = '{"code":"REALCODE2","status":"active","type":"balance","amount":7,"legacyEmpty":[],"legacyHuge":123456789012345678901234567890}';
+    redis.run(["SET", "liumeiti:redeem-code:REALCODE2", concurrentRaw]);
+    const balanceBeforeRace = Number(redis.run(["GET", money.balanceCentsKey("a@example.com")]));
+    const raced = await Promise.all([
+      money.redeemBalanceCodeAtomic("a@example.com", "REALCODE2", {}, { operationId: "real-redeem-race-a", authVersion: 2, accountLifecycleId: lifecycle }),
+      money.redeemBalanceCodeAtomic("a@example.com", "REALCODE2", {}, { operationId: "real-redeem-race-b", authVersion: 2, accountLifecycleId: lifecycle }),
+    ]);
+    assert.equal(raced.filter((item) => item.ok).length, 1);
+    assert.equal(Number(redis.run(["GET", money.balanceCentsKey("a@example.com")])), balanceBeforeRace + 700);
+    const racedRaw = redis.run(["GET", "liumeiti:redeem-code:REALCODE2"]);
+    assert.match(racedRaw, /"status":"used"/);
+    assert.match(racedRaw, /"legacyEmpty":\[\]/);
+    assert.match(racedRaw, /"legacyHuge":123456789012345678901234567890/);
     const withdrawn = await money.createWithdrawalAtomic("a@example.com", 10, "ali", "Buyer", {
       operationId: "real-withdraw-01", authVersion: 2, accountLifecycleId: lifecycle,
     });
@@ -117,6 +149,52 @@ test("real Redis money commits validate auth version and lifecycle before side e
     assert.equal(reboundEffect.error, "idempotency_conflict");
     assert.equal(redis.run(["GET", money.balanceCentsKey("a@example.com")]), "0");
     assert.equal(redis.run(["EXISTS", effectOperationKey]), 1);
+
+    const arrayOrder = {
+      orderId: "LM-LOSSLESS-EMPTY-ARRAYS",
+      email: "buyer@example.com",
+      status: "received",
+      paymentMethod: "alipay",
+      paidCurrency: "CNY",
+      finalAmount: 0,
+      createdAt: new Date().toISOString(),
+      items: [],
+      redeemServices: [],
+      legacyRows: [],
+      legacyNull: null,
+    };
+    const orderResult = await money.commitOrderCreationAtomic({
+      order: arrayOrder,
+      paymentMethod: "alipay",
+      operationId: "real-order-lossless-empty-arrays",
+      requestHash: "c".repeat(64),
+    });
+    assert.equal(orderResult.ok, true);
+    assert.deepEqual(orderResult.order.items, []);
+    assert.deepEqual(orderResult.order.redeemServices, []);
+    assert.deepEqual(orderResult.order.legacyRows, []);
+    const storedOrderRaw = redis.run(["GET", money.moneyKeys.orderRecordKey(arrayOrder.orderId)]);
+    assert.match(storedOrderRaw, /"items":\[\]/);
+    assert.match(storedOrderRaw, /"redeemServices":\[\]/);
+    assert.match(storedOrderRaw, /"legacyRows":\[\]/);
+    assert.match(storedOrderRaw, /"legacyNull":null/);
+
+    redis.run(["SET", money.balanceCentsKey("a@example.com"), "100"]);
+    redis.run(["SET", money.balanceCentsKey("b@example.com"), String(Number.MAX_SAFE_INTEGER)]);
+    const overflow = await money.transferBalanceAtomic("a@example.com", "b@example.com", 0.01, {
+      operationId: "real-transfer-safe-integer-overflow",
+      authVersion: 2,
+      accountLifecycleId: recreatedLifecycle,
+    });
+    assert.equal(overflow.ok, false);
+    assert.equal(overflow.error, "balance_out_of_range");
+    assert.equal(redis.run(["GET", money.balanceCentsKey("a@example.com")]), "100");
+    assert.equal(redis.run(["GET", money.balanceCentsKey("b@example.com")]), String(Number.MAX_SAFE_INTEGER));
+
+    redis.run(["SET", money.balanceCentsKey("a@example.com"), "9007199254740992"]);
+    const unsafeOverlay = await money.getBalanceCentsOverlay("a@example.com", 0);
+    assert.equal(unsafeOverlay.ok, false);
+    assert.equal(unsafeOverlay.error, "invalid_balance_record");
   } finally {
     globalThis.fetch = originalFetch;
     docker(["rm", "-f", container]);

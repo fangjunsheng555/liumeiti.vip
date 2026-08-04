@@ -34,7 +34,7 @@ function normalizeOrderId(value) {
 }
 
 function normalizeEmail(value) {
-  return clean(value, 200).trim().toLowerCase();
+  const email = String(value || "").trim().toLowerCase(); return email.length <= 254 && !/[\x00-\x1f\x7f]/.test(email) ? email : "";
 }
 
 function netflixItem(order) {

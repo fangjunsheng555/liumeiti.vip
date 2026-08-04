@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { after } from "next/server";
+import { after } from "next/server.js";
 import {
   checkIdentityRateLimit,
   checkRateLimit,
@@ -44,9 +44,7 @@ const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
 const SITE_URL = process.env.SITE_URL || `https://${SITE_DOMAIN}`;
 const LIMIT_MESSAGE = "代付申请提交较频繁，请稍后再试或联系在线客服";
 
-function validEmail(value) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
-}
+function validEmail(value) { const email = String(value || "").trim(); return email.length <= 254 && !/[\x00-\x1f\x7f]/.test(email) && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email); }
 
 // 网站链接/平台:不做格式校验,接受任意内容(链接或纯文字描述均可),仅要求非空。
 function normalizePlatformUrl(value) {
@@ -157,7 +155,7 @@ async function handler(request) {
   const idempotency = requiredIdempotencyKey(request);
   if (!idempotency.ok) return Response.json({ ok: false, error: idempotency.error }, { status: 400 });
 
-  const email = clean(body.email, 200).toLowerCase();
+  const email = String(body.email || "").trim().toLowerCase();
   const platform = normalizePlatformUrl(body.platformUrl);
   const productPrice = clean(body.productPrice, 80);
   const contact = clean(body.contact, 200);
@@ -169,10 +167,10 @@ async function handler(request) {
   let userEmail = null;
   let userAuthVersion = 0;
   let userAccountLifecycleId = "";
-  const expectedIdentityHeader = clean(request.headers.get("x-order-expected-account"), 200).toLowerCase();
+  const expectedIdentityHeader = String(request.headers.get("x-order-expected-account") || "").trim().toLowerCase();
   const expectedIdentityHeaderProvided = request.headers.has("x-order-expected-account");
   const expectedBodyProvided = Object.prototype.hasOwnProperty.call(body, "expectedAccountEmail");
-  const expectedBodyAccount = clean(body.expectedAccountEmail, 200).toLowerCase();
+  const expectedBodyAccount = String(body.expectedAccountEmail || "").trim().toLowerCase();
   const expectedHeaderAccount = expectedIdentityHeader === "__guest__" ? "" : expectedIdentityHeader;
   const expectedLifecycleHeaderRaw = clean(request.headers.get("x-operation-expected-lifecycle"), 80).toLowerCase();
   const expectedLifecycleHeaderProvided = request.headers.has("x-operation-expected-lifecycle");

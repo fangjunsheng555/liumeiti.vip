@@ -56,6 +56,14 @@ class MoneyFailureRedis {
     const key = String(parts[1] || "");
     if (command === "GET") {
       if (key.startsWith("liumeiti:redeem-guard:")) return Response.json({ result: "0" });
+      if (key.startsWith("liumeiti:redeem-code:")) {
+        return Response.json({ result: JSON.stringify({
+          code: "MISSING1",
+          status: "active",
+          amount: 25,
+          coupons: [],
+        }) });
+      }
       // executeOperation recovery miss: the EVAL response was malformed and
       // Redis cannot yet prove whether the operation record was committed.
       return Response.json({ result: null });

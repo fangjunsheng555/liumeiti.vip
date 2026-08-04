@@ -86,15 +86,23 @@ if not rev or rev<1 or rev~=math.floor(rev) or rev>9007199254740990 then
 end
 local envelopeLifecycle=value.accountLifecycleId
 if type(envelopeLifecycle)~='string' then
-  local tombstone=cjson.encode({deleted=true,rev=rev+1,accountLifecycleId=currentLifecycle})
+  local tombstoneOk,tombstone=pcall(cjson.encode,{deleted=true,rev=rev+1,accountLifecycleId=currentLifecycle})
+  if not tombstoneOk then return redis.error_reply('tool_2fa_response_encode_failed') end
+  local responseOk,response=pcall(cjson.encode,{ok=true,exists=true,raw=tombstone,retired=true})
+  if not responseOk then return redis.error_reply('tool_2fa_response_encode_failed') end
   redis.call('SET',KEYS[1],tombstone)
-  return cjson.encode({ok=true,exists=true,raw=tombstone,retired=true})
+  return response
 elseif envelopeLifecycle~=currentLifecycle then
-  local tombstone=cjson.encode({deleted=true,rev=rev+1,accountLifecycleId=currentLifecycle})
+  local tombstoneOk,tombstone=pcall(cjson.encode,{deleted=true,rev=rev+1,accountLifecycleId=currentLifecycle})
+  if not tombstoneOk then return redis.error_reply('tool_2fa_response_encode_failed') end
+  local responseOk,response=pcall(cjson.encode,{ok=true,exists=true,raw=tombstone,retired=true})
+  if not responseOk then return redis.error_reply('tool_2fa_response_encode_failed') end
   redis.call('SET',KEYS[1],tombstone)
-  return cjson.encode({ok=true,exists=true,raw=tombstone,retired=true})
+  return response
 end
-return cjson.encode({ok=true,exists=true,raw=raw})`;
+local responseOk,response=pcall(cjson.encode,{ok=true,exists=true,raw=raw})
+if not responseOk then return redis.error_reply('tool_2fa_response_encode_failed') end
+return response`;
 
 const WRITE_SCRIPT = `
 local function keytype(key)
@@ -135,13 +143,19 @@ local expected=tonumber(ARGV[1])
 if not expected or expected<0 or expected~=math.floor(expected) or expected>9007199254740990 then
   return cjson.encode({ok=false,error='invalid_revision'})
 end
-if current~=expected then return cjson.encode({ok=false,error='revision_conflict',currentRev=current}) end
+if current~=expected then
+  local responseOk,response=pcall(cjson.encode,{ok=false,error='revision_conflict',currentRev=current})
+  if not responseOk then return redis.error_reply('tool_2fa_response_encode_failed') end
+  return response
+end
 local decoded,nextValue=pcall(cjson.decode,ARGV[2])
 if not decoded or type(nextValue)~='table' or tonumber(nextValue.rev)~=current+1 or nextValue.accountLifecycleId~=currentLifecycle or type(nextValue.enc)~='string' then
   return cjson.encode({ok=false,error='record_invalid'})
 end
+local responseOk,response=pcall(cjson.encode,{ok=true,rev=current+1})
+if not responseOk then return redis.error_reply('tool_2fa_response_encode_failed') end
 redis.call('SET',KEYS[1],ARGV[2])
-return cjson.encode({ok=true,rev=current+1})`;
+return response`;
 
 const DELETE_SCRIPT = `
 local function keytype(key)
@@ -163,18 +177,29 @@ local currentLifecycle=redis.call('GET',KEYS[4])
 if type(ARGV[2])~='string' or currentLifecycle~=ARGV[2] then return cjson.encode({ok=false,error='account_lifecycle_changed'}) end
 local kind=keytype(KEYS[1])
 if kind=='none' then
-  redis.call('SET',KEYS[1],cjson.encode({deleted=true,rev=1,accountLifecycleId=currentLifecycle}))
-  return cjson.encode({ok=true,deleted=false,rev=1})
+  local tombstoneOk,tombstone=pcall(cjson.encode,{deleted=true,rev=1,accountLifecycleId=currentLifecycle})
+  if not tombstoneOk then return redis.error_reply('tool_2fa_response_encode_failed') end
+  local response=cjson.encode({ok=true,deleted=false,rev=1})
+  redis.call('SET',KEYS[1],tombstone)
+  return response
 end
 if kind~='string' then return cjson.encode({ok=false,error='record_invalid'}) end
 local decoded,value=pcall(cjson.decode,redis.call('GET',KEYS[1]))
 if not decoded or type(value)~='table' then return cjson.encode({ok=false,error='record_invalid'}) end
 local rev=tonumber(value.rev)
 if not rev or rev<1 or rev~=math.floor(rev) or rev>9007199254740990 then return cjson.encode({ok=false,error='record_invalid'}) end
-if value.deleted==true and value.accountLifecycleId==currentLifecycle then return cjson.encode({ok=true,deleted=false,rev=rev}) end
+if value.deleted==true and value.accountLifecycleId==currentLifecycle then
+  local responseOk,response=pcall(cjson.encode,{ok=true,deleted=false,rev=rev})
+  if not responseOk then return redis.error_reply('tool_2fa_response_encode_failed') end
+  return response
+end
 local nextRev=rev+1
-redis.call('SET',KEYS[1],cjson.encode({deleted=true,rev=nextRev,accountLifecycleId=currentLifecycle}))
-return cjson.encode({ok=true,deleted=true,rev=nextRev})`;
+local tombstoneOk,tombstone=pcall(cjson.encode,{deleted=true,rev=nextRev,accountLifecycleId=currentLifecycle})
+if not tombstoneOk then return redis.error_reply('tool_2fa_response_encode_failed') end
+local responseOk,response=pcall(cjson.encode,{ok=true,deleted=true,rev=nextRev})
+if not responseOk then return redis.error_reply('tool_2fa_response_encode_failed') end
+redis.call('SET',KEYS[1],tombstone)
+return response`;
 
 async function readEnvelopeForAuth(auth) {
   const reply = parseReply(await redisCmd([

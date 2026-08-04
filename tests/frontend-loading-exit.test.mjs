@@ -7,12 +7,15 @@ const serviceCenter = await readFile(new URL("../app/service-center/page.jsx", i
 const account = await readFile(new URL("../app/account/page.jsx", import.meta.url), "utf8");
 const redeemCard = await readFile(new URL("../app/components/RedeemCard.jsx", import.meta.url), "utf8");
 const netflix = await readFile(new URL("../app/netflix-code/page.jsx", import.meta.url), "utf8");
+const netflixFetch = await readFile(new URL("../app/netflix-code/fetch-json.js", import.meta.url), "utf8");
 const admin = await readFile(new URL("../app/admin/page.jsx", import.meta.url), "utf8");
 const security = await readFile(new URL("../app/admin/SecurityPanel.jsx", import.meta.url), "utf8");
 const pushClient = await readFile(new URL("../app/lib/push-client.js", import.meta.url), "utf8");
 const pushSettings = await readFile(new URL("../app/components/PushNotificationSettings.jsx", import.meta.url), "utf8");
 const emailSettings = await readFile(new URL("../app/components/EmailPreferenceSettings.jsx", import.meta.url), "utf8");
 const proxyQuote = await readFile(new URL("../app/components/ProxyQuotePayment.jsx", import.meta.url), "utf8");
+const preferenceForm = await readFile(new URL("../app/email/preferences/PreferenceForm.jsx", import.meta.url), "utf8");
+const unsubscribeConfirmation = await readFile(new URL("../app/email/unsubscribe/UnsubscribeConfirmation.jsx", import.meta.url), "utf8");
 const clientFetchSource = await readFile(new URL("../app/lib/client-fetch.js", import.meta.url), "utf8");
 const { clientFetch } = await import("../app/lib/client-fetch.js");
 
@@ -64,10 +67,20 @@ test("checkout and service center requests cannot hold their busy states forever
 });
 
 test("Netflix account and order lookup always leave their loading states", () => {
-  assert.match(netflix, /const REQUEST_TIMEOUT_MS = 15 \* 1000/);
-  assert.match(netflix, /fetchWithTimeout\("\/api\/auth\/me"/);
+  assert.match(netflixFetch, /export const NETFLIX_REQUEST_TIMEOUT_MS = 15 \* 1000/);
+  assert.match(netflixFetch, /const response = await fetch\([\s\S]*const data = await response\.json\(\)[\s\S]*finally \{[\s\S]*clearTimeout\(timer\)/);
+  assert.match(netflix, /import \{ fetchNetflixJson \} from "\.\/fetch-json"/);
+  assert.match(netflix, /fetchNetflixJson\("\/api\/auth\/me"/);
   assert.match(netflix, /\.finally\(\(\) => \{ if \(alive\) setLoadingAccount\(false\); \}\)/);
+  assert.match(netflix, /setAccountLoadError\(/);
+  assert.match(netflix, /setAccountLoadAttempt\(\(value\) => value \+ 1\)/);
+  assert.match(netflix, /className=\{styles\.accountLoadError\} role="alert"/);
   assert.match(netflix, /finally \{\s*setQueryBusy\(false\);/);
+  const accountEffectStart = netflix.indexOf("useEffect(() => {");
+  const nextEffectStart = netflix.indexOf("useEffect(() =>", accountEffectStart + 1);
+  const accountEffect = netflix.slice(accountEffectStart, nextEffectStart);
+  assert.doesNotMatch(accountEffect, /clearTimeout\(pollTimer\.current\)|clearTimeout\(codeCopyTimer\.current\)/);
+  assert.match(netflix, /useEffect\(\(\) => \(\) => \{\s*if \(pollTimer\.current\) window\.clearTimeout\(pollTimer\.current\);\s*if \(codeCopyTimer\.current\) window\.clearTimeout\(codeCopyTimer\.current\);\s*\}, \[\]\);/);
 });
 
 test("admin bootstrap failures replace the spinner with a Chinese error and retry", () => {
@@ -132,6 +145,27 @@ test("quote and USDT-rate bootstrap failures are localized, finite, and retryabl
   assert.match(proxyQuote, /paymentUiReady = rateReady && !paymentUncertain/);
   assert.match(proxyQuote, /付款提交结果尚未确认[\s\S]*?收款码和付款方式已锁定/);
   assert.match(proxyQuote, /onClick=\{paymentUncertain \? \(\) => setQuoteAttempt/);
+});
+
+test("all remaining audited account, notification, quote, and mail workflows have explicit finite exits", () => {
+  assert.match(account, /catch \(error\) \{[\s\S]*?setLoadError\(message\)[\s\S]*?finally \{[\s\S]*?loading: false/);
+  assert.match(admin, /async function loadRegisteredMailEmails\(\)/);
+  assert.match(admin, /async function loadOrderMailEmails\(\)/);
+  assert.doesNotMatch(admin, /async function fetch(?:Registered|Order)MailEmails\(\)/);
+
+  assert.match(emailSettings, /finally \{\s*if \(requestId === loadRequestRef\.current\) \{\s*setState\(\(current\) => \(\{ \.\.\.current, loading: false, saving: false \}\)\)/);
+  assert.match(emailSettings, /finally \{\s*setState\(\(current\) => \(\{ \.\.\.current, saving: false \}\)\)/);
+  assert.match(proxyQuote, /finally \{\s*if \(requestId === rateRequestRef\.current\) \{\s*setRateState\(\(current\) => \(\{ \.\.\.current, loading: false \}\)\)/);
+  assert.match(pushSettings, /fetchPushAccountState as loadPushAccountState/);
+  assert.match(pushSettings, /loadPushAccountState\(\)/);
+
+  for (const source of [preferenceForm, unsubscribeConfirmation]) {
+    assert.match(source, /import \{ clientFetch as fetch, isClientRequestTimeout \} from "\.\.\/\.\.\/lib\/client-fetch"/);
+    assert.match(source, /isClientRequestTimeout\(error\)/);
+    assert.match(source, /error\?\.name === "TypeError"/);
+  }
+  assert.match(preferenceForm, /saving: false/);
+  assert.match(unsubscribeConfirmation, /submitting: false/);
 });
 
 test("account, checkout, service center and redeem auth failures never masquerade as signed-out", () => {

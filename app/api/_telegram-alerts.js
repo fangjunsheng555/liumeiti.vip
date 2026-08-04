@@ -14,22 +14,63 @@ const RETRY_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 const RETRY_MAX_ATTEMPTS = 8;
 
 const CLAIM_ALERT_SCRIPT = `
-if redis.call('GET',KEYS[1]) then return cjson.encode({ok=true,state='duplicate'}) end
-if redis.call('EXISTS',KEYS[2])==1 then return cjson.encode({ok=true,state='locked'}) end
+local function validtype(key,expected)
+  local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value
+  return actual=='none' or actual==expected
+end
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'string') then return redis.error_reply('telegram_lock_storage_type_error') end
+local ttl=tonumber(ARGV[2])
+if ARGV[1]=='' or not ttl or ttl~=math.floor(ttl) or ttl<1 or ttl>2147483647 then return redis.error_reply('telegram_invalid_lock') end
+local duplicateOk,duplicate=pcall(cjson.encode,{ok=true,state='duplicate'})
+local lockedOk,locked=pcall(cjson.encode,{ok=true,state='locked'})
+local acquiredOk,acquired=pcall(cjson.encode,{ok=true,state='acquired'})
+if not duplicateOk or not lockedOk or not acquiredOk then return redis.error_reply('telegram_lock_encode_failed') end
+if redis.call('GET',KEYS[1]) then return duplicate end
+if redis.call('EXISTS',KEYS[2])==1 then return locked end
 redis.call('SET',KEYS[2],ARGV[1],'EX',ARGV[2])
-return cjson.encode({ok=true,state='acquired'})`;
+return acquired`;
 
 const CLAIM_RETRY_LOCK_SCRIPT = `
-if redis.call('EXISTS',KEYS[1])==1 then return cjson.encode({ok=true,state='locked'}) end
+local value=redis.call('TYPE',KEYS[1]); local actual=type(value)=='table' and value.ok or value
+if actual~='none' and actual~='string' then return redis.error_reply('telegram_retry_lock_storage_type_error') end
+local ttl=tonumber(ARGV[2])
+if ARGV[1]=='' or not ttl or ttl~=math.floor(ttl) or ttl<1 or ttl>2147483647 then return redis.error_reply('telegram_invalid_retry_lock') end
+local lockedOk,locked=pcall(cjson.encode,{ok=true,state='locked'})
+local acquiredOk,acquired=pcall(cjson.encode,{ok=true,state='acquired'})
+if not lockedOk or not acquiredOk then return redis.error_reply('telegram_retry_lock_encode_failed') end
+if redis.call('EXISTS',KEYS[1])==1 then return locked end
 redis.call('SET',KEYS[1],ARGV[1],'EX',ARGV[2])
-return cjson.encode({ok=true,state='acquired'})`;
+return acquired`;
 
 const UPSERT_RETRY_SCRIPT = `
+local function validtype(key,expected)
+  local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value
+  return actual=='none' or actual==expected
+end
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') then return redis.error_reply('telegram_retry_storage_type_error') end
+local score=tonumber(ARGV[2]); local ttl=tonumber(ARGV[3])
+local recordOk,record=pcall(cjson.decode,ARGV[1])
+local attempts=recordOk and type(record)=='table' and tonumber(record.attempts) or nil
+local createdAtMs=recordOk and type(record)=='table' and tonumber(record.createdAtMs) or nil
+if not score or score~=score or score~=math.floor(score) or score<0 or score>9007199254740991
+  or not ttl or ttl~=math.floor(ttl) or ttl<1 or ttl>2147483647 or ARGV[4]==''
+  or not recordOk or type(record)~='table' or type(record.hash)~='string' or record.hash~=ARGV[4] or type(record.providerDelivered)~='boolean' or type(record.message)~='string' or record.message==''
+  or tonumber(record.nextAttemptAt)~=score or not attempts or attempts~=math.floor(attempts) or attempts<0 or attempts>8
+  or not createdAtMs or createdAtMs~=math.floor(createdAtMs) or createdAtMs<0 or createdAtMs>9007199254740991 then
+  return redis.error_reply('telegram_invalid_retry_record')
+end
 redis.call('SET',KEYS[1],ARGV[1],'EX',ARGV[3])
-redis.call('ZADD',KEYS[2],ARGV[2],ARGV[4])
+redis.call('ZADD',KEYS[2],score,ARGV[4])
 return 1`;
 
 const REMOVE_RETRY_SCRIPT = `
+local function validtype(key,expected)
+  local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value
+  return actual=='none' or actual==expected
+end
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') or ARGV[1]=='' then
+  return redis.error_reply('telegram_retry_storage_type_error')
+end
 redis.call('DEL',KEYS[1])
 redis.call('ZREM',KEYS[2],ARGV[1])
 return 1`;
@@ -37,7 +78,9 @@ return 1`;
 const READ_RETRY_STATE_SCRIPT = `
 local raw=redis.call('GET',KEYS[1])
 local duplicate=redis.call('EXISTS',KEYS[2])==1
-return cjson.encode({ok=true,hasRecord=raw~=false,record=raw or '',duplicate=duplicate})`;
+local encodedOk,encoded=pcall(cjson.encode,{ok=true,hasRecord=raw~=false,record=raw or '',duplicate=duplicate})
+if not encodedOk then return redis.error_reply('telegram_retry_state_encode_failed') end
+return encoded`;
 
 function pipelineRows(value) {
   if (!Array.isArray(value)) return [];
@@ -176,13 +219,36 @@ function retryDelayMs(hash, attempts, retryAfterSeconds = 0) {
   return Math.max(backoff, retryAfter) + jitter;
 }
 
+function retryAttemptCount(value) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function retryCreatedAtMs(value, fallback) {
+  if (value == null || value === "") return fallback;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 async function upsertRetry(record) {
+  const key = retryRecordKey(record.hash);
+  const raw = JSON.stringify(record);
+  const score = String(record.nextAttemptAt);
   const saved = await redisCmd([
     "EVAL", UPSERT_RETRY_SCRIPT, "2",
-    retryRecordKey(record.hash), TELEGRAM_RETRY_INDEX,
-    JSON.stringify(record), String(record.nextAttemptAt), String(RETRY_TTL_SECONDS), record.hash,
+    key, TELEGRAM_RETRY_INDEX, raw, score, String(RETRY_TTL_SECONDS), record.hash,
   ]);
-  return Number(saved) === 1;
+  if (Number(saved) === 1) return true;
+  if (saved != null) return false;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const recovered = strictPipelineRows(await redisPipeline([
+        ["GET", key], ["ZSCORE", TELEGRAM_RETRY_INDEX, record.hash], ["PING"],
+      ]), 3, "telegram_retry_write_unavailable");
+      if (recovered[0] === raw && String(recovered[1]) === score && recovered[2] === "PONG") return true;
+    } catch {}
+  }
+  return false;
 }
 
 async function removeRetry(hash) {
@@ -192,8 +258,8 @@ async function removeRetry(hash) {
 }
 
 async function scheduleRetry({ hash, fingerprint, incidentId, event, message, prior = null, result, providerDelivered = false, now = Date.now() }) {
-  const attempts = Math.max(1, Number(prior?.attempts || 0) + 1);
-  const createdAtMs = Number(prior?.createdAtMs || now);
+  const attempts = retryAttemptCount(prior?.attempts) + 1;
+  const createdAtMs = retryCreatedAtMs(prior?.createdAtMs, now);
   if (attempts > RETRY_MAX_ATTEMPTS || now - createdAtMs >= RETRY_MAX_AGE_MS) {
     const removed = await removeRetry(hash);
     return { queued: false, expired: removed, storageFailed: !removed, attempts };
@@ -205,7 +271,7 @@ async function scheduleRetry({ hash, fingerprint, incidentId, event, message, pr
     incidentId: clean(incidentId, 80),
     event: clean(event, 40),
     message: redactOperationalText(message),
-    providerDelivered: Boolean(providerDelivered || prior?.providerDelivered),
+    providerDelivered: providerDelivered === true || prior?.providerDelivered === true,
     attempts,
     createdAtMs,
     createdAt: new Date(createdAtMs).toISOString(),
@@ -218,7 +284,7 @@ async function scheduleRetry({ hash, fingerprint, incidentId, event, message, pr
 }
 
 function providerAttemptMarker({ hash, fingerprint, incidentId, event, message, prior = null, now = Date.now() }) {
-  const createdAtMs = Number(prior?.createdAtMs || now);
+  const createdAtMs = retryCreatedAtMs(prior?.createdAtMs, now);
   return {
     ...(prior && typeof prior === "object" ? prior : {}),
     hash,
@@ -228,7 +294,7 @@ function providerAttemptMarker({ hash, fingerprint, incidentId, event, message, 
     message: redactOperationalText(message),
     providerDelivered: false,
     providerAttemptedAt: new Date(now).toISOString(),
-    attempts: Math.max(0, Number(prior?.attempts || 0)),
+    attempts: retryAttemptCount(prior?.attempts),
     createdAtMs,
     createdAt: new Date(createdAtMs).toISOString(),
     lastAttemptAt: new Date(now).toISOString(),
@@ -243,13 +309,13 @@ async function readRetryState(hash) {
     "EVAL", READ_RETRY_STATE_SCRIPT, "2",
     retryRecordKey(hash), TELEGRAM_DEDUPE_PREFIX + hash,
   ]));
-  if (!state?.ok || typeof state.hasRecord !== "boolean" || typeof state.duplicate !== "boolean") {
+  if (state?.ok !== true || typeof state.hasRecord !== "boolean" || typeof state.duplicate !== "boolean") {
     return { ok: false, error: "telegram_retry_state_unavailable" };
   }
   if (!state.hasRecord) return { ok: true, record: null, duplicate: state.duplicate };
   const record = parseJson(state.record);
-  return record && typeof record === "object"
-    ? { ok: true, record, duplicate: state.duplicate }
+  return record && typeof record === "object" && !Array.isArray(record) && clean(record.hash, 64).toLowerCase() === hash && (!Object.hasOwn(record, "providerDelivered") || typeof record.providerDelivered === "boolean") && Number.isSafeInteger(Number(record.nextAttemptAt)) && Number(record.nextAttemptAt) >= 0 && typeof record.message === "string" && record.message.trim()
+    ? { ok: true, record: { ...record, attempts: retryAttemptCount(record.attempts), createdAtMs: retryCreatedAtMs(record.createdAtMs, Date.now()), providerDelivered: record.providerDelivered === true }, duplicate: state.duplicate }
     : { ok: false, error: "telegram_retry_record_corrupt" };
 }
 
@@ -295,7 +361,7 @@ export async function sendOperationalTelegram({ fingerprint, text, incidentId = 
   const claim = parseJson(await redisCmd([
     "EVAL", CLAIM_ALERT_SCRIPT, "2", dedupeKey, lockKey, lockToken, "30",
   ]));
-  if (!claim?.ok) {
+  if (claim?.ok !== true || !["acquired", "duplicate", "locked"].includes(claim.state)) {
     const storageFailure = { ok: false, retryable: true, error: "telegram_lock_store_unavailable" };
     const retry = await scheduleRetry({
       hash,
@@ -325,7 +391,7 @@ export async function sendOperationalTelegram({ fingerprint, text, incidentId = 
     }
     let result = await deliverTelegramMessage(message);
     let retry = null;
-    if (result.ok) {
+    if (result.ok === true) {
       const dedupeSaved = await redisCmd(["SET", dedupeKey, "1", "EX", String(DEDUPE_TTL_SECONDS)]) === "OK";
       if (dedupeSaved) {
         await removeRetry(hash);
@@ -355,7 +421,7 @@ export async function sendOperationalTelegram({ fingerprint, text, incidentId = 
       return {
         ...result,
         ok: false,
-        providerDelivered: Boolean(result.ok || result.providerDelivered),
+        providerDelivered: result.ok === true || result.providerDelivered === true,
         monitoringError: !historySaved ? "telegram_history_write_failed" : "telegram_health_write_failed",
         retry,
         record,
@@ -398,7 +464,7 @@ export async function drainTelegramAlertRetries({ limit = 20, now = Date.now(), 
     const claim = parseJson(await redisCmd([
       "EVAL", CLAIM_RETRY_LOCK_SCRIPT, "1", lockKey, lockToken, "30",
     ]));
-    if (!claim?.ok) {
+    if (claim?.ok !== true || !["acquired", "locked"].includes(claim.state)) {
       failed += 1;
       continue;
     }
@@ -422,7 +488,7 @@ export async function drainTelegramAlertRetries({ limit = 20, now = Date.now(), 
       // A previous worker persisted this marker before calling Telegram but
       // never durably recorded the provider result. Retrying would risk a
       // duplicate operational alert, so quarantine it as uncertain instead.
-      if (record.providerAttemptedAt && !record.providerDelivered) {
+      if (record.providerAttemptedAt && record.providerDelivered !== true) {
         const removed = await removeRetry(hash);
         const historySaved = await appendHistory(historyRecord({
           fingerprint: record.fingerprint,
@@ -453,7 +519,7 @@ export async function drainTelegramAlertRetries({ limit = 20, now = Date.now(), 
       }
       const started = Date.now();
       let result;
-      if (record.providerDelivered) {
+      if (record.providerDelivered === true) {
         const saved = await redisCmd(["SET", TELEGRAM_DEDUPE_PREFIX + hash, "1", "EX", String(DEDUPE_TTL_SECONDS)]) === "OK";
         result = saved
           ? { ok: true, providerDelivered: true, recoveredDedupe: true }
@@ -475,15 +541,15 @@ export async function drainTelegramAlertRetries({ limit = 20, now = Date.now(), 
         result = await deliverTelegramMessage(record.message);
       }
       processed += 1;
-      if (result.ok) {
-        if (!record.providerDelivered) {
+      if (result.ok === true) {
+        if (record.providerDelivered !== true) {
           const saved = await redisCmd(["SET", TELEGRAM_DEDUPE_PREFIX + hash, "1", "EX", String(DEDUPE_TTL_SECONDS)]) === "OK";
           if (!saved) {
             result = { ok: false, retryable: true, providerDelivered: true, error: "telegram_dedupe_store_unavailable" };
           }
         }
       }
-      if (result.ok) {
+      if (result.ok === true) {
         if (await removeRetry(hash)) sent += 1;
         else failed += 1;
       } else if (result.retryable) {
@@ -495,7 +561,7 @@ export async function drainTelegramAlertRetries({ limit = 20, now = Date.now(), 
           message: record.message,
           prior: record,
           result,
-          providerDelivered: Boolean(result.providerDelivered),
+          providerDelivered: result.providerDelivered === true,
           now,
         });
         if (retry.queued) rescheduled += 1;

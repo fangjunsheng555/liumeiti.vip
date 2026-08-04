@@ -12,6 +12,8 @@ const lists = new Map();
 const sortedSets = new Map();
 const telegramResponses = [];
 const telegramBodies = [];
+let loseRetryUpsertResponse = false;
+let failRetryRecoveryPipelineOnce = false;
 const originalFetch = globalThis.fetch;
 
 function sortedSet(key) {
@@ -51,6 +53,7 @@ function execute(command) {
     sortedSet(args[0]).set(args[2], Number(args[1]));
     return 1;
   }
+  if (name === "ZSCORE") return sortedSet(args[0]).has(args[1]) ? String(sortedSet(args[0]).get(args[1])) : null;
   if (name === "ZREM") return sortedSet(args[0]).delete(args[1]) ? 1 : 0;
   if (name === "ZRANGE") {
     return [...sortedSet(args[0]).entries()]
@@ -75,21 +78,10 @@ function execute(command) {
       const raw = strings.get(keys[0]);
       return JSON.stringify({ ok: true, hasRecord: raw != null, record: raw || "", duplicate: strings.has(keys[1]) });
     }
-    if (script.includes("local next = cjson.decode(ARGV[1])") && script.includes("LPUSH")) {
-      const record = JSON.parse(argv[0]);
+    if (script.includes("local current=redis.call('GET',KEYS[1])") && script.includes("LPUSH")) {
       const raw = strings.get(keys[0]);
-      if (raw) {
-        const previous = JSON.parse(raw);
-        if (record.status !== "ok") {
-          record.lastSuccessAt = previous.lastSuccessAt || "";
-          record.lastSuccessAtBeijing = previous.lastSuccessAtBeijing || "";
-        }
-        if (record.status !== "error") {
-          record.lastFailureAt = previous.lastFailureAt || "";
-          record.lastFailureAtBeijing = previous.lastFailureAtBeijing || "";
-        }
-      }
-      const encoded = JSON.stringify(record);
+      if (argv[2] === "0" ? raw != null : raw == null || raw !== argv[3]) return "__conflict__";
+      const encoded = String(argv[0]);
       strings.set(keys[0], encoded);
       const target = lists.get(keys[1]) || [];
       target.unshift(encoded);
@@ -132,10 +124,20 @@ globalThis.fetch = async (input, options = {}) => {
   if (url.origin === "http://telegram-retry.redis.test") {
     if (url.pathname === "/pipeline") {
       const commands = JSON.parse(options.body || "[]");
+      if (failRetryRecoveryPipelineOnce && commands.length === 3 && commands[0]?.[0] === "GET" && commands[1]?.[0] === "ZSCORE") {
+        failRetryRecoveryPipelineOnce = false;
+        return Response.json([{ error: "injected recovery read failure" }, ...commands.slice(1).map((command) => ({ result: execute(command) }))]);
+      }
       return Response.json(commands.map((command) => ({ result: execute(command) })));
     }
     const command = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
-    return Response.json({ result: execute(command) });
+    const result = execute(command);
+    if (loseRetryUpsertResponse && String(command[0]).toUpperCase() === "EVAL"
+        && String(command[1]).includes("telegram_invalid_retry_record")) {
+      loseRetryUpsertResponse = false;
+      return Response.json({ result: null });
+    }
+    return Response.json({ result });
   }
   if (url.origin === "https://api.telegram.org") {
     telegramBodies.push(JSON.parse(options.body || "{}"));
@@ -155,7 +157,26 @@ function reset() {
   sortedSets.clear();
   telegramResponses.length = 0;
   telegramBodies.length = 0;
+  loseRetryUpsertResponse = false;
+  failRetryRecoveryPipelineOnce = false;
 }
+
+test("a committed provider marker with a lost Redis response still sends exactly once", async () => {
+  reset();
+  loseRetryUpsertResponse = true;
+  failRetryRecoveryPipelineOnce = true;
+  assert.equal(telegramBodies.length, 0);
+  const sent = await telegram.sendOperationalTelegram({
+    fingerprint: "incident:marker-response-loss",
+    incidentId: "INC-MARKER-LOSS",
+    event: "opened",
+    text: "marker response lost after commit",
+  });
+  assert.equal(sent.ok, true);
+  assert.equal(loseRetryUpsertResponse, false);
+  assert.equal(telegramBodies.length, 1);
+  assert.equal((await telegram.readTelegramRetryQueue()).length, 0);
+});
 
 test("a 5xx alert is persisted and maintenance retries it exactly once", async () => {
   reset();

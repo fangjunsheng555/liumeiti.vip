@@ -49,10 +49,11 @@ export async function DELETE(request) {
   let body = {};
   try { body = await request.json(); } catch {}
   const email = String(body.email || "").trim().toLowerCase();
-  if (!validEmail(email)) return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
-  const result = await clearMailSuppression({ email, source: "admin", reason: clean(body.reason || "manual_clear", 120) });
+  const contactId = String(body.contactId || "").trim().toLowerCase();
+  if (!validEmail(email) && !/^[a-f0-9]{40}$/.test(contactId)) return Response.json({ ok: false, error: "invalid_target" }, { status: 400 });
+  const result = await clearMailSuppression({ email, contactId, source: "admin", reason: clean(body.reason || "manual_clear", 120) });
   if (!result.ok) return Response.json(result, { status: result.error === "contact_not_found" ? 404 : 503 });
   const actor = adminActorFromSession(session);
-  await pushAdminActionLog({ action: "mail_suppression_clear", actor, target: `mail:${email}`, detail: { reason: body.reason || "manual_clear" } });
+  await pushAdminActionLog({ action: "mail_suppression_clear", actor, target: validEmail(email) ? `mail:${email}` : `mail-contact:${contactId}`, detail: { reason: body.reason || "manual_clear" } });
   return Response.json({ ok: true, contact: result.contact });
 }

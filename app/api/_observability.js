@@ -21,20 +21,37 @@ const TRACE_TTL_SECONDS = 180 * 24 * 60 * 60;
 const TRACE_LIMIT = 100;
 
 const APPEND_TRACE_SCRIPT = `
+local function validtype(key,expected)
+  local value=redis.call('TYPE',key)
+  local actual=type(value)=='table' and value.ok or value
+  return actual=='none' or actual==expected
+end
+if not validtype(KEYS[1],'list') or not validtype(KEYS[2],'hash') or not validtype(KEYS[3],'string') then
+  return redis.error_reply('trace_storage_type_error')
+end
+local limit=tonumber(ARGV[3]); local ttl=tonumber(ARGV[4])
+if not limit or limit~=math.floor(limit) or limit<1 or limit>10000
+  or not ttl or ttl~=math.floor(ttl) or ttl<1 or ttl>2147483647 then
+  return redis.error_reply('trace_argument_error')
+end
 local existing=redis.call('HGET',KEYS[2],ARGV[1])
 if existing then
+  local encodedOk,encoded=pcall(cjson.encode,{ok=true,duplicate=true,event=existing})
+  if not encodedOk then return redis.error_reply('trace_response_encode_failed') end
   redis.call('EXPIRE',KEYS[1],ARGV[4])
   redis.call('EXPIRE',KEYS[2],ARGV[4])
   redis.call('SET',KEYS[3],ARGV[5],'EX',ARGV[4])
-  return cjson.encode({ok=true,duplicate=true,event=existing})
+  return encoded
 end
+local encodedOk,encoded=pcall(cjson.encode,{ok=true,duplicate=false,event=ARGV[2]})
+if not encodedOk then return redis.error_reply('trace_response_encode_failed') end
 redis.call('HSET',KEYS[2],ARGV[1],ARGV[2])
 redis.call('LPUSH',KEYS[1],ARGV[2])
-redis.call('LTRIM',KEYS[1],0,tonumber(ARGV[3])-1)
+redis.call('LTRIM',KEYS[1],0,limit-1)
 redis.call('EXPIRE',KEYS[1],ARGV[4])
 redis.call('EXPIRE',KEYS[2],ARGV[4])
 redis.call('SET',KEYS[3],ARGV[5],'EX',ARGV[4])
-return cjson.encode({ok=true,duplicate=false,event=ARGV[2]})`;
+return encoded`;
 
 const LATENCY_BUCKETS = [25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, Infinity];
 
@@ -244,7 +261,13 @@ function metricCommands(key, ttlSeconds, group, sample) {
   return commands;
 }
 
+export function observabilityWritesEnabled() {
+  const environment = String(process.env.VERCEL_ENV || "").trim().toLowerCase();
+  return !environment || environment === "production";
+}
+
 async function recordTimedMetric(kind, groupValue, sample = {}) {
+  if (!observabilityWritesEnabled()) return true;
   const group = normalizedMetricGroup(groupValue);
   const now = Number(sample.at || Date.now());
   const isDependency = kind === "dependency";
@@ -463,7 +486,7 @@ export async function sampleOperationalQueues({ now = Date.now() } = {}) {
       ["LTRIM", QUEUE_HISTORY_PREFIX + definition.name, "0", String(QUEUE_HISTORY_LIMIT - 1)],
     );
   });
-  if (historyCommands.length) {
+  if (historyCommands.length && observabilityWritesEnabled()) {
     const saved = pipelineRows(await redisPipeline(historyCommands));
     if (saved.length !== historyCommands.length || saved.some(pipelineRowFailed)) {
       const error = new Error("operational_queue_snapshot_write_failed");
@@ -600,22 +623,25 @@ export async function readBusinessTrace(orderId, limit = TRACE_LIMIT) {
     error.code = "trace_store_unavailable";
     throw error;
   }
-  const events = result[0].map((value) => {
+  const events = [];
+  let corruptCount = 0;
+  for (const value of result[0]) {
     const parsed = parseJson(value);
     const valid = parsed && typeof parsed === "object" && !Array.isArray(parsed)
       && Boolean(clean(parsed.stage, 60))
       && ["ok", "error", "uncertain", "retry", "skipped"].includes(parsed.outcome);
     if (!valid) {
-      const error = new Error("trace_store_corrupt");
-      error.code = "trace_store_corrupt";
-      throw error;
+      corruptCount += 1;
+      continue;
     }
-    return parsed;
-  });
+    events.push(parsed);
+  }
+  if (corruptCount) console.warn(`[observability] ignored ${corruptCount} corrupt trace event(s) for ${id}`);
   return {
     orderId: id,
     businessTraceId: businessTraceIdForOrder(id),
     events,
+    corruptCount,
   };
 }
 

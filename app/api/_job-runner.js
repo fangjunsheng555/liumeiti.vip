@@ -9,6 +9,15 @@ const MONITORING_BOOTSTRAP_KEY = "lm:ops:monitor:bootstrap:v1";
 const JOB_RUN_TTL_SECONDS = 90 * 24 * 60 * 60;
 const JOB_HISTORY_LIMIT = 500;
 
+export function normalizeJobResult(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || typeof value.ok !== "boolean"
+    || (Object.hasOwn(value, "disabled") && typeof value.disabled !== "boolean")) {
+    return { ok: false, error: "invalid_job_result" };
+  }
+  return value;
+}
+
 // OPS_HIGH_FREQUENCY_CRON is retained for deployment compatibility. On the
 // Hobby plan it means the trusted external *hourly* scheduler is active. The
 // 150-minute alarm window tolerates normal GitHub Actions scheduling jitter and
@@ -185,12 +194,12 @@ export async function runObservedJob(jobName, options = {}, handler) {
 
   let result = null;
   try {
-    result = await handler({ runId, heartbeat, startedAt: record.startedAt });
+    result = normalizeJobResult(await handler({ runId, heartbeat, startedAt: record.startedAt }));
     const finished = new Date();
-    const explicitFailure = result?.ok === false;
+    const explicitFailure = result.ok !== true;
     record = {
       ...record,
-      status: explicitFailure ? "failed" : (result?.disabled ? "disabled" : "success"),
+      status: explicitFailure ? "failed" : (result.disabled === true ? "disabled" : "success"),
       heartbeatAt: finished.toISOString(),
       finishedAt: finished.toISOString(),
       durationMs: Math.max(0, finished.getTime() - now.getTime()),

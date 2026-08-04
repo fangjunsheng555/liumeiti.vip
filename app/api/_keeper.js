@@ -5,7 +5,7 @@
 import { randomBytes } from "node:crypto";
 import { redisCmd, redisConfig } from "./_utils.js";
 import { recordHealthStatus } from "./_health.js";
-import { runObservedJob } from "./_job-runner.js";
+import { normalizeJobResult, runObservedJob } from "./_job-runner.js";
 import { sampleOperationalQueues } from "./_observability.js";
 
 const USDT_TICK_LOCK = "lm:keeper:usdt-tick";
@@ -50,6 +50,7 @@ async function acquireTick(key, intervalSec) {
   // cheap read distinguishes an ordinary throttle hit from an unavailable
   // lock store so outages become visible.
   const existing = await redisCmd(["GET", key]);
+  if (existing === token) return { acquired: true, token, recovered: true };
   return existing ? { acquired: false, skipped: true, reason: "throttled" } : { acquired: false, skipped: false, reason: "tick_lock_unavailable" };
 }
 
@@ -67,9 +68,10 @@ async function renewTickLease(key, token, ttlMs) {
 }
 
 async function recordTaskHealth(job, result) {
+  result = normalizeJobResult(result);
   const [component, label] = TASK_HEALTH[job] || ["job_runner", job];
-  const failed = result?.ok === false;
-  const disabled = Boolean(result?.disabled);
+  const failed = result.ok !== true;
+  const disabled = !failed && result.disabled === true;
   const metrics = {
     scanned: Number(result?.scanned || result?.checked || 0),
     processed: Number(result?.processed || result?.completed || result?.settled || result?.sent || result?.expired || result?.matched || 0),
@@ -146,15 +148,15 @@ async function runTick({ job, lockKey, intervalSec, trigger, deadlineAt = 0, han
       }
       let result;
       try {
-        result = await handler({
+        result = normalizeJobResult(await handler({
           ...context,
           checkpoint,
           shouldContinue,
           deadlineAt,
           remainingMs: () => deadlineAt ? Math.max(0, deadlineAt - Date.now()) : Number.POSITIVE_INFINITY,
-        });
+        }));
         businessFinished = true;
-        businessFailed = result?.ok === false;
+        businessFailed = result.ok !== true;
       } catch (error) {
         businessFailed = true;
         throw error;
@@ -170,17 +172,17 @@ async function runTick({ job, lockKey, intervalSec, trigger, deadlineAt = 0, han
           error: leaseLost ? "tick_lease_lost" : "maintenance_deadline_exceeded",
         };
       }
-      const healthSaved = await recordTaskHealth(job, result || { ok: true });
+      const healthSaved = await recordTaskHealth(job, result);
       if (!healthSaved) {
         return {
           ...(result && typeof result === "object" ? result : {}),
           ok: false,
-          businessOk: result?.ok !== false,
+          businessOk: result.ok === true,
           monitoringError: "task_health_write_failed",
-          error: result?.ok === false ? (result.error || "job_failed") : "task_health_write_failed",
+          error: result.ok !== true ? (result.error || "job_failed") : "task_health_write_failed",
         };
       }
-      return result || { ok: true };
+      return result;
     });
   } catch (error) {
     await releaseTick(lockKey, lease.token);
@@ -393,7 +395,7 @@ async function pushMaintenanceTick(trigger, { deadlineAt = 0, remainingMs = 30_0
         ? await runStep("push_stats", () => readPushQueueStats())
         : { ok: false, partial: true, deadlineExceeded: true, error: "maintenance_deadline_exceeded" };
       const steps = [recovery, dispatch, cleanup, providerAlerts, stats];
-      const failed = steps.filter((result) => result?.ok === false).length;
+      const failed = steps.filter((result) => result?.ok !== true).length;
       return {
         ok: failed === 0,
         scanned: Number(recovery.scanned || 0) + Number(dispatch.scanned || 0) + Number(cleanup.scanned || 0),
@@ -436,7 +438,7 @@ async function queueSampleTick(trigger, { deadlineAt = 0 } = {}) {
           return { ok: false, partial: true, deadlineExceeded: true, error: "maintenance_deadline_exceeded" };
         }
         const result = await runBackfill();
-        if (result?.ok === false) throw new Error(result.error || "operational_index_backfill_failed");
+        if (result?.ok !== true) throw new Error(result?.error || "operational_index_backfill_failed");
       }
       if (!shouldContinue()) return { ok: false, partial: true, deadlineExceeded: true, error: "maintenance_deadline_exceeded" };
       const queues = await sampleOperationalQueues();
@@ -529,7 +531,7 @@ export async function runMaintenanceTick({
       jobs.push({ ok: false, error: error?.message || "maintenance_task_failed" });
     }
   }
-  const failed = jobs.filter((result) => result?.ok === false).length;
+  const failed = jobs.filter((result) => result?.ok !== true).length;
   const partial = jobs.some((result) => result?.partial || result?.deadlineExceeded || result?.leaseLost);
   const healthSaved = await recordHealthStatus("job_runner", {
     status: failed ? "error" : "ok",

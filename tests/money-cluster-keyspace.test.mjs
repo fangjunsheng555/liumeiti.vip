@@ -51,6 +51,15 @@ test("legacy Upstash keyspace remains byte-for-byte compatible by default", () =
   assert.deepEqual(keyspace.redisAtomicStorageKeys(existing), existing);
 });
 
+test("two distinct valid long account emails never share money or lifecycle keys", () => {
+  const first = `${"a".repeat(188)}@example.com`;
+  const second = `${first}x`;
+  assert.equal(first.length, 200);
+  assert.equal(second.length, 201);
+  assert.notEqual(money.balanceCentsKey(first), money.balanceCentsKey(second));
+  assert.notEqual(money.accountLifecycleKey(first), money.accountLifecycleKey(second));
+});
+
 test("cluster-v1 maps arbitrary atomic keys to one explicit Redis hash slot", async () => {
   await withClusterMode(async () => {
     const logical = [

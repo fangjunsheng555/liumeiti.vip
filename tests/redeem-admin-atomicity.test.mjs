@@ -260,6 +260,51 @@ test("real Redis enforces redeem create idempotency and management CAS", {
     assert.deepEqual(usedDelete, { ok: false, error: "code_already_used" });
     assert.equal(redis.run(["EXISTS", CODE_PREFIX + singleCode]), 1);
 
+    const losslessCode = "LMLOSSLESS1";
+    const losslessCodeRaw = JSON.stringify({
+      ...codeRecord(losslessCode, "RB-LOSSLESS-CODE"),
+      legacyRows: [],
+      legacyNull: null,
+    }).replace(/}$/, ',"legacyHuge":123456789012345678901234567890}');
+    redis.run(["SET", CODE_PREFIX + losslessCode, losslessCodeRaw]);
+    redis.run(["LPUSH", CODE_LIST, losslessCode]);
+    assert.equal((await withFetch(redis.fetch, () => utils.updateRedeemCodeStatus(losslessCode, "void", actor))).ok, true);
+    const voidedLosslessCode = redis.run(["GET", CODE_PREFIX + losslessCode]);
+    assert.match(voidedLosslessCode, /"legacyRows":\[\]/);
+    assert.match(voidedLosslessCode, /"legacyNull":null/);
+    assert.match(voidedLosslessCode, /"legacyHuge":123456789012345678901234567890/);
+
+    const losslessBatchId = "RB-LOSSLESS-BATCH";
+    const losslessBatchCode = "LMLOSSBATCH1";
+    const losslessBatchRaw = JSON.stringify({
+      id: losslessBatchId,
+      type: "balance",
+      amount: 7,
+      quantity: 1,
+      status: "active",
+      codes: [losslessBatchCode],
+      legacyRows: [],
+      legacyNull: null,
+    }).replace(/}$/, ',"legacyHuge":123456789012345678901234567890}');
+    const losslessBatchCodeRaw = JSON.stringify({
+      ...codeRecord(losslessBatchCode, losslessBatchId),
+      legacyRows: [],
+      legacyNull: null,
+    }).replace(/}$/, ',"legacyHuge":123456789012345678901234567890}');
+    redis.run(["SET", BATCH_PREFIX + losslessBatchId, losslessBatchRaw]);
+    redis.run(["LPUSH", BATCH_LIST, losslessBatchId]);
+    redis.run(["SET", CODE_PREFIX + losslessBatchCode, losslessBatchCodeRaw]);
+    redis.run(["LPUSH", CODE_LIST, losslessBatchCode]);
+    assert.equal((await withFetch(redis.fetch, () => utils.updateRedeemBatchStatus(losslessBatchId, "void", actor))).ok, true);
+    for (const storedRaw of [
+      redis.run(["GET", BATCH_PREFIX + losslessBatchId]),
+      redis.run(["GET", CODE_PREFIX + losslessBatchCode]),
+    ]) {
+      assert.match(storedRaw, /"legacyRows":\[\]/);
+      assert.match(storedRaw, /"legacyNull":null/);
+      assert.match(storedRaw, /"legacyHuge":123456789012345678901234567890/);
+    }
+
     const batchId = "RB-RACE-DELETE";
     const becomesUsed = "LMRACEUSED";
     const remainsActive = "LMRACEACTIVE";
@@ -291,6 +336,16 @@ test("real Redis enforces redeem create idempotency and management CAS", {
     assert.equal(preserved.status, "used");
     assert.equal(preserved.usedBy, "batch-winner@example.com");
     assert.equal(redis.run(["LRANGE", CODE_LIST, "0", "-1"]).includes(becomesUsed), true);
+    const deleteAudit = JSON.parse(redis.run(["LINDEX", ACTION_LOG, "0"]));
+    assert.equal(deleteAudit.action, "redeem_batch_delete");
+    assert.deepEqual(deleteAudit.detail, {
+      total: 2,
+      changed: 1,
+      deleted: 1,
+      preservedUsed: 1,
+      type: "balance",
+      amount: 10,
+    });
 
     const droppedBatchId = "RB-DROP-DELETE";
     const droppedCode = "LMDROPDELETE";
@@ -312,6 +367,20 @@ test("real Redis enforces redeem create idempotency and management CAS", {
     assert.equal(recoveredDelete.recovered, true);
     assert.equal(redis.run(["EXISTS", CODE_PREFIX + droppedCode]), 0);
     assert.equal(redis.run(["EXISTS", BATCH_PREFIX + droppedBatchId]), 0);
+
+    const serviceCreated = await withFetch(redis.fetch, () => utils.createRedeemCodes({
+      type: "service",
+      quantity: 1,
+      services: [{ key: "spotify", plan: "family" }],
+    }, actor, { operationId: "redeem-create-lossless-item-001" }));
+    assert.equal(serviceCreated.ok, true);
+    const createdItem = serviceCreated.codes[0];
+    assert.equal(Array.isArray(createdItem.services), true);
+    assert.equal(
+      redis.run(["GET", CODE_PREFIX + createdItem.code]),
+      JSON.stringify(createdItem),
+      "Lua stores the exact Node-encoded item instead of decoding and re-encoding its arrays",
+    );
   } finally {
     docker(["rm", "-f", container]);
   }

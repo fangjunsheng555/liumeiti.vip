@@ -1291,3 +1291,29 @@ test("single and batch order transitions share the same per-order lock", async (
   assert.match(transition, /adjustStockBatchEffectAtomic/);
   assert.match(transition, /completeTransitionId/);
 });
+
+test("order-create recovery rejects an operation record whose orderId belongs to another idempotency key", async () => {
+  const operationId = "order-operation-identity-a";
+  const otherOperationId = "order-operation-identity-b";
+  const requestHash = money.idempotencyPayloadHash({ operationId, amount: 25 });
+  const operationKey = money.moneyKeys.operationKey("order-create", operationId);
+  const raw = JSON.stringify({
+    requestHash,
+    result: {
+      ok: true,
+      order: {
+        orderId: money.orderIdForIdempotencyKey(otherOperationId),
+        status: "received",
+        finalAmount: 25,
+      },
+    },
+  });
+  const redis = new AtomicRedisMock([[operationKey, raw]]);
+
+  await withRedis(redis, async () => {
+    const result = await money.findOrderCreationByIdempotencyKey(operationId, requestHash);
+    assert.deepEqual(result, { ok: false, error: "invalid_operation_record" });
+    assert.equal(redis.values.get(operationKey), raw, "rejection must not mutate the mismatched record");
+    assert.equal(redis.evalCalls.length, 0, "a read-only recovery check must not run money Lua");
+  });
+});

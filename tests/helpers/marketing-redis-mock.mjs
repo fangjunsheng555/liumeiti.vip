@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export function installMarketingRedisMock(origin) {
   const values = new Map();
   const sets = new Map();
@@ -40,11 +42,26 @@ export function installMarketingRedisMock(origin) {
       return failure.result;
     }
     if (name === "PING") return "PONG";
-    if (name === "GET") return values.get(args[0]) ?? null;
+    if (name === "TYPE") {
+      if (values.has(args[0])) return "string";
+      if (sets.has(args[0])) return "set";
+      if (lists.has(args[0])) return "list";
+      if (hashes.has(args[0])) return "hash";
+      if (sortedSets.has(args[0])) return "zset";
+      return "none";
+    }
+    if (name === "GET") {
+      if (values.has(args[0])) return values.get(args[0]);
+      if ([sets, lists, hashes, sortedSets].some((map) => map.has(args[0]))) return { error: "WRONGTYPE Operation against a key holding the wrong kind of value" };
+      return null;
+    }
     if (name === "MGET") return args.map((key) => values.get(key) ?? null);
+    if (name === "SISMEMBER") return sets.get(args[0])?.has(String(args[1])) ? 1 : 0;
+    if (name === "SMISMEMBER") return args.slice(1).map((member) => sets.get(args[0])?.has(String(member)) ? 1 : 0);
     if (name === "SET") {
       const options = args.slice(2).map((item) => String(item).toUpperCase());
       if (options.includes("NX") && hasKey(args[0])) return null;
+      for (const map of [sets, lists, hashes, sortedSets]) map.delete(args[0]);
       values.set(args[0], String(args[1]));
       return "OK";
     }
@@ -255,29 +272,30 @@ export function installMarketingRedisMock(origin) {
       if (script.includes("__in_flight__") && script.includes("SMEMBERS")) {
         const raw = values.get(keys[0]);
         if (!raw) return "__missing__";
+        if (raw !== String(argv[2] || "")) return "__conflict__";
         const doc = JSON.parse(raw);
+        if (String(doc.status || "") === String(argv[0] || "")) return raw;
         if (!String(argv[1] || "").split("|").includes(String(doc.status || ""))) return `__invalid__:${doc.status || ""}`;
         for (const jobId of setFor(keys[2])) {
-          const jobRaw = values.get(String(argv[6]) + jobId);
+          const jobRaw = values.get(String(argv[7]) + jobId);
           const job = jobRaw ? JSON.parse(jobRaw) : null;
-          if (job?.status === "sending" && values.has(String(argv[7]) + jobId)) return "__in_flight__";
+          if (job?.status === "sending" && values.has(String(argv[8]) + jobId)) return "__in_flight__";
         }
-        Object.assign(doc, JSON.parse(String(argv[2] || "{}")), { status: String(argv[0]) });
-        values.set(keys[0], JSON.stringify(doc));
-        if (!zsetFor(keys[1]).has(String(argv[5]))) zsetFor(keys[1]).set(String(argv[5]), Number(argv[4]));
-        return JSON.stringify(doc);
+        values.set(keys[0], String(argv[3]));
+        if (!zsetFor(keys[1]).has(String(argv[6]))) zsetFor(keys[1]).set(String(argv[6]), Number(argv[5]));
+        return String(argv[3]);
       }
-      if (script.includes("__invalid__:") && script.includes("patchOk") && !script.includes("__in_flight__")) {
+      if (script.includes("__corrupt_patch__") && !script.includes("__in_flight__")) {
         const raw = values.get(keys[0]);
         if (!raw) return "__missing__";
+        if (raw !== String(argv[2] || "")) return "__conflict__";
         let doc = null;
         try { doc = JSON.parse(raw); } catch { return "__corrupt__"; }
         const expected = String(argv[1] || "").split("|");
         if (!expected.includes(String(doc.status || ""))) return `__invalid__:${doc.status || ""}`;
-        Object.assign(doc, JSON.parse(String(argv[2] || "{}")), { status: String(argv[0]) });
-        values.set(keys[0], JSON.stringify(doc));
-        if (!zsetFor(keys[1]).has(String(argv[5]))) zsetFor(keys[1]).set(String(argv[5]), Number(argv[4]));
-        return JSON.stringify(doc);
+        values.set(keys[0], String(argv[3]));
+        if (!zsetFor(keys[1]).has(String(argv[6]))) zsetFor(keys[1]).set(String(argv[6]), Number(argv[5]));
+        return String(argv[3]);
       }
       if (script.includes("local queueScore=tonumber(doc.queueScore or ARGV[1])")) {
         const existing = values.get(keys[0]);
@@ -299,13 +317,14 @@ export function installMarketingRedisMock(origin) {
         setFor(keys[3]).add(String(argv[1]));
         return 1;
       }
-      if (script.includes("campaignStatus=campaign and campaign.status")) {
+      if (script.includes("__campaign_conflict__") && script.includes("responseEncoded")) {
         const raw = values.get(keys[0]);
         if (!raw) return "__missing__";
         const current = JSON.parse(raw);
         if (!String(argv[0] || "").split("|").includes(String(current.status || ""))) return `__invalid__:${current.status || ""}`;
         const campaignRaw = values.get(keys[5]);
         const campaign = campaignRaw ? JSON.parse(campaignRaw) : null;
+        if (campaignRaw ? String(campaignRaw) !== String(argv[13]) : argv[13] !== "__lm_marketing_missing__") return "__campaign_conflict__";
         if (argv[8] === "sending") {
           if (!campaign) return "__campaign_missing__";
           if (!["scheduled", "sending"].includes(campaign.status)) return `__campaign_blocked__:${campaign.status}`;
@@ -327,29 +346,12 @@ export function installMarketingRedisMock(origin) {
           values.set(keys[7], String(Number(values.get(keys[7]) || 0) + 1));
         }
         if (campaign) {
-          if (argv[8] === "sending" && campaign.status === "scheduled") {
-            campaign.status = "sending";
-            campaign.startedAt ||= argv[9];
-          }
-          if (argv[4] === "terminal") {
-            const field = `${argv[8]}Count`;
-            campaign[field] = Number(campaign[field] || 0) + 1;
-            campaign.terminalCount = Number(campaign.terminalCount || 0) + 1;
-            if (setFor(keys[2]).size === 0 && campaign.enqueueCompletedAt && campaign.status !== "cancelled") {
-              if (Number(campaign.failedCount || 0) > 0 || Number(campaign.enqueueFailedCount || 0) > 0) {
-                campaign.status = "failed";
-                campaign.failedAt = argv[9];
-              } else {
-                campaign.status = "completed";
-                campaign.completedAt = argv[9];
-              }
-            }
-          }
-          campaign.updatedAt = argv[9];
-          values.set(keys[5], JSON.stringify(campaign));
+          const useFinal = argv[4] === "terminal" && setFor(keys[2]).size === 0;
+          values.set(keys[5], String(useFinal ? argv[15] : argv[14]));
           if (!zsetFor(keys[6]).has(String(argv[6]))) zsetFor(keys[6]).set(String(argv[6]), Number(argv[12]));
+          return String(useFinal ? argv[17] : argv[16]);
         }
-        return JSON.stringify({ ok: true, status: argv[8], campaignStatus: campaign?.status || "" });
+        return String(argv[16]);
       }
       if (script.includes("__duplicate__") && script.includes("HINCRBYFLOAT")) {
         if (argv[0] !== "0") {
@@ -381,11 +383,41 @@ export function installMarketingRedisMock(origin) {
         values.delete(keys[0]);
         return 1;
       }
-      if (script.includes("current=tonumber(doc.revision or 0)") && script.includes("ARGV[2]")) {
+      if (script.includes("CORRUPT_CONTACT_REPAIR_V1")) {
+        const type = execute(["TYPE", keys[0]]);
+        const raw = type === "string" ? values.get(keys[0]) : null;
+        const expected = type === "string"
+          ? createHash("sha1").update(String(raw)).digest("hex")
+          : `type:${type}`;
+        const member = String(argv[5]);
+        const hasAll = setFor(keys[4]).has(member);
+        const hasOptional = setFor(keys[3]).has(member);
+        const hasMarketing = setFor(keys[2]).has(member);
+        if (type === "none" ? String(argv[0]) !== "missing" || !(hasAll || hasOptional || hasMarketing)
+          : (String(argv[0]) !== "type:any" && expected !== String(argv[0]))) return 0;
+        const scope = hasAll ? "all" : hasOptional ? "optional" : "marketing";
+        const replacementIndex = scope === "all" ? 3 : scope === "optional" ? 2 : 1;
+        let replacement = null;
+        try { replacement = JSON.parse(String(argv[replacementIndex])); } catch { return -3; }
+        if (!replacement || typeof replacement !== "object"
+            || replacement.suppression?.scope !== scope) return -3;
+        const indexed = execute(["ZADD", keys[1], argv[4], member]);
+        if (indexed == null || (typeof indexed === "object" && indexed?.error != null)) return indexed;
+        for (const key of keys.slice(2, 5)) execute(["SREM", key, member]);
+        execute(["SADD", keys[scope === "all" ? 4 : scope === "optional" ? 3 : 2], member]);
+        execute(["SET", keys[0], String(argv[replacementIndex])]);
+        return scope === "all" ? 3 : scope === "optional" ? 2 : 1;
+      }
+      if (script.includes("CONTACT_CAS_V2")) {
         const raw = values.get(keys[0]);
         let current = 0;
         if (raw) {
-          try { current = Number(JSON.parse(raw).revision || 0); } catch { return -2; }
+          try {
+            const doc = JSON.parse(raw);
+            if (!doc || typeof doc !== "object" || Array.isArray(doc)) return -2;
+            const revision = Number(doc.revision);
+            current = Number.isSafeInteger(revision) && revision >= 0 && revision < Number.MAX_SAFE_INTEGER ? revision : 0;
+          } catch { return -2; }
         }
         if (current !== Number(argv[0])) return 0;
         if (script.includes("redis.call('ZADD',KEYS[2],ARGV[3],ARGV[4])")) {
@@ -412,8 +444,14 @@ export function installMarketingRedisMock(origin) {
         const userRaw = values.get(keys[0]);
         if (!userRaw) return JSON.stringify({ ok: false, error: "session_revoked" });
         const authVersion = Number(values.get(keys[1]) || 1);
-        const lifecycle = values.get(keys[3]) || String(argv[0] || "");
-        if (!values.has(keys[3])) values.set(keys[3], lifecycle);
+        const lifecycleRaw = values.get(keys[3]);
+        const lifecycle = /^[a-f0-9]{32}$/.test(String(lifecycleRaw || ""))
+          ? lifecycleRaw
+          : String(argv[0] || "");
+        if (!/^[a-f0-9]{32}$/.test(String(lifecycle || ""))) {
+          return JSON.stringify({ ok: false, error: "invalid_lifecycle_candidate" });
+        }
+        if (lifecycle !== lifecycleRaw) values.set(keys[3], lifecycle);
         return JSON.stringify({
           ok: true,
           userRaw,

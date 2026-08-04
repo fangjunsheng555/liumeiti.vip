@@ -11,6 +11,7 @@ const headers = { "cache-control": "no-store", "referrer-policy": "no-referrer",
 function resultStatus(result) {
   if (result?.ok) return 200;
   if (["storage_unavailable", "storage_failed"].includes(result?.error)) return 503;
+  if (result?.error === "contact_repair_required") return 409;
   return result?.error === "contact_not_found" ? 404 : 400;
 }
 
@@ -23,7 +24,7 @@ function publicResult(result) {
   const contact = result.contact;
   return contact ? {
     ok: true,
-    maskedEmail: contact.email.replace(/^(.{1,2}).*(@.*)$/, "$1***$2"),
+    maskedEmail: contact.email ? contact.email.replace(/^(.{1,2}).*(@.*)$/, "$1***$2") : "***",
     locale: contact.locale,
     preferences: contact.preferences,
     suppression: contact.suppression,

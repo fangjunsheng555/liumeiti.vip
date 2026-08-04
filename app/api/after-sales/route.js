@@ -19,7 +19,7 @@ function normalizeOrderId(value) {
 }
 
 function normalizeEmail(value) {
-  return clean(value, 200).toLowerCase().trim();
+  return String(value || "").trim().toLowerCase();
 }
 
 function submittedItemAt(items, index) {

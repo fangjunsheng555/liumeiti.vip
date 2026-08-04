@@ -242,6 +242,28 @@ test("a webhook completion retry records one stable campaign metric", async () =
   assert.equal(Number(redis.hashes.get(`lm:mail:marketing:campaign:stats:${campaignId}`)?.get("delivered") || 0), 1);
 });
 
+test("a soft-bounce webhook retry after lease completion failure increments the contact only once", async () => {
+  const email = "soft-webhook-replay@example.com";
+  const messageId = "soft-webhook-replay-message";
+  const eventId = "soft-webhook-replay-event";
+  assert.ok(await delivery.registerEmailDelivery({
+    args: { to: email, subject: "soft", category: "transactional" },
+    result: { ok: true, provider: "resend", messageId },
+  }));
+  redis.failNextCommand("EVAL", "lm:mail:delivery:event:", 0, 2);
+  const event = {
+    type: "email.delivery_delayed",
+    created_at: new Date().toISOString(),
+    data: { email_id: messageId, to: [email], reason: "mailbox full" },
+  };
+  assert.equal((await delivery.applyResendWebhookEvent(event, eventId)).error, "event_completion_failed");
+  assert.equal((await preferences.getMailContact(email)).softBounce.count, 1);
+  assert.equal((await delivery.applyResendWebhookEvent(event, eventId)).ok, true);
+  const replayed = await preferences.getMailContact(email);
+  assert.equal(replayed.softBounce.count, 1);
+  assert.deepEqual(replayed.softBounce.eventIds, [eventId]);
+});
+
 test("marketing provider requests include RFC 8058 headers and explicit opt-outs never reach the provider", async () => {
   process.env.RESEND_API_KEY = "re_mail_preferences_test";
   process.env.RESEND_FROM = "info@liumeiti.vip";
@@ -572,6 +594,13 @@ test("marketing send fails closed and retryable when the preference secret is un
     assert.equal(result.suppressed, false);
     assert.equal(result.retryable, true);
     assert.equal(result.reason, "policy_unavailable");
+    const arbitraryId = "a".repeat(40);
+    const mismatchedWrite = await preferences.updateMailPreferences({
+      email: "secret-missing@example.com", contactId: arbitraryId,
+      preferences: { marketing: "denied" }, source: "missing_secret_probe",
+    });
+    assert.equal(mismatchedWrite.ok, false);
+    assert.equal(redis.values.has(preferences.mailPreferenceInternals.contactKey(arbitraryId)), false);
   } finally {
     process.env.MAIL_PREFERENCES_SECRET = previousMailSecret;
     process.env.AUTH_SECRET = previousAuthSecret;
@@ -611,6 +640,352 @@ test("account preference route records only whitelisted locale values for regist
   assert.equal((await preferences.getMailContact(email)).locale, "zh");
 });
 
+test("account preferences atomically repair malformed historical contacts with restrictive defaults", async () => {
+  const email = "corrupt-account-preferences@example.com";
+  const lifecycle = "b".repeat(32);
+  const contactId = preferences.mailContactId(email);
+  const key = preferences.mailPreferenceInternals.contactKey(contactId);
+  redis.execute(["SET", key, "{not-json"]);
+  redis.execute(["SET", `liumeiti:users:${email}`, JSON.stringify({ email, username: "legacy-mail-user", balance: 0 })]);
+  redis.execute(["SET", `lm:user:authver:${email}`, "1"]);
+  redis.execute(["SET", `lm:user:lifecycle:${email}`, lifecycle]);
+  const token = authSession.signUserSessionForVersion(email, 1);
+
+  const request = () => new Request("https://www.liumeiti.vip/api/account/email-preferences", {
+    headers: { cookie: `lm_user=${encodeURIComponent(token)}` },
+  });
+  const [repairedResponse, concurrentResponse] = await Promise.all([
+    accountPreferenceRoute.GET(request()),
+    accountPreferenceRoute.GET(request()),
+  ]);
+  assert.equal(repairedResponse.status, 200, await repairedResponse.clone().text());
+  assert.equal(concurrentResponse.status, 200, await concurrentResponse.clone().text());
+  const repaired = await repairedResponse.json();
+  assert.deepEqual(repaired.preferences, {
+    marketing: "unknown",
+    orderUpdates: true,
+    renewal: true,
+    serviceNotices: true,
+  });
+  assert.equal(repaired.suppression.scope, "marketing");
+  assert.equal(redis.sets.get("lm:mail:suppressed:all")?.has(contactId) || false, false);
+  assert.equal(redis.sets.get("lm:mail:suppressed:marketing")?.has(contactId), true);
+  assert.equal(redis.sets.get("lm:mail:suppressed:optional")?.has(contactId) || false, false);
+  assert.equal(JSON.parse(redis.values.get(key)).revision >= 1, true);
+
+  const updatedResponse = await accountPreferenceRoute.PATCH(new Request("https://www.liumeiti.vip/api/account/email-preferences", {
+    method: "PATCH",
+    headers: { cookie: `lm_user=${encodeURIComponent(token)}`, "content-type": "application/json" },
+    body: JSON.stringify({ preferences: { marketing: "granted", orderUpdates: true, renewal: true, serviceNotices: true } }),
+  }));
+  assert.equal(updatedResponse.status, 200);
+  assert.deepEqual((await updatedResponse.json()).preferences, {
+    marketing: "granted",
+    orderUpdates: true,
+    renewal: true,
+    serviceNotices: true,
+  });
+  assert.equal((await preferences.getMailContact(email)).suppression.scope, "none");
+  for (const purpose of ["critical", "transactional", "marketing"]) {
+    const decision = await preferences.getMailSendDecision({ email, purpose, category: purpose === "transactional" ? "order" : "security" });
+    assert.equal(decision.allowed, true, `${purpose} must recover after the account owner grants marketing consent`);
+  }
+});
+
+test("signed preference and one-click tokens repair malformed contacts without allowing delivery", async () => {
+  const email = "corrupt-token-preferences@example.com";
+  const token = await preferences.createMailPreferenceToken(email);
+  const contactId = preferences.mailContactId(email);
+  const key = preferences.mailPreferenceInternals.contactKey(contactId);
+  redis.execute(["SET", key, "null"]);
+
+  const repairedByToken = await preferenceRoute.GET(new Request(`https://www.liumeiti.vip/api/email/preferences?token=${encodeURIComponent(token)}`));
+  assert.equal(repairedByToken.status, 200, await repairedByToken.clone().text());
+  assert.equal((await repairedByToken.json()).suppression.scope, "marketing");
+  const oneClick = await unsubscribeRoute.POST(new Request(`https://www.liumeiti.vip/api/email/unsubscribe?token=${encodeURIComponent(token)}`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: "List-Unsubscribe=One-Click",
+  }));
+  assert.equal(oneClick.status, 200);
+
+  const lifecycle = "c".repeat(32);
+  redis.execute(["SET", `liumeiti:users:${email}`, JSON.stringify({ email, username: "repair-owner", balance: 0 })]);
+  redis.execute(["SET", `lm:user:authver:${email}`, "1"]);
+  redis.execute(["SET", `lm:user:lifecycle:${email}`, lifecycle]);
+  const session = authSession.signUserSessionForVersion(email, 1);
+  const repair = await accountPreferenceRoute.GET(new Request("https://www.liumeiti.vip/api/account/email-preferences", {
+    headers: { cookie: `lm_user=${encodeURIComponent(session)}` },
+  }));
+  assert.equal(repair.status, 200);
+
+  const recovered = await preferenceRoute.GET(new Request(`https://www.liumeiti.vip/api/email/preferences?token=${encodeURIComponent(token)}`));
+  assert.equal(recovered.status, 200);
+  const recoveredBody = await recovered.json();
+  assert.equal(recoveredBody.preferences.marketing, "denied");
+  assert.equal(recoveredBody.suppression.scope, "marketing");
+});
+
+test("concurrent signed-token repair losers reread the winner instead of returning a false conflict", async () => {
+  const email = "concurrent-token-repair@example.com";
+  const token = await preferences.createMailPreferenceToken(email);
+  const contactId = preferences.mailContactId(email);
+  redis.execute(["SET", preferences.mailPreferenceInternals.contactKey(contactId), "{bad"]);
+
+  const reads = await Promise.all(Array.from({ length: 5 }, () => preferences.getMailPreferencesByToken(token)));
+  assert.equal(reads.every((result) => result.ok), true);
+  assert.equal(reads.every((result) => result.suppression.scope === "marketing"), true);
+  assert.equal(reads.every((result) => result.maskedEmail === "***"), true);
+});
+
+test("a repaired token tombstone can persist an explicit marketing grant without an email field", async () => {
+  const email = "token-tombstone-grant@example.com";
+  const token = await preferences.createMailPreferenceToken(email);
+  const contactId = preferences.mailContactId(email);
+  redis.execute(["SET", preferences.mailPreferenceInternals.contactKey(contactId), "{bad"]);
+  assert.equal((await preferences.getMailPreferencesByToken(token)).ok, true);
+  const granted = await preferences.updateMailPreferencesByToken(token, { marketing: "granted" }, "test_grant");
+  assert.equal(granted.ok, true);
+  assert.equal(granted.contact.email, "");
+  assert.equal(granted.contact.preferences.marketing, "granted");
+  assert.equal(granted.contact.suppression.scope, "none");
+});
+
+test("a valid JSON contact with the wrong identity is repaired instead of looping to 503", async () => {
+  const email = "wrong-contact-identity@example.com";
+  const contactId = preferences.mailContactId(email);
+  const key = preferences.mailPreferenceInternals.contactKey(contactId);
+  redis.execute(["SET", key, JSON.stringify({
+    contactId: "d".repeat(40),
+    email,
+    preferences: { marketing: "granted" },
+    revision: 9,
+  })]);
+  redis.execute(["SET", `liumeiti:users:${email}`, JSON.stringify({ email, username: "wrong-id-owner", balance: 0 })]);
+  redis.execute(["SET", `lm:user:authver:${email}`, "1"]);
+  redis.execute(["SET", `lm:user:lifecycle:${email}`, "d".repeat(32)]);
+  const session = authSession.signUserSessionForVersion(email, 1);
+
+  const response = await accountPreferenceRoute.GET(new Request("https://www.liumeiti.vip/api/account/email-preferences", {
+    headers: { cookie: `lm_user=${encodeURIComponent(session)}` },
+  }));
+  assert.equal(response.status, 200, await response.clone().text());
+  const body = await response.json();
+  assert.equal(body.suppression.scope, "marketing");
+  assert.equal((await preferences.getMailContact(email)).contactId, contactId);
+});
+
+test("a contact with the right id but another email cannot leak through single or token reads", async () => {
+  const email = "right-id-wrong-email@example.com";
+  const contactId = preferences.mailContactId(email);
+  const key = preferences.mailPreferenceInternals.contactKey(contactId);
+  redis.execute(["SET", key, JSON.stringify({
+    contactId, email: "other-person@example.com", preferences: { marketing: "granted" }, revision: 4,
+  })]);
+  const decision = await preferences.getMailSendDecision({ email, purpose: "critical", category: "security" });
+  assert.equal(decision.allowed, true);
+  assert.equal(decision.contact.email, email);
+
+  const token = await preferences.createMailPreferenceToken(email);
+  redis.execute(["SET", key, JSON.stringify({
+    contactId, email: "token-impostor@example.com", preferences: { marketing: "granted" }, revision: 5,
+  })]);
+  const tokenRead = await preferences.getMailPreferencesByToken(token);
+  assert.equal(tokenRead.ok, true);
+  assert.equal(tokenRead.maskedEmail, "***");
+});
+
+test("batch send policy treats malformed contacts conservatively without failing healthy recipients", async () => {
+  const corruptEmail = "corrupt-batch-preferences@example.com";
+  const healthyEmail = "healthy-batch-preferences@example.com";
+  await preferences.ensureMailContact(corruptEmail, { source: "test" });
+  redis.execute(["SET", preferences.mailPreferenceInternals.contactKey(preferences.mailContactId(corruptEmail)), "[]"]);
+
+  for (const [purpose, category] of [["critical", "security"], ["transactional", "order"], ["marketing", "marketing"]]) {
+    const result = await preferences.getMailSendDecisionsBatch({
+      emails: [corruptEmail, healthyEmail],
+      purpose,
+      category,
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.decisions.get(corruptEmail).allowed, purpose !== "marketing");
+    assert.equal(result.decisions.get(healthyEmail).allowed, true);
+  }
+
+  redis.execute(["SET", preferences.mailPreferenceInternals.contactKey(preferences.mailContactId(corruptEmail)), JSON.stringify({
+    contactId: "e".repeat(40),
+    email: "somebody-else@example.com",
+    preferences: { marketing: "granted" },
+  })]);
+  const identityMismatch = await preferences.getMailSendDecisionsBatch({ emails: [corruptEmail, healthyEmail], purpose: "critical", category: "security" });
+  assert.equal(identityMismatch.ok, true);
+  assert.equal(identityMismatch.decisions.get(corruptEmail).allowed, true);
+  assert.equal(identityMismatch.decisions.get(healthyEmail).allowed, true);
+});
+
+test("single-recipient repair blocks marketing without locking critical or order mail", async () => {
+  for (const [email, raw] of [["direct-corrupt-policy@example.com", "{broken"], ["empty-corrupt-policy@example.com", ""]]) {
+    const contactId = preferences.mailContactId(email);
+    const key = preferences.mailPreferenceInternals.contactKey(contactId);
+    redis.execute(["SET", key, raw]);
+    for (const [purpose, category] of [["critical", "security"], ["transactional", "order"], ["marketing", "marketing"]]) {
+      const decision = await preferences.getMailSendDecision({ email, purpose, category });
+      assert.equal(decision.allowed, purpose !== "marketing", `${email} ${purpose} has the least-locking safe policy`);
+    }
+    const stored = JSON.parse(redis.values.get(key));
+    assert.equal(stored.suppression.scope, "marketing");
+    assert.equal(redis.sets.get("lm:mail:suppressed:marketing")?.has(contactId), true);
+  }
+});
+
+test("a wrong-type contact key is repaired without locking critical mail or account access", async () => {
+  const email = "wrong-type-contact@example.com";
+  const contactId = preferences.mailContactId(email);
+  const key = preferences.mailPreferenceInternals.contactKey(contactId);
+  redis.execute(["HSET", key, "legacy", "wrong-type"]);
+
+  for (const [purpose, category] of [["critical", "security"], ["transactional", "order"], ["marketing", "marketing"]]) {
+    const decision = await preferences.getMailSendDecision({ email, purpose, category });
+    assert.equal(decision.allowed, purpose !== "marketing");
+  }
+  assert.equal(redis.execute(["TYPE", key]), "string");
+  assert.equal(JSON.parse(redis.values.get(key)).suppression.scope, "marketing");
+
+  redis.execute(["SET", `liumeiti:users:${email}`, JSON.stringify({ email, username: "wrong-type-owner", balance: 0 })]);
+  redis.execute(["SET", `lm:user:authver:${email}`, "1"]);
+  redis.execute(["SET", `lm:user:lifecycle:${email}`, "e".repeat(32)]);
+  const session = authSession.signUserSessionForVersion(email, 1);
+  const response = await accountPreferenceRoute.GET(new Request("https://www.liumeiti.vip/api/account/email-preferences", {
+    headers: { cookie: `lm_user=${encodeURIComponent(session)}` },
+  }));
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal((await response.json()).suppression.scope, "marketing");
+});
+
+test("one wrong-type batch contact is repaired without dropping a healthy recipient", async () => {
+  const badEmail = "wrong-type-batch@example.com";
+  const goodEmail = "healthy-batch-neighbor@example.com";
+  const badId = preferences.mailContactId(badEmail);
+  redis.execute(["HSET", preferences.mailPreferenceInternals.contactKey(badId), "legacy", "wrong-type"]);
+  const result = await preferences.getMailSendDecisionsBatch({
+    emails: [badEmail, goodEmail], purpose: "critical", category: "security",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.decisions.size, 2);
+  assert.equal(result.decisions.get(badEmail).allowed, true);
+  assert.equal(result.decisions.get(goodEmail).allowed, true);
+  assert.equal(JSON.parse(redis.values.get(preferences.mailPreferenceInternals.contactKey(badId))).suppression.scope, "marketing");
+});
+
+test("corrupt contacts already present in the hard-suppression index remain blocked for critical mail", async () => {
+  const email = "hard-suppressed-corrupt@example.com";
+  const contactId = preferences.mailContactId(email);
+  redis.execute(["SADD", "lm:mail:suppressed:all", contactId]);
+  redis.execute(["SET", preferences.mailPreferenceInternals.contactKey(contactId), "{broken"]);
+  const decision = await preferences.getMailSendDecision({ email, purpose: "critical", category: "security" });
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.contact.suppression.scope, "all");
+  redis.execute(["SET", preferences.mailPreferenceInternals.contactKey(contactId), "{broken-again"]);
+  const batch = await preferences.getMailSendDecisionsBatch({ emails: [email], purpose: "critical", category: "security" });
+  assert.equal(batch.decisions.get(email).allowed, false);
+  assert.equal(batch.decisions.get(email).contact.suppression.scope, "all");
+});
+
+test("orphan suppression indexes remain authoritative for single, ensure, and batch paths", async () => {
+  const directEmail = "orphan-all-direct@example.com";
+  const directId = preferences.mailContactId(directEmail);
+  redis.execute(["SADD", "lm:mail:suppressed:all", directId]);
+  const direct = await preferences.getMailSendDecision({ email: directEmail, purpose: "critical", category: "security" });
+  assert.equal(direct.allowed, false);
+  assert.equal(JSON.parse(redis.values.get(preferences.mailPreferenceInternals.contactKey(directId))).suppression.scope, "all");
+
+  const ensuredEmail = "orphan-all-ensure@example.com";
+  const ensuredId = preferences.mailContactId(ensuredEmail);
+  redis.execute(["SADD", "lm:mail:suppressed:all", ensuredId]);
+  assert.equal((await preferences.ensureMailContact(ensuredEmail, { source: "campaign" })).suppression.scope, "all");
+  assert.equal((await preferences.getMailSendDecision({ email: ensuredEmail, purpose: "marketing" })).allowed, false);
+
+  const batchEmail = "orphan-all-batch@example.com";
+  const batchId = preferences.mailContactId(batchEmail);
+  redis.execute(["SADD", "lm:mail:suppressed:all", batchId]);
+  const batch = await preferences.getMailSendDecisionsBatch({ emails: [batchEmail], purpose: "marketing", category: "marketing" });
+  assert.equal(batch.decisions.get(batchEmail).allowed, false);
+  assert.equal(batch.decisions.get(batchEmail).contact.suppression.scope, "all");
+
+  const cleanEmail = "orphan-no-index@example.com";
+  assert.equal((await preferences.getMailSendDecision({ email: cleanEmail, purpose: "critical" })).allowed, true);
+  assert.equal(redis.values.has(preferences.mailPreferenceInternals.contactKey(preferences.mailContactId(cleanEmail))), false);
+});
+
+test("orphan optional and marketing indexes recover their exact delivery scope", async () => {
+  for (const [scope, blockedPurposes] of [
+    ["optional", new Set(["lifecycle", "marketing"])],
+    ["marketing", new Set(["marketing"])],
+  ]) {
+    const email = `orphan-${scope}-scope@example.com`;
+    const contactId = preferences.mailContactId(email);
+    redis.execute(["SADD", `lm:mail:suppressed:${scope}`, contactId]);
+    for (const purpose of ["critical", "transactional", "lifecycle", "marketing"]) {
+      const decision = await preferences.getMailSendDecision({ email, purpose, category: purpose === "lifecycle" ? "renewal" : purpose });
+      assert.equal(decision.allowed, !blockedPurposes.has(purpose), `${scope} ${purpose}`);
+    }
+    assert.equal((await preferences.getMailContact(email)).suppression.scope, scope);
+  }
+});
+
+test("conflicting orphan suppression indexes keep only the strongest all scope", async () => {
+  const email = "orphan-conflicting-indexes@example.com";
+  const contactId = preferences.mailContactId(email);
+  for (const scope of ["marketing", "optional", "all"]) redis.execute(["SADD", `lm:mail:suppressed:${scope}`, contactId]);
+  const decision = await preferences.getMailSendDecision({ email, purpose: "critical", category: "security" });
+  assert.equal(decision.allowed, false);
+  assert.equal(decision.contact.suppression.scope, "all");
+  assert.equal(redis.sets.get("lm:mail:suppressed:all")?.has(contactId), true);
+  assert.equal(redis.sets.get("lm:mail:suppressed:optional")?.has(contactId) || false, false);
+  assert.equal(redis.sets.get("lm:mail:suppressed:marketing")?.has(contactId) || false, false);
+});
+
+test("valid hard suppression survives unrelated index read failure and concurrent repair losers", async () => {
+  const validEmail = "valid-all-index-fault@example.com";
+  await preferences.suppressMailAddress({ email: validEmail, scope: "all", reason: "hard_bounce" });
+  redis.failNextCommand("SISMEMBER", "lm:mail:suppressed:optional", { error: "WRONGTYPE index" });
+  assert.equal((await preferences.getMailSendDecision({ email: validEmail, purpose: "critical" })).allowed, false);
+
+  const raceEmail = "repair-race-all@example.com";
+  const raceId = preferences.mailContactId(raceEmail);
+  redis.execute(["SADD", "lm:mail:suppressed:all", raceId]);
+  redis.execute(["SET", preferences.mailPreferenceInternals.contactKey(raceId), "{broken"]);
+  const decisions = await Promise.all(Array.from({ length: 5 }, () => (
+    preferences.getMailSendDecision({ email: raceEmail, purpose: "critical", category: "security" })
+  )));
+  assert.equal(decisions.every((decision) => !decision.allowed && decision.contact?.suppression?.scope === "all"), true);
+});
+
+test("legacy contact revision shapes are repaired without 503, fractions, or lost concurrent updates", async () => {
+  const shapes = ["bad", -1, 1.5, 9007199254740992, null, {}];
+  for (let index = 0; index < shapes.length; index += 1) {
+    const email = `legacy-revision-${index}@example.com`;
+    const contact = await preferences.ensureMailContact(email, { source: "test" });
+    assert.ok(contact, `failed to create contact for revision shape ${JSON.stringify(shapes[index])}`);
+    const key = preferences.mailPreferenceInternals.contactKey(contact.contactId);
+    const stored = JSON.parse(redis.values.get(key));
+    stored.revision = shapes[index];
+    redis.execute(["SET", key, JSON.stringify(stored)]);
+
+    const [left, right] = await Promise.all([
+      preferences.updateMailPreferences({ email, preferences: { renewal: false }, source: "revision_probe" }),
+      preferences.updateMailPreferences({ email, preferences: { serviceNotices: false }, source: "revision_probe" }),
+    ]);
+    assert.equal(left.ok, true, `left update failed for ${JSON.stringify(shapes[index])}`);
+    assert.equal(right.ok, true, `right update failed for ${JSON.stringify(shapes[index])}`);
+    const updated = await preferences.getMailContact(email);
+    assert.equal(Number.isSafeInteger(updated.revision), true);
+    assert.equal(updated.revision >= 2, true);
+    assert.equal(updated.preferences.renewal, false);
+    assert.equal(updated.preferences.serviceNotices, false);
+  }
+});
+
 test("suppression admin route distinguishes an empty store from index and detail outages", async () => {
   redis.sortedSets.delete("lm:mail:contacts");
   redis.sets.delete("lm:mail:suppressed:all");
@@ -639,6 +1014,177 @@ test("suppression admin route distinguishes an empty store from index and detail
   const detailOutage = await suppressionRoute.GET(request());
   assert.equal(detailOutage.status, 503);
   assert.equal((await detailOutage.json()).error, "storage_unavailable");
+
+  const healthy = await preferences.suppressMailAddress({
+    email: "healthy-suppression-list@example.com", scope: "marketing", reason: "test", source: "test",
+  });
+  const wrongTypeId = preferences.mailContactId("wrong-type-suppression-list@example.com");
+  redis.execute(["SADD", "lm:mail:suppressed:all", wrongTypeId]);
+  redis.execute(["HSET", preferences.mailPreferenceInternals.contactKey(wrongTypeId), "legacy", "wrong-type"]);
+  const wrongIdentityId = preferences.mailContactId("wrong-identity-suppression-list@example.com");
+  const impostorId = "f".repeat(40);
+  redis.execute(["SADD", "lm:mail:suppressed:all", wrongIdentityId]);
+  redis.execute(["SET", preferences.mailPreferenceInternals.contactKey(wrongIdentityId), JSON.stringify({
+    contactId: impostorId, email: "impostor@example.com", suppression: { scope: "none" },
+  })]);
+  const wrongEmailId = preferences.mailContactId("wrong-email-suppression-list@example.com");
+  redis.execute(["SADD", "lm:mail:suppressed:all", wrongEmailId]);
+  redis.execute(["SET", preferences.mailPreferenceInternals.contactKey(wrongEmailId), JSON.stringify({
+    contactId: wrongEmailId, email: "different-owner@example.com", suppression: { scope: "none" },
+  })]);
+  redis.execute(["SADD", "lm:mail:suppressed:all", "not-a-contact-id", `x${"a".repeat(40)}`]);
+  const degraded = await suppressionRoute.GET(request());
+  assert.equal(degraded.status, 200);
+  const degradedRows = (await degraded.json()).suppressions;
+  assert.equal(degradedRows.some((row) => row.contactId === healthy.contact.contactId), true);
+  assert.equal(degradedRows.some((row) => row.contactId === wrongTypeId && row.suppression.scope === "all"), true);
+  assert.equal(degradedRows.some((row) => row.contactId === wrongIdentityId && row.suppression.scope === "all"), true);
+  assert.equal(degradedRows.some((row) => row.contactId === impostorId), false);
+  assert.equal(degradedRows.some((row) => row.contactId === wrongEmailId && !row.email && row.suppression.scope === "all"), true);
+  assert.equal(degradedRows.some((row) => !/^[a-f0-9]{40}$/.test(row.contactId)), false);
+
+  const clearOrphan = await suppressionRoute.DELETE(new Request("https://www.liumeiti.vip/api/admin/mail/suppressions", {
+    method: "DELETE",
+    headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}`, "content-type": "application/json" },
+    body: JSON.stringify({ contactId: wrongTypeId, reason: "orphan_recovery" }),
+  }));
+  assert.equal(clearOrphan.status, 200);
+  assert.equal(redis.sets.get("lm:mail:suppressed:all")?.has(wrongTypeId) || false, false);
+});
+
+test("mail preference writes reject a mismatched email and contact id without corrupting the owner", async () => {
+  const victimEmail = "identity-owner@example.com";
+  const victim = await preferences.ensureMailContact(victimEmail, { source: "identity_probe" });
+  const attempted = await preferences.updateMailPreferences({
+    email: "identity-attacker@example.com",
+    contactId: victim.contactId,
+    preferences: { marketing: "denied" },
+    source: "identity_probe",
+  });
+  assert.equal(attempted.ok, false);
+  const unchanged = await preferences.getMailContact(victimEmail);
+  assert.equal(unchanged.email, victimEmail);
+  assert.equal(unchanged.preferences.marketing, "unknown");
+  assert.equal(await preferences.getMailContact("identity-attacker@example.com"), null);
+});
+
+test("explicit-id suppression changes reject a different valid email", async () => {
+  const ownerEmail = "suppression-owner@example.com";
+  const otherEmail = "suppression-other@example.com";
+  const owner = await preferences.suppressMailAddress({ email: ownerEmail, scope: "all", reason: "hard_bounce" });
+  await preferences.ensureMailContact(otherEmail, { source: "identity_probe" });
+  assert.equal((await preferences.clearMailSuppression({ email: otherEmail, contactId: owner.contact.contactId })).ok, false);
+  assert.equal((await preferences.suppressMailAddress({ email: otherEmail, contactId: owner.contact.contactId, scope: "all" })).ok, false);
+  assert.equal((await preferences.getMailContact(ownerEmail)).suppression.scope, "all");
+  assert.equal((await preferences.getMailContact(otherEmail)).suppression.scope, "none");
+});
+
+test("legacy invalid soft-bounce counters and future timestamps restart at one", async () => {
+  for (const [label, count, lastAt] of [
+    ["negative", -7, new Date().toISOString()],
+    ["fraction", 1.5, new Date().toISOString()],
+    ["unsafe", Number.MAX_SAFE_INTEGER + 1, new Date().toISOString()],
+    ["future", 2, "2999-01-01T00:00:00.000Z"],
+  ]) {
+    const email = `soft-legacy-${label}@example.com`;
+    const contact = await preferences.ensureMailContact(email, { source: "legacy_probe" });
+    const key = preferences.mailPreferenceInternals.contactKey(contact.contactId);
+    const raw = JSON.parse(redis.values.get(key));
+    raw.softBounce = { count, lastAt, eventIds: [] };
+    redis.execute(["SET", key, JSON.stringify(raw)]);
+    const result = await preferences.applyMailFeedback({
+      email, status: "delayed", eventType: "soft_bounce", reason: "mailbox full", eventId: `legacy-${label}`,
+    });
+    assert.equal(result.contact.softBounce.count, 1, label);
+    assert.equal(result.cooldown, false, label);
+  }
+});
+
+test("a permanent 550 bounce cannot be softened by digits in a provider trace", async () => {
+  const email = "hard-bounce-trace@example.com";
+  const result = await preferences.applyMailFeedback({
+    email, status: "bounced", eventType: "bounce",
+    reason: "550 5.1.1 permanent user unknown; provider trace 412345", eventId: "hard-trace-1",
+  });
+  assert.equal(result.contact.suppression.scope, "all");
+  assert.equal((await preferences.getMailSendDecision({ email, purpose: "critical" })).allowed, false);
+});
+
+test("overlong recipient input is rejected without creating a truncated alias", async () => {
+  const overlong = `${"a".repeat(242)}@example.comX`;
+  const truncated = overlong.slice(0, 254);
+  assert.equal(overlong.length, 255);
+  assert.equal(preferences.mailContactId(overlong), "");
+  assert.equal((await preferences.getMailSendDecision({ email: overlong, purpose: "marketing" })).reason, "invalid_email");
+  assert.equal(await preferences.ensureMailContact(overlong, { source: "overlong_probe" }), null);
+  assert.equal(await delivery.registerEmailDelivery({ args: { to: overlong, subject: "alias" }, result: { ok: true, messageId: "overlong-alias" } }), null);
+  assert.equal(await preferences.getMailContact(truncated), null);
+});
+
+test("post-fix convergence round 1: an exact 254-character recipient remains usable without aliasing", async () => {
+  const email = `${"a".repeat(242)}@example.com`;
+  assert.equal(email.length, 254);
+  const contact = await preferences.ensureMailContact(email, { source: "boundary_probe" });
+  assert.equal(contact.email, email);
+  assert.equal(contact.contactId, preferences.mailContactId(email));
+  const record = await delivery.registerEmailDelivery({
+    args: { to: email, subject: "boundary" }, result: { ok: true, messageId: "boundary-254" },
+  });
+  assert.equal(record.to, email);
+});
+
+test("post-fix convergence round 1: a 550 mailbox-full response is still a hard bounce", async () => {
+  const email = "hard-mailbox-full@example.com";
+  const result = await preferences.applyMailFeedback({
+    email, status: "bounced", eventType: "bounce",
+    reason: "550 5.2.2 mailbox full; permanent failure", eventId: "hard-mailbox-full-1",
+  });
+  assert.equal(result.contact.suppression.scope, "all");
+  assert.equal((await preferences.getMailSendDecision({ email, purpose: "critical" })).allowed, false);
+});
+
+test("post-fix convergence round 1: an explicit soft-bounce event outranks contradictory provider text", async () => {
+  const email = "explicit-soft-provider@example.com";
+  const result = await preferences.applyMailFeedback({
+    email, status: "bounced", eventType: "soft_bounce",
+    reason: "550 provider mislabeled this temporary deferral", eventId: "explicit-soft-1",
+  });
+  assert.equal(result.soft, true);
+  assert.equal(result.contact.softBounce.count, 1);
+  assert.equal(result.contact.suppression.scope, "none");
+  assert.equal((await preferences.getMailSendDecision({ email, purpose: "critical" })).allowed, true);
+});
+
+test("post-fix convergence round 1: a maximum-safe legacy bounce counter restarts instead of overflowing", async () => {
+  const email = "soft-max-safe@example.com";
+  const contact = await preferences.ensureMailContact(email, { source: "boundary_probe" });
+  const key = preferences.mailPreferenceInternals.contactKey(contact.contactId);
+  const raw = JSON.parse(redis.values.get(key));
+  raw.softBounce = { count: Number.MAX_SAFE_INTEGER, lastAt: new Date().toISOString(), eventIds: [] };
+  redis.execute(["SET", key, JSON.stringify(raw)]);
+  const result = await preferences.applyMailFeedback({
+    email, status: "delayed", eventType: "soft_bounce", reason: "temporary", eventId: "max-safe-next",
+  });
+  assert.equal(result.contact.softBounce.count, 1);
+  assert.equal(result.cooldown, false);
+});
+
+test("post-fix convergence round 1: an orphan optional suppression can be listed and cleared by contact id", async () => {
+  const email = "orphan-optional-admin-clear@example.com";
+  const contactId = preferences.mailContactId(email);
+  redis.execute(["SADD", "lm:mail:suppressed:optional", contactId]);
+  const listed = await suppressionRoute.GET(new Request("https://www.liumeiti.vip/api/admin/mail/suppressions", {
+    headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}` },
+  }));
+  assert.equal((await listed.json()).suppressions.some((row) => row.contactId === contactId && row.suppression.scope === "optional"), true);
+  const cleared = await suppressionRoute.DELETE(new Request("https://www.liumeiti.vip/api/admin/mail/suppressions", {
+    method: "DELETE",
+    headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}`, "content-type": "application/json" },
+    body: JSON.stringify({ contactId }),
+  }));
+  assert.equal(cleared.status, 200);
+  assert.equal(redis.sets.get("lm:mail:suppressed:optional")?.has(contactId) || false, false);
+  assert.equal((await preferences.getMailSendDecision({ email, purpose: "marketing" })).allowed, true);
 });
 
 test("delivery history route distinguishes empty, missing, and per-row storage failures", async () => {

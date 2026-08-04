@@ -106,26 +106,33 @@ function strictJsonList(value) {
 }
 
 function executeEval(script, keys, argv) {
-  if (script.includes("local oldTarget") && script.includes("return priorRaw and 'updated' or 'created'")) {
+  if (script.includes("push_delivery_claim_v1")) {
+    const deliveries = hash(keys[0]);
+    if ((deliveries.get(argv[0]) || "__lm_push_missing__") !== argv[2]) return "stale";
+    const next = JSON.parse(argv[1]);
+    if (next.eventId !== argv[3] || next.subscriptionId !== argv[4] || next.status !== "sending" || next.claimToken !== argv[5]) return "invalid_claim";
+    deliveries.set(argv[0], argv[1]);
+    return "saved";
+  }
+  if (script.includes("newCount>subscriptionLimit") && script.includes("local preferencesOk")) {
     const [subscriptionsKey, accountSubscriptionsKey, preferencesKey] = keys;
-    const [id, target, recordJson, rawLimit, preferencesJson] = argv;
+    const [id, target, recordJson, rawLimit, preferencesJson,
+      expectedPrior, oldTarget, expectedOld, nextOld, expectedNew, nextNew] = argv;
     const subscriptions = hash(subscriptionsKey);
     const accounts = hash(accountSubscriptionsKey);
-    const priorRaw = subscriptions.get(id) || null;
-    const prior = priorRaw ? JSON.parse(priorRaw) : {};
-    const oldTarget = String(prior.accountTarget || "");
-    const list = strictJsonList(accounts.get(target));
-    if (!list.includes(id) && list.length >= Number(rawLimit)) return "limit";
-    if (oldTarget && oldTarget !== target) {
-      const oldList = strictJsonList(accounts.get(oldTarget)).filter((value) => value !== id);
-      if (oldList.length) accounts.set(oldTarget, JSON.stringify(oldList));
+    const priorRaw = subscriptions.get(id) || "__lm_push_missing__";
+    if (priorRaw !== expectedPrior) return "stale";
+    if (oldTarget !== "__lm_push_missing__" && (accounts.get(oldTarget) || "__lm_push_missing__") !== expectedOld) return "stale";
+    if ((accounts.get(target) || "__lm_push_missing__") !== expectedNew) return "stale";
+    if (strictJsonList(nextNew).length > Number(rawLimit)) return "invalid_payload";
+    if (oldTarget !== "__lm_push_missing__") {
+      if (nextOld !== "__lm_push_missing__") accounts.set(oldTarget, nextOld);
       else accounts.delete(oldTarget);
     }
-    if (!list.includes(id)) list.push(id);
     subscriptions.set(id, recordJson);
-    accounts.set(target, JSON.stringify(list));
+    accounts.set(target, nextNew);
     hash(preferencesKey).set(target, preferencesJson);
-    return priorRaw ? "updated" : "created";
+    return priorRaw !== "__lm_push_missing__" ? "updated" : "created";
   }
 
   if (script.includes("return 'queued'") && script.includes("requestHash")) {
@@ -166,7 +173,8 @@ function executeEval(script, keys, argv) {
 
   if (script.includes("local restocked=") && script.includes("before=before or -1")) {
     const [stockKey, eventsKey, outboxKey] = keys;
-    const [rawAfter, eventId, requestHash, eventJson, score] = argv;
+    const [rawAfter, rawEventId, requestHash, eventJson, score] = argv;
+    const eventId = rawEventId === "__lm_push_missing__" ? "" : rawEventId;
     const events = hash(eventsKey);
     const priorRaw = eventId ? events.get(eventId) : null;
     if (priorRaw && JSON.parse(priorRaw).requestHash !== requestHash) return "push_event_conflict";
@@ -221,27 +229,21 @@ function executeEval(script, keys, argv) {
     });
   }
 
-  if (script.includes("if ARGV[2]~='' and target~=ARGV[2] then return -1 end")) {
+  if (script.includes("return ARGV[3]~='__lm_push_missing__' and 1 or 0")) {
     const [subscriptionsKey, accountSubscriptionsKey] = keys;
-    const [id, expectedTarget] = argv;
+    const [id, expectedTarget, expectedRecord, target, expectedList, nextList] = argv;
     const subscriptions = hash(subscriptionsKey);
-    const raw = subscriptions.get(id);
-    if (!raw) {
-      if (!expectedTarget) return 0;
-      const accounts = hash(accountSubscriptionsKey);
-      const list = strictJsonList(accounts.get(expectedTarget)).filter((value) => value !== id);
-      if (list.length) accounts.set(expectedTarget, JSON.stringify(list));
-      else accounts.delete(expectedTarget);
-      return 0;
-    }
-    const record = JSON.parse(raw);
-    if (expectedTarget && record.accountTarget !== expectedTarget) return -1;
-    subscriptions.delete(id);
     const accounts = hash(accountSubscriptionsKey);
-    const list = strictJsonList(accounts.get(record.accountTarget)).filter((value) => value !== id);
-    if (list.length) accounts.set(record.accountTarget, JSON.stringify(list));
-    else accounts.delete(record.accountTarget);
-    return 1;
+    if ((subscriptions.get(id) || "__lm_push_missing__") !== expectedRecord) return -5;
+    if (target !== "__lm_push_missing__" && (accounts.get(target) || "__lm_push_missing__") !== expectedList) return -5;
+    if (expectedRecord !== "__lm_push_missing__" && expectedTarget !== "__lm_push_missing__"
+      && JSON.parse(expectedRecord).accountTarget !== expectedTarget) return -1;
+    subscriptions.delete(id);
+    if (target !== "__lm_push_missing__") {
+      if (nextList !== "__lm_push_missing__") accounts.set(target, nextList);
+      else accounts.delete(target);
+    }
+    return expectedRecord !== "__lm_push_missing__" ? 1 : 0;
   }
 
   if (script.includes("redis.call('HDEL',KEYS[1],tostring(id))") && script.includes("return #list")) {
@@ -268,7 +270,7 @@ function executeEval(script, keys, argv) {
     return 1;
   }
 
-  if (script.includes("return redis.call('EXPIRE',KEYS[1],ARGV[2])")) {
+  if (script.includes("redis.call('EXPIRE',KEYS[1],ttl)")) {
     expireString(keys[0]);
     if (strings.get(keys[0]) !== argv[0]) return 0;
     expirations.set(keys[0], Date.now() + Number(argv[1]) * 1000);
@@ -290,12 +292,13 @@ function executeEval(script, keys, argv) {
     return "rescheduled";
   }
 
-  if (script.includes("current.deliveryFields=merged") && script.includes("return 'saved'")) {
-    const current = JSON.parse(hash(keys[0]).get(argv[0]) || "null");
+  if (script.includes("push_delivery_fields_lossless_cas_v2") && script.includes("return 'saved'")) {
+    const raw = hash(keys[0]).get(argv[0]);
+    const current = JSON.parse(raw || "null");
     if (!current) return "missing";
     if (current.requestHash !== argv[1]) return "conflict";
-    current.deliveryFields = [...new Set([...(current.deliveryFields || []), ...JSON.parse(argv[2])])];
-    hash(keys[0]).set(argv[0], JSON.stringify(current));
+    if (raw !== argv[2]) return "stale";
+    hash(keys[0]).set(argv[0], argv[3]);
     return "saved";
   }
 
@@ -304,24 +307,31 @@ function executeEval(script, keys, argv) {
     const [eventId, requestHash, clearStock, rawDeliveryCount, ...rest] = argv;
     const currentRaw = hash(eventsKey).get(eventId);
     if (currentRaw && JSON.parse(currentRaw).requestHash !== requestHash) return "conflict";
+    const deliveryCount = Number(rawDeliveryCount);
+    const productKey = rest[deliveryCount] || "";
+    let cleanupPlan = [];
+    if (clearStock === "1" && productKey) {
+      const expectedStock = rest[deliveryCount + 1] || "__lm_push_missing__";
+      cleanupPlan = JSON.parse(rest[deliveryCount + 2] || "[]");
+      if ((hash(stockWatchesKey).get(productKey) || "__lm_push_missing__") !== expectedStock) return "stale";
+      for (const row of cleanupPlan) {
+        if ((hash(accountWatchesKey).get(row.target) || "__lm_push_missing__") !== row.expected) return "stale";
+      }
+    }
     hash(eventsKey).delete(eventId);
     sortedSet(outboxKey).delete(eventId);
-    const deliveryCount = Number(rawDeliveryCount);
     rest.slice(0, deliveryCount).forEach((field) => hash(deliveriesKey).delete(field));
-    const productKey = rest[deliveryCount] || "";
     if (clearStock === "1" && productKey) {
-      const targets = jsonList(hash(stockWatchesKey).get(productKey));
-      for (const target of targets) {
-        const products = jsonList(hash(accountWatchesKey).get(target)).filter((product) => product !== productKey);
-        if (products.length) hash(accountWatchesKey).set(target, JSON.stringify(products));
-        else hash(accountWatchesKey).delete(target);
+      for (const row of cleanupPlan) {
+        if (row.next !== "__lm_push_missing__") hash(accountWatchesKey).set(row.target, row.next);
+        else hash(accountWatchesKey).delete(row.target);
       }
       hash(stockWatchesKey).delete(productKey);
     }
     return "finalized";
   }
 
-  if (script.includes("redis.call('ZADD',KEYS[2],ARGV[3],ARGV[1])")) {
+  if (script.includes("tostring(record.alertId or '')~=ARGV[1]")) {
     hash(keys[0]).set(argv[0], argv[1]);
     sortedSet(keys[1]).set(argv[0], Number(argv[2]));
     return 1;
@@ -358,6 +368,7 @@ function executeEval(script, keys, argv) {
 function execute(command) {
   const [rawName, ...args] = command.map(String);
   const name = rawName.toUpperCase();
+  if (name === "PING") return "PONG";
   if (name === "GET") { expireString(args[0]); return strings.get(args[0]) ?? null; }
   if (name === "MGET") return args.map((key) => { expireString(key); return strings.get(key) ?? null; });
   if (name === "SET") {
@@ -957,7 +968,7 @@ test("stock events with many empty targets stop on lock loss before scanning the
   const queued = await push.enqueueRestockPushEvent("ai", "many-empty-lock", "many-empty-lock");
   let refreshCalls = 0;
   failRedisOnce((command) => {
-    if (command[0] !== "EVAL" || !command[1].includes("return redis.call('EXPIRE',KEYS[1],ARGV[2])")) return false;
+    if (command[0] !== "EVAL" || !command[1].includes("redis.call('EXPIRE',KEYS[1],ttl)")) return false;
     refreshCalls += 1;
     return refreshCalls === 2;
   }, { result: 0 });
@@ -1241,6 +1252,20 @@ test("an atomic reschedule failure leaves both the event and its due index recov
   assert.equal(JSON.parse(hash(push.pushInternals.EVENTS_HASH).get(queued.eventId)).attempts, 0);
 });
 
+test("delivery-field CAS preserves legacy null, arrays and long integer tokens", async () => {
+  const eventId = "push_lossless_fields_1";
+  const requestHash = "f".repeat(64);
+  const raw = `{ "eventId":"${eventId}", "requestHash":"${requestHash}", "deliveryFields":[], "legacyNull":null, "legacyRows":[], "legacyHuge":123456789012345678901234567890 }`;
+  hash(push.pushInternals.EVENTS_HASH).set(eventId, raw);
+  const saved = await push.pushInternals.persistDeliveryFields({ eventId, requestHash }, ["delivery:one"]);
+  assert.equal(saved.ok, true);
+  const stored = hash(push.pushInternals.EVENTS_HASH).get(eventId);
+  assert.match(stored, /"deliveryFields":\["delivery:one"\]/);
+  assert.match(stored, /"legacyNull":null/);
+  assert.match(stored, /"legacyRows":\[\]/);
+  assert.match(stored, /"legacyHuge":123456789012345678901234567890/);
+});
+
 test("failed success/final commits recover without a duplicate provider send", async () => {
   await push.bindPushSubscription(auth, subscription);
   const queued = await push.enqueueOrderPushEvent({
@@ -1268,6 +1293,23 @@ test("failed success/final commits recover without a duplicate provider send", a
   assert.equal(sends, 1);
   assert.equal(hash(push.pushInternals.EVENTS_HASH).has(queued.eventId), false);
   assert.equal(sortedSet(push.pushInternals.OUTBOX_KEY).has(queued.eventId), false);
+});
+
+test("a committed sending claim with a lost response still invokes Push exactly once", async () => {
+  await push.bindPushSubscription(auth, subscription);
+  const queued = await push.enqueueOrderPushEvent({
+    orderId: "LM-PUSH-CLAIM-RESPONSE-LOSS",
+    userEmail: auth.email,
+    accountLifecycleId: auth.accountLifecycleId,
+  }, "order.completed", "claim-response-loss");
+  let sends = 0;
+  failRedisOnce((command) => command[0] === "EVAL" && command[1].includes("push_delivery_claim_v1"), { after: true, result: null });
+  const first = await push.dispatchPushOutbox({ sendNotification: async () => { sends += 1; return { statusCode: 201 }; } });
+  const replay = await push.dispatchPushOutbox({ now: Date.now() + 60_000, sendNotification: async () => { sends += 1; } });
+  assert.equal(first.ok, true);
+  assert.equal(replay.ok, true);
+  assert.equal(sends, 1);
+  assert.equal(hash(push.pushInternals.EVENTS_HASH).has(queued.eventId), false);
 });
 
 test("failed stock finalization keeps watches until an atomic retry succeeds", async () => {

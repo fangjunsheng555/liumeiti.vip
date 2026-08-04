@@ -7,6 +7,7 @@ import {
   redisCmd,
   redisPipeline,
   redisConfig,
+  replaceTopLevelJsonFields,
   setOrderAt,
 } from "../_utils.js";
 import { createHash, randomBytes } from "node:crypto";
@@ -24,15 +25,39 @@ const COMPLETE_LOCK_PREFIX = "liumeiti:after-sales:complete-lock:";
 const CREDENTIAL_SERVICES = new Set(["spotify", "ai", "netflix", "disney", "max"]);
 
 const CREATE_TICKET_SCRIPT = `
+local function validtype(key,expected)
+  local value=redis.call('TYPE',key)
+  local actual=type(value)=='table' and value.ok or value
+  return actual=='none' or actual==expected
+end
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'string')
+  or not validtype(KEYS[3],'zset') or not validtype(KEYS[4],'zset')
+  or not validtype(KEYS[5],'zset') or not validtype(KEYS[6],'zset') then
+  return redis.error_reply('after_sales_storage_type_error')
+end
+local score=tonumber(ARGV[2])
+if not score or score~=score or score<-9007199254740991 or score>9007199254740991 then
+  return redis.error_reply('after_sales_score_error')
+end
+local nextOk,nextTicket=pcall(cjson.decode,ARGV[1])
+if not nextOk or type(nextTicket)~='table' or tostring(nextTicket.ticketId or '')~=ARGV[3]
+  or tostring(nextTicket.orderId or '')~=ARGV[4] or tostring(nextTicket.status or '')~='pending' then
+  return redis.error_reply('after_sales_ticket_invalid')
+end
 local activeId=redis.call('GET',KEYS[2])
 if activeId then
   local activeRaw=redis.call('GET',ARGV[5]..activeId)
   if not activeRaw then
-    return cjson.encode({ok=false,error='pending_ticket_exists',ticketId=activeId,storagePending=true})
+    local responseOk,response=pcall(cjson.encode,{ok=false,error='pending_ticket_exists',ticketId=activeId,storagePending=true})
+    if not responseOk then return redis.error_reply('after_sales_response_encode_failed') end
+    return response
   end
   local parsed,active=pcall(cjson.decode,activeRaw)
-  if not parsed or type(active)~='table' or tostring(active.status or '')=='pending' then
-    return cjson.encode({ok=false,error='pending_ticket_exists',ticketId=activeId})
+  if not parsed or type(active)~='table' or tostring(active.ticketId or '')~=activeId
+    or tostring(active.orderId or '')~=ARGV[4] or tostring(active.status or '')=='pending' then
+    local responseOk,response=pcall(cjson.encode,{ok=false,error='pending_ticket_exists',ticketId=activeId})
+    if not responseOk then return redis.error_reply('after_sales_response_encode_failed') end
+    return response
   end
   redis.call('DEL',KEYS[2])
 end
@@ -48,37 +73,75 @@ redis.call('SET',KEYS[2],ARGV[3])
 return cjson.encode({ok=true})`;
 
 const COMPLETE_TICKET_SCRIPT = `
+local function validtype(key,expected)
+  local value=redis.call('TYPE',key)
+  local actual=type(value)=='table' and value.ok or value
+  return actual=='none' or actual==expected
+end
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset')
+  or not validtype(KEYS[3],'zset') or not validtype(KEYS[4],'zset')
+  or not validtype(KEYS[5],'string') then return redis.error_reply('after_sales_storage_type_error') end
+local hasCompletionOperation=ARGV[7]=='1'
+local completedScore=tonumber(ARGV[4]); local outboxScore=hasCompletionOperation and tonumber(ARGV[6]) or 0
+if not completedScore or completedScore~=completedScore or completedScore<-9007199254740991 or completedScore>9007199254740991
+  or not outboxScore or outboxScore~=outboxScore or outboxScore<-9007199254740991 or outboxScore>9007199254740991 then
+  return redis.error_reply('after_sales_score_error')
+end
 if redis.call('GET',KEYS[1])~=ARGV[1] then return 0 end
+local oldOk,oldTicket=pcall(cjson.decode,ARGV[1]); local nextOk,nextTicket=pcall(cjson.decode,ARGV[2])
+if not oldOk or type(oldTicket)~='table' or not nextOk or type(nextTicket)~='table'
+  or tostring(oldTicket.ticketId or '')~=ARGV[3] or tostring(nextTicket.ticketId or '')~=ARGV[3]
+  or tostring(oldTicket.orderId or '')~=tostring(nextTicket.orderId or '')
+  or tostring(oldTicket.status or '')~='pending' or tostring(nextTicket.status or '')~='completed' then return 0 end
 redis.call('SET',KEYS[1],ARGV[2])
 redis.call('ZREM',KEYS[2],ARGV[3])
 redis.call('ZADD',KEYS[3],ARGV[4],ARGV[3])
-if ARGV[5]~='' then redis.call('ZADD',KEYS[4],ARGV[6],ARGV[3]) end
+if hasCompletionOperation then redis.call('ZADD',KEYS[4],ARGV[6],ARGV[3]) end
 if redis.call('GET',KEYS[5])==ARGV[3] then redis.call('DEL',KEYS[5]) end
 return 1`;
 
-const COMPLETE_EFFECTS_SCRIPT = `
+const MARK_EFFECTS_SCRIPT = `
+local function validtype(key,expected)
+  local value=redis.call('TYPE',key)
+  local actual=type(value)=='table' and value.ok or value
+  return actual=='none' or actual==expected
+end
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') then
+  return redis.error_reply('after_sales_storage_type_error')
+end
 local raw=redis.call('GET',KEYS[1])
 if not raw then return 0 end
+if raw~=ARGV[1] then return -1 end
 local ok,ticket=pcall(cjson.decode,raw)
-if not ok or type(ticket)~='table' or tostring(ticket.completionOperationId or '')~=ARGV[1] then return 0 end
-ticket.completionEffectsPending=false
-ticket.completionEffectsCompletedAt=ARGV[2]
-redis.call('SET',KEYS[1],cjson.encode(ticket))
-redis.call('ZREM',KEYS[2],ARGV[3])
-return 1`;
-
-const CREATE_EFFECTS_SCRIPT = `
-local raw=redis.call('GET',KEYS[1])
-if not raw then return 0 end
-local ok,ticket=pcall(cjson.decode,raw)
-if not ok or type(ticket)~='table' or tostring(ticket.ticketId or '')~=ARGV[1] then return 0 end
-ticket.creationEffectsPending=false
-ticket.creationEffectsCompletedAt=ARGV[2]
-redis.call('SET',KEYS[1],cjson.encode(ticket))
-redis.call('ZREM',KEYS[2],ARGV[1])
+if not ok or type(ticket)~='table' then return 0 end
+if tostring(ticket.ticketId or '')~=ARGV[5] then return 0 end
+if ARGV[3]=='completion' then
+  if tostring(ticket.completionOperationId or '')~=ARGV[4] then return 0 end
+elseif ARGV[3]=='creation' then
+  if tostring(ticket.ticketId or '')~=ARGV[5] then return 0 end
+else
+  return 0
+end
+redis.call('SET',KEYS[1],ARGV[2])
+redis.call('ZREM',KEYS[2],ARGV[5])
 return 1`;
 
 const REPAIR_COMPLETED_TICKET_SCRIPT = `
+local function validtype(key,expected)
+  local value=redis.call('TYPE',key)
+  local actual=type(value)=='table' and value.ok or value
+  return actual=='none' or actual==expected
+end
+if not validtype(KEYS[1],'zset') or not validtype(KEYS[2],'zset')
+  or not validtype(KEYS[3],'zset') or not validtype(KEYS[4],'zset')
+  or not validtype(KEYS[5],'string') or not validtype(KEYS[6],'zset') then
+  return redis.error_reply('after_sales_storage_type_error')
+end
+local completedScore=tonumber(ARGV[1]); local outboxScore=ARGV[3]=='1' and tonumber(ARGV[4]) or 0
+if not completedScore or completedScore~=completedScore or completedScore<-9007199254740991 or completedScore>9007199254740991
+  or not outboxScore or outboxScore~=outboxScore or outboxScore<-9007199254740991 or outboxScore>9007199254740991 then
+  return redis.error_reply('after_sales_score_error')
+end
 redis.call('ZADD',KEYS[1],ARGV[1],ARGV[2])
 redis.call('ZREM',KEYS[2],ARGV[2])
 redis.call('ZADD',KEYS[3],ARGV[1],ARGV[2])
@@ -107,6 +170,12 @@ function parseRecord(value) {
   try { return JSON.parse(value); } catch { return null; }
 }
 
+function validTicketRecord(ticket, expectedId = "") {
+  return Boolean(ticket && typeof ticket === "object" && !Array.isArray(ticket)
+    && normalizeId(ticket.ticketId) && (!expectedId || normalizeId(ticket.ticketId) === expectedId)
+    && ["pending", "completed"].includes(ticket.status));
+}
+
 function pipelineRows(value) {
   if (Array.isArray(value)) return value;
   if (Array.isArray(value?.result)) return value.result;
@@ -125,7 +194,12 @@ async function getTicketsByIds(ids) {
   if (!cleanIds.length) return [];
   const response = await redisPipeline(cleanIds.map((id) => ["GET", ticketKey(id)]));
   const rows = pipelineRows(response);
-  return rows.map((entry) => parseRecord(pipelineValue(entry))).filter(Boolean);
+  if (!writeSucceeded(response, cleanIds.length)) throw new Error("after_sales_store_unavailable");
+  return rows.map((entry, index) => {
+    const raw = pipelineValue(entry), ticket = parseRecord(raw);
+    if (raw != null && !validTicketRecord(ticket, cleanIds[index])) throw new Error("after_sales_record_invalid");
+    return ticket;
+  }).filter(Boolean);
 }
 
 async function compareDelete(key, expected) {
@@ -151,9 +225,10 @@ function writeSucceeded(result, expectedCount) {
 }
 
 export async function getAfterSalesTicket(ticketId) {
-  const key = ticketKey(ticketId);
+  const id = normalizeId(ticketId), key = ticketKey(id);
   if (!key) return null;
-  return parseRecord(await redisCmd(["GET", key]));
+  const ticket = parseRecord(await redisCmd(["GET", key]));
+  return validTicketRecord(ticket, id) ? ticket : null;
 }
 
 export async function getActiveAfterSalesTicket(orderId) {
@@ -162,7 +237,8 @@ export async function getActiveAfterSalesTicket(orderId) {
   const ticketId = normalizeId(await redisCmd(["GET", key]));
   if (!ticketId) return null;
   const ticket = await getAfterSalesTicket(ticketId);
-  if (ticket?.status === "pending") return ticket;
+  if (ticket?.status === "pending" && normalizeId(ticket.orderId, 80) === normalizeId(orderId, 80)) return ticket;
+  if (ticket?.status === "pending") return { ticketId, orderId: normalizeId(orderId, 80), status: "pending", storagePending: true };
   if (!ticket) return { ticketId, orderId: normalizeId(orderId, 80), status: "pending", storagePending: true };
   await compareDelete(key, ticketId);
   return null;
@@ -181,7 +257,7 @@ export async function getActiveAfterSalesTickets(orderIds) {
     const ticketId = normalizeId(pipelineValue(activeRows[index]));
     if (!ticketId) continue;
     const ticket = byTicketId.get(ticketId);
-    if (ticket?.status === "pending") result[orderId] = ticket;
+    if (ticket?.status === "pending" && normalizeId(ticket.orderId, 80) === orderId) result[orderId] = ticket;
     else if (!ticket) result[orderId] = { ticketId, orderId, status: "pending", storagePending: true };
     else await compareDelete(activeOrderKey(orderId), ticketId);
   }
@@ -446,14 +522,14 @@ export async function completeAfterSalesTicket(ticketId, completion, actor) {
   try {
     const storedRaw = await redisCmd(["GET", ticketKey(id)]);
     const storedTicket = parseRecord(storedRaw);
-    if (!storedTicket) return { ok: false, error: "ticket_not_found" };
+    if (!validTicketRecord(storedTicket, id)) return { ok: false, error: "ticket_not_found" };
     const ticket = await hydrateAfterSalesTicketCredentials(storedTicket);
     const payload = completion && typeof completion === "object" ? completion : { staffNote: completion };
     const completionOperationId = clean(payload.operationId, 100);
     const completionRequestHash = clean(payload.requestHash, 80);
     if (ticket.status === "completed") {
       const owned = Boolean(completionOperationId && ticket.completionOperationId === completionOperationId);
-      if (owned && ticket.completionRequestHash && ticket.completionRequestHash !== completionRequestHash) {
+      if (owned && ticket.completionRequestHash !== completionRequestHash) {
         return { ok: false, error: "idempotency_conflict" };
       }
       if (owned) {
@@ -503,7 +579,8 @@ export async function completeAfterSalesTicket(ticketId, completion, actor) {
     const saved = Number(await redisCmd([
       "EVAL", COMPLETE_TICKET_SCRIPT, "5",
       ticketKey(completed.ticketId), PENDING_INDEX, COMPLETED_INDEX, COMPLETION_OUTBOX_INDEX, activeOrderKey(completed.orderId),
-      String(storedRaw), JSON.stringify(completed), completed.ticketId, String(score), completionOperationId, String(Date.now()),
+      String(storedRaw), JSON.stringify(completed), completed.ticketId, String(score),
+      completionOperationId || "__lm_after_sales_missing__", String(Date.now()), completionOperationId ? "1" : "0",
     ])) === 1;
     if (!saved) return { ok: false, error: "storage_failed" };
     return { ok: true, ticket: completed, changed: true, owned: Boolean(completionOperationId) };
@@ -534,11 +611,14 @@ export async function backfillAfterSalesCreationOutbox(batchSize = 200) {
     const cursor = Math.max(0, Number(savedCursor || 0));
     const ids = await redisCmd(["ZRANGE", ALL_INDEX, String(cursor), String(cursor + safeBatch - 1)]);
     const safeIds = Array.isArray(ids) ? ids.map((id) => normalizeId(id)).filter(Boolean) : [];
-    const rawRows = safeIds.length ? pipelineRows(await redisPipeline(safeIds.map((id) => ["GET", ticketKey(id)]))) : [];
+    const readResponse = safeIds.length ? await redisPipeline(safeIds.map((id) => ["GET", ticketKey(id)])) : [];
+    if (!writeSucceeded(readResponse, safeIds.length)) throw new Error("after_sales_store_unavailable");
+    const rawRows = pipelineRows(readResponse);
     const commands = [];
     let indexed = 0;
     safeIds.forEach((id, index) => {
       const ticket = parseRecord(pipelineValue(rawRows[index]));
+      if (pipelineValue(rawRows[index]) != null && !validTicketRecord(ticket, id)) throw new Error("after_sales_record_invalid");
       if (ticket && ticket.creationEffectsPending !== false) {
         commands.push(["ZADD", CREATION_OUTBOX_INDEX, String(createdScore(ticket)), id]);
         indexed += 1;
@@ -546,11 +626,11 @@ export async function backfillAfterSalesCreationOutbox(batchSize = 200) {
         commands.push(["ZREM", CREATION_OUTBOX_INDEX, id]);
       }
     });
-    if (commands.length) await redisPipeline(commands);
+    if (commands.length && !writeSucceeded(await redisPipeline(commands), commands.length)) throw new Error("creation_outbox_backfill_failed");
     const total = Math.max(0, Number(await redisCmd(["ZCARD", ALL_INDEX]) || 0));
     const nextCursor = cursor + safeIds.length;
     const done = !safeIds.length || nextCursor >= total;
-    await redisCmd(["SET", CREATION_OUTBOX_BACKFILL_CURSOR, done ? "done" : String(nextCursor)]);
+    if (await redisCmd(["SET", CREATION_OUTBOX_BACKFILL_CURSOR, done ? "done" : String(nextCursor)]) !== "OK") throw new Error("creation_outbox_backfill_failed");
     return { ok: true, done, processed: safeIds.length, indexed, cursor: nextCursor, total };
   } finally {
     await compareDelete(CREATION_OUTBOX_BACKFILL_LOCK, token);
@@ -569,11 +649,14 @@ export async function getAfterSalesCreationOutbox(limit = 30) {
   if (!Array.isArray(ids)) throw new Error("creation_outbox_unavailable");
   const safeIds = Array.isArray(ids) ? ids.map((id) => normalizeId(id)).filter(Boolean) : [];
   if (!safeIds.length) return [];
-  const rawRows = pipelineRows(await redisPipeline(safeIds.map((id) => ["GET", ticketKey(id)])));
+  const readResponse = await redisPipeline(safeIds.map((id) => ["GET", ticketKey(id)]));
+  if (!writeSucceeded(readResponse, safeIds.length)) throw new Error("creation_outbox_unavailable");
+  const rawRows = pipelineRows(readResponse);
   const tickets = [];
   const staleIds = [];
   safeIds.forEach((id, index) => {
     const ticket = parseRecord(pipelineValue(rawRows[index]));
+    if (pipelineValue(rawRows[index]) != null && !validTicketRecord(ticket, id)) throw new Error("after_sales_record_invalid");
     if (!ticket || ticket.creationEffectsPending === false) staleIds.push(id);
     else if (tickets.length < safeLimit) tickets.push(ticket);
   });
@@ -584,20 +667,48 @@ export async function getAfterSalesCreationOutbox(limit = 30) {
 export async function markAfterSalesCreationEffectsDone(ticketId) {
   const id = normalizeId(ticketId);
   if (!id) return false;
-  return Number(await redisCmd([
-    "EVAL", CREATE_EFFECTS_SCRIPT, "2", ticketKey(id), CREATION_OUTBOX_INDEX, id, new Date().toISOString(),
-  ])) === 1;
+  const completedAt = new Date().toISOString();
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const raw = await redisCmd(["GET", ticketKey(id)]);
+    const ticket = typeof raw === "string" ? parseRecord(raw) : null;
+    if (!validTicketRecord(ticket, id)) return false;
+    const nextRaw = replaceTopLevelJsonFields(raw, {
+      creationEffectsPending: false,
+      creationEffectsCompletedAt: completedAt,
+    });
+    if (!nextRaw) return false;
+    const saved = Number(await redisCmd([
+      "EVAL", MARK_EFFECTS_SCRIPT, "2", ticketKey(id), CREATION_OUTBOX_INDEX,
+      raw, nextRaw, "creation", "-", id,
+    ]));
+    if (saved === 1) return true;
+    if (saved !== -1) return false;
+  }
+  return false;
 }
 
 export async function markAfterSalesCompletionEffectsDone(ticketId, operationId) {
   const id = normalizeId(ticketId);
   const stableOperation = clean(operationId, 100);
   if (!id || !stableOperation) return false;
-  return Number(await redisCmd([
-    "EVAL", COMPLETE_EFFECTS_SCRIPT, "2",
-    ticketKey(id), COMPLETION_OUTBOX_INDEX,
-    stableOperation, new Date().toISOString(), id,
-  ])) === 1;
+  const completedAt = new Date().toISOString();
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const raw = await redisCmd(["GET", ticketKey(id)]);
+    const ticket = typeof raw === "string" ? parseRecord(raw) : null;
+    if (!validTicketRecord(ticket, id) || String(ticket.completionOperationId || "") !== stableOperation) return false;
+    const nextRaw = replaceTopLevelJsonFields(raw, {
+      completionEffectsPending: false,
+      completionEffectsCompletedAt: completedAt,
+    });
+    if (!nextRaw) return false;
+    const saved = Number(await redisCmd([
+      "EVAL", MARK_EFFECTS_SCRIPT, "2", ticketKey(id), COMPLETION_OUTBOX_INDEX,
+      raw, nextRaw, "completion", stableOperation, id,
+    ]));
+    if (saved === 1) return true;
+    if (saved !== -1) return false;
+  }
+  return false;
 }
 
 export async function getAfterSalesCounts() {

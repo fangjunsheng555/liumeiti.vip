@@ -35,7 +35,7 @@ function clean(value, limit = 500) {
 }
 
 function normalizeEmail(value) {
-  return clean(value, 200).toLowerCase();
+  const email = String(value || "").trim().toLowerCase(); return email.length <= 254 ? email : "";
 }
 
 function validEmail(value) {
@@ -52,8 +52,9 @@ function normalizeOrderId(value) {
 
 function cents(value) {
   const number = Number(value);
-  if (!Number.isFinite(number)) return 0;
-  return Math.round(number * 100);
+  if (!Number.isFinite(number)) return Number.NaN;
+  const rounded = Math.round(number * 100);
+  return Number.isSafeInteger(rounded) ? rounded : Number.NaN;
 }
 
 function amountFromCents(value) {
@@ -143,6 +144,182 @@ function stableJson(value) {
   return JSON.stringify(value === undefined ? null : value);
 }
 
+const LOSSLESS_DELETE = Symbol("lossless-delete");
+
+function parseLosslessJsonTree(raw) {
+  if (typeof raw !== "string" || !raw) return null;
+  const source = raw;
+  const skip = (start) => {
+    let index = start;
+    while (index < source.length && /\s/.test(source[index])) index += 1;
+    return index;
+  };
+  const stringEnd = (start) => {
+    if (source[start] !== '"') return -1;
+    let escaped = false;
+    for (let index = start + 1; index < source.length; index += 1) {
+      const character = source[index];
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') return index + 1;
+    }
+    return -1;
+  };
+  const parseValue = (start) => {
+    const valueStart = skip(start);
+    const character = source[valueStart];
+    if (character === '"') {
+      const end = stringEnd(valueStart);
+      if (end < 0) return null;
+      try { JSON.parse(source.slice(valueStart, end)); } catch { return null; }
+      return { type: "scalar", start: valueStart, end };
+    }
+    if (character === "{") {
+      const node = { type: "object", start: valueStart, end: -1, close: -1, properties: new Map(), members: [] };
+      let index = skip(valueStart + 1);
+      if (source[index] === "}") {
+        node.close = index;
+        node.end = index + 1;
+        return node;
+      }
+      while (index < source.length) {
+        const keyStart = index;
+        const keyEnd = stringEnd(keyStart);
+        if (keyEnd < 0) return null;
+        let key;
+        try { key = JSON.parse(source.slice(keyStart, keyEnd)); } catch { return null; }
+        if (typeof key !== "string" || node.properties.has(key)) return null;
+        index = skip(keyEnd);
+        if (source[index] !== ":") return null;
+        const value = parseValue(index + 1);
+        if (!value) return null;
+        const member = { key, keyStart, keyEnd, value };
+        node.properties.set(key, member);
+        node.members.push(member);
+        index = skip(value.end);
+        if (source[index] === "}") {
+          node.close = index;
+          node.end = index + 1;
+          return node;
+        }
+        if (source[index] !== ",") return null;
+        index = skip(index + 1);
+      }
+      return null;
+    }
+    if (character === "[") {
+      const node = { type: "array", start: valueStart, end: -1, close: -1, items: [] };
+      let index = skip(valueStart + 1);
+      if (source[index] === "]") {
+        node.close = index;
+        node.end = index + 1;
+        return node;
+      }
+      while (index < source.length) {
+        const value = parseValue(index);
+        if (!value) return null;
+        node.items.push(value);
+        index = skip(value.end);
+        if (source[index] === "]") {
+          node.close = index;
+          node.end = index + 1;
+          return node;
+        }
+        if (source[index] !== ",") return null;
+        index = skip(index + 1);
+      }
+      return null;
+    }
+    let end = valueStart;
+    while (end < source.length && !/[\s,}\]]/.test(source[end])) end += 1;
+    if (end <= valueStart) return null;
+    try { JSON.parse(source.slice(valueStart, end)); } catch { return null; }
+    return { type: "scalar", start: valueStart, end };
+  };
+  const root = parseValue(0);
+  if (!root || skip(root.end) !== source.length) return null;
+  return root;
+}
+
+function losslessJsonPatch(raw, operations) {
+  const root = parseLosslessJsonTree(raw);
+  if (!root || !Array.isArray(operations)) return null;
+  const edits = [];
+  const additions = new Map();
+  const locate = (path) => {
+    let node = root;
+    for (const segment of path) {
+      if (node.type === "object" && typeof segment === "string") node = node.properties.get(segment)?.value;
+      else if (node.type === "array" && Number.isInteger(segment)) node = node.items[segment];
+      else return null;
+      if (!node) return null;
+    }
+    return node;
+  };
+  for (const operation of operations) {
+    const path = Array.isArray(operation?.path) ? operation.path : [];
+    if (!path.length) return null;
+    const parent = locate(path.slice(0, -1));
+    const leaf = path.at(-1);
+    if (!parent || parent.type !== "object" || typeof leaf !== "string" || !leaf) return null;
+    const member = parent.properties.get(leaf);
+    if (operation.value === LOSSLESS_DELETE) {
+      if (!member) continue;
+      const index = parent.members.indexOf(member);
+      if (parent.members.length === 1) edits.push({ start: member.keyStart, end: member.value.end, text: "" });
+      else if (index < parent.members.length - 1) {
+        edits.push({ start: member.keyStart, end: parent.members[index + 1].keyStart, text: "" });
+      } else {
+        edits.push({ start: parent.members[index - 1].value.end, end: member.value.end, text: "" });
+      }
+      continue;
+    }
+    let encoded;
+    try { encoded = JSON.stringify(operation.value); } catch { return null; }
+    if (encoded === undefined) return null;
+    if (member) edits.push({ start: member.value.start, end: member.value.end, text: encoded });
+    else {
+      const key = `${parent.start}:${parent.end}`;
+      if (!additions.has(key)) additions.set(key, { parent, fields: [] });
+      const group = additions.get(key);
+      if (group.fields.some((item) => item.key === leaf)) return null;
+      group.fields.push({ key: leaf, encoded });
+    }
+  }
+  for (const { parent, fields } of additions.values()) {
+    edits.push({
+      start: parent.close,
+      end: parent.close,
+      text: `${parent.members.length ? "," : ""}${fields.map(({ key, encoded }) => `${JSON.stringify(key)}:${encoded}`).join(",")}`,
+    });
+  }
+  edits.sort((left, right) => right.start - left.start || right.end - left.end);
+  for (let index = 1; index < edits.length; index += 1) {
+    if (edits[index - 1].start < edits[index].end) return null;
+  }
+  let next = raw;
+  for (const edit of edits) next = next.slice(0, edit.start) + edit.text + next.slice(edit.end);
+  return parseLosslessJsonTree(next) ? next : null;
+}
+
+function losslessTopLevelPatch(raw, replacements, removals = []) {
+  const operations = Object.entries(replacements || {}).map(([key, value]) => ({ path: [key], value }));
+  for (const key of removals) operations.push({ path: [key], value: LOSSLESS_DELETE });
+  return losslessJsonPatch(raw, operations);
+}
+
+function losslessJsonValue(raw, path) {
+  let node = parseLosslessJsonTree(raw);
+  if (!node) return null;
+  for (const segment of path) {
+    if (node.type === "object" && typeof segment === "string") node = node.properties.get(segment)?.value;
+    else if (node.type === "array" && Number.isInteger(segment)) node = node.items[segment];
+    else return null;
+    if (!node) return null;
+  }
+  return raw.slice(node.start, node.end);
+}
+
 export function idempotencyPayloadHash(value) {
   return sha(stableJson(value));
 }
@@ -211,7 +388,8 @@ async function prepareMoneyAtomicKeys(keys) {
 
 async function redisEvalMoneyAtomic(script, keys = [], args = []) {
   const prepared = await prepareMoneyAtomicKeys(keys);
-  return prepared.ok ? redisEvalAtomic(script, prepared.keys, args) : prepared;
+  const executed = prepared.ok ? await redisEvalAtomic(script, prepared.keys, args) : prepared;
+  return !executed.ok || (executed.value && typeof executed.value === "object" && !Array.isArray(executed.value) && typeof executed.value.ok === "boolean") ? executed : { ok: false, error: "invalid_storage_response" };
 }
 
 async function redisMoneyGet(logicalKey) {
@@ -222,15 +400,15 @@ async function redisMoneyGet(logicalKey) {
 
 async function recoverOperation(opKey, requestHash) {
   const stored = await redisMoneyGet(opKey);
-  if (!stored.ok || !stored.value) return null;
+  if (!stored.ok || !stored.value) return stored.ok ? null : { ok: false, error: stored.error || "storage_unavailable" };
   try {
     const record = JSON.parse(stored.value);
-    if (record?.requestHash !== requestHash) return null;
+    if (record?.requestHash !== requestHash) return { ok: false, error: "idempotency_conflict" };
     const result = record.result || (typeof record.resultJson === "string" ? JSON.parse(record.resultJson) : null);
-    if (!result || typeof result !== "object") return null;
+    if (!result || typeof result !== "object" || Array.isArray(result) || result.ok !== true) return { ok: false, error: "invalid_operation_record" };
     return { ...result, idempotent: true, recovered: true };
   } catch {
-    return null;
+    return { ok: false, error: "invalid_operation_record" };
   }
 }
 
@@ -245,7 +423,8 @@ export async function findOrderCreationByIdempotencyKey(operationId, requestHash
     const record = JSON.parse(stored.value);
     if (record?.requestHash !== hash) return { ok: false, error: "idempotency_conflict" };
     const result = record.result || (typeof record.resultJson === "string" ? JSON.parse(record.resultJson) : null);
-    if (!result?.ok || !result?.order) return { ok: false, error: "invalid_operation_record" };
+    if (result?.ok !== true || !result?.order || typeof result.order !== "object" || Array.isArray(result.order)
+      || normalizeOrderId(result.order.orderId) !== orderIdForIdempotencyKey(key)) return { ok: false, error: "invalid_operation_record" };
     return { ok: true, found: true, ...result, idempotent: true };
   } catch {
     return { ok: false, error: "invalid_operation_record" };
@@ -274,6 +453,7 @@ export async function getBalanceCentsOverlay(email, fallbackBalance = 0) {
   if (!result.ok) return result;
   if (result.value == null) {
     const fallbackCents = cents(fallbackBalance);
+    if (!Number.isSafeInteger(fallbackCents)) return { ok: false, error: "invalid_balance_record" };
     return { ok: true, exists: false, cents: fallbackCents, balance: amountFromCents(fallbackCents) };
   }
   const storedCents = Number(result.value);
@@ -282,6 +462,17 @@ export async function getBalanceCentsOverlay(email, fallbackBalance = 0) {
 }
 
 const LUA_COMMON = `
+local MAX_SAFE_INTEGER=9007199254740991
+local function safeinteger(value)
+  return type(value)=='number' and value==value and value==math.floor(value)
+    and value>=-MAX_SAFE_INTEGER and value<=MAX_SAFE_INTEGER
+end
+local function safeadd(left,right)
+  if not safeinteger(left) or not safeinteger(right) then return nil end
+  local result=left+right
+  if not safeinteger(result) then return nil end
+  return result
+end
 local function keytype(key)
   local result = redis.call('TYPE', key)
   if type(result) == 'table' then return result.ok end
@@ -294,29 +485,41 @@ end
 local function decode(value)
   local ok, result = pcall(cjson.decode, value)
   if not ok or type(result) ~= 'table' then return nil end
+  local encodable = pcall(cjson.encode, {value={value={value=result}}})
+  if not encodable then return nil end
   return result
 end
-local function encode(value) return cjson.encode(value) end
-local function encodepreservingemptyarrays(value, original, fields)
-  local result=encode(value)
-  for _,field in ipairs(fields or {}) do
-    local pattern='"'..field..'"%s*:%s*%[%s*%]'
-    if type(original)=='string' and string.find(original,pattern) then
-      result=string.gsub(result,'"'..field..'":{}','"'..field..'":[]',1)
-    end
-  end
-  return result
+local function appendobjectfields(raw,fields)
+  if type(raw)~='string' or type(fields)~='string' or string.sub(raw,-1)~='}' then return nil end
+  local prefix=string.sub(raw,1,-2)
+  local separator=#prefix>1 and ',' or ''
+  local candidate=prefix..separator..fields..'}'
+  if not decode(candidate) then return nil end
+  return candidate
+end
+local function persistedencode(value)
+  local ok,encoded=pcall(cjson.encode,value)
+  if not ok then return nil end
+  return encoded
+end
+local function encode(value)
+  local encoded=persistedencode(value)
+  if not encoded then return redis.error_reply('money_json_encode_failed') end
+  return encoded
 end
 local function legacycents(user)
-  local value = tonumber(user.balance or 0) or 0
-  if value >= 0 then return math.floor(value * 100 + 0.5) end
-  return math.ceil(value * 100 - 0.5)
+  local value=tonumber(user.balance or 0)
+  if not value or value~=value then return nil end
+  local result=nil
+  if value>=0 then result=math.floor(value*100+0.5) else result=math.ceil(value*100-0.5) end
+  if not safeinteger(result) then return nil end
+  return result
 end
 local function readbalance(balanceKey, user)
   local raw = redis.call('GET', balanceKey)
   if not raw then return legacycents(user) end
   local value = tonumber(raw)
-  if not value or value ~= math.floor(value) then return nil end
+  if not safeinteger(value) then return nil end
   return value
 end
 local function existingop(opKey, requestHash)
@@ -327,18 +530,18 @@ local function existingop(opKey, requestHash)
   if item.requestHash ~= requestHash then return encode({ok=false,error='idempotency_conflict'}) end
   if type(item.resultJson)=='string' then
     local parsed=decode(item.resultJson)
-    if not parsed or string.sub(item.resultJson,-1)~='}' then return encode({ok=false,error='invalid_operation_record'}) end
+    if not parsed or parsed.ok~=true or string.sub(item.resultJson,-1)~='}' then return encode({ok=false,error='invalid_operation_record'}) end
     return string.sub(item.resultJson,1,-2)..',"idempotent":true}'
   end
-  if type(item.result) ~= 'table' then return encode({ok=false,error='invalid_operation_record'}) end
+  if type(item.result) ~= 'table' or item.result.ok~=true then return encode({ok=false,error='invalid_operation_record'}) end
   item.result.idempotent = true
   return encode(item.result)
 end
 local function saveop(opKey, requestHash, result)
-  redis.call('SET', opKey, encode({requestHash=requestHash,result=result}))
+  redis.call('SET', opKey, persistedencode({requestHash=requestHash,result=result}))
 end
 local function saveopjson(opKey, requestHash, resultJson)
-  redis.call('SET',opKey,encode({requestHash=requestHash,resultJson=resultJson}))
+  redis.call('SET',opKey,persistedencode({requestHash=requestHash,resultJson=resultJson}))
 end
 local function pushtrim(key, value, stop)
   redis.call('LPUSH', key, value)
@@ -348,8 +551,10 @@ end
 
 const SAVE_USER_PROFILE_SCRIPT = LUA_COMMON + `
 if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'string') or not validtype(KEYS[3],'string') or not validtype(KEYS[4],'set') or not validtype(KEYS[5],'string') then return encode({ok=false,error='storage_type_error'}) end
-local next=decode(ARGV[1]); if not next then return encode({ok=false,error='invalid_user_record'}) end
-local currentRaw=redis.call('GET',KEYS[1]); local current=currentRaw and decode(currentRaw) or nil
+local next=decode(ARGV[10]); if not next then return encode({ok=false,error='invalid_user_record'}) end
+local currentRaw=redis.call('GET',KEYS[1])
+if (ARGV[8]=='1' and currentRaw~=ARGV[9]) or (ARGV[8]=='0' and currentRaw) then return encode({ok=false,error='storage_conflict'}) end
+local current=currentRaw and decode(currentRaw) or nil
 if currentRaw and not current then return encode({ok=false,error='invalid_user_record'}) end
 if ARGV[3]=='1' and currentRaw then return encode({ok=false,error='user_exists'}) end
 if ARGV[4]=='1' and not currentRaw then return encode({ok=false,error='user_not_found'}) end
@@ -393,22 +598,23 @@ if current then
   if current.referralStats~=nil then next.referralStats=current.referralStats end
 end
 local rawBalance=redis.call('GET',KEYS[2]); local authoritative=nil
+if (ARGV[11]=='1' and rawBalance~=ARGV[12]) or (ARGV[11]=='0' and rawBalance) then return encode({ok=false,error='storage_conflict'}) end
 if rawBalance then
   authoritative=tonumber(rawBalance)
-  if not authoritative or authoritative~=math.floor(authoritative) then return encode({ok=false,error='invalid_balance_record'}) end
+  if not safeinteger(authoritative) then return encode({ok=false,error='invalid_balance_record'}) end
 else
-  local value=tonumber((current and current.balance) or next.balance or 0) or 0
-  if value>=0 then authoritative=math.floor(value*100+0.5) else authoritative=math.ceil(value*100-0.5) end
-  redis.call('SET',KEYS[2],tostring(authoritative))
+  authoritative=legacycents(current or next)
+  if not authoritative then return encode({ok=false,error='invalid_balance_record'}) end
 end
 next.balance=authoritative/100
--- The canonical cents key is authoritative. Persist the merged profile while
--- preserving the known empty-array fields that Redis Lua cjson represents as
--- empty objects.
-redis.call('SET',KEYS[1],encodepreservingemptyarrays(next,ARGV[1],{'coupons'}))
+local responseJson=persistedencode({ok=true,balance=authoritative/100,balanceCents=authoritative,authVersion=currentVersion,accountLifecycleId=lifecycle})
+if not responseJson then return redis.error_reply('money_json_encode_failed') end
+if not rawBalance then redis.call('SET',KEYS[2],tostring(authoritative)) end
+-- canonical cents key is authoritative
+redis.call('SET',KEYS[1],ARGV[10])
 redis.call('SET',KEYS[5],lifecycle)
 redis.call('SADD',KEYS[4],ARGV[5])
-return encode({ok=true,balance=authoritative/100,balanceCents=authoritative,authVersion=currentVersion,accountLifecycleId=lifecycle})
+return responseJson
 `;
 
 // Profile writes and balance effects are both Redis scripts. Whichever runs
@@ -426,16 +632,61 @@ export async function saveUserPreservingBalanceAtomic(email, user, options = {})
   const createOnly = options.createOnly === true;
   const updateOnly = options.updateOnly === true;
   if (createOnly && updateOnly) return { ok: false, error: "invalid_write_mode" };
-  const result = await redisEvalMoneyAtomic(
-    SAVE_USER_PROFILE_SCRIPT,
-    [userKey(lower), balanceCentsKey(lower), "lm:user:authver:" + lower, USER_EMAIL_SET_KEY, accountLifecycleKey(lower)],
-    [
-      JSON.stringify(user), expectedAuthVersion,
-      createOnly ? "1" : "0", updateOnly ? "1" : "0", lower,
-      randomBytes(16).toString("hex"), expectedAccountLifecycleId,
-    ],
-  );
-  return result.ok ? result.value : result;
+  const lifecycleCandidate = randomBytes(16).toString("hex");
+  const protectedFields = new Set([
+    "passwordHash", "passwordResetAt", "banned", "bannedAt", "bannedByStaffId", "unbannedByStaffId",
+    "coupons", "referralStats", "balance",
+  ]);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const [profileRead, balanceRead] = await Promise.all([
+      redisMoneyGet(userKey(lower)), redisMoneyGet(balanceCentsKey(lower)),
+    ]);
+    if (!profileRead.ok || !balanceRead.ok) return { ok: false, error: profileRead.error || balanceRead.error || "storage_unavailable" };
+    if (createOnly && profileRead.value) return { ok: false, error: "user_exists" };
+    if (updateOnly && !profileRead.value) return { ok: false, error: "user_not_found" };
+    let current = null;
+    if (profileRead.value) {
+      try { current = JSON.parse(profileRead.value); } catch { return { ok: false, error: "invalid_user_record" }; }
+      if (!current || typeof current !== "object" || Array.isArray(current)) return { ok: false, error: "invalid_user_record" };
+    }
+    let authoritative;
+    if (balanceRead.value != null) {
+      authoritative = Number(balanceRead.value);
+      if (!Number.isSafeInteger(authoritative)) return { ok: false, error: "invalid_balance_record" };
+    } else {
+      authoritative = cents(current?.balance ?? user.balance ?? 0);
+      if (!Number.isSafeInteger(authoritative)) return { ok: false, error: "invalid_balance_record" };
+    }
+    let nextRaw;
+    if (profileRead.value) {
+      const replacements = { balance: amountFromCents(authoritative) };
+      for (const [key, value] of Object.entries(user)) if (!protectedFields.has(key)) replacements[key] = value;
+      nextRaw = losslessTopLevelPatch(profileRead.value, replacements);
+    } else {
+      nextRaw = losslessTopLevelPatch(JSON.stringify(user), { balance: amountFromCents(authoritative) });
+    }
+    if (!nextRaw) return { ok: false, error: "invalid_user_record" };
+    const result = await redisEvalMoneyAtomic(
+      SAVE_USER_PROFILE_SCRIPT,
+      [userKey(lower), balanceCentsKey(lower), "lm:user:authver:" + lower, USER_EMAIL_SET_KEY, accountLifecycleKey(lower)],
+      [
+        JSON.stringify(user), expectedAuthVersion,
+        createOnly ? "1" : "0", updateOnly ? "1" : "0", lower,
+        lifecycleCandidate, expectedAccountLifecycleId,
+        profileRead.value == null ? "0" : "1", profileRead.value || "", nextRaw,
+        balanceRead.value == null ? "0" : "1", balanceRead.value || "",
+      ],
+    );
+    const value = result.ok ? result.value : result;
+    if (value?.error !== "storage_conflict") return value;
+  }
+  return { ok: false, error: "storage_conflict" };
+}
+
+async function redisMoneyHget(logicalKey, field) {
+  const prepared = await prepareMoneyAtomicKeys([logicalKey]);
+  if (!prepared.ok) return prepared;
+  return redisCommand(["HGET", prepared.keys[0], field]);
 }
 
 const TRANSFER_SCRIPT = LUA_COMMON + `
@@ -461,22 +712,31 @@ local toRaw = redis.call('GET', KEYS[3])
 if not toRaw then return encode({ok=false,error='recipient_not_found'}) end
 local toUser = decode(toRaw); if not toUser then return encode({ok=false,error='invalid_user_record'}) end
 if toUser.banned then return encode({ok=false,error='recipient_unavailable'}) end
-local delta = tonumber(ARGV[2]); if not delta or delta <= 0 or delta ~= math.floor(delta) then return encode({ok=false,error='invalid_amount'}) end
+local delta=tonumber(ARGV[2]); if not safeinteger(delta) or delta<=0 then return encode({ok=false,error='invalid_amount'}) end
 local fromBefore = readbalance(KEYS[4], fromUser); local toBefore = readbalance(KEYS[5], toUser)
 if not fromBefore or not toBefore then return encode({ok=false,error='invalid_balance_record'}) end
 if fromBefore < delta then return encode({ok=false,error='insufficient_balance',currentBalanceCents=fromBefore}) end
-local fromAfter = fromBefore - delta; local toAfter = toBefore + delta
+local fromAfter=fromBefore-delta; local toAfter=safeadd(toBefore,delta)
+if not safeinteger(fromAfter) or not toAfter then return encode({ok=false,error='balance_out_of_range'}) end
 local fromTx = decode(ARGV[3]); local toTx = decode(ARGV[4]); local fromAdmin = decode(ARGV[5]); local toAdmin = decode(ARGV[6])
-if not fromTx or not toTx or not fromAdmin or not toAdmin then return encode({ok=false,error='invalid_ledger_record'}) end
-fromTx.balanceAfter = fromAfter / 100; fromTx.balanceAfterCents = fromAfter
-toTx.balanceAfter = toAfter / 100; toTx.balanceAfterCents = toAfter
-fromAdmin.balanceBefore = fromBefore / 100; fromAdmin.balanceBeforeCents = fromBefore; fromAdmin.balanceAfter = fromAfter / 100; fromAdmin.balanceAfterCents = fromAfter
-toAdmin.balanceBefore = toBefore / 100; toAdmin.balanceBeforeCents = toBefore; toAdmin.balanceAfter = toAfter / 100; toAdmin.balanceAfterCents = toAfter
+if not fromTx or not toTx or not fromAdmin or not toAdmin or type(fromTx.transferId)~='string' then return encode({ok=false,error='invalid_ledger_record'}) end
+local fromBalanceJson=persistedencode(fromAfter/100); local fromCentsJson=persistedencode(fromAfter)
+local toBalanceJson=persistedencode(toAfter/100); local toCentsJson=persistedencode(toAfter)
+local fromBeforeJson=persistedencode(fromBefore/100); local fromBeforeCentsJson=persistedencode(fromBefore)
+local toBeforeJson=persistedencode(toBefore/100); local toBeforeCentsJson=persistedencode(toBefore)
+local transferIdJson=persistedencode(fromTx.transferId)
+if not fromBalanceJson or not fromCentsJson or not toBalanceJson or not toCentsJson or not fromBeforeJson or not fromBeforeCentsJson or not toBeforeJson or not toBeforeCentsJson or not transferIdJson then return redis.error_reply('money_json_encode_failed') end
+local fromTxJson=appendobjectfields(ARGV[3],'"balanceAfter":'..fromBalanceJson..',"balanceAfterCents":'..fromCentsJson)
+local toTxJson=appendobjectfields(ARGV[4],'"balanceAfter":'..toBalanceJson..',"balanceAfterCents":'..toCentsJson)
+local fromAdminJson=appendobjectfields(ARGV[5],'"balanceBefore":'..fromBeforeJson..',"balanceBeforeCents":'..fromBeforeCentsJson..',"balanceAfter":'..fromBalanceJson..',"balanceAfterCents":'..fromCentsJson)
+local toAdminJson=appendobjectfields(ARGV[6],'"balanceBefore":'..toBeforeJson..',"balanceBeforeCents":'..toBeforeCentsJson..',"balanceAfter":'..toBalanceJson..',"balanceAfterCents":'..toCentsJson)
+local resultJson='{"ok":true,"balance":'..fromBalanceJson..',"balanceCents":'..fromCentsJson..',"recipientBalance":'..toBalanceJson..',"recipientBalanceCents":'..toCentsJson..',"transferId":'..transferIdJson..'}'
+local operationJson=persistedencode({requestHash=ARGV[1],resultJson=resultJson})
+if not fromTxJson or not toTxJson or not fromAdminJson or not toAdminJson or not decode(resultJson) or not operationJson then return redis.error_reply('money_json_encode_failed') end
 redis.call('SET', KEYS[4], tostring(fromAfter)); redis.call('SET', KEYS[5], tostring(toAfter))
-  pushtrim(KEYS[8], encode(fromTx), 199); pushtrim(KEYS[9], encode(toTx), 199)
-  redis.call('LPUSH', KEYS[10], encode(toAdmin)); redis.call('LPUSH', KEYS[10], encode(fromAdmin)); redis.call('LTRIM', KEYS[10], '0', '499')
-local result = {ok=true,balance=fromAfter/100,balanceCents=fromAfter,recipientBalance=toAfter/100,recipientBalanceCents=toAfter,transferId=fromTx.transferId}
-saveop(KEYS[1], ARGV[1], result); return encode(result)
+pushtrim(KEYS[8],fromTxJson,199); pushtrim(KEYS[9],toTxJson,199)
+redis.call('LPUSH',KEYS[10],toAdminJson); redis.call('LPUSH',KEYS[10],fromAdminJson); redis.call('LTRIM',KEYS[10],'0','499')
+redis.call('SET',KEYS[1],operationJson); return resultJson
 `;
 
 export async function transferBalanceAtomic(fromEmail, toEmail, amount, options = {}) {
@@ -484,7 +744,7 @@ export async function transferBalanceAtomic(fromEmail, toEmail, amount, options 
   const to = normalizeEmail(toEmail);
   const delta = cents(amount);
   if (!validEmail(from) || !validEmail(to) || from === to) return { ok: false, error: "invalid_recipient" };
-  if (delta <= 0 || delta > 10_000_000) return { ok: false, error: "invalid_amount" };
+  if (!Number.isSafeInteger(delta) || delta <= 0 || delta > 10_000_000) return { ok: false, error: "invalid_amount" };
   const authVersion = Number(options.authVersion);
   const accountLifecycleId = clean(options.accountLifecycleId, 80).toLowerCase();
   if (!Number.isSafeInteger(authVersion) || authVersion < 1) return { ok: false, error: "session_state_changed" };
@@ -524,24 +784,42 @@ if user.banned==true and ARGV[8]=='1' then
   local result={ok=true,skipped='account_banned',effectId=ARGV[6]}; saveop(KEYS[1],ARGV[1],result); return encode(result)
 end
 local before = readbalance(KEYS[3], user); if not before then return encode({ok=false,error='invalid_balance_record'}) end
-local delta = tonumber(ARGV[2]); if not delta or delta ~= math.floor(delta) or delta == 0 then return encode({ok=false,error='invalid_amount'}) end
-local after = before + delta
+local delta=tonumber(ARGV[2]); if not safeinteger(delta) or delta==0 then return encode({ok=false,error='invalid_amount'}) end
+local after=safeadd(before,delta)
+if not after then return encode({ok=false,error='balance_out_of_range'}) end
 if ARGV[3] ~= '1' and after < 0 then return encode({ok=false,error='insufficient_balance',currentBalanceCents=before}) end
 local tx = decode(ARGV[4]); local admin = decode(ARGV[5]); if not tx or not admin then return encode({ok=false,error='invalid_ledger_record'}) end
-tx.balanceAfter = after/100; tx.balanceAfterCents = after
-admin.balanceBefore = before/100; admin.balanceBeforeCents = before; admin.balanceAfter = after/100; admin.balanceAfterCents = after
 local referralDelta=tonumber(ARGV[7]) or 0
+if not safeinteger(referralDelta) then return encode({ok=false,error='invalid_amount'}) end
+local userJson=nil
 if referralDelta~=0 then
+  if raw~=ARGV[10] then return encode({ok=false,error='storage_conflict'}) end
   if type(user.referralStats)~='table' then user.referralStats={} end
   local total=tonumber(user.referralStats.totalCommission or 0) or 0
   user.referralStats.totalCommission=math.max(0,total+referralDelta/100)
   user.referralStats.lastCommissionAt=tx.createdAt
-  redis.call('SET',KEYS[2],encodepreservingemptyarrays(user,raw,{'coupons'}))
+  userJson=ARGV[11]
+  local nextUser=decode(userJson)
+  if not nextUser or type(nextUser.referralStats)~='table'
+    or tonumber(nextUser.referralStats.totalCommission or -1)~=user.referralStats.totalCommission
+    or tostring(nextUser.referralStats.lastCommissionAt or '')~=tostring(tx.createdAt or '') then
+    return encode({ok=false,error='invalid_user_record'})
+  end
 end
+local afterJson=persistedencode(after/100); local afterCentsJson=persistedencode(after)
+local beforeJson=persistedencode(before/100); local beforeCentsJson=persistedencode(before)
+local effectIdJson=persistedencode(ARGV[6])
+local txJson=afterJson and afterCentsJson and appendobjectfields(ARGV[4],'"balanceAfter":'..afterJson..',"balanceAfterCents":'..afterCentsJson) or nil
+local adminJson=beforeJson and beforeCentsJson and afterJson and afterCentsJson and appendobjectfields(ARGV[5],'"balanceBefore":'..beforeJson..',"balanceBeforeCents":'..beforeCentsJson..',"balanceAfter":'..afterJson..',"balanceAfterCents":'..afterCentsJson) or nil
+local responseJson=txJson and effectIdJson and '{"ok":true,"balance":'..afterJson..',"balanceCents":'..afterCentsJson..',"balanceBefore":'..beforeJson..',"balanceBeforeCents":'..beforeCentsJson..',"transaction":'..txJson..',"effectId":'..effectIdJson..'}' or nil
+local operationJson=responseJson and persistedencode({requestHash=ARGV[1],resultJson=responseJson}) or nil
+if (referralDelta~=0 and not userJson) or not txJson or not adminJson or not responseJson or not decode(responseJson) or not operationJson then
+  return redis.error_reply('money_json_encode_failed')
+end
+if userJson then redis.call('SET',KEYS[2],userJson) end
 redis.call('SET', KEYS[3], tostring(after))
-pushtrim(KEYS[4], encode(tx), 199); pushtrim(KEYS[5], encode(admin), 499)
-local result = {ok=true,balance=after/100,balanceCents=after,balanceBefore=before/100,balanceBeforeCents=before,transaction=tx,effectId=ARGV[6]}
-saveop(KEYS[1], ARGV[1], result); return encode(result)
+pushtrim(KEYS[4], txJson, 199); pushtrim(KEYS[5], adminJson, 499)
+redis.call('SET',KEYS[1],operationJson); return responseJson
 `;
 
 export async function applyBalanceEffectAtomic({
@@ -555,10 +833,13 @@ export async function applyBalanceEffectAtomic({
 } = {}) {
   const lower = normalizeEmail(email);
   const deltaCents = cents(delta);
+  const referralDeltaCents = cents(referralCommissionDelta);
   const stableEffectId = clean(effectId, 180);
   const accountLifecycleId = clean(expectedAccountLifecycleId, 80).toLowerCase();
   if (!validEmail(lower)) return { ok: false, error: "user_not_found" };
-  if (!deltaCents || !stableEffectId) return { ok: false, error: "invalid_amount" };
+  if (!Number.isSafeInteger(deltaCents) || deltaCents === 0 || !Number.isSafeInteger(referralDeltaCents) || !stableEffectId) {
+    return { ok: false, error: "invalid_amount" };
+  }
   if (!/^[a-f0-9]{32}$/.test(accountLifecycleId)) return { ok: false, error: "account_lifecycle_required" };
   // The persisted transaction may include the first administrator's label,
   // but another authorised employee must be able to recover the same business
@@ -568,7 +849,7 @@ export async function applyBalanceEffectAtomic({
     lower, deltaCents, stableEffectId, source: clean(source, 60), reason: stableReason,
     orderId: clean(orderId, 80), withdrawalId: clean(withdrawalId, 80), redeemCode: normalizeCode(redeemCode),
     transferId: clean(transferId, 100), referralLevel: Number(referralLevel || 0),
-    referralCommissionDeltaCents: cents(referralCommissionDelta),
+    referralCommissionDeltaCents: referralDeltaCents,
     skipUnavailable: Boolean(skipUnavailable),
     accountLifecycleId,
   }));
@@ -592,13 +873,34 @@ export async function applyBalanceEffectAtomic({
   // lifecycle remains bound in requestHash and can never execute the effect
   // again under a fresh operation key.
   const opKey = operationKey("effect:" + lower, stableEffectId);
-  return executeOperation({
-    script: BALANCE_EFFECT_SCRIPT,
-    keys: [opKey, userKey(lower), balanceCentsKey(lower), transactionKey(lower), ADMIN_BALANCE_LOG_KEY, accountLifecycleKey(lower)],
-    args: [requestHash, deltaCents, allowNegative ? "1" : "0", JSON.stringify(tx), JSON.stringify(admin), stableEffectId, cents(referralCommissionDelta), skipUnavailable ? "1" : "0", accountLifecycleId],
-    opKey,
-    requestHash,
-  });
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    let expectedRaw = ""; let nextRaw = "";
+    if (referralDeltaCents) {
+      const read = await redisMoneyGet(userKey(lower));
+      if (!read.ok) return { ok: false, error: read.error };
+      if (!read.value) return { ok: false, error: "account_lifecycle_changed" };
+      let current;
+      try { current = JSON.parse(read.value); } catch { return { ok: false, error: "invalid_user_record" }; }
+      const total = Math.max(0, Number(current?.referralStats?.totalCommission || 0) + amountFromCents(referralDeltaCents));
+      expectedRaw = read.value;
+      nextRaw = current?.referralStats && typeof current.referralStats === "object" && !Array.isArray(current.referralStats)
+        ? losslessJsonPatch(read.value, [
+          { path: ["referralStats", "totalCommission"], value: total },
+          { path: ["referralStats", "lastCommissionAt"], value: tx.createdAt },
+        ])
+        : losslessTopLevelPatch(read.value, { referralStats: { totalCommission: total, lastCommissionAt: tx.createdAt } });
+      if (!nextRaw) return { ok: false, error: "invalid_user_record" };
+    }
+    const result = await executeOperation({
+      script: BALANCE_EFFECT_SCRIPT,
+      keys: [opKey, userKey(lower), balanceCentsKey(lower), transactionKey(lower), ADMIN_BALANCE_LOG_KEY, accountLifecycleKey(lower)],
+      args: [requestHash, deltaCents, allowNegative ? "1" : "0", JSON.stringify(tx), JSON.stringify(admin), stableEffectId, referralDeltaCents, skipUnavailable ? "1" : "0", accountLifecycleId, expectedRaw, nextRaw],
+      opKey,
+      requestHash,
+    });
+    if (result?.error !== "storage_conflict") return result;
+  }
+  return { ok: false, error: "storage_conflict" };
 }
 
 const REDEEM_BALANCE_SCRIPT = LUA_COMMON + `
@@ -619,19 +921,30 @@ if not currentLifecycle or currentLifecycle~=ARGV[7] then return encode({ok=fals
 local prior = existingop(KEYS[1],ARGV[1]); if prior then return prior end
 local codeRaw = redis.call('GET',KEYS[4])
 if not codeRaw then return encode({ok=false,error='code_not_found'}) end
+if codeRaw~=ARGV[8] then return encode({ok=false,error='storage_conflict'}) end
 local code = decode(codeRaw); if not code then return encode({ok=false,error='invalid_storage_record'}) end
 if code.status ~= 'active' then return encode({ok=false,error='code_unavailable'}) end
 if code.type == 'service' or code.kind == 'service' or (type(code.services)=='table' and #code.services>0) then return encode({ok=false,error='service_code_checkout_required'}) end
-local value = tonumber(code.amount or 0); local delta = math.floor(value*100+0.5); if delta<=0 then return encode({ok=false,error='invalid_amount'}) end
+local value=tonumber(code.amount or 0); local delta=value and math.floor(value*100+0.5) or nil
+if not safeinteger(delta) or delta<=0 then return encode({ok=false,error='invalid_amount'}) end
 local before=readbalance(KEYS[3],user); if not before then return encode({ok=false,error='invalid_balance_record'}) end
-local after=before+delta; local metadata=decode(ARGV[2]); local tx=decode(ARGV[3]); local admin=decode(ARGV[4]); if not metadata or not tx or not admin then return encode({ok=false,error='invalid_ledger_record'}) end
-for key,value in pairs(metadata) do code[key]=value end
-code.status='used'; tx.amount=delta/100; tx.amountCents=delta; tx.balanceAfter=after/100; tx.balanceAfterCents=after
-admin.amount=delta/100; admin.amountCents=delta; admin.balanceBefore=before/100; admin.balanceBeforeCents=before; admin.balanceAfter=after/100; admin.balanceAfterCents=after
-redis.call('SET',KEYS[3],tostring(after)); redis.call('SET',KEYS[4],encode(code))
-pushtrim(KEYS[7],encode(tx),199); pushtrim(KEYS[8],encode(admin),499)
-local result={ok=true,balance=after/100,balanceCents=after,amount=delta/100,amountCents=delta,code=code.code or ARGV[5]}
-saveop(KEYS[1],ARGV[1],result); return encode(result)
+local after=safeadd(before,delta); if not after then return encode({ok=false,error='balance_out_of_range'}) end
+local metadata=decode(ARGV[2]); local tx=decode(ARGV[3]); local admin=decode(ARGV[4]); if not metadata or not tx or not admin then return encode({ok=false,error='invalid_ledger_record'}) end
+local amountJson=persistedencode(delta/100); local amountCentsJson=persistedencode(delta)
+local beforeJson=persistedencode(before/100); local beforeCentsJson=persistedencode(before)
+local afterJson=persistedencode(after/100); local afterCentsJson=persistedencode(after)
+local codeJson=persistedencode(code.code or ARGV[5])
+local txJson=amountJson and amountCentsJson and afterJson and afterCentsJson and appendobjectfields(ARGV[3],'"amount":'..amountJson..',"amountCents":'..amountCentsJson..',"balanceAfter":'..afterJson..',"balanceAfterCents":'..afterCentsJson) or nil
+local adminJson=amountJson and amountCentsJson and beforeJson and beforeCentsJson and afterJson and afterCentsJson and appendobjectfields(ARGV[4],'"amount":'..amountJson..',"amountCents":'..amountCentsJson..',"balanceBefore":'..beforeJson..',"balanceBeforeCents":'..beforeCentsJson..',"balanceAfter":'..afterJson..',"balanceAfterCents":'..afterCentsJson) or nil
+local nextCode=decode(ARGV[9])
+if not nextCode or tostring(nextCode.status or '')~='used' or tostring(nextCode.usedOperationId or '')~=tostring(metadata.usedOperationId or '')
+  or not txJson or not adminJson then return encode({ok=false,error='invalid_storage_record'}) end
+local resultJson='{"ok":true,"balance":'..afterJson..',"balanceCents":'..afterCentsJson..',"amount":'..amountJson..',"amountCents":'..amountCentsJson..',"code":'..codeJson..'}'
+local operationJson=persistedencode({requestHash=ARGV[1],resultJson=resultJson})
+if not codeJson or not decode(resultJson) or not operationJson then return redis.error_reply('money_json_encode_failed') end
+redis.call('SET',KEYS[3],tostring(after)); redis.call('SET',KEYS[4],ARGV[9])
+pushtrim(KEYS[7],txJson,199); pushtrim(KEYS[8],adminJson,499)
+redis.call('SET',KEYS[1],operationJson); return resultJson
 `;
 
 export async function redeemBalanceCodeAtomic(email, codeValue, meta = {}, options = {}) {
@@ -653,26 +966,39 @@ export async function redeemBalanceCodeAtomic(email, codeValue, meta = {}, optio
   };
   const tx = { id: txId, reason: "兑换码充值 " + code, source: "redeem", redeemCode: code, operationId, createdAt: now.toISOString(), createdAtBeijing: formatBeijingTime(now) };
   const opKey = operationKey("redeem-balance:" + lower + ":" + accountLifecycleId, operationId);
-  return executeOperation({
-    script: REDEEM_BALANCE_SCRIPT,
-    keys: [opKey, userKey(lower), balanceCentsKey(lower), redeemCodeKey(code), "lm:user:authver:" + lower, accountLifecycleKey(lower), transactionKey(lower), ADMIN_BALANCE_LOG_KEY],
-    args: [requestHash, JSON.stringify(usedMeta), JSON.stringify(tx), JSON.stringify({ ...tx, email: lower }), code, authVersion, accountLifecycleId],
-    opKey,
-    requestHash,
-  });
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const read = await redisMoneyGet(redeemCodeKey(code));
+    if (!read.ok) return { ok: false, error: read.error };
+    if (!read.value) return { ok: false, error: "code_not_found" };
+    const nextRaw = losslessTopLevelPatch(read.value, { ...usedMeta, status: "used" });
+    if (!nextRaw) return { ok: false, error: "invalid_storage_record" };
+    const result = await executeOperation({
+      script: REDEEM_BALANCE_SCRIPT,
+      keys: [opKey, userKey(lower), balanceCentsKey(lower), redeemCodeKey(code), "lm:user:authver:" + lower, accountLifecycleKey(lower), transactionKey(lower), ADMIN_BALANCE_LOG_KEY],
+      args: [requestHash, JSON.stringify(usedMeta), JSON.stringify(tx), JSON.stringify({ ...tx, email: lower }), code, authVersion, accountLifecycleId, read.value, nextRaw],
+      opKey,
+      requestHash,
+    });
+    if (result?.error !== "storage_conflict") return result;
+  }
+  return { ok: false, error: "storage_conflict" };
 }
 
 const SERVICE_CODE_SCRIPT = LUA_COMMON + `
 local prior=existingop(KEYS[1],ARGV[1]); if prior then return prior end
 if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'string') then return encode({ok=false,error='storage_type_error'}) end
 local raw=redis.call('GET',KEYS[2]); if not raw then return encode({ok=false,error='code_not_found'}) end
+if raw~=ARGV[3] then return encode({ok=false,error='storage_conflict'}) end
 local code=decode(raw); if not code then return encode({ok=false,error='invalid_code_record'}) end
 if code.status~='active' then return encode({ok=false,error='code_unavailable'}) end
 if code.type~='service' and code.kind~='service' and not (type(code.services)=='table' and #code.services>0) then return encode({ok=false,error='not_service_code'}) end
 local metadata=decode(ARGV[2]); if not metadata then return encode({ok=false,error='invalid_metadata'}) end
 for key,value in pairs(metadata) do code[key]=value end
-code.type='service'; code.status='used'; redis.call('SET',KEYS[2],encode(code))
-local result={ok=true,code=code}; saveop(KEYS[1],ARGV[1],result); return encode(result)
+code.type='service'; code.status='used'
+local nextCode=decode(ARGV[4]); local result=decode(ARGV[5])
+if not nextCode or tostring(nextCode.type or '')~='service' or tostring(nextCode.status or '')~='used'
+  or tostring(nextCode.usedOrderId or '')~=tostring(metadata.usedOrderId or '') or not result then return encode({ok=false,error='invalid_code_record'}) end
+redis.call('SET',KEYS[2],ARGV[4]); saveopjson(KEYS[1],ARGV[1],ARGV[5]); return ARGV[5]
 `;
 
 export async function consumeServiceCodeAtomic(codeValue, email, orderId, meta = {}, options = {}) {
@@ -687,17 +1013,29 @@ export async function consumeServiceCodeAtomic(codeValue, email, orderId, meta =
     usedAt: now.toISOString(), usedAtBeijing: formatBeijingTime(now), usedOperationId: operationId,
   };
   const opKey = operationKey("redeem-service:" + code + ":" + normalizedOrderId, operationId);
-  return executeOperation({ script: SERVICE_CODE_SCRIPT, keys: [opKey, redeemCodeKey(code)], args: [requestHash, JSON.stringify(metadata)], opKey, requestHash });
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const read = await redisMoneyGet(redeemCodeKey(code));
+    if (!read.ok) return { ok: false, error: read.error };
+    if (!read.value) return { ok: false, error: "code_not_found" };
+    const nextRaw = losslessTopLevelPatch(read.value, { ...metadata, type: "service", status: "used" });
+    if (!nextRaw) return { ok: false, error: "invalid_code_record" };
+    const resultJson = `{"ok":true,"code":${nextRaw}}`;
+    const result = await executeOperation({ script: SERVICE_CODE_SCRIPT, keys: [opKey, redeemCodeKey(code)], args: [requestHash, JSON.stringify(metadata), read.value, nextRaw, resultJson], opKey, requestHash });
+    if (result?.error !== "storage_conflict") return result;
+  }
+  return { ok: false, error: "storage_conflict" };
 }
 
 const RESTORE_SERVICE_CODE_SCRIPT = LUA_COMMON + `
 local prior=existingop(KEYS[1],ARGV[1]); if prior then return prior end
 if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'string') then return encode({ok=false,error='storage_type_error'}) end
 local raw=redis.call('GET',KEYS[2]); if not raw then return encode({ok=false,error='code_not_found'}) end
+if raw~=ARGV[3] then return encode({ok=false,error='storage_conflict'}) end
 local code=decode(raw); if not code then return encode({ok=false,error='invalid_code_record'}) end
 if code.status~='used' or tostring(code.usedOrderId or '')~=ARGV[2] then return encode({ok=false,error='code_owner_mismatch'}) end
-code.status='active'; code.usedBy=nil; code.usedOrderId=nil; code.usedIp=nil; code.usedUserAgent=nil; code.usedAt=nil; code.usedAtBeijing=nil; code.usedOperationId=nil
-redis.call('SET',KEYS[2],encode(code)); local result={ok=true,restored=true,code=code}; saveop(KEYS[1],ARGV[1],result); return encode(result)
+local nextCode=decode(ARGV[4]); local result=decode(ARGV[5])
+if not nextCode or tostring(nextCode.status or '')~='active' or nextCode.usedOrderId~=nil or not result then return encode({ok=false,error='invalid_code_record'}) end
+redis.call('SET',KEYS[2],ARGV[4]); saveopjson(KEYS[1],ARGV[1],ARGV[5]); return ARGV[5]
 `;
 
 export async function restoreServiceCodeAtomic(codeValue, orderId, options = {}) {
@@ -707,7 +1045,17 @@ export async function restoreServiceCodeAtomic(codeValue, orderId, options = {})
   const operationId = clean(options.operationId, 160) || `restore:${code}:${normalizedOrderId}`;
   const requestHash = sha(JSON.stringify({ code, orderId: normalizedOrderId }));
   const opKey = operationKey("restore-service:" + code + ":" + normalizedOrderId, operationId);
-  return executeOperation({ script: RESTORE_SERVICE_CODE_SCRIPT, keys: [opKey, redeemCodeKey(code)], args: [requestHash, normalizedOrderId], opKey, requestHash });
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const read = await redisMoneyGet(redeemCodeKey(code));
+    if (!read.ok) return { ok: false, error: read.error };
+    if (!read.value) return { ok: false, error: "code_not_found" };
+    const nextRaw = losslessTopLevelPatch(read.value, { status: "active" }, ["usedBy", "usedOrderId", "usedIp", "usedUserAgent", "usedAt", "usedAtBeijing", "usedOperationId"]);
+    if (!nextRaw) return { ok: false, error: "invalid_code_record" };
+    const resultJson = `{"ok":true,"restored":true,"code":${nextRaw}}`;
+    const result = await executeOperation({ script: RESTORE_SERVICE_CODE_SCRIPT, keys: [opKey, redeemCodeKey(code)], args: [requestHash, normalizedOrderId, read.value, nextRaw, resultJson], opKey, requestHash });
+    if (result?.error !== "storage_conflict") return result;
+  }
+  return { ok: false, error: "storage_conflict" };
 }
 
 const TRANSITION_COUPON_SCRIPT = LUA_COMMON + `
@@ -719,6 +1067,7 @@ if not expectedLifecycle or #expectedLifecycle~=32 or string.match(expectedLifec
 local currentLifecycle=redis.call('GET',KEYS[4])
 if not currentLifecycle or currentLifecycle~=expectedLifecycle then return encode({ok=false,error='account_lifecycle_changed'}) end
 local prior=existingop(KEYS[1],ARGV[1]); if prior then return prior end
+if raw~=ARGV[8] then return encode({ok=false,error='storage_conflict'}) end
 local coupon=nil; for _,item in ipairs(user.coupons) do if tostring(item.id or '')==ARGV[2] then coupon=item; break end end
 if not coupon then return encode({ok=false,error='coupon_not_found'}) end
 local target=ARGV[4]; local changed=false
@@ -732,8 +1081,10 @@ elseif target=='used' then
   elseif coupon.status~='used' or tostring(coupon.usedOrderId or '')~=ARGV[3] then return encode({ok=false,error='coupon_unavailable'}) end
 else return encode({ok=false,error='invalid_coupon_transition'}) end
 local balance=readbalance(KEYS[3],user); if not balance then return encode({ok=false,error='invalid_balance_record'}) end
-redis.call('SET',KEYS[3],tostring(balance)); redis.call('SET',KEYS[2],encodepreservingemptyarrays(user,raw,{'coupons'}))
-local result={ok=true,changed=changed,coupon=coupon}; saveop(KEYS[1],ARGV[1],result); return encode(result)
+local nextUser=decode(ARGV[9]); local response=decode(ARGV[10])
+if not nextUser or not response or response.changed~=changed then return encode({ok=false,error='invalid_user_record'}) end
+redis.call('SET',KEYS[3],tostring(balance)); redis.call('SET',KEYS[2],ARGV[9])
+saveopjson(KEYS[1],ARGV[1],ARGV[10]); return ARGV[10]
 `;
 
 export async function transitionOrderCouponAtomic(email, couponId, orderId, target, effectId, expectedAccountLifecycleId = "") {
@@ -748,13 +1099,49 @@ export async function transitionOrderCouponAtomic(email, couponId, orderId, targ
   const requestHash = sha(JSON.stringify({ lower, id, normalizedOrderId, next, accountLifecycleId }));
   const opKey = operationKey("coupon-effect:" + lower + ":" + accountLifecycleId + ":" + id, stableEffectId);
   const now = new Date();
-  return executeOperation({
-    script: TRANSITION_COUPON_SCRIPT,
-    keys: [opKey, userKey(lower), balanceCentsKey(lower), accountLifecycleKey(lower)],
-    args: [requestHash, id, normalizedOrderId, next, now.toISOString(), formatBeijingTime(now), accountLifecycleId],
-    opKey,
-    requestHash,
-  });
+  const usedAt = now.toISOString(); const usedAtBeijing = formatBeijingTime(now);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const read = await redisMoneyGet(userKey(lower));
+    if (!read.ok) return { ok: false, error: read.error };
+    if (!read.value) return { ok: false, error: "user_not_found" };
+    let current;
+    try { current = JSON.parse(read.value); } catch { return { ok: false, error: "invalid_user_record" }; }
+    const index = Array.isArray(current?.coupons) ? current.coupons.findIndex((item) => String(item?.id || "") === id) : -1;
+    if (index < 0) return { ok: false, error: "coupon_not_found" };
+    const coupon = current.coupons[index];
+    let changed = false; const operations = [];
+    if (next === "used") {
+      if (coupon.status === "active") {
+        changed = true;
+        operations.push(
+          { path: ["coupons", index, "status"], value: "used" },
+          { path: ["coupons", index, "usedOrderId"], value: normalizedOrderId },
+          { path: ["coupons", index, "usedAt"], value: usedAt },
+          { path: ["coupons", index, "usedAtBeijing"], value: usedAtBeijing },
+        );
+      }
+    } else if (coupon.status === "used" && String(coupon.usedOrderId || "") === normalizedOrderId) {
+      changed = true;
+      operations.push(
+        { path: ["coupons", index, "status"], value: "active" },
+        ...["usedOrderId", "discount", "usedAt", "usedAtBeijing"].map((field) => ({ path: ["coupons", index, field], value: LOSSLESS_DELETE })),
+      );
+    }
+    const nextRaw = operations.length ? losslessJsonPatch(read.value, operations) : read.value;
+    if (!nextRaw) return { ok: false, error: "invalid_user_record" };
+    const couponRaw = losslessJsonValue(nextRaw, ["coupons", index]);
+    if (!couponRaw) return { ok: false, error: "invalid_user_record" };
+    const resultJson = `{"ok":true,"changed":${changed},"coupon":${couponRaw}}`;
+    const result = await executeOperation({
+      script: TRANSITION_COUPON_SCRIPT,
+      keys: [opKey, userKey(lower), balanceCentsKey(lower), accountLifecycleKey(lower)],
+      args: [requestHash, id, normalizedOrderId, next, usedAt, usedAtBeijing, accountLifecycleId, read.value, nextRaw, resultJson],
+      opKey,
+      requestHash,
+    });
+    if (result?.error !== "storage_conflict") return result;
+  }
+  return { ok: false, error: "storage_conflict" };
 }
 
 const ADJUST_STOCK_EFFECT_SCRIPT = LUA_COMMON + `
@@ -862,14 +1249,22 @@ local currentLifecycle=redis.call('GET',KEYS[5])
 if not currentLifecycle or currentLifecycle~=ARGV[7] then return encode({ok=false,error='account_lifecycle_changed'}) end
 local prior=existingop(KEYS[1],ARGV[1]); if prior then return prior end
 if redis.call('EXISTS',KEYS[6])==1 then return encode({ok=false,error='withdrawal_exists'}) end
-local before=readbalance(KEYS[3],user); local delta=tonumber(ARGV[2]); if not before or not delta or delta<=0 then return encode({ok=false,error='invalid_amount'}) end
+local before=readbalance(KEYS[3],user); local delta=tonumber(ARGV[2]); if not before or not safeinteger(delta) or delta<=0 then return encode({ok=false,error='invalid_amount'}) end
 if before<delta then return encode({ok=false,error='insufficient_balance',currentBalanceCents=before}) end
+-- withdrawal.username
 local after=before-delta; local withdrawal=decode(ARGV[3]); local tx=decode(ARGV[4]); local admin=decode(ARGV[5]); if not withdrawal or not tx or not admin then return encode({ok=false,error='invalid_record'}) end
-withdrawal.username=tostring(user.username or '')
-tx.balanceAfter=after/100; tx.balanceAfterCents=after; admin.balanceBefore=before/100; admin.balanceBeforeCents=before; admin.balanceAfter=after/100; admin.balanceAfterCents=after
-redis.call('SET',KEYS[3],tostring(after)); redis.call('SET',KEYS[6],encode(withdrawal))
-redis.call('LPUSH',KEYS[7],withdrawal.id); pushtrim(KEYS[8],encode(tx),199); pushtrim(KEYS[9],encode(admin),499)
-local result={ok=true,balance=after/100,balanceCents=after,withdrawal=withdrawal}; saveop(KEYS[1],ARGV[1],result); return encode(result)
+local usernameJson=persistedencode(tostring(user.username or ''))
+local afterJson=persistedencode(after/100); local afterCentsJson=persistedencode(after)
+local beforeJson=persistedencode(before/100); local beforeCentsJson=persistedencode(before)
+local withdrawalJson=usernameJson and appendobjectfields(ARGV[3],'"username":'..usernameJson) or nil
+local txJson=afterJson and afterCentsJson and appendobjectfields(ARGV[4],'"balanceAfter":'..afterJson..',"balanceAfterCents":'..afterCentsJson) or nil
+local adminJson=beforeJson and beforeCentsJson and afterJson and afterCentsJson and appendobjectfields(ARGV[5],'"balanceBefore":'..beforeJson..',"balanceBeforeCents":'..beforeCentsJson..',"balanceAfter":'..afterJson..',"balanceAfterCents":'..afterCentsJson) or nil
+local resultJson=withdrawalJson and '{"ok":true,"balance":'..afterJson..',"balanceCents":'..afterCentsJson..',"withdrawal":'..withdrawalJson..'}' or nil
+local operationJson=resultJson and persistedencode({requestHash=ARGV[1],resultJson=resultJson}) or nil
+if not withdrawalJson or not txJson or not adminJson or not resultJson or not decode(resultJson) or not operationJson then return redis.error_reply('money_json_encode_failed') end
+redis.call('SET',KEYS[3],tostring(after)); redis.call('SET',KEYS[6],withdrawalJson)
+redis.call('LPUSH',KEYS[7],withdrawal.id); pushtrim(KEYS[8],txJson,199); pushtrim(KEYS[9],adminJson,499)
+redis.call('SET',KEYS[1],operationJson); return resultJson
 `;
 
 export async function createWithdrawalAtomic(email, amount, alipayAccount, realName, options = {}) {
@@ -878,7 +1273,7 @@ export async function createWithdrawalAtomic(email, amount, alipayAccount, realN
   const alipay = clean(alipayAccount, 160);
   const name = clean(realName, 80);
   if (!validEmail(lower)) return { ok: false, error: "user_not_found" };
-  if (valueCents <= 0 || valueCents > 10_000_000 || !alipay || !name) return { ok: false, error: "missing_required_fields" };
+  if (!Number.isSafeInteger(valueCents) || valueCents <= 0 || valueCents > 10_000_000 || !alipay || !name) return { ok: false, error: "missing_required_fields" };
   const authVersion = Number(options.authVersion);
   const accountLifecycleId = clean(options.accountLifecycleId, 80).toLowerCase();
   if (!Number.isSafeInteger(authVersion) || authVersion < 1) return { ok: false, error: "session_state_changed" };
@@ -889,7 +1284,7 @@ export async function createWithdrawalAtomic(email, amount, alipayAccount, realN
   const txId = makeId("TX");
   const now = new Date();
   const withdrawal = {
-    id: withdrawalId, userEmail: lower, username: clean(options.username, 80), amount: amountFromCents(valueCents), amountCents: valueCents,
+    id: withdrawalId, userEmail: lower, amount: amountFromCents(valueCents), amountCents: valueCents,
     accountLifecycleId,
     alipayAccount: alipay, realName: name, status: "pending", statusLabel: "待审核", revision: 1, operationId, txId,
     createdAt: now.toISOString(), createdAtBeijing: formatBeijingTime(now), updatedAt: now.toISOString(), updatedAtBeijing: formatBeijingTime(now),
@@ -933,24 +1328,48 @@ end
 -- A transition that can move money validates ownership before an earlier
 -- idempotent result can be returned to a replacement account.
 local prior=existingop(KEYS[1],ARGV[1]); if prior then return prior end
+if withdrawalRaw~=ARGV[9] then return encode({ok=false,error='storage_conflict'}) end
 if expectedRevision>=0 and expectedRevision~=currentRevision then return encode({ok=false,error='stale_revision',currentRevision=currentRevision,withdrawal=withdrawal}) end
-if old==next then local result={ok=true,changed=false,from=old,to=next,balance=nil,withdrawal=withdrawal}; saveop(KEYS[1],ARGV[1],result); return encode(result) end
+local oldJson=persistedencode(old); local nextJson=persistedencode(next)
+if not oldJson or not nextJson then return redis.error_reply('money_json_encode_failed') end
+if old==next then
+  local responseJson='{"ok":true,"changed":false,"from":'..oldJson..',"to":'..nextJson..',"balance":null,"withdrawal":'..withdrawalRaw..'}'
+  local operationJson=persistedencode({requestHash=ARGV[1],resultJson=responseJson})
+  if not decode(responseJson) or not operationJson then return redis.error_reply('money_json_encode_failed') end
+  redis.call('SET',KEYS[1],operationJson); return responseJson
+end
 if not allowed then return encode({ok=false,error='invalid_transition',from=old,to=next}) end
-local balance=nil; local before=nil; local after=nil
+local metadata=decode(ARGV[6]); local nextWithdrawal=decode(ARGV[10])
+if not metadata or not nextWithdrawal or tostring(nextWithdrawal.status or '')~=next
+  or tonumber(nextWithdrawal.revision or -1)~=currentRevision+1 then return encode({ok=false,error='invalid_withdrawal_record'}) end
+local balance=nil; local before=nil; local after=nil; local txJson=nil; local adminJson=nil
 if delta~=0 then
   local userRaw=redis.call('GET',KEYS[2]); if not userRaw then return encode({ok=false,error='user_not_found'}) end
   local user=decode(userRaw); if not user then return encode({ok=false,error='invalid_user_record'}) end
   before=readbalance(KEYS[3],user); if not before then return encode({ok=false,error='invalid_balance_record'}) end
-  after=before+delta; if after<0 then return encode({ok=false,error='insufficient_balance',currentBalanceCents=before}) end
+  after=safeadd(before,delta)
+  if not after then return encode({ok=false,error='balance_out_of_range'}) end
+  if after<0 then return encode({ok=false,error='insufficient_balance',currentBalanceCents=before}) end
   local tx=decode(ARGV[7]); local admin=decode(ARGV[8]); if not tx or not admin then return encode({ok=false,error='invalid_ledger_record'}) end
-  tx.amount=delta/100; tx.amountCents=delta; tx.balanceAfter=after/100; tx.balanceAfterCents=after; tx.status=next; tx.statusLabel=ARGV[4]
-  admin.amount=delta/100; admin.amountCents=delta; admin.balanceBefore=before/100; admin.balanceBeforeCents=before; admin.balanceAfter=after/100; admin.balanceAfterCents=after; admin.status=next; admin.statusLabel=ARGV[4]
-  redis.call('SET',KEYS[3],tostring(after)); pushtrim(KEYS[5],encode(tx),199); pushtrim(KEYS[6],encode(admin),499); balance=after/100
+  local amountJson=persistedencode(delta/100); local amountCentsJson=persistedencode(delta)
+  local beforeJson=persistedencode(before/100); local beforeCentsJson=persistedencode(before)
+  local afterJson=persistedencode(after/100); local afterCentsJson=persistedencode(after)
+  local statusLabelJson=persistedencode(ARGV[4])
+  txJson=amountJson and amountCentsJson and afterJson and afterCentsJson and statusLabelJson and appendobjectfields(ARGV[7],'"amount":'..amountJson..',"amountCents":'..amountCentsJson..',"balanceAfter":'..afterJson..',"balanceAfterCents":'..afterCentsJson..',"status":'..nextJson..',"statusLabel":'..statusLabelJson) or nil
+  adminJson=amountJson and amountCentsJson and beforeJson and beforeCentsJson and afterJson and afterCentsJson and statusLabelJson and appendobjectfields(ARGV[8],'"amount":'..amountJson..',"amountCents":'..amountCentsJson..',"balanceBefore":'..beforeJson..',"balanceBeforeCents":'..beforeCentsJson..',"balanceAfter":'..afterJson..',"balanceAfterCents":'..afterCentsJson..',"status":'..nextJson..',"statusLabel":'..statusLabelJson) or nil
+  if not txJson or not adminJson then return redis.error_reply('money_json_encode_failed') end
+  balance=after/100
 end
-withdrawal.status=next; withdrawal.statusLabel=ARGV[4]; withdrawal.reviewNote=ARGV[5]; withdrawal.revision=currentRevision+1
-local metadata=decode(ARGV[6]); if metadata then for key,value in pairs(metadata) do withdrawal[key]=value end end
-redis.call('SET',KEYS[4],encode(withdrawal))
-local result={ok=true,changed=true,from=old,to=next,balance=balance,withdrawal=withdrawal}; saveop(KEYS[1],ARGV[1],result); return encode(result)
+local balanceJson=balance~=nil and persistedencode(balance) or 'null'
+if not oldJson or not nextJson or not balanceJson then return redis.error_reply('money_json_encode_failed') end
+local responseJson='{"ok":true,"changed":true,"from":'..oldJson..',"to":'..nextJson..',"balance":'..balanceJson..',"withdrawal":'..ARGV[10]..'}'
+if not decode(responseJson) then return redis.error_reply('money_json_encode_failed') end
+local operationJson=persistedencode({requestHash=ARGV[1],resultJson=responseJson})
+if not operationJson then return redis.error_reply('money_json_encode_failed') end
+if delta~=0 then
+  redis.call('SET',KEYS[3],tostring(after)); pushtrim(KEYS[5],txJson,199); pushtrim(KEYS[6],adminJson,499)
+end
+redis.call('SET',KEYS[4],ARGV[10]); redis.call('SET',KEYS[1],operationJson); return responseJson
 `;
 
 const WITHDRAWAL_LABELS = { pending: "待审核", processing: "提现中", success: "提现成功", failed: "审核失败" };
@@ -991,13 +1410,25 @@ export async function transitionWithdrawalAtomic(id, status, note = "", actor = 
     ...(actor ? { staffId: Number(actor.staffId || 1), staffUsername: clean(actor.staffUsername || "admin", 60) } : {}),
   };
   const opKey = operationKey("withdraw-transition:" + withdrawalId, operationId);
-  return executeOperation({
+  const nextRaw = losslessTopLevelPatch(detail.value, {
+    status: nextStatus,
+    statusLabel: WITHDRAWAL_LABELS[nextStatus],
+    reviewNote: clean(note, 400),
+    revision: Number(current.revision || 0) + 1,
+    ...metadata,
+  });
+  if (!nextRaw) return { ok: false, error: "invalid_withdrawal_record" };
+  const result = await executeOperation({
     script: TRANSITION_WITHDRAWAL_SCRIPT,
     keys: [opKey, userKey(email), balanceCentsKey(email), withdrawalKey(withdrawalId), transactionKey(email), ADMIN_BALANCE_LOG_KEY, accountLifecycleKey(email)],
-    args: [requestHash, expectedRevision, nextStatus, WITHDRAWAL_LABELS[nextStatus], clean(note, 400), JSON.stringify(metadata), JSON.stringify(tx), JSON.stringify({ ...tx, email })],
+    args: [requestHash, expectedRevision, nextStatus, WITHDRAWAL_LABELS[nextStatus], clean(note, 400), JSON.stringify(metadata), JSON.stringify(tx), JSON.stringify({ ...tx, email }), detail.value, nextRaw],
     opKey,
     requestHash,
   });
+  if (result?.error === "storage_conflict" && Number(options._losslessAttempt || 0) < 3) {
+    return transitionWithdrawalAtomic(id, status, note, actor, { ...options, expectedRevision, operationId, _losslessAttempt: Number(options._losslessAttempt || 0) + 1 });
+  }
+  return result;
 }
 
 function serviceFingerprint(services) {
@@ -1040,8 +1471,8 @@ if ARGV[24]=='1' then
 end
 local prior=existingop(KEYS[1],ARGV[1]); if prior then return prior end
 if redis.call('EXISTS',KEYS[2])==1 then return encode({ok=false,error='order_exists'}) end
-local order=decode(ARGV[3]); local overview=decode(ARGV[4]); local stocks=decode(ARGV[17])
-if not order or not overview or not stocks or tostring(order.orderId or '')~=ARGV[2] then return encode({ok=false,error='invalid_order_record'}) end
+local order=decode(ARGV[3]); local stocks=decode(ARGV[17])
+if not order or not decode(ARGV[4]) or not stocks or tostring(order.orderId or '')~=ARGV[2] then return encode({ok=false,error='invalid_order_record'}) end
 
 -- Redis scripts are atomic with respect to other clients, but a runtime error
 -- does not roll back writes already performed by the script. Validate every
@@ -1064,51 +1495,52 @@ for _,stock in ipairs(stocks) do
   if not slot or slot<20 or slot>#KEYS or not count or count<1 or count~=math.floor(count) or count>9007199254740991 then return encode({ok=false,error='invalid_stock_spec'}) end
   if not validtype(KEYS[slot],'string') then return encode({ok=false,error='storage_type_error',keyIndex=slot}) end
   local raw=redis.call('GET',KEYS[slot])
+  if (raw~=false)~=(stock.limited==true) then return encode({ok=false,error='storage_conflict'}) end
   if raw then
     local available=tonumber(raw)
     if not available or available~=math.floor(available) or available<0 or available>9007199254740991 then return encode({ok=false,error='invalid_stock_record'}) end
     if available<count then return encode({ok=false,error='out_of_stock',soldOutService=stock.service,soldOutPlan=stock.plan,remaining=available}) end
     table.insert(limited,stock)
-    if type(stock.itemIndexes)=='table' and type(order.items)=='table' then
-      for _,itemIndex in ipairs(stock.itemIndexes) do
-        local item=order.items[tonumber(itemIndex)]
-        if item then item.stockReserved=true end
-      end
-    end
   end
 end
 
 local payment=ARGV[5]; local amount=tonumber(ARGV[6]); local user=nil; local userRaw=nil; local userChanged=false; local before=nil; local after=nil; local balance=nil
 local tx=nil; local admin=nil
-if not amount or amount<0 or amount~=math.floor(amount) then return encode({ok=false,error='invalid_amount'}) end
+if not safeinteger(amount) or amount<0 then return encode({ok=false,error='invalid_amount'}) end
 if ARGV[20]=='1' then
   userRaw=redis.call('GET',KEYS[9]); if not userRaw then return encode({ok=false,error='user_not_found'}) end
   user=decode(userRaw); if not user then return encode({ok=false,error='invalid_user_record'}) end
   before=readbalance(KEYS[10],user); if not before then return encode({ok=false,error='invalid_balance_record'}) end
   after=before
   if ARGV[8]~='' then
+    if userRaw~=ARGV[27] then return encode({ok=false,error='storage_conflict'}) end
     local found=nil
     if type(user.coupons)=='table' then for _,coupon in ipairs(user.coupons) do if tostring(coupon.id or '')==ARGV[8] then found=coupon; break end end end
     if not found or found.status~='active' then return encode({ok=false,error='coupon_unavailable'}) end
-    local couponCents=math.floor((tonumber(found.amount or 0) or 0)*100+0.5)
+    local couponValue=tonumber(found.amount or 0)
+    local couponCents=couponValue and math.floor(couponValue*100+0.5) or nil
     local maxCents=tonumber(ARGV[10]) or 0; local expected=tonumber(ARGV[9]) or 0
+    if not safeinteger(couponCents) or not safeinteger(maxCents) or not safeinteger(expected) then return encode({ok=false,error='coupon_changed'}) end
     local actual=math.min(couponCents,maxCents)
     if expected<=0 or actual~=expected then return encode({ok=false,error='coupon_changed'}) end
     found.status='used'; found.usedOrderId=ARGV[2]; found.discount=expected/100; found.usedAt=order.createdAt; found.usedAtBeijing=order.createdAtBeijing; userChanged=true
   end
   if payment=='balance' then
     if before<amount then return encode({ok=false,error='insufficient_balance',currentBalance=before/100,currentBalanceCents=before,required=amount/100}) end
-    after=before-amount; balance=after/100; order.paidByBalance=true
+    after=before-amount
+    if not safeinteger(after) then return encode({ok=false,error='balance_out_of_range'}) end
+    balance=after/100
     if amount>0 then
       tx=decode(ARGV[11]); admin=decode(ARGV[12]); if not tx or not admin then return encode({ok=false,error='invalid_ledger_record'}) end
     end
   end
 end
 
-local code=nil
+local code=nil; local codeRaw=nil
 if payment=='redeem' then
-  local raw=redis.call('GET',KEYS[13]); if not raw then return encode({ok=false,error='code_not_found'}) end
-  code=decode(raw); if not code then return encode({ok=false,error='invalid_code_record'}) end
+  codeRaw=redis.call('GET',KEYS[13]); if not codeRaw then return encode({ok=false,error='code_not_found'}) end
+  if codeRaw~=ARGV[29] then return encode({ok=false,error='storage_conflict'}) end
+  code=decode(codeRaw); if not code then return encode({ok=false,error='invalid_code_record'}) end
   if code.status~='active' then return encode({ok=false,error='code_unavailable'}) end
   if code.type~='service' and code.kind~='service' and not (type(code.services)=='table' and #code.services>0) then return encode({ok=false,error='not_service_code'}) end
   local values={}; if type(code.services)=='table' then for _,item in ipairs(code.services) do local key=tostring(item.key or item.service or item.product or ''); local plan=tostring(item.plan or item.planId or ''); table.insert(values,key..':'..plan) end end
@@ -1124,29 +1556,53 @@ if ARGV[23]=='1' then
   if claimed and claimed~=ARGV[2] then return encode({ok=false,error='payment_quote_used'}) end
 end
 
+local userJson=nil; local txJson=nil; local adminJson=nil
+if user then
+  if userChanged then
+    userJson=ARGV[28]
+    local nextUser=decode(userJson); if not nextUser then return encode({ok=false,error='invalid_user_record'}) end
+  end
+  if payment=='balance' and amount>0 then
+    local beforeJson=persistedencode(before/100); local beforeCentsJson=persistedencode(before)
+    local afterJson=persistedencode(after/100); local afterCentsJson=persistedencode(after)
+    txJson=beforeJson and beforeCentsJson and afterJson and afterCentsJson and appendobjectfields(ARGV[11],'"balanceAfter":'..afterJson..',"balanceAfterCents":'..afterCentsJson) or nil
+    adminJson=beforeJson and beforeCentsJson and afterJson and afterCentsJson and appendobjectfields(ARGV[12],'"balanceBefore":'..beforeJson..',"balanceBeforeCents":'..beforeCentsJson..',"balanceAfter":'..afterJson..',"balanceAfterCents":'..afterCentsJson) or nil
+  end
+end
+local codeJson=code and ARGV[30] or nil
+if code then
+  local nextCode=decode(codeJson)
+  if not nextCode or tostring(nextCode.status or '')~='used' or tostring(nextCode.usedOrderId or '')~=ARGV[2] then return encode({ok=false,error='invalid_code_record'}) end
+end
+local overviewJson=ARGV[4]
+local balanceJson='null'
+if balance~=nil then balanceJson=persistedencode(balance) end
+local resultJson=balanceJson and '{"ok":true,"order":'..ARGV[3]..',"balance":'..balanceJson..'}' or nil
+local operationJson=resultJson and persistedencode({requestHash=ARGV[1],resultJson=resultJson}) or nil
+if (userChanged and not userJson) or (payment=='balance' and amount>0 and (not txJson or not adminJson))
+  or (code and not codeJson) or not overviewJson or not resultJson or not operationJson then
+  return redis.error_reply('money_json_encode_failed')
+end
+
 -- Commit phase: every mutation and every index is part of this one script.
 for _,stock in ipairs(limited) do redis.call('DECRBY',KEYS[tonumber(stock.slot)],tostring(stock.count)) end
 if user then
   redis.call('SET',KEYS[10],tostring(after))
-  if userChanged then redis.call('SET',KEYS[9],encodepreservingemptyarrays(user,userRaw,{'coupons'})) end
+  if userChanged then redis.call('SET',KEYS[9],userJson) end
   if payment=='balance' and amount>0 then
-    tx.balanceAfter=after/100; tx.balanceAfterCents=after
-    admin.balanceBefore=before/100; admin.balanceBeforeCents=before; admin.balanceAfter=after/100; admin.balanceAfterCents=after
-    pushtrim(KEYS[11],encode(tx),199); pushtrim(KEYS[12],encode(admin),499)
+    pushtrim(KEYS[11],txJson,199); pushtrim(KEYS[12],adminJson,499)
   end
 end
-if code then redis.call('SET',KEYS[13],encode(code)) end
+if code then redis.call('SET',KEYS[13],codeJson) end
 if ARGV[23]=='1' then redis.call('SET',KEYS[14],ARGV[2],'EX',tostring(quoteTtl)) end
-local orderJson=encodepreservingemptyarrays(order,ARGV[3],{'redeemServices'})
-redis.call('SET',KEYS[2],orderJson)
+redis.call('SET',KEYS[2],ARGV[3])
 if redis.call('SADD',KEYS[17],ARGV[2])==1 then redis.call('LPUSH',KEYS[3],ARGV[2]) end
-redis.call('HSET',KEYS[4],ARGV[2],encode(overview)); redis.call('ZADD',KEYS[5],ARGV[16],ARGV[2]); redis.call('INCR',KEYS[6])
+redis.call('HSET',KEYS[4],ARGV[2],overviewJson); redis.call('ZADD',KEYS[5],ARGV[16],ARGV[2]); redis.call('INCR',KEYS[6])
 if ARGV[18]=='1' then redis.call('LPUSH',KEYS[7],ARGV[2]) end
 if ARGV[19]=='1' then redis.call('LPUSH',KEYS[8],ARGV[2]) end
 if payment=='usdt' and ARGV[23]=='1' then redis.call('ZADD',KEYS[15],ARGV[16],ARGV[2]) else redis.call('ZREM',KEYS[15],ARGV[2]) end
 redis.call('ZREM',KEYS[16],ARGV[2])
-local result={ok=true,order=order,balance=balance}; local resultJson=encodepreservingemptyarrays(result,ARGV[3],{'redeemServices'})
-saveopjson(KEYS[1],ARGV[1],resultJson); return resultJson
+redis.call('SET',KEYS[1],operationJson); return resultJson
 `;
 
 function orderOverview(order) {
@@ -1180,7 +1636,11 @@ export async function commitOrderCreationAtomic({
   const lower = normalizeEmail(userEmail);
   const couponId = clean(coupon?.couponId, 100);
   const couponDiscountCents = cents(coupon?.discount || 0);
+  const couponMaxCents = cents(couponMaxAmount);
   const needsUser = paymentMethod === "balance" || Boolean(couponId);
+  if (!Number.isSafeInteger(couponDiscountCents) || !Number.isSafeInteger(couponMaxCents)) {
+    return { ok: false, error: "invalid_amount" };
+  }
   if (needsUser && !validEmail(lower)) return { ok: false, error: "user_not_found" };
   const authenticatedPrincipal = validEmail(lower);
   const principalAuthVersion = Number(expectedAuthVersion);
@@ -1243,22 +1703,76 @@ export async function commitOrderCreationAtomic({
   const safeQuoteTtl = Number.isFinite(rawQuoteTtl)
     ? Math.min(604800, Math.max(300, Math.floor(rawQuoteTtl)))
     : 4 * 24 * 60 * 60;
-  return executeOperation({
-    script: COMMIT_ORDER_SCRIPT,
-    keys,
-    args: [
-      payloadHash, orderId, JSON.stringify(committedOrder), JSON.stringify(orderOverview(committedOrder)), paymentMethod, amountCents, lower,
-      couponId, couponDiscountCents, cents(couponMaxAmount), JSON.stringify(tx), JSON.stringify({ ...tx, email: lower }),
-      paymentMethod === "redeem" ? serviceFingerprint(order.items) : "", JSON.stringify(codeMeta),
-      String(safeQuoteTtl), String(Number.isFinite(createdScore) && createdScore > 0 ? Math.floor(createdScore) : Date.now()),
-      JSON.stringify(stockSpecs), buyerIndex ? "1" : "0", distinctUserIndex ? "1" : "0", needsUser ? "1" : "0",
-      paymentMethod === "balance" && amountCents > 0 ? "1" : "0", paymentMethod === "redeem" ? "1" : "0",
-      paymentMethod === "usdt" && Boolean(order.usdtQuoteId) ? "1" : "0",
-      authenticatedPrincipal ? "1" : "0", authenticatedPrincipal ? String(principalAuthVersion) : "0", principalLifecycleId,
-    ],
-    opKey,
-    requestHash: payloadHash,
-  });
+  const createdScoreArg = String(Number.isFinite(createdScore) && createdScore > 0 ? Math.floor(createdScore) : Date.now());
+  const recovered = await recoverOperation(opKey, payloadHash);
+  if (recovered) return recovered;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    let expectedUserRaw = ""; let nextUserRaw = ""; let expectedCodeRaw = ""; let nextCodeRaw = "";
+    const attemptOrder = {
+      ...committedOrder,
+      ...(Array.isArray(committedOrder.items)
+        ? { items: committedOrder.items.map((item) => ({ ...item })) }
+        : {}),
+    };
+    const stockReads = await Promise.all(stockSpecs.map((stock) => redisMoneyGet(stockKey(stock.service, stock.plan))));
+    if (stockReads.some((read) => !read.ok)) {
+      return { ok: false, error: stockReads.find((read) => !read.ok)?.error || "storage_unavailable" };
+    }
+    const attemptStockSpecs = stockSpecs.map((stock, index) => {
+      const limited = stockReads[index].value != null;
+      if (limited && Array.isArray(attemptOrder.items)) {
+        for (const itemIndex of stock.itemIndexes) {
+          if (attemptOrder.items[itemIndex - 1]) attemptOrder.items[itemIndex - 1].stockReserved = true;
+        }
+      }
+      return { ...stock, limited };
+    });
+    if (couponId) {
+      const read = await redisMoneyGet(userKey(lower));
+      if (!read.ok) return { ok: false, error: read.error };
+      if (!read.value) return { ok: false, error: "user_not_found" };
+      let current;
+      try { current = JSON.parse(read.value); } catch { return { ok: false, error: "invalid_user_record" }; }
+      const index = Array.isArray(current?.coupons) ? current.coupons.findIndex((item) => String(item?.id || "") === couponId) : -1;
+      if (index < 0) return { ok: false, error: "coupon_unavailable" };
+      expectedUserRaw = read.value;
+      nextUserRaw = losslessJsonPatch(read.value, [
+        { path: ["coupons", index, "status"], value: "used" },
+        { path: ["coupons", index, "usedOrderId"], value: orderId },
+        { path: ["coupons", index, "discount"], value: amountFromCents(couponDiscountCents) },
+        { path: ["coupons", index, "usedAt"], value: committedOrder.createdAt },
+        { path: ["coupons", index, "usedAtBeijing"], value: committedOrder.createdAtBeijing },
+      ]);
+      if (!nextUserRaw) return { ok: false, error: "invalid_user_record" };
+    }
+    if (paymentMethod === "redeem") {
+      const read = await redisMoneyGet(redeemCodeKey(redeemCode));
+      if (!read.ok) return { ok: false, error: read.error };
+      if (!read.value) return { ok: false, error: "code_not_found" };
+      expectedCodeRaw = read.value;
+      nextCodeRaw = losslessTopLevelPatch(read.value, { ...codeMeta, type: "service", status: "used" });
+      if (!nextCodeRaw) return { ok: false, error: "invalid_code_record" };
+    }
+    const result = await executeOperation({
+      script: COMMIT_ORDER_SCRIPT,
+      keys,
+      args: [
+        payloadHash, orderId, JSON.stringify(attemptOrder), JSON.stringify(orderOverview(attemptOrder)), paymentMethod, amountCents, lower,
+        couponId, couponDiscountCents, couponMaxCents, JSON.stringify(tx), JSON.stringify({ ...tx, email: lower }),
+        paymentMethod === "redeem" ? serviceFingerprint(order.items) : "", JSON.stringify(codeMeta),
+        String(safeQuoteTtl), createdScoreArg,
+        JSON.stringify(attemptStockSpecs), buyerIndex ? "1" : "0", distinctUserIndex ? "1" : "0", needsUser ? "1" : "0",
+        paymentMethod === "balance" && amountCents > 0 ? "1" : "0", paymentMethod === "redeem" ? "1" : "0",
+        paymentMethod === "usdt" && Boolean(order.usdtQuoteId) ? "1" : "0",
+        authenticatedPrincipal ? "1" : "0", authenticatedPrincipal ? String(principalAuthVersion) : "0", principalLifecycleId,
+        expectedUserRaw, nextUserRaw, expectedCodeRaw, nextCodeRaw,
+      ],
+      opKey,
+      requestHash: payloadHash,
+    });
+    if (result?.error !== "storage_conflict") return result;
+  }
+  return { ok: false, error: "storage_conflict" };
 }
 
 const USDT_CONFIRMED_TX_PREFIX = "lm:usdt:confirmed-tx:";
@@ -1328,12 +1842,10 @@ if listRevisionRaw then
     return encode({ok=false,error='invalid_order_revision'})
   end
 end
-local overviewRaw=redis.call('HGET',KEYS[6],ARGV[2]); local overview=nil
-if overviewRaw then overview=decode(overviewRaw) else overview=decode(ARGV[7]) end
-if not overview then return encode({ok=false,error='invalid_order_overview'}) end
-overview.status=next.status; overview.paymentMethod=next.paymentMethod; overview.paidCurrency=next.paidCurrency
-overview.usdtConfirmedAt=ARGV[10]; overview.usdtTxId=ARGV[3]
-local overviewJson=encodepreservingemptyarrays(overview,overviewRaw or ARGV[7],{'items','referralCommissionEntries','referralCommissionReversedEntries'})
+local overviewRaw=redis.call('HGET',KEYS[6],ARGV[2])
+if (ARGV[21]=='1' and overviewRaw~=ARGV[22]) or (ARGV[21]=='0' and overviewRaw) then return encode({ok=false,error='storage_conflict'}) end
+local overviewJson=ARGV[23]; local overview=decode(overviewJson)
+if not overview or tostring(overview.usdtConfirmedAt or '')~=ARGV[10] or tostring(overview.usdtTxId or '')~=ARGV[3] then return encode({ok=false,error='invalid_order_overview'}) end
 local effect=decode(ARGV[19]); local effectScore=tonumber(ARGV[20])
 if not effect or tostring(effect.effectKey or '')~=ARGV[18]
   or tostring(effect.orderId or '')~=ARGV[2] or tostring(effect.txId or '')~=ARGV[3]
@@ -1342,6 +1854,8 @@ if not effect or tostring(effect.effectKey or '')~=ARGV[18]
   or effectScore<-9007199254740991 or effectScore>9007199254740991 then
   return encode({ok=false,error='invalid_confirmation_effect'})
 end
+local operationJson=persistedencode({requestHash=ARGV[1],resultJson=ARGV[9]})
+if not overviewJson or not operationJson then return redis.error_reply('money_json_encode_failed') end
 
 -- USDT confirmation commit: all commands below use fully validated values and
 -- the claim is deliberately permanent because a chain transaction is immutable.
@@ -1353,7 +1867,7 @@ redis.call('ZREM',KEYS[4],ARGV[2]); redis.call('ZREM',KEYS[5],ARGV[2])
 redis.call('HSET',KEYS[6],ARGV[2],overviewJson); redis.call('ZADD',KEYS[7],ARGV[8],ARGV[2])
 redis.call('SET',KEYS[8],tostring(listRevision+1))
 redis.call('HSET',KEYS[9],ARGV[18],ARGV[19]); redis.call('ZADD',KEYS[10],ARGV[20],ARGV[18])
-saveopjson(KEYS[1],ARGV[1],ARGV[9]); return ARGV[9]
+redis.call('SET',KEYS[1],operationJson); return ARGV[9]
 `;
 
 function usdtPaymentFingerprint(order) {
@@ -1406,8 +1920,11 @@ export async function confirmUsdtOrderAtomic({
   const recovered = await recoverOperation(opKey, requestHash);
   if (recovered) return recovered;
 
-  const stored = await redisMoneyGet(orderRecordKey(orderId));
+  const [stored, overviewStored] = await Promise.all([
+    redisMoneyGet(orderRecordKey(orderId)), redisMoneyHget(ORDER_OVERVIEW_HASH_KEY, orderId),
+  ]);
   if (!stored.ok) return { ok: false, error: stored.error || "storage_unavailable" };
+  if (!overviewStored.ok) return { ok: false, error: overviewStored.error || "storage_unavailable" };
   if (!stored.value) return { ok: false, error: "order_not_found" };
   let current;
   try { current = JSON.parse(stored.value); } catch { return { ok: false, error: "invalid_order_record" }; }
@@ -1462,8 +1979,7 @@ export async function confirmUsdtOrderAtomic({
     },
     confirmedAt: confirmedIso,
   };
-  const nextOrder = {
-    ...current,
+  const orderReplacements = {
     revision: currentRevision + 1,
     usdtConfirmedAt: confirmedIso,
     usdtConfirmedAtBeijing: formatBeijingTime(confirmedDate),
@@ -1471,10 +1987,22 @@ export async function confirmUsdtOrderAtomic({
     usdtConfirmedAmount: amount,
     usdtChainTimestamp: chainIso,
   };
+  const nextOrderRaw = losslessTopLevelPatch(stored.value, orderReplacements);
+  if (!nextOrderRaw) return { ok: false, error: "invalid_order_record" };
+  const nextOrder = { ...current, ...orderReplacements };
+  const overviewBase = overviewStored.value || JSON.stringify(orderOverview(nextOrder));
+  const nextOverviewRaw = losslessTopLevelPatch(overviewBase, {
+    status: nextOrder.status,
+    paymentMethod: nextOrder.paymentMethod,
+    paidCurrency: nextOrder.paidCurrency,
+    usdtConfirmedAt: confirmedIso,
+    usdtTxId: txId,
+  });
+  if (!nextOverviewRaw) return { ok: false, error: "invalid_order_overview" };
   const createdScore = new Date(current.createdAt || 0).getTime();
   const safeCreatedScore = Number.isFinite(createdScore) && createdScore > 0 ? Math.floor(createdScore) : Date.now();
-  const result = { ok: true, order: nextOrder, txId, amount, amountMicros: String(micros), effect };
-  return executeOperation({
+  const resultJson = `{"ok":true,"order":${nextOrderRaw},"txId":${JSON.stringify(txId)},"amount":${JSON.stringify(amount)},"amountMicros":${JSON.stringify(String(micros))},"effect":${JSON.stringify(effect)}}`;
+  const result = await executeOperation({
     script: CONFIRM_USDT_ORDER_SCRIPT,
     keys: [
       opKey,
@@ -1494,10 +2022,10 @@ export async function confirmUsdtOrderAtomic({
       txId,
       stored.value,
       expectedRevision,
-      JSON.stringify(nextOrder),
+      nextOrderRaw,
       JSON.stringify(orderOverview(nextOrder)),
       safeCreatedScore,
-      JSON.stringify(result),
+      resultJson,
       confirmedIso,
       amount,
       chainIso,
@@ -1509,10 +2037,17 @@ export async function confirmUsdtOrderAtomic({
       effectKey,
       JSON.stringify(effect),
       confirmedDate.getTime(),
+      overviewStored.value == null ? "0" : "1",
+      overviewStored.value || "",
+      nextOverviewRaw,
     ],
     opKey,
     requestHash,
   });
+  if (result?.error === "storage_conflict" && Number(arguments[0]?._losslessAttempt || 0) < 3) {
+    return confirmUsdtOrderAtomic({ ...arguments[0], _losslessAttempt: Number(arguments[0]?._losslessAttempt || 0) + 1 });
+  }
+  return result;
 }
 
 export const moneyKeys = {

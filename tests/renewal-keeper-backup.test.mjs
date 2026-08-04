@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { executeOrderCasEval } from "./helpers/order-cas-redis-mock.mjs";
+import { executeDurableOperationEval } from "./helpers/durable-operation-redis-mock.mjs";
 
 process.env.AUTH_SECRET = "renewal-test-secret-at-least-32-characters!!";
 process.env.KV_REST_API_URL = "http://redis.test";
@@ -39,6 +40,8 @@ function execute(command) {
   const name = String(rawName || "").toUpperCase();
   if (name === "PING") return "PONG";
   if (name === "GET") return values.get(args[0]) ?? null;
+  if (name === "SISMEMBER") return sets.get(args[0])?.has(String(args[1])) ? 1 : 0;
+  if (name === "SMISMEMBER") return args.slice(1).map((member) => sets.get(args[0])?.has(String(member)) ? 1 : 0);
   if (name === "SET") {
     const [key, value, ...options] = args;
     if (options.map(String).includes("NX") && values.has(key)) return null;
@@ -63,11 +66,23 @@ function execute(command) {
   if (name === "EVAL") {
     const cas = executeOrderCasEval(command, { values, lists, sortedSets, sets });
     if (cas.handled) return cas.result;
+    const durable = executeDurableOperationEval(command, { values, sortedSet });
+    if (durable.handled) return durable.result;
     const script = String(args[0] || "");
     const keyCount = Number(args[1] || 0);
     const keys = args.slice(2, 2 + keyCount);
     const argv = args.slice(2 + keyCount);
-    if (script.includes("local next = cjson.decode(ARGV[1])") && script.includes("LPUSH")) {
+    if (script.includes("CONTACT_CAS_V2")) {
+      const existing = values.get(keys[0]);
+      const revision = existing ? Number(JSON.parse(existing).revision || 0) : 0;
+      if (revision !== Number(argv[0])) return 0;
+      sortedSet(keys[1]).set(String(argv[3]), Number(argv[2]));
+      values.set(keys[0], argv[1]);
+      return 1;
+    }
+    if (script.includes("local current=redis.call('GET',KEYS[1])") && script.includes("LPUSH")) {
+      const current = values.get(keys[0]);
+      if (argv[2] === "0" ? current != null : current == null || current !== argv[3]) return "__conflict__";
       values.set(keys[0], String(argv[0]));
       return String(argv[0]);
     }
@@ -85,35 +100,6 @@ function execute(command) {
       if (revision !== Number(argv[0])) return 0;
       values.set(keys[0], argv[1]);
       return 1;
-    }
-    if (script.includes("state='started'") && script.includes("isNew=true")) {
-      const existing = values.get(keys[0]);
-      if (existing) {
-        const record = JSON.parse(existing);
-        if (record.requestHash !== argv[0]) return JSON.stringify({ ok: false, error: "idempotency_conflict" });
-        return JSON.stringify({ ok: true, state: record.state || "started", record, isNew: false });
-      }
-      const record = {
-        version: 1,
-        state: "started",
-        operationId: argv[1],
-        requestHash: argv[0],
-        createdAt: argv[2],
-      };
-      values.set(keys[0], JSON.stringify(record));
-      return JSON.stringify({ ok: true, state: "started", record, isNew: true });
-    }
-    if (script.includes("record.state='done'") && script.includes("completedAt=ARGV[3]")) {
-      const raw = values.get(keys[0]);
-      if (!raw) return JSON.stringify({ ok: false, error: "operation_record_missing" });
-      const record = JSON.parse(raw);
-      if (record.requestHash !== argv[0]) return JSON.stringify({ ok: false, error: "idempotency_conflict" });
-      if (record.state === "done") return JSON.stringify({ ok: true, state: "done", record, idempotent: true });
-      record.state = "done";
-      record.result = JSON.parse(argv[1]);
-      record.completedAt = argv[2];
-      values.set(keys[0], JSON.stringify(record));
-      return JSON.stringify({ ok: true, state: "done", record, idempotent: false });
     }
     if (script.includes("local marked=redis.call('SET',KEYS[1],'1','NX')")) {
       if (values.has(keys[0])) return 0;

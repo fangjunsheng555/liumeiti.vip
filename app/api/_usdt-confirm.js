@@ -27,6 +27,14 @@ const MAX_CHAIN_PAGES = 5;
 const MAX_EFFECTS_PER_PASS = 100;
 
 const COMPLETE_EFFECT_SCRIPT = `
+local function validtype(key,expected)
+  local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value
+  return actual=='none' or actual==expected
+end
+if not validtype(KEYS[1],'hash') or not validtype(KEYS[2],'zset')
+  or ARGV[1]=='' or ARGV[2]=='' then
+  return redis.error_reply('usdt_effect_storage_type_error')
+end
 local raw=redis.call('HGET',KEYS[1],ARGV[1])
 if not raw then
   redis.call('ZREM',KEYS[2],ARGV[1])
@@ -70,14 +78,16 @@ export function normalizeConfirmedUsdtTransfers(payload, receivingAddress) {
   const rows = Array.isArray(payload?.data) ? payload.data : [];
   return rows.map((row) => {
     const tokenAddress = String(row?.token_info?.address || row?.token_info?.contract_address || "");
-    const micros = rawValueToMicros(row?.value, row?.token_info?.decimals ?? 6);
+    const tokenDecimals = Number(row?.token_info?.decimals);
+    const micros = rawValueToMicros(row?.value, tokenDecimals);
     const txId = clean(row?.transaction_id, 96);
     const to = String(row?.to || "").trim();
     const ts = Number(row?.block_timestamp || 0);
     if (
       !txId || micros === null || micros <= 0n || !Number.isFinite(ts) || ts <= 0
       || !sameTronAddress(to, receivingAddress)
-      || (tokenAddress && !sameTronAddress(tokenAddress, USDT_TRC20_CONTRACT))
+      || tokenDecimals !== 6
+      || !sameTronAddress(tokenAddress, USDT_TRC20_CONTRACT)
     ) return null;
     return {
       txId,

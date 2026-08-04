@@ -171,7 +171,7 @@ export async function PATCH(request, { params }) {
   try { body = await request.json(); } catch {}
   const account = clean(body.account, 80);
   const password = clean(body.password, 120);
-  const email = clean(body.email, 200).toLowerCase();
+  const email = String(body.email || "").trim().toLowerCase();
   const contact = clean(body.contact, 200);
   const remark = clean(body.remark, 1500);
   if (!account) return Response.json({ ok: false, error: "account_required" }, { status: 400 });

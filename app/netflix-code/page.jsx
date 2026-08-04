@@ -18,23 +18,12 @@ import {
 } from "lucide-react";
 import MobileNav from "../components/MobileNav";
 import { useLocale } from "../components/LocaleProvider";
+import { fetchNetflixJson } from "./fetch-json";
 import styles from "./netflix-code.module.css";
 
 const RESULT_POLL_MS = 6000;
 const RESULT_POLL_LIMIT = 15;
 const RESULT_DELAY_NOTICE_AT = 5;
-const REQUEST_TIMEOUT_MS = 15 * 1000;
-
-async function fetchWithTimeout(input, init = {}) {
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    return await fetch(input, { ...init, signal: controller.signal });
-  } finally {
-    window.clearTimeout(timer);
-  }
-}
-
 function hasNetflix(order) {
   return (Array.isArray(order?.items) ? order.items : []).some((item) => item?.service === "netflix")
     || String(order?.service || "").toLowerCase() === "netflix";
@@ -64,6 +53,8 @@ export default function NetflixCodePage() {
   const seenRejectedRef = useRef([]);
 
   const [loadingAccount, setLoadingAccount] = useState(true);
+  const [accountLoadError, setAccountLoadError] = useState("");
+  const [accountLoadAttempt, setAccountLoadAttempt] = useState(0);
   const [loggedIn, setLoggedIn] = useState(false);
   const [orders, setOrders] = useState([]);
   const [query, setQuery] = useState("");
@@ -89,22 +80,36 @@ export default function NetflixCodePage() {
 
   useEffect(() => {
     let alive = true;
-    fetchWithTimeout("/api/auth/me", { credentials: "same-origin", cache: "no-store" })
-      .then(async (response) => ({ response, data: await response.json() }))
+    setLoadingAccount(true);
+    setAccountLoadError("");
+    setLoggedIn(false);
+    setOrders([]);
+    fetchNetflixJson("/api/auth/me", { credentials: "same-origin", cache: "no-store" })
       .then(({ response, data }) => {
         if (!alive) return;
         if (response.ok && data?.ok) {
           setLoggedIn(true);
           setOrders(Array.isArray(data.orders) ? data.orders : []);
+          return;
         }
+        if (response.status === 401) return;
+        throw new Error(L("账号订单暂时无法读取，请重试", "Account orders could not be loaded; please retry"));
       })
-      .catch(() => {})
+      .catch((error) => {
+        if (!alive) return;
+        setAccountLoadError(error?.name === "AbortError"
+          ? L("读取账号订单超时，请重试", "Loading account orders timed out; please retry")
+          : L("账号订单暂时无法读取，请重试", "Account orders could not be loaded; please retry"));
+      })
       .finally(() => { if (alive) setLoadingAccount(false); });
     return () => {
       alive = false;
-      if (pollTimer.current) window.clearTimeout(pollTimer.current);
-      if (codeCopyTimer.current) window.clearTimeout(codeCopyTimer.current);
     };
+  }, [accountLoadAttempt, L]);
+
+  useEffect(() => () => {
+    if (pollTimer.current) window.clearTimeout(pollTimer.current);
+    if (codeCopyTimer.current) window.clearTimeout(codeCopyTimer.current);
   }, []);
 
   useEffect(() => {
@@ -135,13 +140,12 @@ export default function NetflixCodePage() {
     setQueryBusy(true);
     setStatus(null);
     try {
-      const response = await fetchWithTimeout("/api/order-query", {
+      const { response, data } = await fetchNetflixJson("/api/order-query", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: query.trim(), code: verification ? code : "" }),
       });
-      const data = await response.json();
       if (!response.ok || !data?.ok) {
         const message = data?.error === "code_invalid_or_expired"
           ? L("验证码错误或已过期", "The verification code is incorrect or expired")
@@ -175,13 +179,12 @@ export default function NetflixCodePage() {
     setResult(null);
     setStatus(null);
     try {
-      const response = await fetchWithTimeout("/api/netflix-code", {
+      const { response, data } = await fetchNetflixJson("/api/netflix-code", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "authorize", orderId: order.orderId, token: order.afterSalesToken || "" }),
       });
-      const data = await response.json();
       if (!response.ok || !data?.ok) throw new Error(errorCopy(data?.error));
       sessionRef.current = data.sessionToken;
       setSession({
@@ -201,13 +204,12 @@ export default function NetflixCodePage() {
     const token = sessionRef.current;
     if (!token) return;
     try {
-      const response = await fetchWithTimeout("/api/netflix-code", {
+      const { response, data } = await fetchNetflixJson("/api/netflix-code", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "retrieve", sessionToken: token, seenEventIds: seenRejectedRef.current }),
       });
-      const data = await response.json();
       if (!response.ok || !data?.ok) {
         if (data?.error === "mail_unrecognized") {
           const rejectedIds = [...(Array.isArray(data.eventIds) ? data.eventIds : []), data.eventId]
@@ -320,6 +322,13 @@ export default function NetflixCodePage() {
 
             {loadingAccount ? (
               <div className={styles.loading}><LoaderCircle className="spin-icon" size={18} />{L("正在读取订单…", "Loading orders…")}</div>
+            ) : accountLoadError ? (
+              <div className={styles.accountLoadError} role="alert">
+                <p>{accountLoadError}</p>
+                <button type="button" onClick={() => setAccountLoadAttempt((value) => value + 1)}>
+                  <RefreshCw size={15} />{L("重试", "Retry")}
+                </button>
+              </div>
             ) : availableOrders.length ? (
               <div className={styles.orderList}>
                 {availableOrders.map((order) => (

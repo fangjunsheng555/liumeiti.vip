@@ -12,11 +12,25 @@ const {
 
 test("full Netflix search readers continue beyond the preview limits", async () => {
   const originalFetch = global.fetch;
-  const mailIds = Array.from({ length: 101 }, (_, index) => `MAIL-${index}`);
-  const accessIds = Array.from({ length: 201 }, (_, index) => `ACCESS-${index}`);
+  const mailIds = Array.from({ length: 101 }, (_, index) => `NM${index.toString(16).toUpperCase().padStart(24, "0")}`);
+  const accessIds = Array.from({ length: 201 }, (_, index) => `NA${index.toString(16).toUpperCase().padStart(16, "0")}`);
   const records = new Map([
-    ...mailIds.map((id, index) => [`liumeiti:netflix-mail:event:${id}`, { eventId: id, result: `code-${index}` }]),
-    ...accessIds.map((id, index) => [`liumeiti:netflix-code:access:${id}`, { id, orderId: `ORDER-${index}` }]),
+    ...mailIds.map((id) => [`liumeiti:netflix-mail:event:${id}`, {
+      eventId: id,
+      accepted: false,
+      accountHashes: [],
+      receivedAt: "2026-08-04T00:00:00.000Z",
+      expiresAt: "2026-08-11T00:00:00.000Z",
+      kind: "",
+      payload: null,
+    }]),
+    ...accessIds.map((id, index) => [`liumeiti:netflix-code:access:${id}`, {
+      id,
+      orderId: `ORDER-${index}`,
+      eventId: mailIds[index % mailIds.length],
+      outcome: "code_returned",
+      createdAt: "2026-08-04T00:00:00.000Z",
+    }]),
   ]);
 
   global.fetch = async (input, init = {}) => {
@@ -38,8 +52,8 @@ test("full Netflix search readers continue beyond the preview limits", async () 
     const access = await listAllNetflixCodeAccess();
     assert.equal(mail.length, 101);
     assert.equal(access.length, 201);
-    assert.equal(mail.at(-1).eventId, "MAIL-100");
-    assert.equal(access.at(-1).id, "ACCESS-200");
+    assert.equal(mail.at(-1).eventId, mailIds.at(-1));
+    assert.equal(access.at(-1).id, accessIds.at(-1));
   } finally {
     global.fetch = originalFetch;
   }

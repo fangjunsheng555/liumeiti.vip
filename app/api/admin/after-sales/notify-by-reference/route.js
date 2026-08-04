@@ -38,6 +38,27 @@ function publicOrderSummary(order) {
   };
 }
 
+function validReferenceNoticePlan(plan, reference) {
+  if (!plan || typeof plan !== "object" || Array.isArray(plan) || plan.reference !== reference
+      || !Array.isArray(plan.orderIds) || !plan.orderIds.length || !Array.isArray(plan.recipients) || !plan.recipients.length
+      || !plan.emailContext || typeof plan.emailContext !== "object" || Array.isArray(plan.emailContext)) return false;
+  const plannedIds = plan.orderIds.map((id) => clean(id, 80).toUpperCase());
+  if (plannedIds.some((id) => !id) || new Set(plannedIds).size !== plannedIds.length) return false;
+  const emails = new Set(), recipientIds = [];
+  for (const recipient of plan.recipients) {
+    const email = String(recipient?.email || "").trim().toLowerCase();
+    if (!recipient || typeof recipient !== "object" || Array.isArray(recipient) || !validEmail(email) || emails.has(email)
+        || !Array.isArray(recipient.orderIds) || !recipient.orderIds.length || !Array.isArray(recipient.orders)
+        || recipient.orders.length !== recipient.orderIds.length) return false;
+    emails.add(email);
+    const ids = recipient.orderIds.map((id) => clean(id, 80).toUpperCase());
+    if (new Set(ids).size !== ids.length || recipient.orders.some((order, index) => !order || typeof order !== "object"
+        || Array.isArray(order) || clean(order.orderId, 80).toUpperCase() !== ids[index])) return false;
+    recipientIds.push(...ids);
+  }
+  return recipientIds.length === plannedIds.length && recipientIds.slice().sort().every((id, index) => id === plannedIds.slice().sort()[index]);
+}
+
 function referenceNoticeOrderSnapshot(order) {
   return {
     orderId: clean(order?.orderId, 80).toUpperCase(),
@@ -196,7 +217,10 @@ async function sendReferenceNoticeHandler(request) {
     });
   }
   if (operation.state === "done") {
-    const replay = operation.record.result || { ok: true, reference };
+    const replay = operation.record.result;
+    if (!replay || typeof replay !== "object" || Array.isArray(replay) || typeof replay.ok !== "boolean" || replay.reference !== reference) {
+      return Response.json({ ok: false, error: "durable_operation_record_invalid" }, { status: 409 });
+    }
     return Response.json({ ...replay, idempotent: true });
   }
 
@@ -234,6 +258,9 @@ async function sendReferenceNoticeHandler(request) {
     const planned = await ensureDurableOperationPlan(operation, proposedPlan);
     if (!planned.ok) return Response.json({ ok: false, error: planned.error }, { status: 503 });
     plan = planned.plan;
+  }
+  if (!validReferenceNoticePlan(plan, reference)) {
+    return Response.json({ ok: false, error: "reference_notice_plan_invalid" }, { status: 409 });
   }
 
   // Recipients, selected orders, notes and mail settings stay bound to the

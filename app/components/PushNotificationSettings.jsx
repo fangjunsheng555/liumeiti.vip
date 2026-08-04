@@ -18,7 +18,7 @@ import {
   currentBrowserPushSubscription,
   disableBrowserPush,
   enableBrowserPush,
-  fetchPushAccountState,
+  fetchPushAccountState as loadPushAccountState,
   hasRemotePushSubscription,
   pushSubscriptionMatchesVapidKey,
   reconcileBrowserPushSubscription,
@@ -118,7 +118,7 @@ export default function PushNotificationSettings({ locale = "zh" }) {
     setMessage(null);
     try {
       const [loadedAccountState, subscription] = await Promise.all([
-        fetchPushAccountState(),
+        loadPushAccountState(),
         currentBrowserPushSubscription(),
       ]);
       let accountState = loadedAccountState;

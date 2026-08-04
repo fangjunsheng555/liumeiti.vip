@@ -62,21 +62,13 @@ function sameNetflixRequest(left, right, newerRecord = null, allowCurrentSrc = f
   const rightEvidence = requestFingerprints(right);
   const leftPrimary = requestPrimaryFingerprints(left);
   const rightPrimary = requestPrimaryFingerprints(right);
-  // Two explicit current identities outrank the SRC fallback. An inbox rule
-  // can retain an old SRC in malformed current-looking text, but it cannot
-  // make two distinct original Message-IDs the same request.
   if (leftPrimary.length && rightPrimary.length) {
     const rightPrimarySet = new Set(rightPrimary);
     if (!leftPrimary.some((value) => rightPrimarySet.has(value))) return false;
   }
-  // Equal SRC values are sufficient only when the newer delivery proves that
-  // its SRC came from its current, quote-trimmed content. This closes the last
-  // Outlook dual-forward gap without allowing a new wrapper that quotes only
-  // an older footer to replay the older code.
   if (allowCurrentSrc && leftDelivery && leftDelivery === rightDelivery
     && newerRecord?.deliveryFingerprintFromCurrent === true
     && deliveryFingerprint(newerRecord) === leftDelivery) return true;
-  // Otherwise require an HMAC-protected original Message-ID/content identity.
   // New records carry one HMAC-protected current identity. When only one side
   // has the new field, compare that identity with the legacy record's full
   // evidence set; this keeps pre-deployment mail readable without letting an
@@ -289,16 +281,13 @@ export function latestAcceptedNetflixRecords(
   // A successfully parsed newest delivery is always authoritative. Returning
   // only that record prevents an older code from being used when the customer
   // requested two different Netflix messages close together.
-  if (newest.record?.accepted) {
+  if (newest.record?.accepted === true) {
     return [newest];
   }
 
   // An older accepted result may outrank a newer rejected copy only when both
   // prove they came from the same original Netflix request. Unequal SRC UUIDs
   // conclusively reject a match, while HMAC-protected original Message-ID or
-  // canonical-content identities provide positive proof. Equal SRC is also
-  // proof only when the newer record explicitly says it came from current,
-  // quote-trimmed content. With neither signal, fail closed.
   const excludedFallbacks = new Set(validEventIds(excludeFallbackEventIds));
   // Evidence overlap is deliberately non-transitive for fallback. References
   // is a thread-level header and a newly forwarded request can quote both an
@@ -306,7 +295,7 @@ export function latestAcceptedNetflixRecords(
   // turn indirect overlap into permission to replay an older accepted code.
   return (rankedClusters[0]?.entries || []).filter((entry) => {
     const receivedGap = Math.abs(newestReceivedAt - Number(entry.receivedAt));
-    if (!entry.record?.accepted || receivedGap > windowMs) return false;
+    if (entry.record?.accepted !== true || receivedGap > windowMs) return false;
     if (excludedFallbacks.has(String(entry.record?.eventId || "").toUpperCase())) return false;
     return sameNetflixRequestEntries(newest, entry);
   }).slice(0, 1);
@@ -316,6 +305,34 @@ function parseJson(value) {
   if (!value) return null;
   if (typeof value === "object") return value;
   try { return JSON.parse(value); } catch { return null; }
+}
+
+function plain(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function canonicalAccountHashes(value) {
+  return Array.isArray(value) && value.length === new Set(value).size
+    && value.every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash));
+}
+
+function validMailRecord(record, expectedId = "", expectedHash = "") {
+  if (!plain(record) || !/^NM[A-F0-9]{24}$/.test(record.eventId)
+      || (expectedId && record.eventId !== expectedId) || typeof record.accepted !== "boolean"
+      || !canonicalAccountHashes(record.accountHashes) || (expectedHash && !record.accountHashes.includes(expectedHash))
+      || typeof record.receivedAt !== "string" || typeof record.expiresAt !== "string"
+      || !Number.isFinite(new Date(record.receivedAt).getTime()) || !Number.isFinite(new Date(record.expiresAt).getTime())) return false;
+  if (record.arrivalSequence !== undefined && (!Number.isSafeInteger(Number(record.arrivalSequence)) || Number(record.arrivalSequence) <= 0)) return false;
+  if (record.accepted === true) return ["code", "link", "household"].includes(record.kind)
+    && plain(record.payload) && [record.payload.iv, record.payload.tag, record.payload.data].every((value) => typeof value === "string" && value.length > 0);
+  return (record.kind === "" || record.kind === undefined) && (record.payload == null);
+}
+
+function validAccessRecord(record, expectedId = "") {
+  return plain(record) && /^NA[A-F0-9]{16}$/.test(record.id) && (!expectedId || record.id === expectedId)
+    && clean(record.orderId, 80).toUpperCase() === record.orderId && validEventIds(record.eventId)[0] === record.eventId
+    && ["code_returned", "travel_link_returned", "household_link_returned"].includes(record.outcome)
+    && typeof record.createdAt === "string" && Number.isFinite(new Date(record.createdAt).getTime());
 }
 
 function pipelineRows(value) {
@@ -518,10 +535,16 @@ function returnedAccessDedupeKey(orderId, record) {
   }) : "";
 }
 
+function returnedAccessDedupeValue(orderId, record) {
+  const key = returnedAccessDedupeKey(orderId, record);
+  const digest = key.slice(ACCESS_DEDUPE_PREFIX.length);
+  return digest ? `NA${digest.slice(0, 16).toUpperCase()}` : "";
+}
+
 async function returnedNetflixEventIds(orderId, records) {
   const candidates = (Array.isArray(records) ? records : [])
     .map(({ record }) => record)
-    .filter((record) => record?.accepted
+    .filter((record) => record?.accepted === true
       && returnedEventGlobalKey(record.eventId)
       && returnedEventKey(orderId, record.eventId)
       && returnedAccessDedupeKey(orderId, record));
@@ -543,7 +566,7 @@ async function returnedNetflixEventIds(orderId, records) {
   return { ok: true, eventIds: candidates
     .filter((record, index) => pipelineValue(rows[index * 3]) === "1"
       || pipelineValue(rows[index * 3 + 1]) === "1"
-      || pipelineValue(rows[index * 3 + 2]) === "1")
+      || ["1", returnedAccessDedupeValue(orderId, record)].includes(pipelineValue(rows[index * 3 + 2])))
     .map((record) => record.eventId) };
 }
 
@@ -637,7 +660,7 @@ export async function verifyNetflixMailEvent(eventId, digest) {
   const raw = pipelineValue(rows[0]);
   if (raw == null) return { ok: true, exists: false, matches: false };
   const record = parseJson(raw);
-  if (!record || record.eventId !== normalizedEventId) {
+  if (!validMailRecord(record, normalizedEventId)) {
     return { ok: false, error: "event_record_invalid" };
   }
   const expectedDigestHash = createHash("sha256").update(String(digest || "")).digest("hex");
@@ -682,7 +705,7 @@ export async function findLatestNetflixMailState(email, {
     const record = parseJson(raw);
     // An index member without a valid matching event is an inconsistent read,
     // not the same thing as a healthy empty inbox.
-    if (!record || !record?.accountHashes?.includes(hash)) {
+    if (!validMailRecord(record, ids[index], hash)) {
       return { state: "error", error: "storage_unavailable" };
     }
     const receivedAt = new Date(record.receivedAt || 0).getTime();
@@ -723,7 +746,7 @@ export async function findLatestNetflixMailState(email, {
   // All sibling rejected ids are reported so one acknowledgement covers every
   // copy of a dual-delivered email.
   const seenEventIds = new Set(validEventIds(excludeEventIds));
-  const rejectedEntries = siblingCluster.filter(({ record, receivedAt }) => !record.accepted
+  const rejectedEntries = siblingCluster.filter(({ record, receivedAt }) => record.accepted === false
     && receivedAt >= rejectedMinScore);
   const rejected = rejectedEntries.find(({ record }) => !seenEventIds.has(record.eventId))?.record;
   return rejected ? {
@@ -751,18 +774,8 @@ export async function recordNetflixCodeAccess(entry) {
   if (!await markNetflixCodeResultReturned(orderId, eventId)) return false;
 
   const dedupeId = accessDedupeId({ orderId, eventId, outcome });
-  const first = await redisCmd([
-    "SET",
-    ACCESS_DEDUPE_PREFIX + dedupeId,
-    "1",
-    "NX",
-    "EX",
-    String(ACCESS_TTL_SECONDS),
-  ]);
-  if (first !== "OK") return true;
-
   const now = new Date();
-  const id = "NA" + randomBytes(8).toString("hex").toUpperCase();
+  const id = "NA" + dedupeId.slice(0, 16).toUpperCase();
   const record = {
     id,
     orderId,
@@ -774,13 +787,41 @@ export async function recordNetflixCodeAccess(entry) {
     createdAtBeijing: formatBeijingTime(now),
   };
   const score = now.getTime();
-  const commands = [
-    ["SET", ACCESS_PREFIX + id, JSON.stringify(record), "EX", String(ACCESS_TTL_SECONDS)],
-    ["ZADD", ACCESS_INDEX, String(score), id],
-  ];
-  const rows = pipelineRows(await redisPipeline(commands));
-  const ok = rows.length === commands.length && rows.every((entryRow) => !entryRow?.error);
-  if (!ok) await redisCmd(["DEL", ACCESS_DEDUPE_PREFIX + dedupeId]);
+  const raw = JSON.stringify(record);
+  const script = `
+local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end
+local score=tonumber(ARGV[3]); local ttl=tonumber(ARGV[4])
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'string') or not validtype(KEYS[3],'zset')
+  or not score or score~=score or not ttl or ttl~=math.floor(ttl) or ttl<1 then return -1 end
+local nextOk,next=pcall(cjson.decode,ARGV[2])
+if not nextOk or type(next)~='table' or tostring(next.id or '')~=ARGV[1] or tostring(next.orderId or '')~=ARGV[5]
+  or tostring(next.eventId or '')~=ARGV[6] or tostring(next.outcome or '')~=ARGV[7] then return -1 end
+local dedupe=redis.call('GET',KEYS[1])
+if dedupe and dedupe~='1' and dedupe~=ARGV[1] then return -2 end
+local existing=redis.call('GET',KEYS[2])
+local existingScore=redis.call('ZSCORE',KEYS[3],ARGV[1])
+if existing then
+  local existingOk,doc=pcall(cjson.decode,existing)
+  if not existingOk or type(doc)~='table' or tostring(doc.id or '')~=ARGV[1] or tostring(doc.orderId or '')~=ARGV[5]
+    or tostring(doc.eventId or '')~=ARGV[6] or tostring(doc.outcome or '')~=ARGV[7] then return -2 end
+else redis.call('SET',KEYS[2],ARGV[2],'EX',ARGV[4]) end
+redis.call('EXPIRE',KEYS[2],ARGV[4])
+redis.call('ZADD',KEYS[3],existingScore or ARGV[3],ARGV[1])
+redis.call('SET',KEYS[1],ARGV[1],'EX',ARGV[4])
+return existing and 0 or 1`;
+  const saved = await redisCmd([
+    "EVAL", script, "3", ACCESS_DEDUPE_PREFIX + dedupeId, ACCESS_PREFIX + id, ACCESS_INDEX,
+    id, raw, String(score), String(ACCESS_TTL_SECONDS), orderId, eventId, outcome,
+  ]);
+  let ok = saved != null && [0, 1].includes(Number(saved));
+  if (saved == null) {
+    const recovered = await strictRedisRead([
+      ["GET", ACCESS_DEDUPE_PREFIX + dedupeId], ["GET", ACCESS_PREFIX + id], ["ZSCORE", ACCESS_INDEX, id],
+    ]);
+    const stored = parseJson(recovered ? pipelineValue(recovered[1]) : null);
+    ok = Boolean(recovered && pipelineValue(recovered[0]) === id && pipelineValue(recovered[2]) != null
+      && validAccessRecord(stored, id) && stored.orderId === orderId && stored.eventId === eventId && stored.outcome === outcome);
+  }
   await redisCmd(["ZREMRANGEBYSCORE", ACCESS_INDEX, "-inf", String(Date.now() - ACCESS_TTL_SECONDS * 1000)]);
   return ok;
 }
@@ -792,25 +833,33 @@ export async function markNetflixCodeResultReturned(orderId, eventId) {
   // The global marker prevents a shared Netflix account from replaying an old
   // result through a different order. The order-scoped v1 marker is retained
   // as migration evidence and for existing operational tooling.
-  if (await redisCmd([
-    "SET",
-    globalMarkerKey,
-    "1",
-    "EX",
-    String(EVENT_TTL_SECONDS),
-  ]) !== "OK") return false;
-  await redisCmd(["SET", markerKey, "1", "EX", String(EVENT_TTL_SECONDS)]);
-  return true;
+  const script = `
+local function validtype(key) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual=='string' end
+local ttl=tonumber(ARGV[1])
+if not validtype(KEYS[1]) or not validtype(KEYS[2]) or not ttl or ttl~=math.floor(ttl) or ttl<1 then return 0 end
+redis.call('SET',KEYS[1],'1','EX',ARGV[1])
+redis.call('SET',KEYS[2],'1','EX',ARGV[1])
+return 1`;
+  const saved = Number(await redisCmd(["EVAL", script, "2", globalMarkerKey, markerKey, String(EVENT_TTL_SECONDS)]));
+  if (saved === 1) return true;
+  const recovered = await strictRedisRead([["GET", globalMarkerKey], ["GET", markerKey]]);
+  return Boolean(recovered && pipelineValue(recovered[0]) === "1" && pipelineValue(recovered[1]) === "1");
 }
 
-async function recordsFromIndex(indexKey, offset, limit, prefix) {
+async function recordsFromIndex(indexKey, offset, limit, prefix, validator) {
   const ids = await redisCmd(["ZREVRANGE", indexKey, String(offset), String(offset + limit - 1)]);
   if (!Array.isArray(ids) || !ids.length) return [];
-  const rows = pipelineRows(await redisPipeline(ids.map((id) => ["GET", prefix + id])));
-  return rows.map((entry) => parseJson(pipelineValue(entry))).filter(Boolean);
+  const response = await redisPipeline(ids.map((id) => ["GET", prefix + id]));
+  if (!pipelineSucceeded(response, ids.length)) return [];
+  const rows = pipelineRows(response);
+  const records = rows.map((entry, index) => {
+    const record = parseJson(pipelineValue(entry));
+    return validator(record, ids[index]) ? record : null;
+  });
+  return records.every(Boolean) ? records : [];
 }
 
-async function allRecordsFromIndex(indexKey, prefix, pageSize = 200) {
+async function allRecordsFromIndex(indexKey, prefix, validator, pageSize = 200) {
   const safePageSize = Math.max(20, Math.min(500, Number(pageSize || 200)));
   const records = [];
   let offset = 0;
@@ -825,8 +874,14 @@ async function allRecordsFromIndex(indexKey, prefix, pageSize = 200) {
       String(offset + safePageSize - 1),
     ]);
     if (!Array.isArray(ids) || !ids.length) break;
-    const rows = pipelineRows(await redisPipeline(ids.map((id) => ["GET", prefix + id])));
-    records.push(...rows.map((entry) => parseJson(pipelineValue(entry))).filter(Boolean));
+    const response = await redisPipeline(ids.map((id) => ["GET", prefix + id]));
+    if (!pipelineSucceeded(response, ids.length)) return [];
+    const page = pipelineRows(response).map((entry, index) => {
+      const record = parseJson(pipelineValue(entry));
+      return validator(record, ids[index]) ? record : null;
+    });
+    if (!page.every(Boolean)) return [];
+    records.push(...page);
     offset += ids.length;
     if (ids.length < safePageSize) break;
   }
@@ -850,48 +905,111 @@ export async function latestNetflixMailReceipts(hashes) {
 }
 
 export async function listNetflixMailEvents({ offset = 0, limit = 60 } = {}) {
-  return recordsFromIndex(EVENT_INDEX, Math.max(0, Number(offset || 0)), Math.max(1, Math.min(100, Number(limit || 60))), EVENT_PREFIX);
+  return recordsFromIndex(EVENT_INDEX, Math.max(0, Number(offset || 0)), Math.max(1, Math.min(100, Number(limit || 60))), EVENT_PREFIX, validMailRecord);
 }
 
 export async function listNetflixCodeAccess({ offset = 0, limit = 100 } = {}) {
-  return recordsFromIndex(ACCESS_INDEX, Math.max(0, Number(offset || 0)), Math.max(1, Math.min(200, Number(limit || 100))), ACCESS_PREFIX);
+  return recordsFromIndex(ACCESS_INDEX, Math.max(0, Number(offset || 0)), Math.max(1, Math.min(200, Number(limit || 100))), ACCESS_PREFIX, validAccessRecord);
 }
 
 export async function listAllNetflixMailEvents() {
-  return allRecordsFromIndex(EVENT_INDEX, EVENT_PREFIX);
+  return allRecordsFromIndex(EVENT_INDEX, EVENT_PREFIX, validMailRecord);
 }
 
 export async function listAllNetflixCodeAccess() {
-  return allRecordsFromIndex(ACCESS_INDEX, ACCESS_PREFIX);
+  return allRecordsFromIndex(ACCESS_INDEX, ACCESS_PREFIX, validAccessRecord);
 }
+
+const DELETE_MAIL_EVENTS_SCRIPT = `
+local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end
+local ok,plan=pcall(cjson.decode,ARGV[1])
+if not ok or type(plan)~='table' or not validtype(KEYS[1],'zset') then return 0 end
+for _,item in ipairs(plan) do
+  local recordKey=tonumber(item.recordKey)
+  if not recordKey or recordKey~=math.floor(recordKey) or not KEYS[recordKey] or not validtype(KEYS[recordKey],'string') then return 0 end
+  local raw=redis.call('GET',KEYS[recordKey])
+  if (item.present==true and raw~=item.raw) or (item.present~=true and raw) then return 0 end
+  for _,keyIndex in ipairs(item.accountKeys or {}) do
+    keyIndex=tonumber(keyIndex)
+    if not keyIndex or keyIndex~=math.floor(keyIndex) or not KEYS[keyIndex] or not validtype(KEYS[keyIndex],'zset') then return 0 end
+  end
+end
+for _,item in ipairs(plan) do
+  redis.call('ZREM',KEYS[1],item.id)
+  for _,keyIndex in ipairs(item.accountKeys or {}) do redis.call('ZREM',KEYS[tonumber(keyIndex)],item.id) end
+  if item.present==true and redis.call('DEL',KEYS[tonumber(item.recordKey)])~=1 then return 0 end
+end
+return #plan`;
+
+const DELETE_ACCESS_SCRIPT = `
+local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end
+local ok,plan=pcall(cjson.decode,ARGV[1])
+if not ok or type(plan)~='table' or not validtype(KEYS[1],'zset') then return 0 end
+for _,item in ipairs(plan) do
+  local recordKey=tonumber(item.recordKey); local dedupeKey=tonumber(item.dedupeKey or 0)
+  if not recordKey or recordKey~=math.floor(recordKey) or not KEYS[recordKey] or not validtype(KEYS[recordKey],'string') then return 0 end
+  if dedupeKey>0 and (not KEYS[dedupeKey] or not validtype(KEYS[dedupeKey],'string')) then return 0 end
+  local raw=redis.call('GET',KEYS[recordKey])
+  if (item.present==true and raw~=item.raw) or (item.present~=true and raw) then return 0 end
+end
+for _,item in ipairs(plan) do
+  redis.call('ZREM',KEYS[1],item.id)
+  if item.present==true and redis.call('DEL',KEYS[tonumber(item.recordKey)])~=1 then return 0 end
+  if tonumber(item.dedupeKey or 0)>0 then redis.call('DEL',KEYS[tonumber(item.dedupeKey)]) end
+end
+return #plan`;
 
 export async function deleteNetflixMailEvents(values) {
   const eventIds = validEventIds(values).slice(0, 40);
   if (!eventIds.length) return { ok: false, deleted: 0 };
-  const rows = pipelineRows(await redisPipeline(eventIds.map((eventId) => ["GET", eventKey(eventId)])));
-  const commands = [];
-  eventIds.forEach((eventId, index) => {
-    const record = parseJson(pipelineValue(rows[index]));
-    commands.push(["ZREM", EVENT_INDEX, eventId], ["DEL", eventKey(eventId)]);
-    for (const hash of (record?.accountHashes || [])) commands.push(["ZREM", accountIndexKey(hash), eventId]);
-  });
-  const ok = pipelineSucceeded(await redisPipeline(commands), commands.length);
+  const readRows = await strictRedisRead(eventIds.map((eventId) => ["GET", eventKey(eventId)]));
+  if (!readRows) return { ok: false, deleted: 0 };
+  const raws = eventIds.map((eventId, index) => pipelineValue(readRows[index]));
+  const records = raws.map(parseJson);
+  if (records.some((record, index) => record != null && !validMailRecord(record, eventIds[index]))) return { ok: false, deleted: 0 };
+  const keys = [EVENT_INDEX], keyIndexes = new Map([[EVENT_INDEX, 1]]);
+  const addKey = (key) => { if (!keyIndexes.has(key)) { keys.push(key); keyIndexes.set(key, keys.length); } return keyIndexes.get(key); };
+  const plan = eventIds.map((id, index) => ({
+    id, raw: raws[index] || "", present: raws[index] != null, recordKey: addKey(eventKey(id)),
+    accountKeys: (records[index]?.accountHashes || []).map((hash) => addKey(accountIndexKey(hash))),
+  }));
+  const deleted = await redisCmd(["EVAL", DELETE_MAIL_EVENTS_SCRIPT, String(keys.length), ...keys, JSON.stringify(plan)]);
+  let ok = deleted != null && Number(deleted) === eventIds.length;
+  if (deleted == null) {
+    const commands = plan.flatMap((item) => [
+      ["GET", keys[item.recordKey - 1]], ["ZSCORE", EVENT_INDEX, item.id],
+      ...item.accountKeys.map((keyIndex) => ["ZSCORE", keys[keyIndex - 1], item.id]),
+    ]);
+    const recovered = await strictRedisRead(commands);
+    ok = Boolean(recovered && recovered.every((row) => pipelineValue(row) == null));
+  }
   return { ok, deleted: ok ? eventIds.length : 0 };
 }
 
 export async function deleteNetflixCodeAccessRecords(values) {
   const accessIds = validAccessIds(values).slice(0, 40);
   if (!accessIds.length) return { ok: false, deleted: 0 };
-  const rows = pipelineRows(await redisPipeline(accessIds.map((id) => ["GET", ACCESS_PREFIX + id])));
-  const commands = [];
-  accessIds.forEach((id, index) => {
-    const record = parseJson(pipelineValue(rows[index]));
-    commands.push(["ZREM", ACCESS_INDEX, id], ["DEL", ACCESS_PREFIX + id]);
-    if (record?.orderId && record?.eventId && record?.outcome) {
-      commands.push(["DEL", ACCESS_DEDUPE_PREFIX + accessDedupeId(record)]);
-    }
-  });
-  const ok = pipelineSucceeded(await redisPipeline(commands), commands.length);
+  const readRows = await strictRedisRead(accessIds.map((id) => ["GET", ACCESS_PREFIX + id]));
+  if (!readRows) return { ok: false, deleted: 0 };
+  const raws = accessIds.map((id, index) => pipelineValue(readRows[index]));
+  const records = raws.map(parseJson);
+  if (records.some((record, index) => record != null && !validAccessRecord(record, accessIds[index]))) return { ok: false, deleted: 0 };
+  const keys = [ACCESS_INDEX], keyIndexes = new Map([[ACCESS_INDEX, 1]]);
+  const addKey = (key) => { if (!keyIndexes.has(key)) { keys.push(key); keyIndexes.set(key, keys.length); } return keyIndexes.get(key); };
+  const plan = accessIds.map((id, index) => ({
+    id, raw: raws[index] || "", present: raws[index] != null, recordKey: addKey(ACCESS_PREFIX + id),
+    dedupeKey: records[index] ? addKey(ACCESS_DEDUPE_PREFIX + accessDedupeId(records[index])) : 0,
+  }));
+  const deleted = await redisCmd(["EVAL", DELETE_ACCESS_SCRIPT, String(keys.length), ...keys, JSON.stringify(plan)]);
+  let ok = deleted != null && Number(deleted) === accessIds.length;
+  if (deleted == null) {
+    const commands = plan.flatMap((item) => [
+      ["GET", keys[item.recordKey - 1]], ["ZSCORE", ACCESS_INDEX, item.id],
+      ...(item.dedupeKey ? [["GET", keys[item.dedupeKey - 1]]] : []),
+    ]);
+    const recovered = await strictRedisRead(commands);
+    ok = Boolean(recovered && recovered.every((row) => pipelineValue(row) == null));
+  }
   return { ok, deleted: ok ? accessIds.length : 0 };
 }
 

@@ -11,10 +11,15 @@ local listType=redis.call('TYPE',KEYS[2])
 if type(listType)=='table' then listType=listType.ok end
 if markerType~='none' and markerType~='string' then return -2 end
 if listType~='none' and listType~='list' then return -2 end
+local limit=tonumber(ARGV[2])
+local eventOk,event=pcall(cjson.decode,ARGV[1])
+if not limit or limit~=math.floor(limit) or limit<1 or limit>10000
+  or not eventOk or type(event)~='table' or type(event.id)~='string'
+  or type(event.type)~='string' or type(event.createdAt)~='string' then return -2 end
 local marked=redis.call('SET',KEYS[1],'1','NX')
 if marked then
   redis.call('LPUSH',KEYS[2],ARGV[1])
-  redis.call('LTRIM',KEYS[2],0,tonumber(ARGV[2])-1)
+  redis.call('LTRIM',KEYS[2],0,limit-1)
   return 1
 end
 return 0`;

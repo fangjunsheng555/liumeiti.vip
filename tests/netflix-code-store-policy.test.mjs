@@ -598,6 +598,7 @@ test("persisted return evidence blocks an old-code fallback only after a newer f
   const strings = new Map();
   const sortedSets = new Map();
   let failSafetyMarkerWrite = false;
+  let loseSafetyMarkerResponse = false;
   let failReturnedEvidenceLookup = false;
   const sortedSet = (key) => {
     if (!sortedSets.has(key)) sortedSets.set(key, new Map());
@@ -605,6 +606,21 @@ test("persisted return evidence blocks an old-code fallback only after a newer f
   };
   const execute = (command) => {
     const [name, ...args] = command.map(String);
+    if (name === "EVAL" && args[0].includes("validtype(KEYS[1])") && args[1] === "2") {
+      if (failSafetyMarkerWrite) return 0;
+      strings.set(args[2], "1");
+      strings.set(args[3], "1");
+      return loseSafetyMarkerResponse ? null : 1;
+    }
+    if (name === "EVAL" && args[1] === "3" && args[0].includes("existingScore=redis.call('ZSCORE'")) {
+      const [, , dedupeKey, recordKey, indexKey, id, raw, score] = args;
+      const existing = strings.get(recordKey);
+      if (!existing) strings.set(recordKey, raw);
+      const priorScore = sortedSet(indexKey).get(id);
+      sortedSet(indexKey).set(id, priorScore ?? Number(score));
+      strings.set(dedupeKey, id);
+      return existing ? 0 : 1;
+    }
     if (name === "SET") {
       const [key, value] = args;
       if (failSafetyMarkerWrite && key.includes("netflix-code:returned-event-global:v1:")) return null;
@@ -624,6 +640,7 @@ test("persisted return evidence blocks an old-code fallback only after a newer f
       sortedSet(args[0]).set(args[2], Number(args[1]));
       return 1;
     }
+    if (name === "ZSCORE") return sortedSet(args[0]).has(args[1]) ? String(sortedSet(args[0]).get(args[1])) : null;
     if (name === "ZREMRANGEBYSCORE") return 0;
     if (name === "PING") return "PONG";
     if (name === "ZREVRANGEBYSCORE") {
@@ -707,7 +724,13 @@ test("persisted return evidence blocks an old-code fallback only after a newer f
   failSafetyMarkerWrite = true;
   assert.equal(await markNetflixCodeResultReturned("LM-NETFLIX-SAFETY", accepted.eventId), false,
     "a failed Redis write must not be reported as a persisted safety marker");
+  assert.equal([...strings.keys()].some((key) => key.includes("netflix-code:returned-event")), false,
+    "the two safety markers must fail atomically");
   failSafetyMarkerWrite = false;
+  loseSafetyMarkerResponse = true;
+  assert.equal(await markNetflixCodeResultReturned("LM-NETFLIX-AMBIGUOUS", accepted.eventId), true,
+    "an ambiguous REST response must recover both atomically committed markers");
+  loseSafetyMarkerResponse = false;
   assert.equal(await recordNetflixCodeAccess({
     orderId: "LM-NETFLIX-SAFETY",
     accountEmail: account,

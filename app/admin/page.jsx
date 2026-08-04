@@ -2604,7 +2604,7 @@ export default function AdminPage() {
     }
   }
 
-  async function fetchRegisteredMailEmails() {
+  async function loadRegisteredMailEmails() {
     if (!canViewUsers) {
       setMailResult({ type: "error", message: "读取注册用户邮箱需要用户查看权限" });
       return [];
@@ -2624,7 +2624,7 @@ export default function AdminPage() {
     return normalizeEmailList((data.users || []).map((user) => user?.email));
   }
 
-  async function fetchOrderMailEmails() {
+  async function loadOrderMailEmails() {
     const params = new URLSearchParams({ mode: "recipient-emails" });
     const res = await fetch("/api/admin/orders?" + params.toString(), {
       credentials: "same-origin",
@@ -2649,8 +2649,8 @@ export default function AdminPage() {
     try {
       let registered = [];
       let orders = [];
-      if (source === "registered" || source === "all") registered = await fetchRegisteredMailEmails();
-      if (source === "orders" || source === "all") orders = await fetchOrderMailEmails();
+      if (source === "registered" || source === "all") registered = await loadRegisteredMailEmails();
+      if (source === "orders" || source === "all") orders = await loadOrderMailEmails();
       const emails = normalizeEmailList([...registered, ...orders]);
       if (!isCurrentAdminLoadRequest("mailRecipientPool", requestId)) return;
       const label = source === "registered" ? "注册用户" : source === "orders" ? "历史订单联系邮箱" : "注册用户 + 历史订单";

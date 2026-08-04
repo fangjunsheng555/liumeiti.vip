@@ -212,7 +212,10 @@ function installFakeRedis(initial = {}) {
         if (script.includes("redis.call('SREM',KEYS[4],ARGV[1])")) {
           const user = store.has(keys[0]) ? JSON.parse(store.get(keys[0])) : null;
           if (!user) return { result: JSON.stringify({ ok: false, error: "user_not_found" }) };
-          const currentVersion = store.has(keys[4]) ? Number(store.get(keys[4])) : 1;
+          const versionRaw = store.get(keys[4]);
+          const currentVersion = typeof versionRaw === "string" && /^\d+$/.test(versionRaw)
+            && Number.isSafeInteger(Number(versionRaw)) && Number(versionRaw) > 0
+            && Number(versionRaw) <= 9007199254740990 ? Number(versionRaw) : 1;
           const authVersion = currentVersion + 1;
           store.set(keys[4], String(authVersion));
           store.delete(keys[0]);
@@ -222,6 +225,7 @@ function installFakeRedis(initial = {}) {
           return { result: JSON.stringify({
             ok: true,
             authVersion,
+            quotaCleanupSkipped: false,
             user: {
               email: user.email || args[0],
               username: user.username || "",
@@ -346,6 +350,7 @@ function installFakeRedis(initial = {}) {
     }
     const parts = parsedUrl.pathname.split("/").filter(Boolean).map(decodeURIComponent);
     const op = String(parts[0] || "").toUpperCase();
+    if (op === "TYPE") return redisResponse(store.has(parts[1]) ? "string" : "none");
     if (op === "GET") return redisResponse(store.get(parts[1]) ?? null);
     if (op === "MGET") {
       const values = parts.slice(1).map((key) => store.get(key) ?? null);
@@ -862,6 +867,25 @@ test("admin deletion atomically advances the tombstone and old tokens stay revok
   assert.equal(replacement.ok, true);
   assert.equal(authSessions.verifyUserSessionCapability(replacement.token, now).sv, 3);
   assert.equal((await authSessions.authenticateUserRequest(requestWithToken(replacement.token), { now })).ok, true);
+});
+
+test("admin deletion repairs an invalid legacy auth version and ignores corrupt derived quota data", async (t) => {
+  const quotaKey = "lm:tool:quota";
+  const corruptQuota = "{not-json";
+  const redis = installFakeRedis({
+    [USER_KEY]: JSON.stringify({ email: "test@example.com", username: "legacy-delete", balance: 0 }),
+    [VERSION_KEY]: "12.5",
+    [quotaKey]: corruptQuota,
+  });
+  t.after(() => redis.restore());
+
+  const deleted = await utils.deleteUser("test@example.com");
+  assert.equal(deleted.ok, true);
+  assert.equal(deleted.authVersion, 2);
+  assert.equal(deleted.quotaCleanupSkipped, true);
+  assert.equal(redis.store.get(VERSION_KEY), "2");
+  assert.equal(redis.store.has(USER_KEY), false);
+  assert.equal(redis.store.get(quotaKey), corruptQuota);
 });
 
 test("registration cannot mint a cookie for a lifecycle deleted after its profile write", async (t) => {
@@ -1476,6 +1500,30 @@ test("real Redis keeps delete, tombstone advancement, re-registration, and issua
     });
   } finally {
     docker(["rm", "-f", container]);
+  }
+});
+
+test("getUser repairs invalid balance shadows and never crosses a profile identity boundary", async () => {
+  const profile = { email: "test@example.com", username: "legacy", balance: 12.5, coupons: [], withdrawals: [] };
+  const redis = installFakeRedis({ [USER_KEY]: JSON.stringify(profile), [BALANCE_KEY]: "12.5" });
+  try {
+    const fractional = await utils.getUser("TEST@example.com");
+    assert.equal(fractional.balance, 12.5);
+    assert.equal(redis.store.has(BALANCE_KEY), false);
+    redis.store.set(BALANCE_KEY, "9007199254740992");
+    const oversized = await utils.getUser("test@example.com");
+    assert.equal(oversized.balance, 12.5);
+    assert.equal(redis.store.has(BALANCE_KEY), false);
+    redis.store.set(USER_KEY, JSON.stringify({ username: "old-no-email", balance: 3 }));
+    const missingIdentity = await utils.getUser("test@example.com");
+    assert.equal(missingIdentity.email, "test@example.com");
+    assert.equal(missingIdentity.balance, 3);
+    redis.store.set(USER_KEY, JSON.stringify({ email: "other@example.com", balance: 999 }));
+    assert.equal(await utils.getUser("test@example.com"), null);
+    redis.store.set(USER_KEY, "[]");
+    assert.equal(await utils.getUser("test@example.com"), null);
+  } finally {
+    redis.restore();
   }
 });
 

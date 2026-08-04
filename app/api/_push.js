@@ -8,7 +8,7 @@ import {
 } from "node:crypto";
 import webpush from "web-push";
 
-import { clean, redisCmd, validEmail } from "./_utils.js";
+import { clean, redisCmd, replaceTopLevelJsonFields, validEmail } from "./_utils.js";
 import { readUserAuthState, validAccountLifecycleId } from "./_auth-session.js";
 import { appendBusinessTraceEvent } from "./_observability.js";
 
@@ -37,6 +37,23 @@ const DISPATCH_LOCK_TTL_SECONDS = 55;
 const DEFAULT_DISPATCH_BUDGET_MS = 40_000;
 const DELIVERY_TRACE_TTL_SECONDS = 180 * 24 * 60 * 60;
 const PROVIDER_ALERT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const PUSH_MISSING_VALUE = "__lm_push_missing__";
+
+const PUSH_LUA_PREFLIGHT = `
+local MAX_SAFE_INTEGER=9007199254740991
+local function keytype(key)
+  local value=redis.call('TYPE',key)
+  return type(value)=='table' and value.ok or value
+end
+local function validtype(key,expected)
+  local actual=keytype(key)
+  return actual=='none' or actual==expected
+end
+local function safeinteger(value)
+  return type(value)=='number' and value==value and value==math.floor(value)
+    and value>=-MAX_SAFE_INTEGER and value<=MAX_SAFE_INTEGER
+end
+`;
 
 const BUILTIN_PUSH_ENDPOINT_HOSTS = Object.freeze([
   "fcm.googleapis.com",
@@ -46,9 +63,11 @@ const BUILTIN_PUSH_ENDPOINT_HOSTS = Object.freeze([
   ".notify.windows.com",
 ]);
 
-const REFRESH_DISPATCH_LOCK_SCRIPT = `
+const REFRESH_DISPATCH_LOCK_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'string') then return 0 end
+local ttl=tonumber(ARGV[2]); if not safeinteger(ttl) or ttl<1 or ttl>2147483647 then return 0 end
 if redis.call('GET',KEYS[1])~=ARGV[1] then return 0 end
-return redis.call('EXPIRE',KEYS[1],ARGV[2])`;
+return redis.call('EXPIRE',KEYS[1],ttl)`;
 
 const DEFAULT_PREFERENCES = Object.freeze({
   enabled: true,
@@ -59,103 +78,59 @@ const DEFAULT_PREFERENCES = Object.freeze({
   locale: "zh",
 });
 
-const BIND_SUBSCRIPTION_SCRIPT = `
-local function islist(value)
-  if type(value)~='table' then return false end
-  local length=#value
-  local count=0
-  for key,_ in pairs(value) do
-    if type(key)~='number' or key<1 or key~=math.floor(key) or key>length then return false end
-    count=count+1
+const BIND_SUBSCRIPTION_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'hash') or not validtype(KEYS[2],'hash') or not validtype(KEYS[3],'hash') then return 'storage_type_error' end
+local subscriptionLimit=tonumber(ARGV[4])
+if not safeinteger(subscriptionLimit) or subscriptionLimit<1 or subscriptionLimit>10000 then return 'invalid_limit' end
+local function validlist(raw)
+  if raw=='__lm_push_missing__' then return true,0 end
+  local ok,list=pcall(cjson.decode,raw); if not ok or type(list)~='table' then return false,0 end
+  local seen={}; local count=0
+  for index,item in ipairs(list) do
+    if index~=count+1 or type(item)~='string' or item=='' or seen[item] then return false,0 end
+    seen[item]=true; count=count+1
   end
-  return count==length
+  for key,_ in pairs(list) do if type(key)~='number' or key<1 or key>count or key~=math.floor(key) then return false,0 end end
+  return true,count
 end
-local function decode(value)
-  if not value then return {} end
-  local ok, parsed=pcall(cjson.decode,value)
-  if not ok or type(parsed)~='table' then return nil end
-  return parsed
+local recordOk,record=pcall(cjson.decode,ARGV[3]); local preferencesOk,preferences=pcall(cjson.decode,ARGV[5])
+local oldOk=validlist(ARGV[9]); local newOk,newCount=validlist(ARGV[11])
+if not recordOk or type(record)~='table' or tostring(record.subscriptionId or '')~=ARGV[1]
+  or tostring(record.accountTarget or '')~=ARGV[2] or not preferencesOk or type(preferences)~='table'
+  or not oldOk or not newOk or newCount>subscriptionLimit then return 'invalid_payload' end
+local priorRaw=redis.call('HGET',KEYS[1],ARGV[1]) or '__lm_push_missing__'
+if priorRaw~=ARGV[6] then return 'stale' end
+if ARGV[7]~='__lm_push_missing__' and (redis.call('HGET',KEYS[2],ARGV[7]) or '__lm_push_missing__')~=ARGV[8] then return 'stale' end
+if (redis.call('HGET',KEYS[2],ARGV[2]) or '__lm_push_missing__')~=ARGV[10] then return 'stale' end
+if ARGV[7]~='__lm_push_missing__' then
+  if ARGV[9]~='__lm_push_missing__' then redis.call('HSET',KEYS[2],ARGV[7],ARGV[9])
+  else redis.call('HDEL',KEYS[2],ARGV[7]) end
 end
-local function remove(list, value)
-  local out={}
-  for _,item in ipairs(list) do if tostring(item)~=value then table.insert(out,item) end end
-  return out
-end
-local function contains(list, value)
-  for _,item in ipairs(list) do if tostring(item)==value then return true end end
-  return false
-end
-local priorRaw=redis.call('HGET',KEYS[1],ARGV[1])
-local prior=decode(priorRaw)
-if not prior or (priorRaw and (tostring(prior.subscriptionId or '')~=ARGV[1] or tostring(prior.accountTarget or '')=='')) then return 'corrupt' end
-local oldTarget=tostring(prior.accountTarget or '')
-local newTarget=ARGV[2]
-local newList=decode(redis.call('HGET',KEYS[2],newTarget))
-if not newList or not islist(newList) then return 'corrupt' end
-if not contains(newList,ARGV[1]) and #newList>=tonumber(ARGV[4]) then return 'limit' end
-if oldTarget~='' and oldTarget~=newTarget then
-  local oldList=decode(redis.call('HGET',KEYS[2],oldTarget))
-  if not oldList or not islist(oldList) then return 'corrupt' end
-  oldList=remove(oldList,ARGV[1])
-  if #oldList==0 then redis.call('HDEL',KEYS[2],oldTarget)
-  else redis.call('HSET',KEYS[2],oldTarget,cjson.encode(oldList)) end
-end
-if not contains(newList,ARGV[1]) then table.insert(newList,ARGV[1]) end
 redis.call('HSET',KEYS[1],ARGV[1],ARGV[3])
-redis.call('HSET',KEYS[2],newTarget,cjson.encode(newList))
-redis.call('HSET',KEYS[3],newTarget,ARGV[5])
-return priorRaw and 'updated' or 'created'`;
+redis.call('HSET',KEYS[2],ARGV[2],ARGV[11])
+redis.call('HSET',KEYS[3],ARGV[2],ARGV[5])
+return ARGV[6]~='__lm_push_missing__' and 'updated' or 'created'`;
 
-const REMOVE_SUBSCRIPTION_SCRIPT = `
-local function islist(value)
-  if type(value)~='table' then return false end
-  local length=#value
-  local count=0
-  for key,_ in pairs(value) do
-    if type(key)~='number' or key<1 or key~=math.floor(key) or key>length then return false end
-    count=count+1
-  end
-  return count==length
+const REMOVE_SUBSCRIPTION_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'hash') or not validtype(KEYS[2],'hash') then return -4 end
+local function validlist(raw)
+  if raw=='__lm_push_missing__' then return true end
+  local ok,list=pcall(cjson.decode,raw); if not ok or type(list)~='table' then return false end
+  for _,item in ipairs(list) do if type(item)~='string' or item=='' then return false end end
+  return true
 end
-local function decode(value)
-  if not value then return {} end
-  local ok, parsed=pcall(cjson.decode,value)
-  if not ok or type(parsed)~='table' then return nil end
-  return parsed
-end
-local function remove(list, value)
-  local out={}
-  for _,item in ipairs(list) do if tostring(item)~=value then table.insert(out,item) end end
-  return out
-end
-local raw=redis.call('HGET',KEYS[1],ARGV[1])
-if not raw then
-  if ARGV[2]=='' then return 0 end
-  local missingList=decode(redis.call('HGET',KEYS[2],ARGV[2]))
-  if not missingList or not islist(missingList) then return -2 end
-  missingList=remove(missingList,ARGV[1])
-  if #missingList==0 then redis.call('HDEL',KEYS[2],ARGV[2])
-  else redis.call('HSET',KEYS[2],ARGV[2],cjson.encode(missingList)) end
-  return 0
-end
-local record=decode(raw)
-if not record or tostring(record.subscriptionId or '')~=ARGV[1] or tostring(record.accountTarget or '')=='' then return -2 end
-local target=tostring(record.accountTarget or '')
-if ARGV[2]~='' and target~=ARGV[2] then return -1 end
-local list=nil
-if target~='' then
-  list=decode(redis.call('HGET',KEYS[2],target))
-  if not list or not islist(list) then return -2 end
-  list=remove(list,ARGV[1])
-end
+if not validlist(ARGV[6]) then return -2 end
+if (redis.call('HGET',KEYS[1],ARGV[1]) or '__lm_push_missing__')~=ARGV[3] then return -5 end
+if ARGV[4]~='__lm_push_missing__' and (redis.call('HGET',KEYS[2],ARGV[4]) or '__lm_push_missing__')~=ARGV[5] then return -5 end
 redis.call('HDEL',KEYS[1],ARGV[1])
-if target~='' then
-  if #list==0 then redis.call('HDEL',KEYS[2],target)
-  else redis.call('HSET',KEYS[2],target,cjson.encode(list)) end
+if ARGV[4]~='__lm_push_missing__' then
+  if ARGV[6]=='__lm_push_missing__' then redis.call('HDEL',KEYS[2],ARGV[4])
+  else redis.call('HSET',KEYS[2],ARGV[4],ARGV[6]) end
 end
-return 1`;
+return ARGV[3]~='__lm_push_missing__' and 1 or 0`;
 
-const REMOVE_ALL_SUBSCRIPTIONS_SCRIPT = `
+const REMOVE_ALL_SUBSCRIPTIONS_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'hash') or not validtype(KEYS[2],'hash') then return -3 end
 local function islist(value)
   if type(value)~='table' then return false end
   local length=#value
@@ -181,109 +156,99 @@ for _,id in ipairs(list) do redis.call('HDEL',KEYS[1],tostring(id)) end
 redis.call('HDEL',KEYS[2],ARGV[1])
 return #list`;
 
-const ENQUEUE_EVENT_SCRIPT = `
+const ENQUEUE_EVENT_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'hash') or not validtype(KEYS[2],'zset') then return 'storage_type_error' end
+local score=tonumber(ARGV[4]); if not safeinteger(score) then return 'invalid_score' end
+local nextOk,nextEvent=pcall(cjson.decode,ARGV[3])
+if not nextOk or type(nextEvent)~='table' or tostring(nextEvent.eventId or '')~=ARGV[1] or tostring(nextEvent.requestHash or '')~=ARGV[2] then return 'invalid_event' end
 local prior=redis.call('HGET',KEYS[1],ARGV[1])
 if prior then
   local ok,decoded=pcall(cjson.decode,prior)
-  if not ok or type(decoded)~='table' then return 'corrupt' end
-  if tostring(decoded.requestHash or '')~='' and tostring(decoded.requestHash)~=ARGV[2] then return 'conflict' end
-  redis.call('ZADD',KEYS[2],ARGV[4],ARGV[1])
+  if not ok or type(decoded)~='table' or tostring(decoded.eventId or '')~=ARGV[1] then return 'corrupt' end
+  local priorHash=tostring(decoded.requestHash or '')
+  if priorHash~='' and priorHash~=ARGV[2] then return 'conflict' end
+  if priorHash=='' then
+    for _,field in ipairs({'type','category','audience','entityId','accountTarget','accountLifecycleId','productKey','route'}) do
+      if tostring(decoded[field] or '')~=tostring(nextEvent[field] or '') then return 'conflict' end
+    end
+  end
+  redis.call('ZADD',KEYS[2],score,ARGV[1])
   return 'exists'
 end
 redis.call('HSET',KEYS[1],ARGV[1],ARGV[3])
-redis.call('ZADD',KEYS[2],ARGV[4],ARGV[1])
+redis.call('ZADD',KEYS[2],score,ARGV[1])
 return 'queued'`;
 
-const SAVE_ENQUEUE_RECOVERY_SCRIPT = `
+const SAVE_ENQUEUE_RECOVERY_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'hash') or not validtype(KEYS[2],'zset') then return 'storage_type_error' end
+local score=tonumber(ARGV[4]); if not safeinteger(score) then return 'invalid_score' end
+local nextOk,nextRecord=pcall(cjson.decode,ARGV[3])
+if not nextOk or type(nextRecord)~='table' or tostring(nextRecord.recoveryId or '')~=ARGV[1]
+  or tostring(nextRecord.requestHash or '')~=ARGV[2] or type(nextRecord.record)~='table'
+  or tostring(nextRecord.record.sourceId or '')=='' then return 'invalid_recovery' end
 local prior=redis.call('HGET',KEYS[1],ARGV[1])
 if prior then
   local ok,decoded=pcall(cjson.decode,prior)
-  if not ok or type(decoded)~='table' then return 'corrupt' end
+  if not ok or type(decoded)~='table' or tostring(decoded.recoveryId or '')~=ARGV[1] then return 'corrupt' end
   if tostring(decoded.requestHash or '')~=ARGV[2] then return 'conflict' end
 end
 redis.call('HSET',KEYS[1],ARGV[1],ARGV[3])
-redis.call('ZADD',KEYS[2],ARGV[4],ARGV[1])
+redis.call('ZADD',KEYS[2],score,ARGV[1])
 return prior and 'updated' or 'saved'`;
 
-const REMOVE_ENQUEUE_RECOVERY_SCRIPT = `
+const REMOVE_ENQUEUE_RECOVERY_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'hash') or not validtype(KEYS[2],'zset') then return 0 end
 redis.call('HDEL',KEYS[1],ARGV[1])
 redis.call('ZREM',KEYS[2],ARGV[1])
 return 1`;
 
-const STOCK_WATCH_ADD_SCRIPT = `
-local function islist(value)
-  if type(value)~='table' then return false end
-  local length=#value
-  local count=0
-  for key,_ in pairs(value) do
-    if type(key)~='number' or key<1 or key~=math.floor(key) or key>length then return false end
-    count=count+1
-  end
-  return count==length
+const STOCK_WATCH_ADD_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'hash') or not validtype(KEYS[3],'hash') then return 'storage_type_error' end
+local watchLimit=tonumber(ARGV[3]); if not safeinteger(watchLimit) or watchLimit<1 or watchLimit>10000 then return 'invalid_limit' end
+local function validlist(raw)
+  local ok,list=pcall(cjson.decode,raw); if not ok or type(list)~='table' then return false,0 end
+  local count=0; for _,item in ipairs(list) do if type(item)~='string' or item=='' then return false,0 end; count=count+1 end
+  return true,count
 end
-local function decode(value)
-  if not value then return {} end
-  local ok,parsed=pcall(cjson.decode,value)
-  if not ok or type(parsed)~='table' then return nil end
-  return parsed
-end
-local function contains(list,value)
-  for _,item in ipairs(list) do if tostring(item)==value then return true end end
-  return false
-end
+local targetsOk=validlist(ARGV[5]); local productsOk,productsCount=validlist(ARGV[7])
+if not targetsOk or not productsOk or productsCount>watchLimit then return 'invalid_payload' end
 local stock=redis.call('GET',KEYS[1])
 if not stock then return 'available' end
 local count=tonumber(stock)
-if not count or count<0 or count~=math.floor(count) then return 'invalid_stock' end
+if not safeinteger(count) or count<0 then return 'invalid_stock' end
 if count>0 then return 'available' end
-local targets=decode(redis.call('HGET',KEYS[2],ARGV[1]))
-local products=decode(redis.call('HGET',KEYS[3],ARGV[2]))
-if not targets or not products or not islist(targets) or not islist(products) then return 'corrupt' end
-if not contains(products,ARGV[1]) and #products>=tonumber(ARGV[3]) then return 'limit' end
-if not contains(targets,ARGV[2]) then table.insert(targets,ARGV[2]) end
-if not contains(products,ARGV[1]) then table.insert(products,ARGV[1]) end
-redis.call('HSET',KEYS[2],ARGV[1],cjson.encode(targets))
-redis.call('HSET',KEYS[3],ARGV[2],cjson.encode(products))
+if (redis.call('HGET',KEYS[2],ARGV[1]) or '__lm_push_missing__')~=ARGV[4]
+  or (redis.call('HGET',KEYS[3],ARGV[2]) or '__lm_push_missing__')~=ARGV[6] then return 'stale' end
+redis.call('HSET',KEYS[2],ARGV[1],ARGV[5])
+redis.call('HSET',KEYS[3],ARGV[2],ARGV[7])
 return 'watching'`;
 
-const STOCK_WATCH_REMOVE_SCRIPT = `
-local function islist(value)
-  if type(value)~='table' then return false end
-  local length=#value
-  local count=0
-  for key,_ in pairs(value) do
-    if type(key)~='number' or key<1 or key~=math.floor(key) or key>length then return false end
-    count=count+1
-  end
-  return count==length
+const STOCK_WATCH_REMOVE_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'hash') or not validtype(KEYS[2],'hash') then return 'storage_type_error' end
+local function validlist(raw)
+  if raw=='__lm_push_missing__' then return true end
+  local ok,list=pcall(cjson.decode,raw); if not ok or type(list)~='table' then return false end
+  for _,item in ipairs(list) do if type(item)~='string' or item=='' then return false end end
+  return true
 end
-local function decode(value)
-  if not value then return {} end
-  local ok,parsed=pcall(cjson.decode,value)
-  if not ok or type(parsed)~='table' then return nil end
-  return parsed
-end
-local function remove(list,value)
-  local out={}
-  for _,item in ipairs(list) do if tostring(item)~=value then table.insert(out,item) end end
-  return out
-end
-local targets=decode(redis.call('HGET',KEYS[1],ARGV[1]))
-local products=decode(redis.call('HGET',KEYS[2],ARGV[2]))
-if not targets or not products or not islist(targets) or not islist(products) then return 'corrupt' end
-targets=remove(targets,ARGV[2])
-products=remove(products,ARGV[1])
-if #targets==0 then redis.call('HDEL',KEYS[1],ARGV[1]) else redis.call('HSET',KEYS[1],ARGV[1],cjson.encode(targets)) end
-if #products==0 then redis.call('HDEL',KEYS[2],ARGV[2]) else redis.call('HSET',KEYS[2],ARGV[2],cjson.encode(products)) end
+if not validlist(ARGV[4]) or not validlist(ARGV[6]) then return 'invalid_payload' end
+if (redis.call('HGET',KEYS[1],ARGV[1]) or '__lm_push_missing__')~=ARGV[3]
+  or (redis.call('HGET',KEYS[2],ARGV[2]) or '__lm_push_missing__')~=ARGV[5] then return 'stale' end
+if ARGV[4]=='__lm_push_missing__' then redis.call('HDEL',KEYS[1],ARGV[1]) else redis.call('HSET',KEYS[1],ARGV[1],ARGV[4]) end
+if ARGV[6]=='__lm_push_missing__' then redis.call('HDEL',KEYS[2],ARGV[2]) else redis.call('HSET',KEYS[2],ARGV[2],ARGV[6]) end
 return 1`;
 
-const SET_STOCK_AND_ENQUEUE_SCRIPT = `
+const SET_STOCK_AND_ENQUEUE_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'hash') or not validtype(KEYS[3],'zset') then return 'storage_type_error' end
+local outboxScore=tonumber(ARGV[5]); if not safeinteger(outboxScore) then return 'invalid_score' end
 local priorEvent=nil
-if ARGV[2]~='' then
+if ARGV[2]~='__lm_push_missing__' then
+  local nextEventOk,nextEvent=pcall(cjson.decode,ARGV[4])
+  if not nextEventOk or type(nextEvent)~='table' or tostring(nextEvent.eventId or '')~=ARGV[2] or tostring(nextEvent.requestHash or '')~=ARGV[3] then return 'invalid_event' end
   priorEvent=redis.call('HGET',KEYS[2],ARGV[2])
   if priorEvent then
     local eventOk,event=pcall(cjson.decode,priorEvent)
-    if not eventOk or type(event)~='table' then return 'push_event_corrupt' end
+    if not eventOk or type(event)~='table' or tostring(event.eventId or '')~=ARGV[2] then return 'push_event_corrupt' end
     if tostring(event.requestHash or '')~=ARGV[3] then return 'push_event_conflict' end
   end
 end
@@ -291,127 +256,132 @@ local raw=redis.call('GET',KEYS[1])
 local before=nil
 if raw then
   before=tonumber(raw)
-  if not before or before<0 or before~=math.floor(before) then return 'invalid_stock' end
+  if not safeinteger(before) or before<0 then return 'invalid_stock' end
 end
 local after=nil
-if ARGV[1]=='unlimited' then redis.call('DEL',KEYS[1])
-else
+if ARGV[1]~='unlimited' then
   after=tonumber(ARGV[1])
-  if not after or after<0 or after~=math.floor(after) then return 'invalid_value' end
-  redis.call('SET',KEYS[1],tostring(after))
+  if not safeinteger(after) or after<0 then return 'invalid_value' end
 end
 local restocked=(before~=nil and before==0 and (after==nil or after>0))
-local queued=false
-if restocked and ARGV[2]~='' then
-  if not priorEvent then
-    redis.call('HSET',KEYS[2],ARGV[2],ARGV[4])
-    queued=true
-  end
-  redis.call('ZADD',KEYS[3],ARGV[5],ARGV[2])
+local queued=(restocked and ARGV[2]~='__lm_push_missing__' and not priorEvent) and true or false
+local responseOk,response=pcall(cjson.encode,{ok=true,before=before or -1,after=after or -1,restocked=restocked,queued=queued})
+if not responseOk then return 'encode_failed' end
+if ARGV[1]=='unlimited' then redis.call('DEL',KEYS[1])
+else redis.call('SET',KEYS[1],tostring(after)) end
+if restocked and ARGV[2]~='__lm_push_missing__' then
+  if queued then redis.call('HSET',KEYS[2],ARGV[2],ARGV[4]) end
+  redis.call('ZADD',KEYS[3],outboxScore,ARGV[2])
 end
-return cjson.encode({ok=true,before=before or -1,after=after or -1,restocked=restocked,queued=queued})`;
+return response`;
 
-const SAVE_SUCCESSFUL_DELIVERY_SCRIPT = `
+const SAVE_SUCCESSFUL_DELIVERY_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'hash') or not validtype(KEYS[2],'hash') then return 0 end
+local deliveryOk,delivery=pcall(cjson.decode,ARGV[2]); local subscriptionOk,subscription=pcall(cjson.decode,ARGV[4])
+if not deliveryOk or type(delivery)~='table' or not subscriptionOk or type(subscription)~='table'
+  or tostring(delivery.eventId or '')..'|'..tostring(delivery.subscriptionId or '')~=ARGV[1]
+  or tostring(delivery.subscriptionId or '')~=ARGV[3] or tostring(delivery.status or '')~='sent'
+  or tostring(delivery.at or '')=='' or tostring(subscription.subscriptionId or '')~=ARGV[3] then return 0 end
 redis.call('HSET',KEYS[1],ARGV[1],ARGV[2])
 redis.call('HSET',KEYS[2],ARGV[3],ARGV[4])
 return 1`;
 
-const RESCHEDULE_EVENT_SCRIPT = `
-local raw=redis.call('HGET',KEYS[1],ARGV[1])
-if not raw then return 'missing' end
-local ok,current=pcall(cjson.decode,raw)
-if not ok or type(current)~='table' then return 'corrupt' end
-if tostring(current.requestHash or '')~=ARGV[2] then return 'conflict' end
-redis.call('HSET',KEYS[1],ARGV[1],ARGV[3])
-redis.call('ZADD',KEYS[2],ARGV[4],ARGV[1])
-return 'rescheduled'`;
-
-const PERSIST_DELIVERY_FIELDS_SCRIPT = `
-local raw=redis.call('HGET',KEYS[1],ARGV[1])
-if not raw then return 'missing' end
-local ok,current=pcall(cjson.decode,raw)
-if not ok or type(current)~='table' then return 'corrupt' end
-if tostring(current.requestHash or '')~=ARGV[2] then return 'conflict' end
-local seen={}
-local merged={}
-if type(current.deliveryFields)=='table' then
-  for _,field in ipairs(current.deliveryFields) do
-    local value=tostring(field)
-    if value~='' and not seen[value] then seen[value]=true table.insert(merged,value) end
-  end
-end
-local incomingOk,incoming=pcall(cjson.decode,ARGV[3])
-if not incomingOk or type(incoming)~='table' then return 'invalid_fields' end
-for _,field in ipairs(incoming) do
-  local value=tostring(field)
-  if value~='' and not seen[value] then seen[value]=true table.insert(merged,value) end
-end
-current.deliveryFields=merged
-redis.call('HSET',KEYS[1],ARGV[1],cjson.encode(current))
+const CLAIM_DELIVERY_SCRIPT = PUSH_LUA_PREFLIGHT + `
+-- push_delivery_claim_v1
+if not validtype(KEYS[1],'hash') then return 'storage_type_error' end
+if (redis.call('HGET',KEYS[1],ARGV[1]) or '__lm_push_missing__')~=ARGV[3] then return 'stale' end
+local ok,next=pcall(cjson.decode,ARGV[2])
+if not ok or type(next)~='table' or tostring(next.eventId or '')~=ARGV[4] or tostring(next.subscriptionId or '')~=ARGV[5]
+  or tostring(next.status or '')~='sending' or tostring(next.claimToken or '')~=ARGV[6] then return 'invalid_claim' end
+redis.call('HSET',KEYS[1],ARGV[1],ARGV[2])
 return 'saved'`;
 
-const FINALIZE_EVENT_SCRIPT = `
-local function islist(value)
-  if type(value)~='table' then return false end
-  local length=#value
-  local count=0
-  for key,_ in pairs(value) do
-    if type(key)~='number' or key<1 or key~=math.floor(key) or key>length then return false end
-    count=count+1
-  end
-  return count==length
-end
-local function decode(value)
-  if not value then return {} end
-  local ok,parsed=pcall(cjson.decode,value)
-  if not ok or type(parsed)~='table' then return nil end
-  return parsed
-end
+const RESCHEDULE_EVENT_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'hash') or not validtype(KEYS[2],'zset') then return 'storage_type_error' end
+local score=tonumber(ARGV[4]); if not safeinteger(score) then return 'invalid_score' end
+local raw=redis.call('HGET',KEYS[1],ARGV[1])
+if not raw then return 'missing' end
+local ok,current=pcall(cjson.decode,raw)
+if not ok or type(current)~='table' or tostring(current.eventId or '')~=ARGV[1] then return 'corrupt' end
+if tostring(current.requestHash or '')~=ARGV[2] then return 'conflict' end
+local nextOk,nextEvent=pcall(cjson.decode,ARGV[3])
+if not nextOk or type(nextEvent)~='table' or tostring(nextEvent.eventId or '')~=ARGV[1] or tostring(nextEvent.requestHash or '')~=ARGV[2] then return 'invalid_event' end
+redis.call('HSET',KEYS[1],ARGV[1],ARGV[3])
+redis.call('ZADD',KEYS[2],score,ARGV[1])
+return 'rescheduled'`;
+
+const PERSIST_DELIVERY_FIELDS_SCRIPT = PUSH_LUA_PREFLIGHT + `
+-- push_delivery_fields_lossless_cas_v2
+if not validtype(KEYS[1],'hash') then return 'storage_type_error' end
+local raw=redis.call('HGET',KEYS[1],ARGV[1])
+if not raw then return 'missing' end
+local ok,current=pcall(cjson.decode,raw)
+if not ok or type(current)~='table' or tostring(current.eventId or '')~=ARGV[1] then return 'corrupt' end
+if tostring(current.requestHash or '')~=ARGV[2] then return 'conflict' end
+if raw~=ARGV[3] then return 'stale' end
+local replacementOk,replacement=pcall(cjson.decode,ARGV[4])
+if not replacementOk or type(replacement)~='table'
+  or tostring(replacement.eventId or '')~=ARGV[1] or tostring(replacement.requestHash or '')~=ARGV[2]
+  or type(replacement.deliveryFields)~='table' then return 'invalid_fields' end
+redis.call('HSET',KEYS[1],ARGV[1],ARGV[4])
+return 'saved'`;
+
+const FINALIZE_EVENT_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'hash') or not validtype(KEYS[2],'zset') or not validtype(KEYS[3],'hash')
+  or not validtype(KEYS[4],'hash') or not validtype(KEYS[5],'hash') then return 'storage_type_error' end
 local raw=redis.call('HGET',KEYS[1],ARGV[1])
 if raw then
   local ok,current=pcall(cjson.decode,raw)
-  if not ok or type(current)~='table' then return 'corrupt' end
+  if not ok or type(current)~='table' or tostring(current.eventId or '')~=ARGV[1] then return 'corrupt' end
   if tostring(current.requestHash or '')~=ARGV[2] then return 'conflict' end
 end
-local deliveryCount=tonumber(ARGV[4]) or 0
+local deliveryCount=tonumber(ARGV[4])
+if not safeinteger(deliveryCount) or deliveryCount<0 or deliveryCount>60000 then return 'invalid_delivery_count' end
+for index=1,deliveryCount do
+  if type(ARGV[4+index])~='string' or ARGV[4+index]=='' then return 'invalid_delivery_id' end
+end
 local productKey=''
-local stockTargets={}
-local accountProducts={}
-if ARGV[3]=='1' and ARGV[5+deliveryCount]~='' then
+local cleanupPlan={}
+if ARGV[3]=='1' then
   productKey=ARGV[5+deliveryCount]
-  stockTargets=decode(redis.call('HGET',KEYS[4],productKey))
-  if not stockTargets or not islist(stockTargets) then return 'corrupt' end
-  for _,target in ipairs(stockTargets) do
-    local targetText=tostring(target)
-    local products=decode(redis.call('HGET',KEYS[5],targetText))
-    if not products or not islist(products) then return 'corrupt' end
-    accountProducts[targetText]=products
+  local expectedStock=ARGV[6+deliveryCount]
+  local planOk,plan=pcall(cjson.decode,ARGV[7+deliveryCount])
+  if type(productKey)~='string' or productKey=='' or type(expectedStock)~='string'
+    or not planOk or type(plan)~='table' then return 'invalid_cleanup_plan' end
+  if (redis.call('HGET',KEYS[4],productKey) or '__lm_push_missing__')~=expectedStock then return 'stale' end
+  for _,row in ipairs(plan) do
+    if type(row)~='table' or type(row.target)~='string' or row.target==''
+      or type(row.expected)~='string' or type(row.next)~='string' then return 'invalid_cleanup_plan' end
+    if (redis.call('HGET',KEYS[5],row.target) or '__lm_push_missing__')~=row.expected then return 'stale' end
   end
+  cleanupPlan=plan
 end
 redis.call('HDEL',KEYS[1],ARGV[1])
 redis.call('ZREM',KEYS[2],ARGV[1])
 for index=1,deliveryCount do redis.call('HDEL',KEYS[3],ARGV[4+index]) end
 if productKey~='' then
-  for _,target in ipairs(stockTargets) do
-    local products=accountProducts[tostring(target)]
-    local kept={}
-    for _,product in ipairs(products) do
-      if tostring(product)~=productKey then table.insert(kept,product) end
-    end
-    if #kept==0 then redis.call('HDEL',KEYS[5],tostring(target))
-    else redis.call('HSET',KEYS[5],tostring(target),cjson.encode(kept)) end
+  for _,row in ipairs(cleanupPlan) do
+    if row.next=='__lm_push_missing__' then redis.call('HDEL',KEYS[5],row.target)
+    else redis.call('HSET',KEYS[5],row.target,row.next) end
   end
   redis.call('HDEL',KEYS[4],productKey)
 end
 return 'finalized'`;
 
-const SAVE_PROVIDER_ALERT_SCRIPT = `
+const SAVE_PROVIDER_ALERT_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'hash') or not validtype(KEYS[2],'zset') then return 0 end
+local score=tonumber(ARGV[3]); if not safeinteger(score) then return 0 end
+local recordOk,record=pcall(cjson.decode,ARGV[2])
+if not recordOk or type(record)~='table' or tostring(record.alertId or '')~=ARGV[1] then return 0 end
 redis.call('HSET',KEYS[1],ARGV[1],ARGV[2])
-redis.call('ZADD',KEYS[2],ARGV[3],ARGV[1])
+redis.call('ZADD',KEYS[2],score,ARGV[1])
 return 1`;
 
-const CLEANUP_PROVIDER_ALERTS_SCRIPT = `
-local ids=redis.call('ZRANGEBYSCORE',KEYS[2],'-inf',ARGV[1],'LIMIT',0,ARGV[2])
+const CLEANUP_PROVIDER_ALERTS_SCRIPT = PUSH_LUA_PREFLIGHT + `
+if not validtype(KEYS[1],'hash') or not validtype(KEYS[2],'zset') then return 'storage_type_error' end
+local cutoff=tonumber(ARGV[1]); local limit=tonumber(ARGV[2])
+if not safeinteger(cutoff) or not safeinteger(limit) or limit<1 or limit>10000 then return 'invalid_arguments' end
+local ids=redis.call('ZRANGEBYSCORE',KEYS[2],'-inf',cutoff,'LIMIT',0,limit)
 for _,id in ipairs(ids) do
   redis.call('HDEL',KEYS[1],id)
   redis.call('ZREM',KEYS[2],id)
@@ -422,6 +392,10 @@ function parseJson(value, fallback = null) {
   if (!value) return fallback;
   if (typeof value === "object") return value;
   try { return JSON.parse(value); } catch { return fallback; }
+}
+
+function isPlainRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 async function readHashField(key, field) {
@@ -452,6 +426,14 @@ function parsedListField(field, limit) {
   return values.length === parsed.length
     ? { ok: true, values }
     : { ok: false, error: "storage_unavailable", values: [] };
+}
+
+async function listSnapshot(key, field, limit) {
+  const raw = await readHashField(key, field);
+  const parsed = parsedListField(raw, limit);
+  return parsed.ok
+    ? { ok: true, raw: raw.exists ? String(raw.value) : PUSH_MISSING_VALUE, values: parsed.values }
+    : { ok: false, raw: PUSH_MISSING_VALUE, values: [] };
 }
 
 function redisNumber(value) {
@@ -513,7 +495,7 @@ function decrypted(value) {
 }
 
 function normalizedEmail(value) {
-  return clean(value, 254).toLowerCase().trim();
+  return String(value || "").trim().toLowerCase();
 }
 
 export function pushServerConfiguration() {
@@ -700,14 +682,32 @@ export async function bindPushSubscription(auth, input, options = {}) {
     failureCount: 0,
   };
   const preferences = normalizePushPreferences(options.preferences || {}, { ...currentPreferences, locale: record.locale });
-  const result = await redisCmd([
-    "EVAL", BIND_SUBSCRIPTION_SCRIPT, "3",
-    SUBSCRIPTIONS_HASH, ACCOUNT_SUBSCRIPTIONS_HASH, PREFERENCES_HASH,
-    id, target, JSON.stringify(record), String(MAX_SUBSCRIPTIONS_PER_ACCOUNT), JSON.stringify(preferences),
-  ]);
-  if (result === "limit") return { ok: false, error: "subscription_limit" };
-  if (!['created', 'updated'].includes(result)) return { ok: false, error: "storage_unavailable" };
-  return { ok: true, subscriptionId: id, preferences, created: result === "created" };
+  for (let attempt = 0; attempt < MAX_SUBSCRIPTIONS_PER_ACCOUNT * 2; attempt += 1) {
+    const priorField = await readHashField(SUBSCRIPTIONS_HASH, id);
+    if (!priorField.ok) return { ok: false, error: "storage_unavailable" };
+    const prior = priorField.exists ? parseJson(priorField.value, null) : null;
+    if (priorField.exists && !validStoredSubscriptionRecord(prior, id)) return { ok: false, error: "storage_unavailable" };
+    const oldTarget = prior?.accountTarget && prior.accountTarget !== target ? prior.accountTarget : PUSH_MISSING_VALUE;
+    const [newList, oldList] = await Promise.all([
+      listSnapshot(ACCOUNT_SUBSCRIPTIONS_HASH, target, MAX_SUBSCRIPTIONS_PER_ACCOUNT),
+      oldTarget !== PUSH_MISSING_VALUE ? listSnapshot(ACCOUNT_SUBSCRIPTIONS_HASH, oldTarget, MAX_SUBSCRIPTIONS_PER_ACCOUNT) : Promise.resolve({ ok: true, raw: PUSH_MISSING_VALUE, values: [] }),
+    ]);
+    if (!newList.ok || !oldList.ok) return { ok: false, error: "storage_unavailable" };
+    const nextNew = newList.values.includes(id) ? newList.values : [...newList.values, id];
+    if (nextNew.length > MAX_SUBSCRIPTIONS_PER_ACCOUNT) return { ok: false, error: "subscription_limit" };
+    const nextOld = oldList.values.filter((value) => value !== id);
+    const result = await redisCmd([
+      "EVAL", BIND_SUBSCRIPTION_SCRIPT, "3",
+      SUBSCRIPTIONS_HASH, ACCOUNT_SUBSCRIPTIONS_HASH, PREFERENCES_HASH,
+      id, target, JSON.stringify(record), String(MAX_SUBSCRIPTIONS_PER_ACCOUNT), JSON.stringify(preferences),
+      priorField.exists ? String(priorField.value) : PUSH_MISSING_VALUE, oldTarget, oldList.raw,
+      nextOld.length ? JSON.stringify(nextOld) : PUSH_MISSING_VALUE, newList.raw, JSON.stringify(nextNew),
+    ]);
+    if (result === "stale") continue;
+    if (!['created', 'updated'].includes(result)) return { ok: false, error: "storage_unavailable" };
+    return { ok: true, subscriptionId: id, preferences, created: result === "created" };
+  }
+  return { ok: false, error: "storage_unavailable" };
 }
 
 export async function updatePushPreferences(auth, input) {
@@ -722,16 +722,29 @@ export async function updatePushPreferences(auth, input) {
 }
 
 async function removeSubscriptionById(id, expectedTarget = "") {
-  const raw = await redisCmd([
-    "EVAL", REMOVE_SUBSCRIPTION_SCRIPT, "2",
-    SUBSCRIPTIONS_HASH, ACCOUNT_SUBSCRIPTIONS_HASH,
-    clean(id, 80), clean(expectedTarget, 80),
-  ]);
-  if (raw == null) return { ok: false, error: "storage_unavailable", removed: false };
-  const result = redisNumber(raw);
-  if (result == null) return { ok: false, error: "storage_unavailable", removed: false };
-  if (result === -1) return { ok: false, error: "subscription_owner_changed", removed: false };
-  if (result === 0 || result === 1) return { ok: true, removed: result === 1 };
+  const safeId = clean(id, 80);
+  const safeTarget = clean(expectedTarget, 80);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const recordField = await readHashField(SUBSCRIPTIONS_HASH, safeId);
+    if (!recordField.ok) return { ok: false, error: "storage_unavailable", removed: false };
+    const record = recordField.exists ? parseJson(recordField.value, null) : null;
+    if (recordField.exists && !validStoredSubscriptionRecord(record, safeId)) return { ok: false, error: "storage_unavailable", removed: false };
+    const target = record?.accountTarget || safeTarget;
+    if (record && safeTarget && target !== safeTarget) return { ok: false, error: "subscription_owner_changed", removed: false };
+    if (!record && !target) return { ok: true, removed: false };
+    const list = await listSnapshot(ACCOUNT_SUBSCRIPTIONS_HASH, target, MAX_SUBSCRIPTIONS_PER_ACCOUNT);
+    if (!list.ok) return { ok: false, error: "storage_unavailable", removed: false };
+    const next = list.values.filter((value) => value !== safeId);
+    const raw = await redisCmd([
+      "EVAL", REMOVE_SUBSCRIPTION_SCRIPT, "2", SUBSCRIPTIONS_HASH, ACCOUNT_SUBSCRIPTIONS_HASH,
+      safeId, safeTarget || PUSH_MISSING_VALUE, recordField.exists ? String(recordField.value) : PUSH_MISSING_VALUE,
+      target || PUSH_MISSING_VALUE, list.raw, next.length ? JSON.stringify(next) : PUSH_MISSING_VALUE,
+    ]);
+    const result = redisNumber(raw);
+    if (result === -5) continue;
+    if (result === 0 || result === 1) return { ok: true, removed: result === 1 };
+    return { ok: false, error: "storage_unavailable", removed: false };
+  }
   return { ok: false, error: "storage_unavailable", removed: false };
 }
 
@@ -776,28 +789,50 @@ export async function addStockWatch(auth, serviceValue, planValue) {
   if (!ids.ok) return { ok: false, error: "storage_unavailable" };
   if (!ids.ids.length) return { ok: false, error: "push_subscription_required" };
   const [service, plan] = productKey.split(":");
-  const result = await redisCmd([
-    "EVAL", STOCK_WATCH_ADD_SCRIPT, "3",
-    `liumeiti:stock:${service}:${plan}`, STOCK_WATCHES_HASH, ACCOUNT_WATCHES_HASH,
-    productKey, target, String(MAX_WATCHES_PER_ACCOUNT),
-  ]);
-  if (result == null) return { ok: false, error: "storage_unavailable" };
-  if (result === "available") return { ok: true, available: true, watching: false, productKey };
-  if (result === "watching") return { ok: true, available: false, watching: true, productKey };
-  return { ok: false, error: result === "limit" ? "stock_watch_limit" : "stock_unavailable" };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const [targets, products] = await Promise.all([
+      listSnapshot(STOCK_WATCHES_HASH, productKey, 5000),
+      listSnapshot(ACCOUNT_WATCHES_HASH, target, MAX_WATCHES_PER_ACCOUNT),
+    ]);
+    if (!targets.ok || !products.ok) return { ok: false, error: "storage_unavailable" };
+    const nextTargets = targets.values.includes(target) ? targets.values : [...targets.values, target];
+    const nextProducts = products.values.includes(productKey) ? products.values : [...products.values, productKey];
+    if (nextProducts.length > MAX_WATCHES_PER_ACCOUNT) return { ok: false, error: "stock_watch_limit" };
+    const result = await redisCmd([
+      "EVAL", STOCK_WATCH_ADD_SCRIPT, "3", `liumeiti:stock:${service}:${plan}`, STOCK_WATCHES_HASH, ACCOUNT_WATCHES_HASH,
+      productKey, target, String(MAX_WATCHES_PER_ACCOUNT), targets.raw, JSON.stringify(nextTargets), products.raw, JSON.stringify(nextProducts),
+    ]);
+    if (result === "stale") continue;
+    if (result === "available") return { ok: true, available: true, watching: false, productKey };
+    if (result === "watching") return { ok: true, available: false, watching: true, productKey };
+    return { ok: false, error: "stock_unavailable" };
+  }
+  return { ok: false, error: "storage_unavailable" };
 }
 
 export async function removeStockWatch(auth, serviceValue, planValue) {
   const target = pushAccountTarget(auth?.email, auth?.accountLifecycleId);
   const productKey = pushStockProductKey(serviceValue, planValue);
   if (!target || !productKey) return { ok: false, error: "invalid_stock_watch" };
-  const result = await redisCmd([
-    "EVAL", STOCK_WATCH_REMOVE_SCRIPT, "2",
-    STOCK_WATCHES_HASH, ACCOUNT_WATCHES_HASH, productKey, target,
-  ]);
-  return redisNumber(result) === 1
-    ? { ok: true, watching: false, productKey }
-    : { ok: false, error: "storage_unavailable" };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const [targets, products] = await Promise.all([
+      listSnapshot(STOCK_WATCHES_HASH, productKey, 5000),
+      listSnapshot(ACCOUNT_WATCHES_HASH, target, MAX_WATCHES_PER_ACCOUNT),
+    ]);
+    if (!targets.ok || !products.ok) return { ok: false, error: "storage_unavailable" };
+    const nextTargets = targets.values.filter((value) => value !== target);
+    const nextProducts = products.values.filter((value) => value !== productKey);
+    const result = await redisCmd([
+      "EVAL", STOCK_WATCH_REMOVE_SCRIPT, "2", STOCK_WATCHES_HASH, ACCOUNT_WATCHES_HASH,
+      productKey, target, targets.raw, nextTargets.length ? JSON.stringify(nextTargets) : PUSH_MISSING_VALUE,
+      products.raw, nextProducts.length ? JSON.stringify(nextProducts) : PUSH_MISSING_VALUE,
+    ]);
+    if (result === "stale") continue;
+    return redisNumber(result) === 1
+      ? { ok: true, watching: false, productKey }
+      : { ok: false, error: "storage_unavailable" };
+  }
+  return { ok: false, error: "storage_unavailable" };
 }
 
 function safeNotificationPath(value) {
@@ -835,13 +870,14 @@ async function rememberEnqueueFailure(record, error) {
   const sourceId = clean(record?.sourceId, 500);
   if (!sourceId) return false;
   const recoveryId = `pr_${sha(sourceId).slice(0, 48)}`;
+  const requestHash = preparedEvent(record).requestHash;
   const priorField = await readHashField(ENQUEUE_RECOVERY_HASH, recoveryId);
   if (!priorField.ok) return false;
   const prior = priorField.exists ? parseJson(priorField.value, null) : null;
-  if (priorField.exists && !prior) return false;
+  if (priorField.exists && (!isPlainRecord(prior) || prior.recoveryId !== recoveryId
+      || prior.requestHash !== requestHash || clean(prior.record?.sourceId, 500) !== sourceId)) return false;
   const attempts = Math.max(0, Number(prior?.attempts || 0)) + 1;
   const retryAt = Date.now() + retryDelayMs(attempts);
-  const requestHash = preparedEvent(record).requestHash;
   const recovery = {
     version: 1,
     recoveryId,
@@ -1039,10 +1075,14 @@ export async function setStockAndMaybeEnqueueRestock(serviceValue, planValue, va
   const resultRaw = await redisCmd([
     "EVAL", SET_STOCK_AND_ENQUEUE_SCRIPT, "3",
     `liumeiti:stock:${service}:${plan}`, EVENTS_HASH, OUTBOX_KEY,
-    unlimited ? "unlimited" : String(count), event?.eventId || "", event?.requestHash || "", event ? JSON.stringify(event) : "", String(Date.now()),
+    unlimited ? "unlimited" : String(count), event?.eventId || PUSH_MISSING_VALUE,
+    event?.requestHash || PUSH_MISSING_VALUE, event ? JSON.stringify(event) : PUSH_MISSING_VALUE, String(Date.now()),
   ]);
   const result = parseJson(resultRaw, null);
-  if (!result?.ok) return { ok: false, error: resultRaw || "storage_unavailable" };
+  if (!isPlainRecord(result) || result.ok !== true || typeof result.restocked !== "boolean" || typeof result.queued !== "boolean"
+      || !Number.isSafeInteger(result.before) || !Number.isSafeInteger(result.after)) {
+    return { ok: false, error: typeof resultRaw === "string" ? resultRaw : "storage_unavailable" };
+  }
   return {
     ok: true,
     before: result.before === -1 ? null : Number(result.before),
@@ -1108,14 +1148,37 @@ function deliveryField(eventId, subscriptionId) {
   return `${eventId}|${subscriptionId}`;
 }
 
+function validDeliveryRecord(record, eventId, subscriptionId) {
+  if (!isPlainRecord(record) || !["sent", "gone", "skipped", "terminal", "uncertain", "sending", "retryable"].includes(record.status)
+      || typeof record.at !== "string" || !record.at || !Number.isFinite(new Date(record.at).getTime())) return false;
+  const hasEventId = Object.hasOwn(record, "eventId"), hasSubscriptionId = Object.hasOwn(record, "subscriptionId");
+  if (hasEventId !== hasSubscriptionId) return false;
+  return !hasEventId || (record.eventId === eventId && record.subscriptionId === subscriptionId);
+}
+
 async function saveDelivery(eventId, subscriptionId, record) {
-  return redisNumber(await redisCmd(["HSET", DELIVERIES_HASH, deliveryField(eventId, subscriptionId), JSON.stringify(record)])) != null;
+  return redisNumber(await redisCmd(["HSET", DELIVERIES_HASH, deliveryField(eventId, subscriptionId), JSON.stringify({ ...record, eventId, subscriptionId })])) != null;
+}
+
+async function claimDelivery(eventId, subscriptionId, record, expectedRaw) {
+  const claimToken = randomBytes(12).toString("hex");
+  const raw = JSON.stringify({ ...record, eventId, subscriptionId, claimToken });
+  const field = deliveryField(eventId, subscriptionId);
+  const result = await redisCmd(["EVAL", CLAIM_DELIVERY_SCRIPT, "1", DELIVERIES_HASH,
+    field, raw, expectedRaw, eventId, subscriptionId, claimToken]);
+  if (result === "saved") return true;
+  if (result != null) return false;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const stored = await redisCmd(["HMGET", DELIVERIES_HASH, field]);
+    if (Array.isArray(stored) && stored[0] === raw && await redisCmd(["PING"]) === "PONG") return true;
+  }
+  return false;
 }
 
 async function saveSuccessfulDelivery(eventId, subscriptionId, delivery, subscriptionRecord) {
   return Number(await redisCmd([
     "EVAL", SAVE_SUCCESSFUL_DELIVERY_SCRIPT, "2", DELIVERIES_HASH, SUBSCRIPTIONS_HASH,
-    deliveryField(eventId, subscriptionId), JSON.stringify(delivery), subscriptionId, JSON.stringify(subscriptionRecord),
+    deliveryField(eventId, subscriptionId), JSON.stringify({ ...delivery, eventId, subscriptionId }), subscriptionId, JSON.stringify(subscriptionRecord),
   ])) === 1;
 }
 
@@ -1230,15 +1293,35 @@ async function recordPushDeliveryTrace(event, phase, details = {}) {
 async function finalizeEvent(event, deliveryFields = [], traceDetails = null, { clearStockWatches = true } = {}) {
   const safeFields = uniqueStrings(deliveryFields, MAX_SUBSCRIPTIONS_PER_ACCOUNT * 5000);
   const shouldClearStock = clearStockWatches && event.audience === "stock" && event.productKey;
-  const result = await redisCmd([
-    "EVAL", FINALIZE_EVENT_SCRIPT, "5",
-    EVENTS_HASH, OUTBOX_KEY, DELIVERIES_HASH, STOCK_WATCHES_HASH, ACCOUNT_WATCHES_HASH,
-    event.eventId, clean(event.requestHash, 80), shouldClearStock ? "1" : "0", String(safeFields.length),
-    ...safeFields, shouldClearStock ? clean(event.productKey, 100) : "",
-  ]);
-  if (result !== "finalized") return { ok: false, error: "storage_unavailable" };
-  if (traceDetails) await recordPushDeliveryTrace(event, "final", traceDetails);
-  return { ok: true };
+  const productKey = shouldClearStock ? clean(event.productKey, 100) : "";
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let expectedStock = PUSH_MISSING_VALUE;
+    let cleanupPlan = [];
+    if (productKey) {
+      const targets = await listSnapshot(STOCK_WATCHES_HASH, productKey, 5000);
+      if (!targets.ok) return { ok: false, error: "storage_unavailable" };
+      expectedStock = targets.raw;
+      const products = await Promise.all(targets.values.map((target) => (
+        listSnapshot(ACCOUNT_WATCHES_HASH, target, MAX_WATCHES_PER_ACCOUNT)
+      )));
+      if (products.some((state) => !state.ok)) return { ok: false, error: "storage_unavailable" };
+      cleanupPlan = targets.values.map((target, index) => {
+        const next = products[index].values.filter((value) => value !== productKey);
+        return { target, expected: products[index].raw, next: next.length ? JSON.stringify(next) : PUSH_MISSING_VALUE };
+      });
+    }
+    const result = await redisCmd([
+      "EVAL", FINALIZE_EVENT_SCRIPT, "5",
+      EVENTS_HASH, OUTBOX_KEY, DELIVERIES_HASH, STOCK_WATCHES_HASH, ACCOUNT_WATCHES_HASH,
+      event.eventId, clean(event.requestHash, 80), productKey ? "1" : "0", String(safeFields.length),
+      ...safeFields, productKey || PUSH_MISSING_VALUE, expectedStock, JSON.stringify(cleanupPlan),
+    ]);
+    if (result === "stale") continue;
+    if (result !== "finalized") return { ok: false, error: "storage_unavailable" };
+    if (traceDetails) await recordPushDeliveryTrace(event, "final", traceDetails);
+    return { ok: true };
+  }
+  return { ok: false, error: "storage_unavailable" };
 }
 
 async function rescheduleEvent(event, error = "push_delivery_failed", retryAfter = 0, traceErrorCode = "push_delivery_retry") {
@@ -1263,11 +1346,30 @@ async function rescheduleEvent(event, error = "push_delivery_failed", retryAfter
 async function persistDeliveryFields(event, deliveryFields) {
   const safeFields = uniqueStrings(deliveryFields, MAX_SUBSCRIPTIONS_PER_ACCOUNT * 5000);
   if (!event?.eventId || !safeFields.length) return { ok: true };
-  const result = await redisCmd([
-    "EVAL", PERSIST_DELIVERY_FIELDS_SCRIPT, "1", EVENTS_HASH,
-    event.eventId, clean(event.requestHash, 80), JSON.stringify(safeFields),
-  ]);
-  return result === "saved" ? { ok: true } : { ok: false, error: "storage_unavailable" };
+  const requestHash = clean(event.requestHash, 80);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const field = await readHashField(EVENTS_HASH, event.eventId);
+    if (!field.ok || !field.exists || typeof field.value !== "string") {
+      return { ok: false, error: "storage_unavailable" };
+    }
+    const current = parseJson(field.value, null);
+    if (!isPlainRecord(current) || current.eventId !== event.eventId || clean(current.requestHash, 80) !== requestHash) {
+      return { ok: false, error: "storage_unavailable" };
+    }
+    if (current.deliveryFields != null && !Array.isArray(current.deliveryFields)) {
+      return { ok: false, error: "storage_unavailable" };
+    }
+    const merged = uniqueStrings([...(current.deliveryFields || []), ...safeFields], MAX_SUBSCRIPTIONS_PER_ACCOUNT * 5000);
+    const replacement = replaceTopLevelJsonFields(field.value, { deliveryFields: merged });
+    if (!replacement) return { ok: false, error: "storage_unavailable" };
+    const result = await redisCmd([
+      "EVAL", PERSIST_DELIVERY_FIELDS_SCRIPT, "1", EVENTS_HASH,
+      event.eventId, requestHash, field.value, replacement,
+    ]);
+    if (result === "saved") return { ok: true };
+    if (result !== "stale") return { ok: false, error: "storage_unavailable" };
+  }
+  return { ok: false, error: "storage_unavailable" };
 }
 
 async function stoppedDispatch(event, deliveryFields, leaseState, sent, removed) {
@@ -1363,7 +1465,7 @@ async function dispatchEvent(event, sendNotification, lease) {
         continue;
       }
       const prior = deliveryState.exists ? parseJson(deliveryState.value, null) : null;
-      if (deliveryState.exists && !prior) {
+      if (deliveryState.exists && !validDeliveryRecord(prior, event.eventId, id)) {
         retry = true;
         lastError = "push_delivery_record_corrupt";
         lastErrorCode = "push_delivery_store_unavailable";
@@ -1481,11 +1583,11 @@ async function dispatchEvent(event, sendNotification, lease) {
         }
         continue;
       }
-      const sendingSaved = await saveDelivery(event.eventId, id, {
+      const sendingSaved = await claimDelivery(event.eventId, id, {
         status: "sending",
         at: new Date().toISOString(),
         attempt: Math.max(0, Number(event.attempts || 0)) + 1,
-      });
+      }, deliveryState.exists ? String(deliveryState.value) : PUSH_MISSING_VALUE);
       if (!sendingSaved) {
         retry = true;
         lastError = "push_delivery_claim_failed";
@@ -1658,7 +1760,7 @@ export async function dispatchPushOutbox({
         }
         continue;
       }
-      if (!event) {
+      if (!isPlainRecord(event) || event.eventId !== clean(id, 80) || !/^[a-f0-9]{64}$/.test(String(event.requestHash || ""))) {
         summary.failed += 1;
         summary.error = "push_event_corrupt";
         continue;
@@ -1721,12 +1823,13 @@ export async function recoverPushEnqueueFailures({
       continue;
     }
     const recovery = recoveryField.exists ? parseJson(recoveryField.value, null) : null;
-    if (recoveryField.exists && !recovery) {
+    const sourceId = clean(recovery?.record?.sourceId, 500);
+    const prepared = sourceId && isPlainRecord(recovery?.record) ? preparedEvent(recovery.record) : null;
+    const expectedRecoveryId = sourceId ? `pr_${sha(sourceId).slice(0, 48)}` : "";
+    if (!recoveryField.exists || !isPlainRecord(recovery) || recoveryId !== expectedRecoveryId
+        || recovery.recoveryId !== recoveryId || recovery.requestHash !== prepared?.requestHash
+        || !Number.isSafeInteger(Number(recovery.attempts || 0)) || Number(recovery.attempts || 0) < 0) {
       failed += 1;
-      continue;
-    }
-    if (!recovery?.record?.sourceId) {
-      if (!await removeEnqueueRecovery(recoveryId)) failed += 1;
       continue;
     }
     const expiresAt = new Date(recovery.record.expiresAt || 0).getTime();
@@ -1736,7 +1839,7 @@ export async function recoverPushEnqueueFailures({
       continue;
     }
     const result = await enqueueEvent(recovery.record, { rememberFailure: false });
-    if (result.ok) {
+    if (result.ok === true) {
       if (!await removeEnqueueRecovery(recoveryId)) failed += 1;
       else recovered += 1;
       continue;
@@ -1745,7 +1848,7 @@ export async function recoverPushEnqueueFailures({
     const retryAt = Date.now() + retryDelayMs(attempts);
     const updated = {
       ...recovery,
-      requestHash: recovery.requestHash || preparedEvent(recovery.record).requestHash,
+      requestHash: prepared.requestHash,
       attempts,
       error: clean(result.error || "push_enqueue_failed", 180),
       lastFailedAt: new Date().toISOString(),
@@ -1885,6 +1988,7 @@ export const pushInternals = {
   ACCOUNT_WATCHES_HASH,
   notificationCopy,
   payloadForEvent,
+  persistDeliveryFields,
   encrypted,
   decrypted,
   safeNotificationPath,

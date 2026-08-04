@@ -182,6 +182,10 @@ export default function ProxyQuotePayment({ orderId }) {
         ? error.message
         : loadFailureMessage(locale, error, "rate");
       setRateState({ loading: false, error: message });
+    } finally {
+      if (requestId === rateRequestRef.current) {
+        setRateState((current) => ({ ...current, loading: false }));
+      }
     }
   }, [locale]);
 
