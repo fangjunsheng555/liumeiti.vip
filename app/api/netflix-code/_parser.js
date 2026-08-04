@@ -606,26 +606,41 @@ function forwardedHeaderAddresses(text) {
   return lines.filter((line) => labels.test(line.trim())).flatMap(emailsIn);
 }
 
+function portableExplicitTimestamp(value) {
+  const dateText = String(value || "").trim();
+  // Date.parse assigns the host timezone to a date that has none. Only an
+  // explicit RFC/ISO zone is portable enough for cross-copy ordering.
+  const hasExplicitTimezone = /(?:[+-]\d{2}:?\d{2}|(?:^|[\s(])(?:ut|utc|gmt|[ecmp][sd]t|jst|kst|aest|aedt)(?=$|[\s)+-])|(?:^|\s)z$|t\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?z(?:$|\s))/i.test(dateText);
+  if (!hasExplicitTimezone) return 0;
+  const timestamp = new Date(dateText).getTime();
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
+}
+
 function forwardedNetflixSentAt(text) {
   let insideNetflixHeaders = false;
   for (const rawLine of String(text || "").split(/\r?\n/)) {
     const line = rawLine.trim();
-    if (/^(?:from|de|von|da|发件人|寄件者)\s*[:：]/i.test(line)) {
+    if (/^(?:from|de|von|da|发件人|寄件者|差出人)\s*[:：]/i.test(line)) {
       insideNetflixHeaders = emailsIn(line).some(isNetflixAddress);
       continue;
     }
     if (!insideNetflixHeaders) continue;
-    const match = /^(?:date|sent|datum|gesendet|fecha|enviado|enviada|data|inviato|verzonden|wysłano|wyslano|日期|发送时间|寄件日期)\s*[:：]\s*(.+)$/i.exec(line);
+    const match = /^(?:date|sent|datum|gesendet|fecha|enviado|enviada|envoyé|envoye|data|inviato|verzonden|wysłano|wyslano|日期|发送时间|寄件日期|送信日時)\s*[:：]\s*(.+)$/i.exec(line);
     if (!match) continue;
-    const timestamp = new Date(match[1]).getTime();
-    if (Number.isFinite(timestamp) && timestamp > 0) return timestamp;
+    const timestamp = portableExplicitTimestamp(match[1]);
+    if (timestamp) return timestamp;
   }
   return 0;
 }
 
 function normalizedNetflixRequestSentAt(current, currentPlain, receivedAt) {
   const received = new Date(receivedAt || Date.now()).getTime();
-  const structured = current?.structuredNetflix ? new Date(current.message?.date || 0).getTime() : 0;
+  // PostalMime's convenience `date` value has already passed through native
+  // Date parsing. Read the original header instead so a structured MIME Date
+  // without a zone cannot reintroduce host-timezone dependence.
+  const structured = current?.structuredNetflix
+    ? messageHeaderValues(current.message, "date").map(portableExplicitTimestamp).find(Boolean) || 0
+    : 0;
   const candidate = Number.isFinite(structured) && structured > 0
     ? structured
     : forwardedNetflixSentAt(currentPlain);
@@ -749,6 +764,8 @@ export async function parseNetflixEmail(raw, envelope = {}) {
   const receivedAt = new Date(envelope.receivedAt || Date.now()).toISOString();
   const expiresAt = new Date(new Date(receivedAt).getTime() + 15 * 60 * 1000).toISOString();
   const requestIdentity = netflixRequestIdentity(current);
+  const deliveryFingerprint = netflixDeliveryFingerprint(current.text || current.htmlText);
+  const requestSentAt = normalizedNetflixRequestSentAt(current, currentPlain, receivedAt);
   const base = {
     accepted: true,
     accountEmails,
@@ -756,12 +773,17 @@ export async function parseNetflixEmail(raw, envelope = {}) {
     subject: currentSubject.slice(0, 240),
     language,
     receivedAt,
-    requestSentAt: normalizedNetflixRequestSentAt(current, currentPlain, receivedAt),
+    requestSentAt,
+    requestSentAtPortable: Boolean(requestSentAt),
     expiresAt,
     // Multipart text/html alternatives can format quoted history differently.
     // Never let a quoted SRC that survives only in the secondary alternative
     // override a clean primary text part; use HTML only when text is absent.
-    deliveryFingerprint: netflixDeliveryFingerprint(current.text || current.htmlText),
+    deliveryFingerprint,
+    // current.text/current.htmlText have already passed through the quoted
+    // history trimmer. Persisting this bit lets the store distinguish a real
+    // current SRC from an older footer that survives only in quoted history.
+    deliveryFingerprintFromCurrent: Boolean(deliveryFingerprint),
     requestPrimaryEvidence: requestIdentity.evidence,
     requestIdentityAmbiguous: requestIdentity.ambiguous,
     requestEvidence: netflixRequestEvidence(current),

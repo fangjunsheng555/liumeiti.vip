@@ -12,6 +12,7 @@ import { netflixMailStateErrorResponse } from "../app/api/netflix-code/route.js"
 
 const DELIVERY_A = "a".repeat(64);
 const DELIVERY_B = "b".repeat(64);
+const DELIVERY_C = "c".repeat(64);
 const REQUEST_A = "1".repeat(64);
 const REQUEST_B = "2".repeat(64);
 const BASE = Date.parse("2026-08-01T08:00:00.000Z");
@@ -23,12 +24,14 @@ function mail({
   // Absence is the least favorable production shape: no SRC and no shared
   // request identity. Tests that model preserved evidence opt in explicitly.
   fingerprint = "",
+  fingerprintFromCurrent = false,
   requestFingerprint = "",
   primaryFingerprint = "",
   requestIdentityAmbiguous = false,
   code = "",
   sequence = 0,
   requestSentAt = "",
+  requestSentAtPortable = false,
 }) {
   return {
     receivedAt: at,
@@ -36,6 +39,7 @@ function mail({
       accepted,
       eventId: id,
       deliveryFingerprint: fingerprint,
+      deliveryFingerprintFromCurrent: fingerprintFromCurrent,
       requestFingerprints: Array.isArray(requestFingerprint)
         ? requestFingerprint
         : requestFingerprint ? [requestFingerprint] : [],
@@ -45,6 +49,7 @@ function mail({
       requestIdentityAmbiguous,
       arrivalSequence: sequence,
       requestSentAt,
+      requestSentAtPortable,
       value: code,
     },
   };
@@ -145,9 +150,9 @@ test("original Netflix sent time keeps a delayed old copy behind the newer reque
   const requestASentAt = new Date(BASE - 30_000).toISOString();
   const requestBSentAt = new Date(BASE - 15_000).toISOString();
   const result = selected([
-    mail({ at: BASE - 20_000, accepted: true, id: "dated-a-first", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, requestSentAt: requestASentAt, code: "4827" }),
-    mail({ at: BASE - 10_000, accepted: true, id: "dated-b", fingerprint: DELIVERY_B, requestFingerprint: REQUEST_B, requestSentAt: requestBSentAt, code: "7314" }),
-    mail({ at: BASE, accepted: true, id: "dated-a-delayed", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, requestSentAt: requestASentAt, code: "4827" }),
+    mail({ at: BASE - 20_000, accepted: true, id: "dated-a-first", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, requestSentAt: requestASentAt, requestSentAtPortable: true, code: "4827" }),
+    mail({ at: BASE - 10_000, accepted: true, id: "dated-b", fingerprint: DELIVERY_B, requestFingerprint: REQUEST_B, requestSentAt: requestBSentAt, requestSentAtPortable: true, code: "7314" }),
+    mail({ at: BASE, accepted: true, id: "dated-a-delayed", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, requestSentAt: requestASentAt, requestSentAtPortable: true, code: "4827" }),
   ]);
   assert.deepEqual(result.map((record) => record.value), ["7314"]);
 });
@@ -155,9 +160,9 @@ test("original Netflix sent time keeps a delayed old copy behind the newer reque
 test("different requests with the same trusted send time fail closed", () => {
   const sameSentAt = new Date(BASE - 60_000).toISOString();
   const result = selected([
-    mail({ at: BASE - 20_000, accepted: true, id: "same-date-a-first", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, requestSentAt: sameSentAt, code: "4827", sequence: 40 }),
-    mail({ at: BASE - 10_000, accepted: true, id: "same-date-b", fingerprint: DELIVERY_B, requestFingerprint: REQUEST_B, requestSentAt: sameSentAt, code: "7314", sequence: 41 }),
-    mail({ at: BASE, accepted: true, id: "same-date-a-delayed", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, requestSentAt: sameSentAt, code: "4827", sequence: 42 }),
+    mail({ at: BASE - 20_000, accepted: true, id: "same-date-a-first", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, requestSentAt: sameSentAt, requestSentAtPortable: true, code: "4827", sequence: 40 }),
+    mail({ at: BASE - 10_000, accepted: true, id: "same-date-b", fingerprint: DELIVERY_B, requestFingerprint: REQUEST_B, requestSentAt: sameSentAt, requestSentAtPortable: true, code: "7314", sequence: 41 }),
+    mail({ at: BASE, accepted: true, id: "same-date-a-delayed", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, requestSentAt: sameSentAt, requestSentAtPortable: true, code: "4827", sequence: 42 }),
   ]);
   assert.deepEqual(result, []);
 });
@@ -199,6 +204,33 @@ test("a quoted old SRC plus a transitive identity bridge never replays the old c
     [rows[2], rows[1], rows[0]],
   ];
   for (const input of permutations) assert.deepEqual(selected(input), []);
+});
+
+test("same-millisecond transitive bridge cannot invent a newer current-SRC direction", () => {
+  const requestX = "3".repeat(64);
+  const requestY = "4".repeat(64);
+  const oldAccepted = mail({
+    accepted: true,
+    id: "same-ms-old-accepted",
+    fingerprint: DELIVERY_A,
+    fingerprintFromCurrent: true,
+    requestFingerprint: requestY,
+    code: "4827",
+  });
+  const bridge = mail({
+    accepted: false,
+    id: "same-ms-bridge",
+    requestFingerprint: [requestX, requestY],
+  });
+  const latestFailed = mail({
+    accepted: false,
+    id: "same-ms-latest-failed",
+    fingerprint: DELIVERY_A,
+    fingerprintFromCurrent: true,
+    requestFingerprint: requestX,
+  });
+  assert.deepEqual(selected([oldAccepted, bridge, latestFailed]), []);
+  assert.deepEqual(selected([latestFailed, bridge, oldAccepted]), []);
 });
 
 test("current primary identity prevents an old References thread member from demoting the newest accepted code", () => {
@@ -259,7 +291,7 @@ test("different accepted codes with the same millisecond timestamp use the distr
 test("an unknown-time competitor fails closed through the 120-second ambiguity boundary", () => {
   for (const gap of [10_000, 119_999, 120_000]) {
     assert.deepEqual(selected([
-      mail({ at: BASE - gap, accepted: true, id: `trusted-request-${gap}`, fingerprint: DELIVERY_B, requestFingerprint: REQUEST_B, primaryFingerprint: REQUEST_B, requestSentAt: new Date(BASE - gap - 1_000).toISOString(), code: "7314" }),
+      mail({ at: BASE - gap, accepted: true, id: `trusted-request-${gap}`, fingerprint: DELIVERY_B, requestFingerprint: REQUEST_B, primaryFingerprint: REQUEST_B, requestSentAt: new Date(BASE - gap - 1_000).toISOString(), requestSentAtPortable: true, code: "7314" }),
       mail({ at: BASE, accepted: true, id: `unknown-time-competitor-${gap}`, fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, primaryFingerprint: REQUEST_A, code: "4827" }),
     ]), []);
   }
@@ -267,7 +299,7 @@ test("an unknown-time competitor fails closed through the 120-second ambiguity b
 
 test("an unknown-time rule-only request remains usable beyond the duplicate-delivery window", () => {
   const result = selected([
-    mail({ at: BASE - 120_001, accepted: true, id: "previous-request", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, primaryFingerprint: REQUEST_A, requestSentAt: new Date(BASE - 120_001).toISOString(), code: "4827" }),
+    mail({ at: BASE - 120_001, accepted: true, id: "previous-request", fingerprint: DELIVERY_A, requestFingerprint: REQUEST_A, primaryFingerprint: REQUEST_A, requestSentAt: new Date(BASE - 120_001).toISOString(), requestSentAtPortable: true, code: "4827" }),
     mail({ at: BASE, accepted: true, id: "rule-only-current-request", fingerprint: DELIVERY_B, requestFingerprint: REQUEST_B, primaryFingerprint: REQUEST_B, code: "7314" }),
   ]);
   assert.deepEqual(result.map((record) => record.value), ["7314"]);
@@ -321,6 +353,102 @@ test("a newer failed email quoting only the previous SRC can never replay the ol
       requestFingerprint: REQUEST_B,
     }),
   ]), []);
+});
+
+test("a current matching SRC can claim a pre-deployment accepted record within 120 seconds", () => {
+  const result = selected([
+    mail({
+      at: BASE - 60_000,
+      accepted: true,
+      id: "legacy-accepted-without-current-marker",
+      fingerprint: DELIVERY_A,
+      code: "4827",
+    }),
+    mail({
+      accepted: false,
+      id: "new-current-src-copy",
+      fingerprint: DELIVERY_A,
+      fingerprintFromCurrent: true,
+      sequence: 2,
+    }),
+  ]);
+  assert.deepEqual(result.map((record) => record.value), ["4827"]);
+});
+
+test("a legacy host-derived requestSentAt is ignored without the portable marker", () => {
+  const result = selected([
+    mail({
+      at: BASE - 60_000,
+      accepted: true,
+      id: "legacy-poisoned-time",
+      fingerprint: DELIVERY_A,
+      requestSentAt: "2099-01-01T00:00:00.000Z",
+      code: "4827",
+    }),
+    mail({
+      accepted: true,
+      id: "current-request",
+      fingerprint: DELIVERY_B,
+      code: "7314",
+    }),
+  ]);
+  assert.deepEqual(result.map((record) => record.value), ["7314"]);
+});
+
+test("portable requestSentAt is revalidated against receivedAt before ordering", async (t) => {
+  const cases = [
+    ["future", "2099-01-01T00:00:00.000Z"],
+    ["older-than-seven-days", new Date(BASE - 60_000 - 7 * 24 * 60 * 60_000 - 1).toISOString()],
+    ["invalid", "not-a-date"],
+    ["null", null],
+    ["empty", ""],
+  ];
+  for (const [label, requestSentAt] of cases) {
+    await t.test(label, () => {
+      const result = selected([
+        mail({
+          at: BASE - 60_000,
+          accepted: true,
+          id: `invalid-portable-${label}`,
+          fingerprint: DELIVERY_A,
+          requestSentAt,
+          requestSentAtPortable: true,
+          code: "4827",
+        }),
+        mail({
+          accepted: true,
+          id: `current-after-${label}`,
+          fingerprint: DELIVERY_B,
+          code: "7314",
+        }),
+      ]);
+      assert.deepEqual(result.map((record) => record.value), ["7314"]);
+    });
+  }
+});
+
+test("different same-millisecond accepted requests fail closed when either sequence is missing", () => {
+  const complete = mail({ accepted: true, id: "complete-sequence", fingerprint: DELIVERY_A, code: "4827", sequence: 200 });
+  const missing = mail({ accepted: true, id: "missing-sequence", fingerprint: DELIVERY_B, code: "7314", sequence: 0 });
+  assert.deepEqual(selected([complete, missing]), []);
+  assert.deepEqual(selected([missing, complete]), []);
+});
+
+test("three same-millisecond requests fail closed in all orders when any sequence is missing", () => {
+  const rows = [
+    mail({ accepted: true, id: "sequence-2", fingerprint: DELIVERY_A, code: "4827", sequence: 2 }),
+    mail({ accepted: true, id: "sequence-1", fingerprint: DELIVERY_B, code: "7314", sequence: 1 }),
+    mail({ accepted: true, id: "sequence-missing", fingerprint: DELIVERY_C, code: "2468", sequence: 0 }),
+  ];
+  const permutations = [
+    [rows[0], rows[1], rows[2]],
+    [rows[0], rows[2], rows[1]],
+    [rows[1], rows[0], rows[2]],
+    [rows[1], rows[2], rows[0]],
+    [rows[2], rows[0], rows[1]],
+    [rows[2], rows[1], rows[0]],
+  ];
+  for (const input of permutations) assert.deepEqual(selected(input), []);
 });
 
 test("an unreturned old code is never guessed behind a newer fingerprint-less failed request", () => {
@@ -546,11 +674,16 @@ test("persisted return evidence blocks an old-code fallback only after a newer f
     subject: "Netflix: Your sign-in code",
     receivedAt: new Date(now - 10_000).toISOString(),
     expiresAt: new Date(now + 14 * 60_000).toISOString(),
-    deliveryFingerprint: "",
+    deliveryFingerprint: DELIVERY_A,
+    deliveryFingerprintFromCurrent: true,
+    requestSentAt: new Date(now - 15_000).toISOString(),
+    requestSentAtPortable: true,
     requestEvidence: ["message-id:<same-original-netflix-request@example.com>"],
   }, { messageId: "old-code", digest: "old-code" });
   assert.equal(accepted.ok, true);
   const firstStoredRecord = JSON.parse(strings.get(`liumeiti:netflix-mail:event:${accepted.eventId}`));
+  assert.equal(firstStoredRecord.deliveryFingerprintFromCurrent, true);
+  assert.equal(firstStoredRecord.requestSentAtPortable, true);
   const acceptedRetry = await storeNetflixMailEvent({
     accepted: true,
     kind: "code",
@@ -560,7 +693,10 @@ test("persisted return evidence blocks an old-code fallback only after a newer f
     subject: "Netflix: Your sign-in code",
     receivedAt: new Date(now - 10_000).toISOString(),
     expiresAt: new Date(now + 14 * 60_000).toISOString(),
-    deliveryFingerprint: "",
+    deliveryFingerprint: DELIVERY_A,
+    deliveryFingerprintFromCurrent: true,
+    requestSentAt: new Date(now - 15_000).toISOString(),
+    requestSentAtPortable: true,
     requestEvidence: ["message-id:<same-original-netflix-request@example.com>"],
   }, { messageId: "old-code", digest: "old-code" });
   const retryStoredRecord = JSON.parse(strings.get(`liumeiti:netflix-mail:event:${accepted.eventId}`));

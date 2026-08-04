@@ -26,6 +26,7 @@ const ACCESS_TTL_SECONDS = 90 * 24 * 60 * 60;
 const SIBLING_EVENT_WINDOW_MS = 15 * 1000;
 const MAX_REQUEST_FINGERPRINTS = 32;
 const MAX_PRIMARY_REQUEST_FINGERPRINTS = 4;
+export const NETFLIX_DUAL_DELIVERY_WINDOW_MS = 120 * 1000;
 
 function deliveryFingerprint(record) {
   const value = String(record?.deliveryFingerprint || "").trim().toLowerCase();
@@ -46,7 +47,7 @@ function requestPrimaryFingerprints(record) {
     .slice(0, MAX_PRIMARY_REQUEST_FINGERPRINTS);
 }
 
-function sameNetflixRequest(left, right) {
+function sameNetflixRequest(left, right, newerRecord = null, allowCurrentSrc = false) {
   const leftDelivery = deliveryFingerprint(left);
   const rightDelivery = deliveryFingerprint(right);
   // Two present, unequal Netflix SRC UUIDs conclusively identify different
@@ -57,15 +58,25 @@ function sameNetflixRequest(left, right) {
   // request. The event may still return its own parsed result, but it cannot
   // authorize fallback to another event's code.
   if (left?.requestIdentityAmbiguous === true || right?.requestIdentityAmbiguous === true) return false;
-  // Equal SRC values are not sufficient positive evidence on their own. A
-  // newly forwarded message can quote the previous Netflix email and retain
-  // only that older SRC footer. Treating the quoted value as authoritative
-  // would let a newer unparsed request replay the previous code. At least one
-  // HMAC-protected original Message-ID/content identity must also overlap.
   const leftEvidence = requestFingerprints(left);
   const rightEvidence = requestFingerprints(right);
   const leftPrimary = requestPrimaryFingerprints(left);
   const rightPrimary = requestPrimaryFingerprints(right);
+  // Two explicit current identities outrank the SRC fallback. An inbox rule
+  // can retain an old SRC in malformed current-looking text, but it cannot
+  // make two distinct original Message-IDs the same request.
+  if (leftPrimary.length && rightPrimary.length) {
+    const rightPrimarySet = new Set(rightPrimary);
+    if (!leftPrimary.some((value) => rightPrimarySet.has(value))) return false;
+  }
+  // Equal SRC values are sufficient only when the newer delivery proves that
+  // its SRC came from its current, quote-trimmed content. This closes the last
+  // Outlook dual-forward gap without allowing a new wrapper that quotes only
+  // an older footer to replay the older code.
+  if (allowCurrentSrc && leftDelivery && leftDelivery === rightDelivery
+    && newerRecord?.deliveryFingerprintFromCurrent === true
+    && deliveryFingerprint(newerRecord) === leftDelivery) return true;
+  // Otherwise require an HMAC-protected original Message-ID/content identity.
   // New records carry one HMAC-protected current identity. When only one side
   // has the new field, compare that identity with the legacy record's full
   // evidence set; this keeps pre-deployment mail readable without letting an
@@ -81,15 +92,55 @@ function compareArrival(left, right) {
   if (receivedDifference) return receivedDifference;
   const leftSequence = Number(left?.record?.arrivalSequence || 0);
   const rightSequence = Number(right?.record?.arrivalSequence || 0);
-  if (Number.isSafeInteger(leftSequence) && Number.isSafeInteger(rightSequence) && leftSequence !== rightSequence) {
+  if (Number.isSafeInteger(leftSequence) && leftSequence > 0
+    && Number.isSafeInteger(rightSequence) && rightSequence > 0
+    && leftSequence !== rightSequence) {
     return rightSequence - leftSequence;
   }
   return 0;
 }
 
+function sameNetflixRequestEntries(left, right) {
+  const leftReceivedAt = Number(left?.receivedAt || 0);
+  const rightReceivedAt = Number(right?.receivedAt || 0);
+  let newer = leftReceivedAt > rightReceivedAt ? left : rightReceivedAt > leftReceivedAt ? right : null;
+  if (!newer) {
+    const leftSequence = Number(left?.record?.arrivalSequence || 0);
+    const rightSequence = Number(right?.record?.arrivalSequence || 0);
+    if (Number.isSafeInteger(leftSequence) && leftSequence > 0
+      && Number.isSafeInteger(rightSequence) && rightSequence > 0
+      && leftSequence !== rightSequence) {
+      newer = leftSequence > rightSequence ? left : right;
+    }
+  }
+  const receivedGap = Math.abs(leftReceivedAt - rightReceivedAt);
+  const allowCurrentSrc = Boolean(newer)
+    && Number.isFinite(receivedGap)
+    && receivedGap <= NETFLIX_DUAL_DELIVERY_WINDOW_MS;
+  return sameNetflixRequest(left?.record, right?.record, newer?.record || null, allowCurrentSrc);
+}
+
 function recordRequestSentAt(entry) {
-  const value = new Date(entry?.record?.requestSentAt || 0).getTime();
-  return Number.isFinite(value) && value > 0 ? value : 0;
+  if (entry?.record?.requestSentAtPortable !== true) return 0;
+  const received = Number(entry?.receivedAt || 0);
+  const candidate = new Date(entry?.record?.requestSentAt || 0).getTime();
+  if (!Number.isFinite(received) || received <= 0
+    || !Number.isFinite(candidate) || candidate <= 0
+    || candidate < received - 7 * 24 * 60 * 60 * 1000
+    || candidate > received + 10 * 60 * 1000) return 0;
+  return candidate;
+}
+
+function clusterSequenceOrder(left, right) {
+  const leftSequence = Number(left?.firstArrivalSequence || 0);
+  const rightSequence = Number(right?.firstArrivalSequence || 0);
+  const comparable = Number.isSafeInteger(leftSequence) && leftSequence > 0
+    && Number.isSafeInteger(rightSequence) && rightSequence > 0
+    && leftSequence !== rightSequence;
+  return {
+    comparable,
+    difference: comparable ? rightSequence - leftSequence : 0,
+  };
 }
 
 function clusterDeliveryFingerprints(entries) {
@@ -110,7 +161,7 @@ function rankedNetflixRequestClusters(records) {
   for (const entry of pool) {
     const matching = [];
     clusters.forEach((cluster, index) => {
-      if (cluster.some((candidate) => sameNetflixRequest(entry?.record, candidate?.record))) matching.push(index);
+      if (cluster.some((candidate) => sameNetflixRequestEntries(entry, candidate))) matching.push(index);
     });
     if (!matching.length) {
       clusters.push([entry]);
@@ -128,7 +179,16 @@ function rankedNetflixRequestClusters(records) {
       entry,
       ...matching.flatMap((index) => clusters[index]),
     ]);
-    if (mergedFingerprints.size > 1 || mergedPrimaryFingerprints.size > 1) {
+    const mergeEntries = [entry, ...matching.flatMap((index) => clusters[index])];
+    const sameSrcWithoutDirectProof = mergeEntries.some((left, leftIndex) => {
+      const fingerprint = deliveryFingerprint(left?.record);
+      if (!fingerprint) return false;
+      return mergeEntries.slice(leftIndex + 1).some((right) => (
+        deliveryFingerprint(right?.record) === fingerprint
+        && !sameNetflixRequestEntries(left, right)
+      ));
+    });
+    if (mergedFingerprints.size > 1 || mergedPrimaryFingerprints.size > 1 || sameSrcWithoutDirectProof) {
       clusters.push([entry]);
       continue;
     }
@@ -144,10 +204,11 @@ function rankedNetflixRequestClusters(records) {
     const sourceTimes = entries.map(recordRequestSentAt).filter((value) => value > 0);
     const firstReceivedAt = Math.min(...entries.map((entry) => Number(entry.receivedAt)));
     const firstEntries = entries.filter((entry) => Number(entry.receivedAt) === firstReceivedAt);
-    const firstSequences = firstEntries
-      .map((entry) => Number(entry?.record?.arrivalSequence || 0))
-      .filter((value) => Number.isSafeInteger(value) && value > 0);
-    const firstArrivalSequence = firstSequences.length ? Math.min(...firstSequences) : 0;
+    const firstSequences = firstEntries.map((entry) => Number(entry?.record?.arrivalSequence || 0));
+    const firstArrivalSequence = firstSequences.length
+      && firstSequences.every((value) => Number.isSafeInteger(value) && value > 0)
+      ? Math.min(...firstSequences)
+      : 0;
     return {
       entries: orderedEntries,
       // All copies normally carry the same original Date. If a wrapper
@@ -158,12 +219,13 @@ function rankedNetflixRequestClusters(records) {
       firstReceivedAt,
       firstArrivalSequence,
     };
-  }).sort((left, right) => (
-    right.requestTime - left.requestTime
-    || right.firstReceivedAt - left.firstReceivedAt
-    || right.firstArrivalSequence - left.firstArrivalSequence
-    || compareArrival(left.entries[0], right.entries[0])
-  ));
+  }).sort((left, right) => {
+    const sequenceDifference = clusterSequenceOrder(left, right).difference;
+    return right.requestTime - left.requestTime
+      || right.firstReceivedAt - left.firstReceivedAt
+      || sequenceDifference
+      || compareArrival(left.entries[0], right.entries[0]);
+  });
   return ranked;
 }
 
@@ -187,8 +249,6 @@ export function latestNetflixSiblingCluster(records) {
 // forward plus an inbox rule. The copies can arrive minutes apart and one may
 // be flattened beyond recognition, so any accepted record close enough to the
 // newest delivery outranks a rejected copy.
-export const NETFLIX_DUAL_DELIVERY_WINDOW_MS = 120 * 1000;
-
 export function latestAcceptedNetflixRecords(
   records,
   windowMs = NETFLIX_DUAL_DELIVERY_WINDOW_MS,
@@ -196,15 +256,14 @@ export function latestAcceptedNetflixRecords(
 ) {
   const rankedClusters = rankedNetflixRequestClusters(records);
   const firstCluster = rankedClusters[0];
-  const secondCluster = rankedClusters[1];
   // Legacy events can lack the distributed sequence. If two distinct request
   // clusters then tie on every trustworthy ordering signal, Redis member order
   // cannot prove which code is newest. Fail closed instead of guessing.
-  if (firstCluster && secondCluster
-    && firstCluster.requestTime === secondCluster.requestTime
-    && firstCluster.firstReceivedAt === secondCluster.firstReceivedAt
-    && firstCluster.firstArrivalSequence === secondCluster.firstArrivalSequence
-    && compareArrival(firstCluster.entries[0], secondCluster.entries[0]) === 0) {
+  if (firstCluster && rankedClusters.slice(1).some((cluster) => (
+    firstCluster.requestTime === cluster.requestTime
+    && firstCluster.firstReceivedAt === cluster.firstReceivedAt
+    && !clusterSequenceOrder(firstCluster, cluster).comparable
+  ))) {
     return [];
   }
   // Never compare a trusted original send time with a nearby cluster whose
@@ -237,20 +296,19 @@ export function latestAcceptedNetflixRecords(
   // An older accepted result may outrank a newer rejected copy only when both
   // prove they came from the same original Netflix request. Unequal SRC UUIDs
   // conclusively reject a match, while HMAC-protected original Message-ID or
-  // canonical-content identities provide the required positive proof. An SRC
-  // match alone is unsafe because a new forward may quote only the previous
-  // email's footer. With no shared positive evidence the situation is
-  // information-theoretically ambiguous, so fail closed instead of ever
-  // returning a possibly stale code.
+  // canonical-content identities provide positive proof. Equal SRC is also
+  // proof only when the newer record explicitly says it came from current,
+  // quote-trimmed content. With neither signal, fail closed.
   const excludedFallbacks = new Set(validEventIds(excludeFallbackEventIds));
   // Evidence overlap is deliberately non-transitive for fallback. References
   // is a thread-level header and a newly forwarded request can quote both an
   // older identity and its SRC footer. A bridge record must therefore never
   // turn indirect overlap into permission to replay an older accepted code.
   return (rankedClusters[0]?.entries || []).filter((entry) => {
-    if (!entry.record?.accepted || Math.abs(newestReceivedAt - Number(entry.receivedAt)) > windowMs) return false;
+    const receivedGap = Math.abs(newestReceivedAt - Number(entry.receivedAt));
+    if (!entry.record?.accepted || receivedGap > windowMs) return false;
     if (excludedFallbacks.has(String(entry.record?.eventId || "").toUpperCase())) return false;
-    return sameNetflixRequest(newest.record, entry.record);
+    return sameNetflixRequestEntries(newest, entry);
   }).slice(0, 1);
 }
 
@@ -529,10 +587,12 @@ export async function storeNetflixMailEvent(parsed, { messageId = "", digest = "
     receivedAt: parsed?.receivedAt || new Date().toISOString(),
     receivedAtBeijing: formatBeijingTime(parsed?.receivedAt || new Date()),
     requestSentAt: parsed?.requestSentAt || "",
+    requestSentAtPortable: parsed?.requestSentAtPortable === true,
     expiresAt: parsed?.expiresAt || "",
     sender: maskNetflixEmail(parsed?.sender),
     subject: clean(parsed?.subject, 240),
     deliveryFingerprint: deliveryFingerprint(parsed),
+    deliveryFingerprintFromCurrent: parsed?.deliveryFingerprintFromCurrent === true,
     requestIdentityAmbiguous: parsed?.requestIdentityAmbiguous === true,
     requestPrimaryFingerprints: protectedNetflixPrimaryRequestFingerprints(parsed),
     requestFingerprints: protectedNetflixRequestFingerprints(parsed),
