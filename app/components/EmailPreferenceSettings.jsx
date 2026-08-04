@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { clientFetch as fetch } from "../lib/client-fetch";
 
 const empty = { marketing: "unknown", orderUpdates: true, renewal: true, serviceNotices: true };
@@ -26,30 +26,65 @@ function suppressionMessage(suppression, L) {
   return "";
 }
 
+function preferenceRequestMessage(locale, error, action) {
+  const L = (zh, en) => locale === "en" ? en : zh;
+  const saving = action === "save";
+  if (error?.name === "TimeoutError" || error?.code === "request_timeout") {
+    return saving
+      ? L("保存请求超时，请重试", "The save request timed out. Please retry.")
+      : L("请求超时，请重试", "The request timed out. Please retry.");
+  }
+  if (error?.code === "invalid_json") return L("服务器响应异常，请重试", "The server returned an invalid response. Please retry.");
+  if (error?.status === 401) return L("登录状态已失效，请重新登录后重试", "Your session expired. Sign in and retry.");
+  if (error?.status === 403) return L("暂时无权操作邮件偏好，请刷新登录状态后重试", "Email preferences can't be accessed. Refresh your session and retry.");
+  if (error?.status === 409) return L("邮件偏好状态已更新，请重新加载后重试", "Email preferences changed. Reload and retry.");
+  if ([500, 503].includes(error?.status)) return L("邮件偏好服务暂时不可用，请稍后重试", "Email preferences are temporarily unavailable. Please retry later.");
+  return saving
+    ? L("保存失败，请检查网络后重试", "Couldn't save. Check your connection and retry.")
+    : L("网络连接失败，请检查网络后重试", "The network request failed. Check your connection and retry.");
+}
+
 export default function EmailPreferenceSettings({ locale = "zh" }) {
   const L = (zh, en) => locale === "en" ? en : zh;
   const [preferences, setPreferences] = useState(empty);
   const [suppression, setSuppression] = useState({ scope: "none" });
-  const [state, setState] = useState({ loading: true, saving: false, error: "", saved: false });
+  const [state, setState] = useState({ loading: true, loaded: false, saving: false, error: "", saved: false });
+  const loadRequestRef = useRef(0);
   const deliveryNotice = suppressionMessage(suppression, L);
 
+  const load = useCallback(async () => {
+    const requestId = ++loadRequestRef.current;
+    setState({ loading: true, loaded: false, saving: false, error: "", saved: false });
+    try {
+      const response = await fetch("/api/account/email-preferences", { cache: "no-store" });
+      let data = null;
+      try { data = await response.json(); } catch {
+        const error = new Error("invalid_json");
+        error.code = "invalid_json";
+        throw error;
+      }
+      if (!response.ok || !data?.ok) {
+        const error = new Error("load_failed");
+        error.status = response.status;
+        throw error;
+      }
+      if (requestId !== loadRequestRef.current) return;
+      setPreferences({ ...empty, ...data.preferences });
+      setSuppression(data.suppression || { scope: "none" });
+      setState({ loading: false, loaded: true, saving: false, error: "", saved: false });
+    } catch (error) {
+      if (requestId !== loadRequestRef.current) return;
+      setState({ loading: false, loaded: false, saving: false, error: preferenceRequestMessage(locale, error, "load"), saved: false });
+    }
+  }, [locale]);
+
   useEffect(() => {
-    let active = true;
-    fetch("/api/account/email-preferences", { cache: "no-store" })
-      .then(async (response) => {
-        const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error(data.error || "加载失败");
-        if (active) {
-          setPreferences({ ...empty, ...data.preferences });
-          setSuppression(data.suppression || { scope: "none" });
-          setState({ loading: false, saving: false, error: "", saved: false });
-        }
-      })
-      .catch((error) => active && setState({ loading: false, saving: false, error: error.message || "加载失败", saved: false }));
-    return () => { active = false; };
-  }, []);
+    load();
+    return () => { loadRequestRef.current += 1; };
+  }, [load]);
 
   async function save() {
+    if (!state.loaded || state.loading || state.saving) return;
     setState((current) => ({ ...current, saving: true, error: "", saved: false }));
     try {
       const response = await fetch("/api/account/email-preferences", {
@@ -62,17 +97,31 @@ export default function EmailPreferenceSettings({ locale = "zh" }) {
           serviceNotices: preferences.serviceNotices,
         } }),
       });
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || "保存失败");
+      let data = null;
+      try { data = await response.json(); } catch {
+        const error = new Error("invalid_json");
+        error.code = "invalid_json";
+        throw error;
+      }
+      if (!response.ok || !data?.ok) {
+        const error = new Error("save_failed");
+        error.status = response.status;
+        throw error;
+      }
       setPreferences((current) => ({ ...current, ...data.preferences }));
       setSuppression(data.suppression || { scope: "none" });
-      setState({ loading: false, saving: false, error: "", saved: true });
+      setState({ loading: false, loaded: true, saving: false, error: "", saved: true });
     } catch (error) {
-      setState({ loading: false, saving: false, error: error.message || "保存失败", saved: false });
+      setState({ loading: false, loaded: true, saving: false, error: preferenceRequestMessage(locale, error, "save"), saved: false });
     }
   }
 
   if (state.loading) return <section style={CARD}><strong>{L("邮件偏好", "Email preferences")}</strong><span style={{ color: "#64748b", fontSize: 12 }}>{L("正在加载…", "Loading…")}</span></section>;
+  if (!state.loaded) return <section style={CARD} aria-labelledby="email-preference-error-title">
+    <strong id="email-preference-error-title">{L("邮件偏好", "Email preferences")}</strong>
+    <p role="alert" style={{ color: "#b42318", margin: 0, fontSize: 12, lineHeight: 1.55 }}>{state.error || L("邮件偏好暂时无法加载", "Email preferences couldn't load.")}</p>
+    <button type="button" onClick={load} style={BUTTON}>{L("重试", "Retry")}</button>
+  </section>;
   return <section style={CARD} aria-labelledby="email-preference-title">
     <header><strong id="email-preference-title" style={{ display: "block", color: "#0f172a", fontSize: 15, fontWeight: 900 }}>{L("邮件偏好", "Email preferences")}</strong><span style={{ display: "block", marginTop: 3, color: "#64748b", fontSize: 11, lineHeight: 1.55 }}>{L("营销、续费、服务和订单通知可分别设置；验证码与账户安全邮件始终保留。", "Choose marketing, renewal, service and order mail separately. Verification and account-security mail always remains enabled.")}</span></header>
     {deliveryNotice ? <p role="status" style={{ margin: 0, border: "1px solid #f1d39b", borderRadius: 10, background: "#fff8e8", color: "#7a4b00", padding: "10px 11px", fontSize: 11.5, lineHeight: 1.55 }}>{deliveryNotice}</p> : null}

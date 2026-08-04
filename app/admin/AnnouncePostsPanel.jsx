@@ -2,10 +2,11 @@
 
 // 后台「公告中心」编辑。仅超级管理员。管理多条带日期/分类的公告，前端在 /announcements 列表展示。
 // 列表 = GET /api/admin/announce-posts。保存 = POST { post }（含 id 即编辑）。删除 = DELETE { id }。
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Inbox, LoaderCircle, CheckCircle2, AlertTriangle, Pin, Plus, Pencil, Trash2, Eye, EyeOff, Megaphone, Send } from "lucide-react";
 import ServiceNoticeDialog from "./ServiceNoticeDialog";
 import { clientFetch as fetch } from "../lib/client-fetch";
+import { beginLatestRequest, isLatestRequest } from "../lib/latest-request";
 
 const C = {
   text: "var(--text, #1d1d1f)", muted: "var(--muted, #6e6e73)", faint: "var(--faint, #8a8a8e)", border: "var(--border, #d2d2d7)",
@@ -46,24 +47,31 @@ export default function AnnouncePostsPanel() {
   const [form, setForm] = useState(EMPTY);
   const [services, setServices] = useState([]);
   const [noticePost, setNoticePost] = useState(null);
+  const [saveUncertain, setSaveUncertain] = useState(false);
+  const loadRequestRef = useRef(0);
 
   const ok = (text) => setMsg({ type: "ok", text });
   const err = (text) => setMsg({ type: "error", text });
   const editing = !!form.id;
 
   const load = useCallback(async () => {
+    const requestId = beginLatestRequest(loadRequestRef);
     setLoading(true);
     try {
       const r = await fetch("/api/admin/announce-posts", { credentials: "same-origin", cache: "no-store" });
       const d = await r.json();
+      if (!isLatestRequest(loadRequestRef, requestId)) return;
       if (d && d.ok) {
         setPosts(sortPosts(Array.isArray(d.posts) ? d.posts : []));
         setServices(Array.isArray(d.services) ? d.services : []);
       }
       else if (r.status === 401) err("无权限（仅超级管理员可管理公告）");
       else err("加载失败，请重试");
-    } catch (e) { err("加载失败，请重试"); }
-    setLoading(false);
+    } catch (e) {
+      if (isLatestRequest(loadRequestRef, requestId)) err("加载失败，请重试");
+    } finally {
+      if (isLatestRequest(loadRequestRef, requestId)) setLoading(false);
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -71,6 +79,7 @@ export default function AnnouncePostsPanel() {
   const setF = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const resetForm = () => { setForm(EMPTY); };
   const editPost = (p) => {
+    if (loading || busy || saveUncertain) return;
     setForm({
       id: p.id || 0, title: p.title || "", titleEn: p.titleEn || "", body: p.body || "", bodyEn: p.bodyEn || "",
       date: p.date || "", category: p.category || "", pinned: !!p.pinned, published: p.published !== false, inBar: !!p.inBar,
@@ -81,6 +90,7 @@ export default function AnnouncePostsPanel() {
   };
 
   async function save() {
+    if (loading || busy || saveUncertain) return;
     if (!form.title.trim()) { err("请填写中文标题"); return; }
     if (!form.date.trim()) { err("请填写日期（如 2026-06-24）"); return; }
     setBusy(true); setMsg(null);
@@ -92,6 +102,7 @@ export default function AnnouncePostsPanel() {
       affectedService: form.affectedService,
       pinned: !!form.pinned, published: !!form.published, inBar: !!form.inBar,
     };
+    const creating = !form.id;
     try {
       const r = await fetch("/api/admin/announce-posts", {
         method: "POST", credentials: "same-origin",
@@ -99,12 +110,23 @@ export default function AnnouncePostsPanel() {
       });
       const d = await r.json();
       if (d && d.ok) { ok(editing ? "公告已更新" : "公告已发布"); resetForm(); await load(); }
-      else err("保存失败，请重试");
-    } catch (e) { err("保存失败，请重试"); }
+      else if (creating && r.status >= 500) {
+        setSaveUncertain(true);
+        err("公告保存结果尚未确认。为避免生成重复公告，本页已暂停再次发布；请刷新后台并核对公告列表。");
+      } else err("保存失败，请重试");
+    } catch (e) {
+      if (creating) {
+        setSaveUncertain(true);
+        err("公告保存结果尚未确认。为避免生成重复公告，本页已暂停再次发布；请刷新后台并核对公告列表。");
+      } else {
+        err("保存失败，请重试");
+      }
+    }
     setBusy(false);
   }
 
   async function del(id, title) {
+    if (loading || busy) return;
     if (typeof window !== "undefined" && !window.confirm(`确认删除公告「${title || id}」？此操作不可恢复。`)) return;
     setBusy(true); setMsg(null);
     try {
@@ -230,10 +252,10 @@ export default function AnnouncePostsPanel() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <button type="button" onClick={save} disabled={busy} style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "10px 24px", borderRadius: 10, border: 0, background: "linear-gradient(135deg,#0f766e,#14b8a6)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: busy ? "default" : "pointer", opacity: busy ? 0.7 : 1 }}>
-              {busy && <LoaderCircle size={15} className="spin-icon" />}{busy ? "保存中…" : editing ? "保存修改" : "发布公告"}
+            <button type="button" onClick={save} disabled={busy || loading || saveUncertain} style={{ display: "inline-flex", alignItems: "center", gap: 7, padding: "10px 24px", borderRadius: 10, border: 0, background: "linear-gradient(135deg,#0f766e,#14b8a6)", color: "#fff", fontSize: 14, fontWeight: 700, cursor: busy || loading || saveUncertain ? "default" : "pointer", opacity: busy || loading || saveUncertain ? 0.7 : 1 }}>
+              {busy && <LoaderCircle size={15} className="spin-icon" />}{busy ? "保存中…" : saveUncertain ? "结果待核对" : editing ? "保存修改" : "发布公告"}
             </button>
-            {editing && <button type="button" onClick={resetForm} disabled={busy} style={{ padding: "10px 20px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>取消</button>}
+            {editing && <button type="button" onClick={resetForm} disabled={busy || saveUncertain} style={{ padding: "10px 20px", borderRadius: 10, border: `1px solid ${C.border}`, background: C.surface, color: C.text, fontSize: 14, fontWeight: 600, cursor: "pointer" }}>取消</button>}
           </div>
         </div>
 
@@ -245,8 +267,8 @@ export default function AnnouncePostsPanel() {
           ) : posts.length === 0 ? (
             <div style={{ ...card, textAlign: "center", padding: "44px 16px" }}>
               <Inbox size={34} style={{ color: C.faint }} />
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginTop: 10 }}>暂无公告</div>
-              <div style={{ fontSize: 12.5, color: C.muted, marginTop: 4 }}>用上方表单发布第一条公告，会出现在这里。</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginTop: 10 }}>{msg?.type === "error" ? "公告数据未更新" : "暂无公告"}</div>
+              <div style={{ fontSize: 12.5, color: C.muted, marginTop: 4 }}>{msg?.type === "error" ? "请先点击上方刷新数据，当前空白不代表没有公告。" : "用上方表单发布第一条公告，会出现在这里。"}</div>
             </div>
           ) : (
             <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.surface, overflow: "hidden" }}>
@@ -267,9 +289,9 @@ export default function AnnouncePostsPanel() {
                     {p.body && <div style={{ fontSize: 12.5, color: C.muted, marginTop: 3, lineHeight: 1.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.body}</div>}
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: "none" }}>
-                    {p.affectedService && <button type="button" onClick={() => setNoticePost(p)} disabled={busy} style={iconBtn(C.accent)}><Send size={13} />通知用户</button>}
-                    <button type="button" onClick={() => editPost(p)} disabled={busy} style={iconBtn(C.accent)}><Pencil size={13} />编辑</button>
-                    <button type="button" onClick={() => del(p.id, p.title)} disabled={busy} style={iconBtn(C.danger)}><Trash2 size={13} />删除</button>
+                    {p.affectedService && <button type="button" onClick={() => setNoticePost(p)} disabled={busy || loading} style={iconBtn(C.accent)}><Send size={13} />通知用户</button>}
+                    <button type="button" onClick={() => editPost(p)} disabled={busy || loading || saveUncertain} style={iconBtn(C.accent)}><Pencil size={13} />编辑</button>
+                    <button type="button" onClick={() => del(p.id, p.title)} disabled={busy || loading} style={iconBtn(C.danger)}><Trash2 size={13} />删除</button>
                   </div>
                 </div>
               ))}

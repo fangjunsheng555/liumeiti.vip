@@ -45,6 +45,14 @@ const EMPTY_DATA = {
   incidents: { incidents: [], counts: {}, owners: [], total: 0 },
 };
 
+const EMPTY_LOADED_SECTIONS = {
+  health: false,
+  metrics: false,
+  jobs: false,
+  queues: false,
+  incidents: false,
+};
+
 const SECTION_LABELS = {
   health: "组件概览",
   metrics: "核心 API 趋势",
@@ -91,7 +99,20 @@ function metricText(metrics) {
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
-async function requestJson(url, { signal, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+function healthSectionFailure(error) {
+  const status = Number(error?.responseStatus || 0);
+  const code = String(error?.message || "");
+  if (code === "request_timeout" || error?.name === "TimeoutError") return "请求超时，请重试";
+  if (status === 401 || code === "unauthorized") return "后台登录已失效，请重新登录";
+  if (status === 403 || code === "forbidden") return "当前账号没有查看权限";
+  if (status === 409) return "数据已被更新，请刷新重试";
+  if (status === 500) return "服务器处理异常，请稍后重试";
+  if (status === 503) return "后台服务暂时不可用，请稍后重试";
+  if (code === "invalid_response") return "后台返回数据异常，请重试";
+  return "无法连接后台，请检查网络后重试";
+}
+
+async function requestJson(url, { signal, timeoutMs = REQUEST_TIMEOUT_MS, ...init } = {}) {
   const controller = new AbortController();
   let timedOut = false;
   const abortFromParent = () => controller.abort(signal?.reason);
@@ -106,10 +127,20 @@ async function requestJson(url, { signal, timeoutMs = REQUEST_TIMEOUT_MS } = {})
     const response = await fetch(url, {
       credentials: "same-origin",
       cache: "no-store",
+      ...init,
       signal: controller.signal,
     });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || !payload.ok) throw new Error(payload.error || `http_${response.status}`);
+    let payload;
+    try {
+      payload = await response.json();
+    } catch (cause) {
+      throw new Error("invalid_response", { cause });
+    }
+    if (!response.ok || !payload.ok) {
+      const error = new Error(payload.error || `http_${response.status}`);
+      error.responseStatus = Number(response.status || 0);
+      throw error;
+    }
     return payload;
   } catch (error) {
     if (timedOut) throw new Error("request_timeout");
@@ -165,6 +196,7 @@ export default function SystemHealthPanel() {
   const [traceLoading, setTraceLoading] = useState(false);
   const [traceError, setTraceError] = useState("");
   const [sectionErrors, setSectionErrors] = useState({});
+  const [loadedSections, setLoadedSections] = useState(EMPTY_LOADED_SECTIONS);
   const loadSequence = useRef(0);
   const loadController = useRef(null);
   const traceSequence = useRef(0);
@@ -189,15 +221,26 @@ export default function SystemHealthPanel() {
       if (sequence !== loadSequence.current) return;
       const errors = {};
       const updates = {};
+      const completed = {};
+      let unauthorized = false;
+      let forbidden = false;
       settled.forEach((result, index) => {
         const key = requests[index][0];
-        if (result.status === "fulfilled") updates[key] = result.value;
-        else if (result.reason?.name !== "AbortError") errors[key] = result.reason?.message || "unknown";
+        if (result.status === "fulfilled") {
+          updates[key] = result.value;
+          completed[key] = true;
+        }
+        else if (result.reason?.name !== "AbortError") {
+          const status = Number(result.reason?.responseStatus || 0);
+          unauthorized ||= status === 401 || result.reason?.message === "unauthorized";
+          forbidden ||= status === 403 || result.reason?.message === "forbidden";
+          errors[key] = healthSectionFailure(result.reason);
+        }
       });
       setData((previous) => ({ ...previous, ...updates }));
+      setLoadedSections((previous) => ({ ...previous, ...completed }));
       setSectionErrors(errors);
-      const unauthorized = Object.values(errors).includes("unauthorized");
-      setMessage(unauthorized ? "仅超级管理员可查看系统健康状态" : "");
+      setMessage(unauthorized ? "后台登录已失效，请重新登录后重试" : forbidden ? "仅超级管理员可查看系统健康状态" : "");
     } catch (error) {
       if (error?.name !== "AbortError" && sequence === loadSequence.current) {
         setMessage(error?.message === "unauthorized" ? "仅超级管理员可查看系统健康状态" : `系统状态加载失败：${error?.message || "unknown"}`);
@@ -225,25 +268,32 @@ export default function SystemHealthPanel() {
     setActing(key);
     setMessage("");
     try {
-      const response = await fetch(`/api/admin/health/incidents/${encodeURIComponent(incident.id)}`, {
+      await requestJson(`/api/admin/health/incidents/${encodeURIComponent(incident.id)}`, {
         method: "PATCH",
-        credentials: "same-origin",
         headers: {
           "content-type": "application/json",
           "idempotency-key": globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
         },
         body: JSON.stringify({ ...input, expectedVersion: incident.version }),
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || !payload.ok) throw new Error(payload.error || `http_${response.status}`);
       await load({ quiet: true });
     } catch (error) {
       const errors = {
         stale_version: "事故已被其他管理员更新，列表已刷新",
         resolution_required: "请填写不少于 3 个字的处理结论",
         invalid_incident_transition: "当前事故状态不允许执行该操作",
+        unauthorized: "后台登录已失效，请重新登录后重试",
+        forbidden: "当前后台账号没有事故处置权限",
+        origin_forbidden: "当前页面来源不受信任，请从本站后台重试",
+        http_401: "后台登录已失效，请重新登录后重试",
+        http_403: "当前后台账号没有事故处置权限",
+        http_409: "事故已被其他管理员更新，请刷新后重试",
+        http_500: "事故更新失败，服务器处理异常，请稍后重试",
+        http_503: "事故更新失败，后台服务暂时不可用，请稍后重试",
+        invalid_response: "事故更新失败，后台返回了无法解析的数据，请重试",
+        request_timeout: "事故更新超时，页面已停止等待，请重试",
       };
-      setMessage(errors[error?.message] || `事故更新失败：${error?.message || "unknown"}`);
+      setMessage(errors[error?.message] || errors[`http_${Number(error?.responseStatus || 0)}`] || "事故更新失败，请检查网络后重试");
       if (error?.message === "stale_version") await load({ quiet: true });
     } finally {
       setActing("");
@@ -317,11 +367,11 @@ export default function SystemHealthPanel() {
       </header>
 
       <div className="health-kpis" aria-label="系统健康概览">
-        <article><Server size={16} /><span>异常组件<small>共 {health.components.length} 项</small></span><strong className={health.counts?.error ? "danger" : "good"}>{Number(health.counts?.error || 0)}</strong></article>
-        <article><Activity size={16} /><span>核心 API 5xx<small>{Number(summary.requests || 0).toLocaleString()} 次白名单请求</small></span><strong className={summary.errorRate >= 0.02 ? "danger" : "good"}>{formatPercent(summary.errorRate)}</strong></article>
-        <article><Clock3 size={16} /><span>核心 API P95<small>所选统计区间</small></span><strong className={summary.p95Ms > 1500 ? "danger" : ""}>{Math.round(Number(summary.p95Ms || 0))} ms</strong></article>
-        <article><ShieldAlert size={16} /><span>未关闭事故<small>{missedJobs} 个任务可能漏跑</small></span><strong className={openIncidentCount ? "danger" : "good"}>{openIncidentCount}</strong></article>
-        <article><Database size={16} /><span>队列积压<small>{queues.filter((item) => ["warning", "error"].includes(item.status)).length} 个队列需关注</small></span><strong className={backlog ? "" : "good"}>{backlog}</strong></article>
+        <article><Server size={16} /><span>异常组件<small>{loadedSections.health ? `共 ${health.components.length} 项` : "尚未加载"}</small></span><strong className={loadedSections.health ? (health.counts?.error ? "danger" : "good") : ""}>{loadedSections.health ? Number(health.counts?.error || 0) : "--"}</strong></article>
+        <article><Activity size={16} /><span>核心 API 5xx<small>{loadedSections.metrics ? `${Number(summary.requests || 0).toLocaleString()} 次白名单请求` : "尚未加载"}</small></span><strong className={loadedSections.metrics ? (summary.errorRate >= 0.02 ? "danger" : "good") : ""}>{loadedSections.metrics ? formatPercent(summary.errorRate) : "--"}</strong></article>
+        <article><Clock3 size={16} /><span>核心 API P95<small>{loadedSections.metrics ? "所选统计区间" : "尚未加载"}</small></span><strong className={loadedSections.metrics && summary.p95Ms > 1500 ? "danger" : ""}>{loadedSections.metrics ? `${Math.round(Number(summary.p95Ms || 0))} ms` : "--"}</strong></article>
+        <article><ShieldAlert size={16} /><span>未关闭事故<small>{loadedSections.jobs ? `${missedJobs} 个任务可能漏跑` : "任务状态尚未加载"}</small></span><strong className={loadedSections.incidents ? (openIncidentCount ? "danger" : "good") : ""}>{loadedSections.incidents ? openIncidentCount : "--"}</strong></article>
+        <article><Database size={16} /><span>队列积压<small>{loadedSections.queues ? `${queues.filter((item) => ["warning", "error"].includes(item.status)).length} 个队列需关注` : "尚未加载"}</small></span><strong className={loadedSections.queues ? (backlog ? "" : "good") : ""}>{loadedSections.queues ? backlog : "--"}</strong></article>
       </div>
 
       <div className="health-toolbar">
@@ -335,7 +385,11 @@ export default function SystemHealthPanel() {
           ].map(([key, label]) => <button type="button" key={key} className={tab === key ? "active" : ""} aria-current={tab === key ? "page" : undefined} onClick={() => setTab(key)}>{label}</button>)}
         </nav>
         {tab === "api" && (
-          <select value={range} onChange={(event) => setRange(event.target.value)} aria-label="趋势区间">
+          <select value={range} onChange={(event) => {
+            setLoadedSections((previous) => ({ ...previous, metrics: false }));
+            setData((previous) => ({ ...previous, metrics: EMPTY_DATA.metrics }));
+            setRange(event.target.value);
+          }} aria-label="趋势区间">
             <option value="1h">最近 1 小时</option>
             <option value="24h">最近 24 小时</option>
             <option value="7d">最近 7 天</option>
@@ -366,7 +420,8 @@ export default function SystemHealthPanel() {
           </div>
           <div className="admin-health-table" aria-busy={loading}>
             <div className="admin-health-table-head"><span>服务</span><span>状态</span><span>最近检查</span><span>运行信息</span></div>
-            {health.components.map((item) => {
+            {!loadedSections.health && <div className="health-empty"><AlertTriangle size={22} /><strong>组件状态尚未成功加载</strong><small>请查看上方错误并点击刷新重试</small></div>}
+            {loadedSections.health && health.components.map((item) => {
               const meta = STATUS[item.status] || STATUS.warning;
               return (
                 <div className="admin-health-row" key={item.component}>
@@ -398,6 +453,9 @@ export default function SystemHealthPanel() {
 
       {tab === "api" && (
         <section className="health-section health-chart-grid">
+          {!loadedSections.metrics ? (
+            <div className="health-empty"><AlertTriangle size={22} /><strong>当前区间的核心 API 趋势尚未加载</strong><small>不会显示上一统计区间的数据；请重试</small></div>
+          ) : <>
           <div className="health-note health-coverage-note">
             <ShieldAlert size={16} />
             <span>
@@ -424,15 +482,17 @@ export default function SystemHealthPanel() {
             <span><small>P50</small><b>{Math.round(Number(summary.p50Ms || 0))} ms</b></span>
             <span><small>P99</small><b>{Math.round(Number(summary.p99Ms || 0))} ms</b></span>
           </div>
+          </>}
         </section>
       )}
 
       {tab === "jobs" && (
         <section className="health-section health-two-columns">
           <article className="health-panel">
-            <header><span><Clock3 size={15} />定时任务历史</span><small>{missedJobs ? `${missedJobs} 个可能漏跑` : "心跳正常"}</small></header>
+            <header><span><Clock3 size={15} />定时任务历史</span><small>{!loadedSections.jobs ? "尚未加载" : missedJobs ? `${missedJobs} 个可能漏跑` : "心跳正常"}</small></header>
             <div className="health-list">
-              {(data.jobs.jobs || []).map((job) => (
+              {!loadedSections.jobs && <div className="health-empty"><AlertTriangle size={22} /><strong>任务历史尚未加载</strong><small>请刷新重试</small></div>}
+              {loadedSections.jobs && (data.jobs.jobs || []).map((job) => (
                 <div className="health-list-row" key={job.job}>
                   <span><strong>{job.label || job.job}</strong><small>{job.errorCode || `目标 ${formatDuration(job.cadenceMs)} · 告警 ${formatDuration(job.missedAfterMs)} · 处理 ${Number(job.processed || 0)}`}</small></span>
                   <span><StateBadge status={job.status} missed={job.missed} /><small>{compactTime(job.heartbeatAt || job.finishedAt)}</small></span>
@@ -456,7 +516,8 @@ export default function SystemHealthPanel() {
           <article className="health-panel">
             <header><span><Database size={15} />Outbox 与恢复队列</span><small>按数量和最老任务判断</small></header>
             <div className="health-list">
-              {queues.map((queue) => (
+              {!loadedSections.queues && <div className="health-empty"><AlertTriangle size={22} /><strong>队列状态尚未加载</strong><small>请刷新重试</small></div>}
+              {loadedSections.queues && queues.map((queue) => (
                 <div className="health-list-row" key={queue.name}>
                   <span><strong>{queue.label}</strong><small>到期 {Number(queue.dueCount || 0)} · 最老 {formatDuration(queue.oldestAgeMs)}</small></span>
                   <span><StateBadge status={queue.status} /><b>{Number(queue.count || 0)}</b></span>
@@ -469,7 +530,8 @@ export default function SystemHealthPanel() {
 
       {tab === "incidents" && (
         <section className="health-section">
-          {!incidents.length && <div className="health-empty"><CheckCircle2 size={22} /><strong>暂无事故记录</strong><small>任务失败、漏跑和队列积压会自动在这里建单</small></div>}
+          {!loadedSections.incidents && <div className="health-empty"><AlertTriangle size={22} /><strong>事故记录尚未加载</strong><small>请查看上方错误并刷新重试</small></div>}
+          {loadedSections.incidents && !incidents.length && <div className="health-empty"><CheckCircle2 size={22} /><strong>暂无事故记录</strong><small>任务失败、漏跑和队列积压会自动在这里建单</small></div>}
           <div className="health-incident-list">
             {incidents.map((incident) => {
               const busy = acting.startsWith(`${incident.id}:`);

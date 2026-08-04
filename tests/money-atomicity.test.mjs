@@ -1137,8 +1137,72 @@ test("routes require scoped idempotency keys and deleted users lose canonical ce
   assert.doesNotMatch(order, /setUser\(|reserveStock\(|consumeServiceRedeemCode\(/);
   assert.match(adminUsers, /export async function GET/);
   assert.match(adminUsers, /export async function POST/);
+  assert.match(adminUsers, /status:\s*targetStatus/);
+  assert.doesNotMatch(adminUsers, /targetState\.status === 401 \? 404 : 503/);
   const getBody = adminUsers.slice(adminUsers.indexOf("export async function GET"), adminUsers.indexOf("export async function POST"));
   assert.doesNotMatch(getBody, /applyBalanceEffectAtomic/);
+});
+
+test("admin balance adjustment preserves a malformed target profile as 409 instead of pretending Redis is unavailable", async () => {
+  const email = "malformed-target@example.com";
+  const redis = new AtomicRedisMock([[`liumeiti:users:${email}`, '{"email":']]);
+  await withRedis(redis, async () => {
+    const { signSession } = await import("../app/api/_utils.js");
+    const route = await import(`../app/api/admin/users/route.js?target-status=${Date.now()}`);
+    const token = signSession({
+      role: "admin",
+      staffRole: "finance",
+      staffId: 11,
+      staffUsername: "finance-a",
+      exp: Date.now() + 60_000,
+    });
+    const response = await route.POST(new Request("http://site.test/api/admin/users", {
+      method: "POST",
+      headers: {
+        cookie: `lm_admin=${encodeURIComponent(token)}`,
+        "content-type": "application/json",
+        "idempotency-key": "admin-malformed-target-0001",
+      },
+      body: JSON.stringify({ email, amount: 5, reason: "status mapping" }),
+    }));
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).error, "account_record_invalid");
+  });
+});
+
+test("admin balance adjustment auto-repairs a legacy target's malformed derived auth keys", async () => {
+  const email = "legacy-target@example.com";
+  const redis = new AtomicRedisMock([user(email, 12.5)]);
+  redis.values.set(`lm:user:authver:${email}`, "");
+  redis.values.set(money.balanceCentsKey(email), "12.5");
+  redis.values.set(money.accountLifecycleKey(email), "legacy-missing-lifecycle");
+  await withRedis(redis, async () => {
+    const { signSession } = await import("../app/api/_utils.js");
+    const route = await import(`../app/api/admin/users/route.js?legacy-target=${Date.now()}`);
+    const token = signSession({
+      role: "admin",
+      staffRole: "finance",
+      staffId: 11,
+      staffUsername: "finance-a",
+      exp: Date.now() + 60_000,
+    });
+    const response = await route.POST(new Request("http://site.test/api/admin/users", {
+      method: "POST",
+      headers: {
+        cookie: `lm_admin=${encodeURIComponent(token)}`,
+        "content-type": "application/json",
+        "idempotency-key": "admin-legacy-target-repair-0001",
+      },
+      body: JSON.stringify({ email, amount: 5, reason: "legacy repair" }),
+    }));
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.balance, 17.5);
+    assert.equal(redis.values.get(`lm:user:authver:${email}`), "1");
+    assert.match(redis.values.get(money.accountLifecycleKey(email)), /^[a-f0-9]{32}$/);
+    assert.equal(redis.values.get(money.balanceCentsKey(email)), "1750");
+  });
 });
 
 test("admin balance idempotency survives staff changes and remains payload-bound", async () => {

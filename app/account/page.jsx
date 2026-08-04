@@ -10,6 +10,14 @@ import EmailPreferenceSettings from "../components/EmailPreferenceSettings";
 import { useLocale } from "../components/LocaleProvider";
 import { DEFAULT_USER_AVATAR_ID, USER_AVATARS, normalizeUserAvatarId, userAvatarPath } from "../lib/avatars";
 import { requestAccountLoad } from "./load-account.js";
+import { clientFetch as fetch, isClientRequestTimeout } from "../lib/client-fetch";
+import {
+  authenticatedUserMatches,
+  isSuccessfulAuthResponse,
+  safeLoginAfterConfirmedAuth,
+  safeLoginAfterUncertainAuth,
+  shouldRecoverAuthMutationResponse,
+} from "../lib/auth-recovery";
 import {
   isExplicitTerminalIdempotencyResponse,
 } from "../lib/idempotency";
@@ -90,6 +98,12 @@ function inviteLink(code) {
   return `${INVITE_LINK_ORIGIN}/?invite=${encodeURIComponent(code)}`;
 }
 
+function accountRequestError(error, L, zh, en) {
+  if (isClientRequestTimeout(error)) return L("请求超时，请重试。", "The request timed out. Please retry.");
+  if (["TypeError", "SyntaxError"].includes(error?.name)) return L(zh, en);
+  return error?.message || L(zh, en);
+}
+
 function maskOrderId(orderId) {
   const value = String(orderId || "").trim().toUpperCase();
   if (!value) return "";
@@ -138,7 +152,7 @@ function GoogleIcon() {
 export default function AccountPage() {
   const { locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
-  const [state, setState] = useState({ loading: true, email: null, accountLifecycleId: "", username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
+  const [state, setState] = useState({ loading: true, email: null, accountLifecycleId: "", username: "", avatarId: DEFAULT_USER_AVATAR_ID, orders: [], balance: 0, financeReady: false, financeError: "", txs: [], coupons: [], withdrawals: [], referral: null, referralDownlines: [] });
   const [activeOrder, setActiveOrder] = useState(null);
   const [afterSalesOrder, setAfterSalesOrder] = useState(null);
   const [afterSalesForm, setAfterSalesForm] = useState(null);
@@ -182,7 +196,12 @@ export default function AccountPage() {
   const [loadError, setLoadError] = useState("");
   const loadRequestRef = useRef({ sequence: 0, controller: null });
 
-  async function load() {
+  async function load(expectedIdentity = null) {
+    const pinnedIdentity = expectedIdentity
+      && typeof expectedIdentity.email === "string"
+      && typeof expectedIdentity.accountLifecycleId === "string"
+      ? expectedIdentity
+      : null;
     const sequence = loadRequestRef.current.sequence + 1;
     loadRequestRef.current.controller?.abort();
     const controller = new AbortController();
@@ -191,14 +210,22 @@ export default function AccountPage() {
     setState((s) => ({ ...s, loading: true }));
     try {
       const result = await requestAccountLoad({
+        fetchImpl: fetch,
         locale,
         signal: controller.signal,
         timeoutMs: 15_000,
+        expectedIdentity: pinnedIdentity,
       });
-      if (sequence !== loadRequestRef.current.sequence || result.cancelled) return;
+      if (sequence !== loadRequestRef.current.sequence || result.cancelled) return result;
       if (result.state) setState(result.state);
-      else setState((current) => ({ ...current, loading: false }));
+      else setState((current) => ({
+        ...current,
+        loading: false,
+        financeReady: false,
+        financeError: result.error || L("资金信息暂时无法确认，请重试", "Balance details couldn't be verified. Please retry."),
+      }));
       setLoadError(result.error || "");
+      return result;
     } finally {
       if (sequence === loadRequestRef.current.sequence) {
         loadRequestRef.current = { sequence, controller: null };
@@ -362,7 +389,7 @@ export default function AccountPage() {
       attachAfterSalesTicket(afterSalesOrder.orderId, data.ticket);
       setAfterSalesStatus({ type: "success", ticketId: data.ticket.ticketId, emailWarning: !data.notice?.email });
     } catch (error) {
-      setAfterSalesStatus({ type: "error", message: error?.message || L("售后工单提交失败，请稍后再试", "Ticket submission failed. Please try again.") });
+      setAfterSalesStatus({ type: "error", message: accountRequestError(error, L, "售后工单提交失败，请稍后再试", "Ticket submission failed. Please try again.") });
     } finally {
       setAfterSalesBusy(false);
     }
@@ -439,7 +466,7 @@ export default function AccountPage() {
       }
       window.location.href = "/";
     } catch (error) {
-      setLogoutError(error.message || L("安全退出失败，请稍后重试", "Secure sign-out failed. Try again shortly."));
+      setLogoutError(accountRequestError(error, L, "安全退出失败，请稍后重试", "Secure sign-out failed. Try again shortly."));
     } finally {
       setLogoutBusy(false);
     }
@@ -451,56 +478,95 @@ export default function AccountPage() {
     setAuthBusy(true);
     setAuthError("");
     setAuthNotice("");
+    const attemptedMode = authMode;
+    const attemptedForm = { ...authForm, email: authForm.email.trim().toLowerCase() };
+    let responseConfirmed = false;
     try {
       let payload = {};
-      if (authMode === "login") payload = { email: authForm.email.trim(), password: authForm.password };
-      if (authMode === "register") payload = {
-        email: authForm.email.trim(),
-        password: authForm.password,
+      if (attemptedMode === "login") payload = { email: attemptedForm.email, password: attemptedForm.password };
+      if (attemptedMode === "register") payload = {
+        email: attemptedForm.email,
+        password: attemptedForm.password,
         captchaToken: authCaptcha.token,
-        captchaAnswer: authForm.captchaAnswer.trim(),
+        captchaAnswer: attemptedForm.captchaAnswer.trim(),
         inviteCode: getStoredInviteCode(),
       };
-      if (authMode === "forgot") payload = { email: authForm.email.trim() };
-      if (authMode === "reset") payload = {
-        email: authForm.email.trim(),
-        code: authForm.code.trim(),
-        newPassword: authForm.newPassword,
+      if (attemptedMode === "forgot") payload = { email: attemptedForm.email };
+      if (attemptedMode === "reset") payload = {
+        email: attemptedForm.email,
+        code: attemptedForm.code.trim(),
+        newPassword: attemptedForm.newPassword,
       };
-      const res = await fetch(`/api/auth/${authMode}`, {
+      const res = await fetch(`/api/auth/${attemptedMode}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
-      if (authMode === "forgot") {
-        setAuthNotice(L("验证码已发送至邮箱。请查看收件箱(或垃圾邮件)", "A code has been sent to your email. Check your inbox (or spam)."));
-        setAuthMode("reset");
-        setAuthForm((f) => ({ ...f, code: "", newPassword: "" }));
-        return;
+      let data = null;
+      try { data = await res.json(); } catch {
+        throw new SyntaxError("invalid_auth_response");
       }
-      if (data.ok) {
-        const returnTo = authReturnTo || currentAccountReturnTo();
-        if (returnTo) {
-          window.location.replace(returnTo);
-          return;
+      if (!isSuccessfulAuthResponse(res, data, attemptedMode)) {
+        if (shouldRecoverAuthMutationResponse(attemptedMode, res.status, data?.error)) {
+          throw new Error("auth_mutation_result_uncertain");
         }
-        await load();
+        const msg = {
+          captcha_failed: L("验证码错误，请重新输入", "Wrong captcha, please try again"),
+          email_taken: L("该邮箱已注册", "This email is already registered"),
+          invalid_email: L("邮箱格式错误", "Invalid email format"),
+          password_length: L("密码 6-64 位", "Password must be 6-64 characters"),
+          invalid_credentials: L("邮箱或密码错误", "Wrong email or password"),
+          invalid_code: L("验证码格式错误(6 位数字)", "Invalid code format (6 digits)"),
+          code_invalid_or_expired: L("验证码错误或已过期", "Code is wrong or expired"),
+          user_not_found: L("该邮箱未注册", "This email isn't registered"),
+          account_banned: L("该账号已停用，请联系在线客服", "This account is disabled. Contact support."),
+        }[data?.error] || L("操作失败，请重试", "Something went wrong. Please retry.");
+        if (attemptedMode === "register" && data?.error === "captcha_failed") refreshAuthCaptcha(true);
+        setAuthError(msg);
         return;
       }
-      const msg = {
-        captcha_failed: L("验证码错误，请重新输入", "Wrong captcha, please try again"),
-        email_taken: L("该邮箱已注册", "This email is already registered"),
-        invalid_email: L("邮箱格式错误", "Invalid email format"),
-        password_length: L("密码 6-64 位", "Password must be 6-64 characters"),
-        invalid_credentials: L("邮箱或密码错误", "Wrong email or password"),
-        invalid_code: L("验证码格式错误(6 位数字)", "Invalid code format (6 digits)"),
-        code_invalid_or_expired: L("验证码错误或已过期", "Code is wrong or expired"),
-        user_not_found: L("该邮箱未注册", "This email isn't registered"),
-      }[data.error] || data.error || L("操作失败", "Something went wrong");
-      if (authMode === "register" && data.error === "captcha_failed") refreshAuthCaptcha(true);
-      setAuthError(msg);
+      if (attemptedMode === "forgot") {
+        responseConfirmed = true;
+        setAuthNotice(L("如果该邮箱已注册，验证码会发送至邮箱。请检查收件箱（或垃圾邮件）", "If this email is registered, a code will be sent. Check your inbox or spam."));
+        setAuthMode("reset");
+        setAuthForm((f) => ({ ...f, email: attemptedForm.email, code: "", newPassword: "" }));
+        return;
+      }
+      if (!authenticatedUserMatches(data, attemptedForm.email, data?.accountLifecycleId)) {
+        throw new SyntaxError("invalid_auth_identity");
+      }
+      responseConfirmed = true;
+      const accountResult = await load({
+        email: attemptedForm.email,
+        accountLifecycleId: data.accountLifecycleId,
+      });
+      if (!accountResult?.ok) {
+        const recovery = safeLoginAfterConfirmedAuth(attemptedMode, attemptedForm);
+        setLoadError("");
+        setAuthError("");
+        setAuthMode(recovery.mode);
+        setAuthForm(recovery.form);
+        setAuthNotice(L(
+          "账户操作已经完成，但登录状态未能确认。请使用刚才的密码重新登录；原注册或重置操作不会再次提交。",
+          "The account operation completed, but the session couldn't be verified. Sign in with the password you just used; the original sign-up or reset won't be submitted again.",
+        ));
+        return;
+      }
+      const returnTo = authReturnTo || currentAccountReturnTo();
+      if (returnTo) {
+        window.location.replace(returnTo);
+      }
     } catch (error) {
+      const recovery = !responseConfirmed ? safeLoginAfterUncertainAuth(attemptedMode, attemptedForm) : null;
+      if (recovery) {
+        setAuthMode(recovery.mode);
+        setAuthForm(recovery.form);
+        setAuthNotice(L(
+          "刚才的注册或重置结果尚未确认，已切换为安全登录验证，不会重复提交原操作。",
+          "The sign-up or reset result is uncertain. We've switched to a safe sign-in check and won't repeat the original operation.",
+        ));
+        return;
+      }
       setAuthError(L("网络错误", "Network error"));
     } finally {
       setAuthBusy(false);
@@ -625,6 +691,10 @@ export default function AccountPage() {
 
   async function submitMoneyAction(action, endpoint, payload, resetFields = []) {
     if (moneyBusy) return;
+    if (!state.financeReady) {
+      setMoneyStatus({ type: "error", message: state.financeError || L("请先重新读取资金信息", "Reload balance details before continuing.") });
+      return;
+    }
     // 客户端金额预校验：即时反馈，避免往返到服务端才报错
     if (action === "transfer" || action === "withdraw") {
       const amt = Number(payload.amount);
@@ -706,7 +776,7 @@ export default function AccountPage() {
         type: "error",
         message: unresolved
           ? L("检测到未确认结果的资金操作，请保持原内容并重试；请勿改换账户或重复发起。", "An earlier money operation is unresolved. Keep the original details and retry; do not switch accounts or start it again.")
-          : e.message || L("操作失败,请稍后再试", "Action failed, please try again"),
+          : accountRequestError(e, L, "操作失败，请稍后再试", "Action failed. Please try again."),
       });
     } finally {
       setMoneyBusy("");
@@ -763,8 +833,8 @@ export default function AccountPage() {
             <div className="auth-modal-head">
               {authMode === "login" || authMode === "register" ? (
                 <div className="auth-modal-tabs">
-                  <button type="button" className={`auth-tab${authMode === "login" ? " active" : ""}`} onClick={() => setAuthMode("login")}>{L("登录", "Sign in")}</button>
-                  <button type="button" className={`auth-tab register-tab${authMode === "register" ? " active" : ""}`} onClick={() => setAuthMode("register")}>
+                  <button type="button" className={`auth-tab${authMode === "login" ? " active" : ""}`} onClick={() => setAuthMode("login")} disabled={authBusy}>{L("登录", "Sign in")}</button>
+                  <button type="button" className={`auth-tab register-tab${authMode === "register" ? " active" : ""}`} onClick={() => setAuthMode("register")} disabled={authBusy}>
                     {L("注册", "Sign up")}
                     <span className="auth-tab-tip">{L("立减¥8.88", "¥8.88 off")}</span>
                   </button>
@@ -776,7 +846,7 @@ export default function AccountPage() {
             <form className="auth-form" onSubmit={doAuth}>
               <label className="auth-field">
                 <span>{L("邮箱", "Email")}</span>
-                <input type="email" value={authForm.email} onChange={(e) => setAuthForm((f) => ({ ...f, email: e.target.value }))} placeholder="example@email.com" required />
+                <input type="email" value={authForm.email} onChange={(e) => setAuthForm((f) => ({ ...f, email: e.target.value }))} placeholder="example@email.com" readOnly={authMode === "reset"} disabled={authBusy} required />
               </label>
               {(authMode === "login" || authMode === "register") && (
                 <label className="auth-field">
@@ -800,7 +870,7 @@ export default function AccountPage() {
                         required
                       />
                     </div>
-                    <button type="button" className="auth-captcha-image" onClick={() => refreshAuthCaptcha(true)} disabled={authCaptcha.loading} aria-label={L("刷新验证码", "Refresh captcha")}>
+                    <button type="button" className="auth-captcha-image" onClick={() => refreshAuthCaptcha(true)} disabled={authBusy || authCaptcha.loading} aria-label={L("刷新验证码", "Refresh captcha")}>
                       {authCaptcha.image && !authCaptcha.loading ? <img src={authCaptcha.image} alt={L("验证码", "Captcha")} /> : <LoaderCircle size={18} className="spin-icon" />}
                       <span><RefreshCw size={12} /></span>
                     </button>
@@ -829,20 +899,20 @@ export default function AccountPage() {
                 <>
                   <div className="auth-divider"><span>{L("或使用", "or")}</span></div>
                   <div className="oauth-login-grid bottom">
-                    <a href={GOOGLE_OAUTH_START} className="oauth-login-btn" onClick={(event) => handleGoogleOAuthStart(event, authReturnTo || currentAccountReturnTo())}><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
+                    <a href={authBusy ? undefined : GOOGLE_OAUTH_START} tabIndex={authBusy ? -1 : undefined} className="oauth-login-btn" aria-disabled={authBusy} onClick={(event) => authBusy ? event.preventDefault() : handleGoogleOAuthStart(event, authReturnTo || currentAccountReturnTo())}><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
                   </div>
                 </>
               )}
               <div className="auth-hints">
                 {authMode === "login" && (
                   <>
-                    <button type="button" className="auth-switch" onClick={() => setAuthMode("forgot")}>{L("忘记密码?", "Forgot password?")}</button>
-                    <span className="auth-hint">{L("还没账号?", "No account?")} <button type="button" className="auth-switch" onClick={() => setAuthMode("register")}>{L("立即注册", "Sign up")}</button></span>
+                    <button type="button" className="auth-switch" onClick={() => setAuthMode("forgot")} disabled={authBusy}>{L("忘记密码?", "Forgot password?")}</button>
+                    <span className="auth-hint">{L("还没账号?", "No account?")} <button type="button" className="auth-switch" onClick={() => setAuthMode("register")} disabled={authBusy}>{L("立即注册", "Sign up")}</button></span>
                   </>
                 )}
-                {authMode === "register" && <span className="auth-hint">{L("已有账号?", "Have an account?")} <button type="button" className="auth-switch" onClick={() => setAuthMode("login")}>{L("去登录", "Sign in")}</button></span>}
-                {authMode === "forgot" && <button type="button" className="auth-switch" onClick={() => setAuthMode("login")}>{L("返回登录", "Back to sign in")}</button>}
-                {authMode === "reset" && <button type="button" className="auth-switch" onClick={() => setAuthMode("forgot")}>{L("重新发送验证码", "Resend code")}</button>}
+                {authMode === "register" && <span className="auth-hint">{L("已有账号?", "Have an account?")} <button type="button" className="auth-switch" onClick={() => setAuthMode("login")} disabled={authBusy}>{L("去登录", "Sign in")}</button></span>}
+                {authMode === "forgot" && <button type="button" className="auth-switch" onClick={() => setAuthMode("login")} disabled={authBusy}>{L("返回登录", "Back to sign in")}</button>}
+                {authMode === "reset" && <button type="button" className="auth-switch" onClick={() => setAuthMode("forgot")} disabled={authBusy}>{L("重新发送验证码", "Resend code")}</button>}
               </div>
             </form>
           </section>
@@ -898,7 +968,7 @@ export default function AccountPage() {
       setState((s) => ({ ...s, avatarId: normalizeUserAvatarId(data.avatarId || avatarId) }));
       setAvatarModal(false);
     } catch (e) {
-      setAvatarError(e.message || L("头像保存失败，请稍后再试", "Failed to save avatar, please try again"));
+      setAvatarError(accountRequestError(e, L, "头像保存失败，请稍后再试", "Failed to save avatar. Please try again."));
     } finally {
       setAvatarSaving("");
     }
@@ -980,22 +1050,24 @@ export default function AccountPage() {
               <Wallet size={14} />
               {L("账户余额", "Balance")}
             </div>
-            <div className="account-balance-value">¥{state.balance.toFixed(2)}</div>
+            <div className="account-balance-value">{state.financeReady ? `¥${state.balance.toFixed(2)}` : "--"}</div>
           </div>
           <button
             type="button"
             className="account-balance-toggle"
             onClick={() => setTxModal(true)}
+            disabled={!state.financeReady}
           >
-            {L(`查看余额明细 · ${state.txs.length} 笔`, `View transactions · ${state.txs.length}`)}
+            {state.financeReady ? L(`查看余额明细 · ${state.txs.length} 笔`, `View transactions · ${state.txs.length}`) : L("资金信息待重新读取", "Balance details need reloading")}
           </button>
         </section>
 
         <section className="account-money-tools">
+          {!state.financeReady && <div className="account-refresh-error" role="alert"><AlertTriangle size={16} /><span>{state.financeError || L("资金信息暂时无法确认", "Balance details couldn't be verified.")}</span><button type="button" onClick={load}><RefreshCw size={13} />{L("重试", "Retry")}</button></div>}
           {moneyStatus && <div className={`account-tool-alert ${moneyStatus.type}`}>{moneyStatus.message}</div>}
           <div className="account-tool-buttons">
-            <button type="button" onClick={() => setMoneyModal("transfer")}><Send size={13} />{L("转账", "Transfer")}</button>
-            <button type="button" onClick={() => setMoneyModal("withdraw")}><CreditCard size={13} />{L("提现", "Withdraw")}</button>
+            <button type="button" onClick={() => setMoneyModal("transfer")} disabled={!state.financeReady}><Send size={13} />{L("转账", "Transfer")}</button>
+            <button type="button" onClick={() => setMoneyModal("withdraw")} disabled={!state.financeReady}><CreditCard size={13} />{L("提现", "Withdraw")}</button>
             <button type="button" onClick={() => setDownlineModal(true)}><Users size={13} />{L("下级", "Team")}</button>
             <button type="button" onClick={() => setInviteModal(true)}><Share2 size={13} />{L("邀请", "Invite")}</button>
           </div>
@@ -1025,7 +1097,7 @@ export default function AccountPage() {
               <span>{L("转账金额", "Amount")}</span>
               <input value={moneyForm.transferAmount} onChange={(e) => updateMoneyField("transferAmount", e.target.value)} placeholder="0.00" inputMode="decimal" required />
             </label>
-            <button type="submit" disabled={moneyBusy === "transfer"}>{moneyBusy === "transfer" ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}{L("确认转账", "Confirm transfer")}</button>
+            <button type="submit" disabled={!state.financeReady || moneyBusy === "transfer"}>{moneyBusy === "transfer" ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}{L("确认转账", "Confirm transfer")}</button>
           </form>
 
           <form
@@ -1042,7 +1114,7 @@ export default function AccountPage() {
               <span>{L("兑换码", "Redeem code")}</span>
               <input value={moneyForm.redeemCode} onChange={(e) => updateMoneyField("redeemCode", e.target.value.toUpperCase())} placeholder={L("输入余额兑换码", "Enter your balance code")} autoComplete="off" required />
             </label>
-            <button type="submit" disabled={moneyBusy === "redeem"}>{moneyBusy === "redeem" ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}{L("立即兑换", "Redeem now")}</button>
+            <button type="submit" disabled={!state.financeReady || moneyBusy === "redeem"}>{moneyBusy === "redeem" ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}{L("立即兑换", "Redeem now")}</button>
           </form>
 
           <form
@@ -1069,7 +1141,7 @@ export default function AccountPage() {
               <span>{L("支付宝账号", "Alipay account")}</span>
               <input value={moneyForm.alipayAccount} onChange={(e) => updateMoneyField("alipayAccount", e.target.value)} placeholder={L("手机号 / 邮箱 / 支付宝账号", "Phone / email / Alipay ID")} required />
             </label>
-            <button type="submit" disabled={moneyBusy === "withdraw"}>{moneyBusy === "withdraw" ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}{L("确认提现", "Confirm withdrawal")}</button>
+            <button type="submit" disabled={!state.financeReady || moneyBusy === "withdraw"}>{moneyBusy === "withdraw" ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}{L("确认提现", "Confirm withdrawal")}</button>
           </form>
         </section>
 
@@ -1220,7 +1292,7 @@ export default function AccountPage() {
                 </>
               )}
               {moneyStatus && <div className={`account-tool-alert ${moneyStatus.type}`}>{moneyStatus.message}</div>}
-              <button type="submit" disabled={!!moneyBusy} className="account-money-submit">
+              <button type="submit" disabled={!state.financeReady || !!moneyBusy} className="account-money-submit">
                 {moneyBusy ? <LoaderCircle size={13} className="spin-icon" /> : <ArrowRight size={13} />}
                 {moneyBusy ? L("处理中", "Processing") : moneyModal === "withdraw" ? L("确认提现", "Confirm withdrawal") : L("确认提交", "Confirm")}
               </button>

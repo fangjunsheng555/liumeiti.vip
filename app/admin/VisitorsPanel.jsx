@@ -4,9 +4,10 @@
 // 列表 = /api/admin/visitors（分页 / IP·邮箱搜索 / 仅看30天前）。
 // 点开单条 = /api/admin/visitors/<id>（该访客访问过的所有页面）。
 // 批量删 = DELETE /api/admin/visitors（按选择 ids 或 olderThanDays）。
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Inbox, LoaderCircle, CheckCircle2, AlertTriangle, Info, X } from "lucide-react";
 import { clientFetch as fetch } from "../lib/client-fetch";
+import { beginLatestRequest, invalidateLatestRequest, isLatestRequest } from "../lib/latest-request";
 
 const LIMIT = 50;
 const OLD_DAYS = 30;
@@ -39,11 +40,14 @@ export default function VisitorsPanel() {
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [reloadFlag, setReloadFlag] = useState(0);
+  const listRequestRef = useRef(0);
+  const detailRequestRef = useRef(0);
   const ok = (text) => setMsg({ type: "ok", text });
   const err = (text) => setMsg({ type: "error", text });
   const info = (text) => setMsg({ type: "info", text });
 
   const load = useCallback(async () => {
+    const requestId = beginLatestRequest(listRequestRef);
     setLoading(true);
     try {
       const p = new URLSearchParams({ offset: String(offset), limit: String(LIMIT) });
@@ -51,21 +55,31 @@ export default function VisitorsPanel() {
       if (olderOnly) { p.set("older", "1"); p.set("days", String(OLD_DAYS)); }
       const res = await fetch("/api/admin/visitors?" + p.toString(), { credentials: "same-origin", cache: "no-store" });
       const data = await res.json();
-      if (data && data.ok) {
-        // offset===0 时整组替换，否则把新一批追加到末尾（滚动加载更多）
-        setRows((prev) => (offset === 0 ? (data.rows || []) : [...prev, ...(data.rows || [])]));
-        setTotal(Number(data.total || 0));
-        if (data.searchCapped) info("搜索仅扫描了最近 2000 名访客");
-        else setMsg(null);
-      } else if (res.status === 401) {
-        err("无权限（仅超级管理员可查看）");
+      if (!res.ok || !data?.ok) {
+        const error = new Error(data?.error || `http_${res.status}`);
+        error.responseStatus = res.status;
+        throw error;
       }
-    } catch (e) { err("加载失败，请重试"); }
-    setLoading(false);
-    if (offset === 0) setSelected(new Set());
+      if (!isLatestRequest(listRequestRef, requestId)) return;
+      // offset===0 时整组替换，否则把新一批追加到末尾（滚动加载更多）
+      setRows((prev) => (offset === 0 ? (data.rows || []) : [...prev, ...(data.rows || [])]));
+      setTotal(Number(data.total || 0));
+      if (data.searchCapped) info("搜索仅扫描了最近 2000 名访客");
+      else setMsg(null);
+      if (offset === 0) setSelected(new Set());
+    } catch (e) {
+      if (!isLatestRequest(listRequestRef, requestId)) return;
+      err(Number(e?.responseStatus || 0) === 401 ? "无权限（仅超级管理员可查看）" : "访客数据加载失败，请点击刷新重试");
+    } finally {
+      if (isLatestRequest(listRequestRef, requestId)) setLoading(false);
+    }
   }, [offset, q, olderOnly, reloadFlag]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    return () => { invalidateLatestRequest(listRequestRef); };
+  }, [load]);
+  useEffect(() => () => { invalidateLatestRequest(detailRequestRef); }, []);
 
   // 强制从头刷新（搜索/筛选/删除后）：offset 已非 0 则归零触发，否则递增 reloadFlag 触发
   const refresh = () => { if (offset !== 0) setOffset(0); else setReloadFlag((f) => f + 1); };
@@ -76,14 +90,25 @@ export default function VisitorsPanel() {
   const toggleAll = () => setSelected((s) => (s.size === rows.length ? new Set() : new Set(rows.map((r) => r.id))));
 
   async function openDetail(id) {
+    const requestId = beginLatestRequest(detailRequestRef);
     setDetail({ loading: true }); setDetailLoading(true);
     try {
       const res = await fetch("/api/admin/visitors/" + id, { credentials: "same-origin", cache: "no-store" });
       const data = await res.json();
+      if (!isLatestRequest(detailRequestRef, requestId)) return;
       if (data && data.ok) setDetail({ ...data.visitor, pages: data.pages || [] });
       else setDetail({ error: data.error || "加载失败" });
-    } catch (e) { setDetail({ error: "加载失败" }); }
+    } catch (e) {
+      if (isLatestRequest(detailRequestRef, requestId)) setDetail({ error: "加载失败" });
+    } finally {
+      if (isLatestRequest(detailRequestRef, requestId)) setDetailLoading(false);
+    }
+  }
+
+  function closeDetail() {
+    invalidateLatestRequest(detailRequestRef);
     setDetailLoading(false);
+    setDetail(null);
   }
 
   async function deleteSelected() {
@@ -165,6 +190,7 @@ export default function VisitorsPanel() {
         return (
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "9px 13px", borderRadius: 10, fontSize: 13, fontWeight: 600, background: styles.bg, border: `1px solid ${styles.bd}`, color: styles.fg }}>
             <Icon size={15} style={{ flex: "none" }} /><span>{msg.text}</span>
+            {msg.type === "error" && <button type="button" style={{ ...btn(false), marginLeft: "auto" }} onClick={refresh} disabled={loading || busy}>重试</button>}
           </div>
         );
       })()}
@@ -192,8 +218,8 @@ export default function VisitorsPanel() {
               <tr><td style={{ ...td, padding: "38px 16px", borderBottom: 0 }} colSpan={8}>
                 <div style={{ textAlign: "center" }}>
                   <Inbox size={34} style={{ color: C.faint }} />
-                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginTop: 10 }}>{q ? "没有匹配的访客" : "暂无访客记录"}</div>
-                  <div style={{ fontSize: 12.5, color: C.muted, marginTop: 4 }}>{q ? "换个 IP 或邮箱关键词再试" : "有访客访问主站或工具站后会出现在这里"}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginTop: 10 }}>{msg?.type === "error" ? "访客数据未更新" : q ? "没有匹配的访客" : "暂无访客记录"}</div>
+                  <div style={{ fontSize: 12.5, color: C.muted, marginTop: 4 }}>{msg?.type === "error" ? "请点击上方重试，当前空白不代表没有访客" : q ? "换个 IP 或邮箱关键词再试" : "有访客访问主站或工具站后会出现在这里"}</div>
                 </div>
               </td></tr>
             ) : rows.map((r) => (
@@ -230,12 +256,12 @@ export default function VisitorsPanel() {
       )}
 
       {detail && (
-        <div onClick={() => setDetail(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 80, display: "flex", justifyContent: "flex-end" }}>
+        <div onClick={closeDetail} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 80, display: "flex", justifyContent: "flex-end" }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: "min(560px, 94vw)", height: "100%", background: C.surface, boxShadow: "-12px 0 40px -12px rgba(0,0,0,.4)", overflowY: "auto", padding: 22 }}>
             <div style={{ display: "flex", alignItems: "center", marginBottom: 16 }}>
               <h3 style={{ margin: 0, fontSize: 17 }}>访客详情</h3>
               <span style={{ flex: 1 }} />
-              <button type="button" aria-label="关闭" onClick={() => setDetail(null)} style={{ display: "grid", placeItems: "center", width: 34, height: 34, borderRadius: 9, border: `1px solid ${C.border}`, background: C.surface, color: C.muted, cursor: "pointer" }}><X size={18} /></button>
+              <button type="button" aria-label="关闭" onClick={closeDetail} style={{ display: "grid", placeItems: "center", width: 34, height: 34, borderRadius: 9, border: `1px solid ${C.border}`, background: C.surface, color: C.muted, cursor: "pointer" }}><X size={18} /></button>
             </div>
             {detailLoading || detail.loading ? (
               <p style={{ color: C.muted }}>加载中…</p>

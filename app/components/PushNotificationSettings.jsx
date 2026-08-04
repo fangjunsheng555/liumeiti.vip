@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bell,
@@ -105,14 +105,21 @@ export default function PushNotificationSettings({ locale = "zh" }) {
   const [currentSubscriptionId, setCurrentSubscriptionId] = useState("");
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const loadRequestRef = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = ++loadRequestRef.current;
     const detected = browserPushCapability();
     setCapability(detected);
+    setLoading(true);
+    setLoadError("");
+    setMessage(null);
     try {
       const [loadedAccountState, subscription] = await Promise.all([
         fetchPushAccountState(),
-        currentBrowserPushSubscription().catch(() => null),
+        currentBrowserPushSubscription(),
       ]);
       let accountState = loadedAccountState;
       let enabled = false;
@@ -145,17 +152,26 @@ export default function PushNotificationSettings({ locale = "zh" }) {
           : accountState.subscriptionIds;
         enabled = Boolean(matchesVapidKey && id && currentValidIds?.includes(id));
       }
+      if (requestId !== loadRequestRef.current) return false;
       setState(accountState);
       setCurrentEnabled(enabled);
       setCurrentSubscriptionId(currentId);
+      return true;
     } catch (error) {
-      setState({ enabled: false, configured: false, preferences: {}, subscriptionIds: [], stockWatches: [] });
-      setCurrentSubscriptionId("");
-      setMessage({ type: "error", text: L("通知设置暂时无法加载", "Notification settings couldn't load") });
+      if (requestId !== loadRequestRef.current) return false;
+      setLoadError(error?.name === "TimeoutError" || error?.code === "request_timeout"
+        ? L("通知设置加载超时，请重试", "Notification settings timed out. Please retry.")
+        : L("通知设置暂时无法加载，请检查网络后重试", "Notification settings couldn't load. Check your connection and retry."));
+      return false;
+    } finally {
+      if (requestId === loadRequestRef.current) setLoading(false);
     }
   }, [en]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    return () => { loadRequestRef.current += 1; };
+  }, [load]);
 
   async function enable() {
     if (busy) return;
@@ -198,7 +214,7 @@ export default function PushNotificationSettings({ locale = "zh" }) {
         setCurrentSubscriptionId("");
         setState((current) => current ? { ...current, subscriptionIds: [], validSubscriptionIds: [] } : current);
       }
-      else await load();
+      else if (!await load()) return;
       setMessage({
         type: "ok",
         text: allDevices
@@ -234,9 +250,14 @@ export default function PushNotificationSettings({ locale = "zh" }) {
   ];
   const hasRemoteSubscription = hasRemotePushSubscription(state, currentSubscriptionId);
 
-  if (!state) {
+  if (loading) {
     return <section style={CARD}><span style={{ display: "inline-flex", alignItems: "center", gap: 8, color: "#64748b", fontSize: 12 }}><LoaderCircle size={15} className="spin-icon" />{L("加载通知设置", "Loading notification settings")}</span></section>;
   }
+  if (loadError || !state) return <section style={CARD} aria-labelledby="push-settings-error-title">
+    <strong id="push-settings-error-title">{L("浏览器通知", "Browser notifications")}</strong>
+    <p role="alert" style={{ color: "#b42318", margin: 0, fontSize: 12, lineHeight: 1.55 }}>{loadError || L("通知设置暂时无法加载", "Notification settings couldn't load.")}</p>
+    <button type="button" style={BUTTON} onClick={load}>{L("重试", "Retry")}</button>
+  </section>;
 
   return (
     <section style={CARD} aria-labelledby="push-settings-title">

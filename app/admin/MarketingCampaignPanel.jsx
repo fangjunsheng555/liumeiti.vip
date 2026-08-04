@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { validateMarketingCampaignDates } from "./marketing-campaign-form.js";
 import { clientFetch as fetch } from "../lib/client-fetch";
+import { beginLatestRequest, invalidateLatestRequest, isLatestRequest } from "../lib/latest-request";
 
 const card = { border: "1px solid #dce5e3", borderRadius: 16, background: "#fff", padding: 18 };
 const input = { width: "100%", boxSizing: "border-box", border: "1px solid #ccd9d6", borderRadius: 9, padding: "9px 11px", background: "#fff", color: "#183e3a" };
@@ -26,8 +27,12 @@ export default function MarketingCampaignPanel() {
   const [audience, setAudience] = useState(null);
   const [preview, setPreview] = useState("");
   const [campaigns, setCampaigns] = useState([]);
+  const [campaignsLoading, setCampaignsLoading] = useState(false);
+  const [campaignsError, setCampaignsError] = useState("");
   const [selectedStats, setSelectedStats] = useState(null);
   const [state, setState] = useState({ busy: "", message: "", error: "" });
+  const campaignsRequestRef = useRef(0);
+  const statsRequestRef = useRef(0);
   const set = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
   const segment = useMemo(() => ({
     sources: ["registered", "customer"],
@@ -44,16 +49,28 @@ export default function MarketingCampaignPanel() {
   const offer = useMemo(() => ({ badge: form.badge, headline: form.headline, currentPrice: form.currentPrice, originalPrice: form.originalPrice, savingText: form.savingText, couponCode: form.couponCode, endsAt: dateValidation.endsAtIso, ctaPath: form.ctaPath, serviceKeys: segment.serviceKeys }), [form, segment.serviceKeys, dateValidation.endsAtIso]);
 
   const loadCampaigns = useCallback(async () => {
+    const requestId = beginLatestRequest(campaignsRequestRef);
+    setCampaignsLoading(true);
+    setCampaignsError("");
     try {
       const response = await fetch("/api/admin/mail/campaigns?limit=30&includeAttribution=1", { cache: "no-store" });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "活动列表加载失败");
+      if (!isLatestRequest(campaignsRequestRef, requestId)) return;
       setCampaigns(data.campaigns || []);
     } catch (error) {
-      setState((current) => ({ ...current, busy: "", error: error.message || "活动列表加载失败" }));
+      if (isLatestRequest(campaignsRequestRef, requestId)) setCampaignsError(error.message || "活动列表加载失败");
+    } finally {
+      if (isLatestRequest(campaignsRequestRef, requestId)) setCampaignsLoading(false);
     }
   }, []);
-  useEffect(() => { loadCampaigns().catch(() => {}); }, [loadCampaigns]);
+  useEffect(() => {
+    loadCampaigns().catch(() => {});
+    return () => {
+      invalidateLatestRequest(campaignsRequestRef);
+      invalidateLatestRequest(statsRequestRef);
+    };
+  }, [loadCampaigns]);
 
   async function request(kind, url, payload) {
     setState({ busy: kind, message: "", error: "" });
@@ -115,16 +132,28 @@ export default function MarketingCampaignPanel() {
   }
 
   async function viewStats(campaign) {
+    const requestId = beginLatestRequest(statsRequestRef);
     setState({ busy: `stats:${campaign.id}`, message: "", error: "" });
     try {
       const response = await fetch(`/api/admin/mail/campaigns/${encodeURIComponent(campaign.id)}/stats`, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "活动统计加载失败");
+      if (!isLatestRequest(statsRequestRef, requestId)) return;
       setSelectedStats(data);
       setState({ busy: "", message: "统计已刷新", error: "" });
     } catch (error) {
-      setState({ busy: "", message: "", error: error.message || "活动统计加载失败" });
+      if (isLatestRequest(statsRequestRef, requestId)) {
+        setState({ busy: "", message: "", error: error.message || "活动统计加载失败" });
+      }
     }
+  }
+
+  function closeStats() {
+    invalidateLatestRequest(statsRequestRef);
+    setSelectedStats(null);
+    setState((current) => String(current.busy || "").startsWith("stats:")
+      ? { busy: "", message: "", error: "" }
+      : current);
   }
 
   return <section style={{ display: "grid", gap: 16 }}>
@@ -161,22 +190,23 @@ export default function MarketingCampaignPanel() {
     </div>
     {preview ? <div style={card}><h3 style={{ marginTop: 0 }}>沙箱预览</h3><iframe title="营销邮件预览" sandbox="" srcDoc={preview} style={{ width: "100%", minHeight: 720, border: "1px solid #d9e3e0", borderRadius: 10, background: "white" }} /></div> : null}
     <div style={card}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 10 }}><h3 style={{ margin: 0 }}>最近活动</h3><button type="button" onClick={loadCampaigns} disabled={state.busy} style={{ ...input, width: "auto", cursor: "pointer" }}>刷新列表</button></div>
-      <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><thead><tr>{["活动","状态","计划时间","入队","送达","点击","收入","转化率","点击率","操作"].map((label) => <th key={label} style={{ textAlign: "left", padding: 9, borderBottom: "1px solid #dfe7e5", whiteSpace: "nowrap" }}>{label}</th>)}</tr></thead><tbody>{campaigns.length === 0 ? <tr><td colSpan={10} style={{ padding: "22px 9px", color: "#82908e", textAlign: "center" }}>暂无营销活动</td></tr> : campaigns.map((campaign) => <tr key={campaign.id} style={{ borderBottom: "1px solid #edf2f1" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 10 }}><h3 style={{ margin: 0 }}>最近活动</h3><button type="button" onClick={loadCampaigns} disabled={Boolean(state.busy) || campaignsLoading} style={{ ...input, width: "auto", cursor: "pointer" }}>{campaignsLoading ? "加载中" : "刷新列表"}</button></div>
+      {campaignsError ? <div role="alert" style={{ color: "#b42318", marginBottom: 10, fontSize: 13 }}>活动列表未更新：{campaignsError}。请点击“刷新列表”重试。</div> : null}
+      <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><thead><tr>{["活动","状态","计划时间","入队","送达","点击","收入","转化率","点击率","操作"].map((label) => <th key={label} style={{ textAlign: "left", padding: 9, borderBottom: "1px solid #dfe7e5", whiteSpace: "nowrap" }}>{label}</th>)}</tr></thead><tbody>{campaignsLoading && campaigns.length === 0 ? <tr><td colSpan={10} style={{ padding: "22px 9px", color: "#82908e", textAlign: "center" }}>活动列表加载中…</td></tr> : campaignsError && campaigns.length === 0 ? <tr><td colSpan={10} style={{ padding: "22px 9px", color: "#b42318", textAlign: "center" }}>活动列表加载失败，当前空白不代表没有活动</td></tr> : campaigns.length === 0 ? <tr><td colSpan={10} style={{ padding: "22px 9px", color: "#82908e", textAlign: "center" }}>暂无营销活动</td></tr> : campaigns.map((campaign) => <tr key={campaign.id} style={{ borderBottom: "1px solid #edf2f1" }}>
         <td style={{ padding: 9, minWidth: 150 }}><strong>{campaign.name || campaign.id}</strong><div style={{ color: "#82908e", fontSize: 11, marginTop: 3 }}>{campaign.id}</div></td>
         <td style={{ padding: 9 }}>{campaign.status}</td><td style={{ padding: 9, whiteSpace: "nowrap" }}>{campaign.scheduledAt ? new Date(campaign.scheduledAt).toLocaleString() : "-"}</td>
         <td style={{ padding: 9 }}>{campaign.counters?.queued || 0}</td><td style={{ padding: 9 }}>{campaign.counters?.delivered || 0}</td><td style={{ padding: 9 }}>{campaign.counters?.uniqueClicks || 0}</td>
         <td style={{ padding: 9 }}>¥{Number(campaign.attribution?.revenue || 0).toFixed(2)}</td><td style={{ padding: 9 }}>{campaign.attribution?.conversionRate || 0}%</td><td style={{ padding: 9 }}>{campaign.attribution?.clickThroughRate || 0}%</td>
         <td style={{ padding: 9, minWidth: 220 }}><div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          <button type="button" onClick={() => viewStats(campaign)} disabled={Boolean(state.busy)} style={{ ...input, width: "auto", padding: "6px 8px", cursor: "pointer" }}>详情</button>
-          {["scheduled", "sending"].includes(campaign.status) ? <button type="button" onClick={() => manageCampaign(campaign, "pause")} disabled={Boolean(state.busy)} style={{ ...input, width: "auto", padding: "6px 8px", cursor: "pointer" }}>暂停</button> : null}
-          {campaign.status === "paused" ? <button type="button" onClick={() => manageCampaign(campaign, "resume")} disabled={Boolean(state.busy)} style={{ ...input, width: "auto", padding: "6px 8px", cursor: "pointer" }}>恢复</button> : null}
-          {!['completed', 'cancelled', 'failed'].includes(campaign.status) ? <button type="button" onClick={() => manageCampaign(campaign, "cancel")} disabled={Boolean(state.busy)} style={{ ...input, width: "auto", padding: "6px 8px", color: "#a33b31", cursor: "pointer" }}>取消</button> : null}
+          <button type="button" onClick={() => viewStats(campaign)} disabled={Boolean(state.busy) || campaignsLoading} style={{ ...input, width: "auto", padding: "6px 8px", cursor: "pointer" }}>详情</button>
+          {["scheduled", "sending"].includes(campaign.status) ? <button type="button" onClick={() => manageCampaign(campaign, "pause")} disabled={Boolean(state.busy) || campaignsLoading} style={{ ...input, width: "auto", padding: "6px 8px", cursor: "pointer" }}>暂停</button> : null}
+          {campaign.status === "paused" ? <button type="button" onClick={() => manageCampaign(campaign, "resume")} disabled={Boolean(state.busy) || campaignsLoading} style={{ ...input, width: "auto", padding: "6px 8px", cursor: "pointer" }}>恢复</button> : null}
+          {!['completed', 'cancelled', 'failed'].includes(campaign.status) ? <button type="button" onClick={() => manageCampaign(campaign, "cancel")} disabled={Boolean(state.busy) || campaignsLoading} style={{ ...input, width: "auto", padding: "6px 8px", color: "#a33b31", cursor: "pointer" }}>取消</button> : null}
         </div></td>
       </tr>)}</tbody></table></div>
     </div>
     {selectedStats ? <div style={card}>
-      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 12, alignItems: "center" }}><div style={{ minWidth: 0, flex: "1 1 220px" }}><h3 style={{ margin: 0, overflowWrap: "anywhere" }}>{selectedStats.campaign.name || selectedStats.campaign.id} · 活动统计</h3><p style={{ margin: "5px 0 0", color: "#748481", fontSize: 12 }}>归因模型：最近一次营销邮件点击，30 天</p></div><div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}><button type="button" onClick={() => viewStats(selectedStats.campaign)} disabled={Boolean(state.busy)} style={{ ...input, width: "auto" }}>刷新统计</button><button type="button" onClick={() => setSelectedStats(null)} style={{ ...input, width: "auto" }}>关闭</button></div></div>
+      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 12, alignItems: "center" }}><div style={{ minWidth: 0, flex: "1 1 220px" }}><h3 style={{ margin: 0, overflowWrap: "anywhere" }}>{selectedStats.campaign.name || selectedStats.campaign.id} · 活动统计</h3><p style={{ margin: "5px 0 0", color: "#748481", fontSize: 12 }}>归因模型：最近一次营销邮件点击，30 天</p></div><div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}><button type="button" onClick={() => viewStats(selectedStats.campaign)} disabled={Boolean(state.busy)} style={{ ...input, width: "auto" }}>刷新统计</button><button type="button" onClick={closeStats} style={{ ...input, width: "auto" }}>关闭</button></div></div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(125px,1fr))", gap: 10, marginTop: 16 }}>{[
         ["入队", selectedStats.counters?.queued || 0], ["已提交", selectedStats.counters?.submitted || 0], ["已送达", selectedStats.counters?.delivered || 0], ["唯一点击", selectedStats.counters?.uniqueClicks || 0],
         ["投诉", selectedStats.counters?.complained || 0], ["退订", selectedStats.counters?.unsubscribed || 0], ["成交订单", selectedStats.attribution?.saleCount || 0], ["活动收入", `¥${Number(selectedStats.attribution?.revenue || 0).toFixed(2)}`],

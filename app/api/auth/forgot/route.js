@@ -1,7 +1,8 @@
 import {
-  validEmail, getUser, setResetCode, sendSimpleEmail,
+  validEmail, getOrCreateResetCode, sendSimpleEmail,
   checkCriticalRateLimit, rateLimitResponse, generateNumericCode, getCookieFromRequest,
 } from "../../_utils.js";
+import { readUserAuthState } from "../../_auth-session.js";
 import { buildEmailBrandHeader } from "../../email-brand.js";
 import { getSettings } from "../../_settings.js";
 
@@ -28,22 +29,33 @@ export async function POST(request) {
   });
   if (!guard.ok) return rateLimitResponse(guard, "验证码请求过多，请稍后再试");
 
-  const user = await getUser(email);
+  // Password recovery is itself an escape hatch for historical accounts, so
+  // it must use the same repair-aware read as login and /auth/me. A legacy
+  // malformed balance/auth shadow key must never turn this neutral response
+  // into a silent no-mail dead end.
+  let user = null;
+  try {
+    const authState = await readUserAuthState(email);
+    if (authState.ok) user = authState.user;
+    else if (Number(authState.status || 0) >= 500) {
+      console.error("[forgot] auth state unavailable:", authState.error || authState.status);
+    }
+  } catch (error) {
+    console.error("[forgot] auth state read failed:", error?.message || error);
+  }
   // For security, return the same response whether or not the email is registered
   // (don't leak which emails are users). But still attempt to send if registered.
   const en = getCookieFromRequest(request, "locale") === "en";
   const L = (zh, e) => (en ? e : zh);
   if (user) {
-    const code = generateCode();
-    const codeStored = await setResetCode(email, code, 600);
-    if (!codeStored) {
+    const code = await getOrCreateResetCode(email, generateCode(), 600);
+    if (!code) {
       console.error("[forgot] reset code storage unavailable");
-      return Response.json({ ok: true, sent: true });
-    }
-    // 品牌名以站点设置为准(与全站显示一致)
-    const settings = await getSettings();
-    const brandName = (en ? settings.brand.nameEn : settings.brand.name) || BRAND_NAME;
-    const html = `<!DOCTYPE html>
+    } else {
+      // 品牌名以站点设置为准(与全站显示一致)
+      const settings = await getSettings();
+      const brandName = (en ? settings.brand.nameEn : settings.brand.name) || BRAND_NAME;
+      const html = `<!DOCTYPE html>
 <html lang="${en ? "en" : "zh-CN"}"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:#f4f6fb;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f4f6fb;padding:32px 16px;">
@@ -66,23 +78,27 @@ export async function POST(request) {
   </td></tr>
 </table>
 </body></html>`;
-    const text = L(`${brandName} 密码重置\n\n验证码: ${code}\n有效期 10 分钟\n\n如非本人操作,请忽略此邮件`, `${brandName} password reset\n\nCode: ${code}\nValid for 10 minutes\n\nIf this wasn't you, please ignore this email.`);
-    // Important: await the send so Vercel serverless doesn't kill the
-    // function before the SMTP transaction finishes. Fire-and-forget
-    // was causing emails to never reach the provider queue.
-    const result = await sendSimpleEmail({
-      to: email,
-      category: "verification",
-      relatedType: "account",
-      subject: L(`${brandName} · 密码重置验证码 ${code}`, `${brandName} · Password reset code ${code}`),
-      text, html,
-      support: settings.support,
-      locale: en ? "en" : "zh",
-    });
-    if (!result.ok) {
-      console.error("[forgot] email failed:", result);
+      const text = L(`${brandName} 密码重置\n\n验证码: ${code}\n有效期 10 分钟\n\n如非本人操作,请忽略此邮件`, `${brandName} password reset\n\nCode: ${code}\nValid for 10 minutes\n\nIf this wasn't you, please ignore this email.`);
+      // Important: await the send so Vercel serverless doesn't kill the
+      // function before the SMTP transaction finishes. Concurrent requests
+      // atomically reuse and renew one Redis code for the full advertised
+      // validity window, so a slower email cannot invalidate a newer one.
+      const result = await sendSimpleEmail({
+        to: email,
+        category: "verification",
+        relatedType: "account",
+        subject: L(`${brandName} · 密码重置验证码 ${code}`, `${brandName} · Password reset code ${code}`),
+        text, html,
+        support: settings.support,
+        locale: en ? "en" : "zh",
+      });
+      if (!result.ok) {
+        console.error("[forgot] email failed:", result);
+      }
     }
   }
 
-  return Response.json({ ok: true, sent: true });
+  // Keep the response payload neutral and avoid claiming provider delivery.
+  // The client explains that registered addresses will receive the code.
+  return Response.json({ ok: true, accepted: true });
 }

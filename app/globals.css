@@ -420,6 +420,8 @@
   .account-auth-page { padding-bottom: 86px; }
   .account-auth-page .account-main { margin-top: 18px; }
   .account-invite-poster { border-radius: 16px; padding: 9px 13px; }
+  .account-auth-page .account-invite-poster > div:nth-child(2) > span { padding-right: 82px; }
+  .account-auth-page .auth-hints { padding-right: 54px; }
   .account-auth-card { border-radius: 20px; }
 }
 

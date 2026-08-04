@@ -1,5 +1,21 @@
 export const CLIENT_FETCH_TIMEOUT_MS = 20_000;
 
+function attachResponseBodyDeadline(response, timeoutMs) {
+  if (!response || typeof response.json !== "function") return response;
+  const readJson = response.json.bind(response);
+  try {
+    Object.defineProperty(response, "json", {
+      configurable: true,
+      writable: true,
+      value: (...args) => withClientDeadline(readJson(...args), timeoutMs, "response_body_timeout"),
+    });
+  } catch {
+    // Callers that need a strict guarantee also use withClientDeadline around
+    // body parsing. Standard browser and Node Response objects are extensible.
+  }
+  return response;
+}
+
 /**
  * Browser fetch with a finite deadline. The caller's AbortSignal is preserved,
  * while a deadline abort is surfaced as a distinct TimeoutError so UI code can
@@ -20,15 +36,26 @@ export async function clientFetch(input, init = {}, timeoutMs = CLIENT_FETCH_TIM
   if (upstreamSignal?.aborted) relayAbort();
   else upstreamSignal?.addEventListener?.("abort", relayAbort, { once: true });
 
+  let rejectDeadline;
+  const deadline = new Promise((_, reject) => { rejectDeadline = reject; });
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
+    const timeoutError = new Error("请求超时，结果尚未确认，请先刷新核对后再决定是否重试 / Request timed out; verify the result before retrying");
+    timeoutError.name = "TimeoutError";
+    timeoutError.code = "request_timeout";
+    rejectDeadline(timeoutError);
   }, Math.max(1_000, Number(timeoutMs) || CLIENT_FETCH_TIMEOUT_MS));
 
   try {
-    return await fetch(input, { ...init, signal: controller.signal });
+    const response = await Promise.race([
+      fetch(input, { ...init, signal: controller.signal }),
+      deadline,
+    ]);
+    return attachResponseBodyDeadline(response, timeoutMs);
   } catch (error) {
     if (timedOut && !abortedByUpstream) {
+      if (error?.name === "TimeoutError" && error?.code === "request_timeout") throw error;
       const timeoutError = new Error("请求超时，结果尚未确认，请先刷新核对后再决定是否重试 / Request timed out; verify the result before retrying");
       timeoutError.name = "TimeoutError";
       timeoutError.code = "request_timeout";

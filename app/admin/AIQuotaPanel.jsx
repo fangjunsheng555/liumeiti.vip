@@ -5,9 +5,10 @@
 // 审批 = POST { action:"approve"|"reject", id, [granted|unlimited] }。
 // 覆盖 = POST { action:"setOverride", email, type, daily|unlimited, maxTokens|tokensUnlimited, note }。
 // 取消 = DELETE { action:"cancelOverride", email, type }。
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Inbox, LoaderCircle, CheckCircle2, AlertTriangle, Sparkles, ClipboardList, SlidersHorizontal, Settings2, Check, X, Trash2, BarChart3, Search } from "lucide-react";
 import { clientFetch as fetch } from "../lib/client-fetch";
+import { beginLatestRequest, invalidateLatestRequest, isLatestRequest } from "../lib/latest-request";
 
 const UNLIMITED = "unlimited";
 const C = {
@@ -63,15 +64,19 @@ export default function AIQuotaPanel() {
   const [usageLoading, setUsageLoading] = useState(false);
   const [usageQ, setUsageQ] = useState("");
   const [usagePeriod, setUsagePeriod] = useState("all"); // 排序依据:all=历史活跃 / today=今日活跃
+  const quotaRequestRef = useRef(0);
+  const usageRequestRef = useRef(0);
 
   const ok = (text) => setMsg({ type: "ok", text });
   const err = (text) => setMsg({ type: "error", text });
 
   const load = useCallback(async () => {
+    const requestId = beginLatestRequest(quotaRequestRef);
     setLoading(true);
     try {
       const r = await fetch("/api/admin/quota", { credentials: "same-origin", cache: "no-store" });
       const d = await r.json();
+      if (!isLatestRequest(quotaRequestRef, requestId)) return;
       if (r.ok && d) {
         setRequests(Array.isArray(d.requests) ? d.requests : []);
         setOverrides(Array.isArray(d.overrides) ? d.overrides : []);
@@ -79,29 +84,47 @@ export default function AIQuotaPanel() {
       } else if (r.status === 401) {
         err("无权限（仅超级管理员可管理配额）");
       } else err("加载失败，请重试");
-    } catch (e) { err("加载失败，请重试"); }
-    setLoading(false);
+    } catch (e) {
+      if (isLatestRequest(quotaRequestRef, requestId)) err("加载失败，请重试");
+    } finally {
+      if (isLatestRequest(quotaRequestRef, requestId)) setLoading(false);
+    }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    return () => { invalidateLatestRequest(quotaRequestRef); };
+  }, [load]);
 
   // 全部用量:仅在切到该栏目时加载;搜索/排序变化防抖 300ms 重新拉取。
   const loadUsage = useCallback(async (q, period) => {
+    const requestId = beginLatestRequest(usageRequestRef);
     setUsageLoading(true);
     try {
       const r = await fetch("/api/admin/ai-usage?period=" + period + "&limit=100" + (q ? "&q=" + encodeURIComponent(q) : ""), { credentials: "same-origin", cache: "no-store" });
       const d = await r.json();
+      if (!isLatestRequest(usageRequestRef, requestId)) return;
       if (r.ok && d && d.ok) setUsage({ items: Array.isArray(d.items) ? d.items : [], grand: d.grand || null, matched: d.matched || 0, hasMore: !!d.hasMore });
       else if (r.status === 401) setMsg({ type: "error", text: "无权限（仅超级管理员可查看用量）" });
       else setMsg({ type: "error", text: "用量加载失败，请重试" });
-    } catch (e) { setMsg({ type: "error", text: "用量加载失败，请重试" }); }
-    setUsageLoading(false);
+    } catch (e) {
+      if (isLatestRequest(usageRequestRef, requestId)) setMsg({ type: "error", text: "用量加载失败，请重试" });
+    } finally {
+      if (isLatestRequest(usageRequestRef, requestId)) setUsageLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    if (tab !== "usage") return;
+    if (tab !== "usage") {
+      invalidateLatestRequest(usageRequestRef);
+      setUsageLoading(false);
+      return;
+    }
     const t = setTimeout(() => loadUsage(usageQ.trim(), usagePeriod), 300);
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      invalidateLatestRequest(usageRequestRef);
+    };
   }, [tab, usageQ, usagePeriod, loadUsage]);
 
   async function post(body, okText) {

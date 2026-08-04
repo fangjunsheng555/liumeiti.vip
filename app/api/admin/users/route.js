@@ -100,8 +100,13 @@ export async function POST(request) {
   // old idempotent result or a balance mutation can be returned.
   const targetState = await readUserAuthState(email);
   if (!targetState.ok) {
+    const targetStatus = targetState.status === 401
+      ? 404
+      : Number.isInteger(targetState.status) && targetState.status >= 400 && targetState.status <= 599
+        ? targetState.status
+        : 500;
     return Response.json({ ok: false, error: targetState.error || "user_not_found" }, {
-      status: targetState.status === 401 ? 404 : 503,
+      status: targetStatus,
     });
   }
   const adjusted = await applyBalanceEffectAtomic({

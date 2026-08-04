@@ -163,7 +163,7 @@ test("every money and balance-redeem client sends the persisted identity", async
     );
     assert.match(source, /body: JSON\.stringify\((?:pending\.payload|exactPayload)\)/);
   }
-  for (const path of ["../app/account/page.jsx", "../app/components/RedeemCard.jsx"]) {
+  for (const path of paths) {
     const source = await readFile(new URL(path, import.meta.url), "utf8");
     assert.match(
       source,

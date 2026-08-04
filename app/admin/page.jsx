@@ -10,7 +10,14 @@ import {
 } from "../lib/admin-mutation-journal";
 import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
 import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
-import { clientFetch as fetch, isClientRequestTimeout } from "../lib/client-fetch";
+import { clientFetch as fetch, isClientRequestTimeout, withClientDeadline } from "../lib/client-fetch";
+import {
+  adminLoginErrorMessage,
+  adminRequestErrorMessage,
+  installAdminUnauthorizedObserver,
+  readAdminJson,
+  rotateAdminRequestEpoch,
+} from "./admin-request-feedback";
 import {
   batchOrderMutationFeedback,
   isSafeOrderMutationRetry,
@@ -1213,6 +1220,24 @@ function hasAdminPermissionContext(staff) {
   return Boolean(staff && (staff.root || Number(staff.id || 0) === 1 || (staff.permissions && typeof staff.permissions === "object")));
 }
 
+function AdminRetryAlert({ message, onRetry, busy = false }) {
+  if (!message) return null;
+  return (
+    <div className="admin-alert error" role="alert">
+      {message}
+      <button
+        type="button"
+        className="admin-filter-btn"
+        style={{ marginLeft: 8 }}
+        onClick={onRetry}
+        disabled={busy}
+      >
+        {busy ? "重试中" : "重试"}
+      </button>
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const [authed, setAuthed] = useState(null); // null=loading, false=login, true=ok
   const [loginName, setLoginName] = useState("");
@@ -1234,6 +1259,7 @@ export default function AdminPage() {
   const [ordersMeta, setOrdersMeta] = useState({ filteredCount: 0, total: 0, hasMore: false });
   const [ordersRefreshToken, setOrdersRefreshToken] = useState(0);
   const [orderOpeningId, setOrderOpeningId] = useState("");
+  const [orderOpenError, setOrderOpenError] = useState(null);
   const [assignableStaff, setAssignableStaff] = useState([]);
   const [assignmentBusy, setAssignmentBusy] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
@@ -1323,6 +1349,7 @@ export default function AdminPage() {
   const [sendCodeEmail, setSendCodeEmail] = useState("");
   const [sendCodeBusy, setSendCodeBusy] = useState(false);
   const [sendCodeResult, setSendCodeResult] = useState(null);
+  const [sendCodeUncertain, setSendCodeUncertain] = useState(null); // { code, email }
   const [staffPane, setStaffPane] = useState({ staff: [], actions: [] });
   const [selectedActionIds, setSelectedActionIds] = useState(new Set());
   const [actionDeleteBusy, setActionDeleteBusy] = useState(false);
@@ -1341,6 +1368,7 @@ export default function AdminPage() {
   const [mailForm, setMailForm] = useState({ to: "", subject: "客服服务通知", content: "" });
   const [mailLoading, setMailLoading] = useState(false);
   const [mailBusy, setMailBusy] = useState(false);
+  const [mailSendUncertain, setMailSendUncertain] = useState(false);
   const [mailResult, setMailResult] = useState(null);
   const [mailMode, setMailMode] = useState("customer");
   const [mailLogType, setMailLogType] = useState("customer");
@@ -1356,6 +1384,8 @@ export default function AdminPage() {
   const [mailComposeOpen, setMailComposeOpen] = useState(false);
   const [mailTemplates, setMailTemplates] = useState([]); // 快捷模板
   const [mailTplBusy, setMailTplBusy] = useState(false);
+  const mailTplBusyRef = useRef(false);
+  const [mailTemplateSaveUncertain, setMailTemplateSaveUncertain] = useState(false);
   const [activeMailLog, setActiveMailLog] = useState(null);
   const [overview, setOverview] = useState(null);
   const [overviewLoading, setOverviewLoading] = useState(false);
@@ -1379,11 +1409,235 @@ export default function AdminPage() {
   const [gQuery, setGQuery] = useState("");
   const [gResults, setGResults] = useState({ orders: [], users: [], codes: [] });
   const [gLoading, setGLoading] = useState(false);
+  const [gError, setGError] = useState("");
+  const [gRetryToken, setGRetryToken] = useState(0);
+  const [adminLoadErrors, setAdminLoadErrors] = useState({});
+  const [userActionError, setUserActionError] = useState("");
+  const [mailTemplateError, setMailTemplateError] = useState("");
+  const adminLoadSequenceRef = useRef({});
+
+  const clearAdminSessionCache = useCallback(() => {
+    rotateAdminRequestEpoch();
+    Object.values(pollControllersRef.current).forEach((controller) => controller?.abort?.());
+    pollControllersRef.current = {};
+    for (const key of new Set([...Object.keys(pollSequenceRef.current), "orders", "overview", "orderRevision", "orderOpen"])) {
+      pollSequenceRef.current[key] = Number(pollSequenceRef.current[key] || 0) + 1;
+    }
+    for (const key of Object.keys(adminLoadSequenceRef.current)) {
+      adminLoadSequenceRef.current[key] = Number(adminLoadSequenceRef.current[key] || 0) + 1;
+    }
+    loadUserRequestRef.current += 1;
+    ordersCacheRef.current.clear();
+    orderListRevisionRef.current = "0";
+    orderLoadEffectSignatureRef.current = "";
+    overviewRef.current = null;
+    mutationRequestsRef.current.clear();
+    mailTplBusyRef.current = false;
+    usdtCheckingRef.current = false;
+
+    setLoginName("");
+    setPassword("");
+    setLoginOtp("");
+    setLoginNeed2fa(false);
+    setLoggingIn(false);
+    setLogoutBusy(false);
+    setLogoutError("");
+    setTab("orders");
+    setNavOpen(false);
+    setCurrentStaff(null);
+    setOrders([]);
+    setLoading(false);
+    setOrdersLoadingMore(false);
+    setOrdersMeta({ filteredCount: 0, total: 0, hasMore: false });
+    setOrdersRefreshToken(0);
+    setOrderOpeningId("");
+    setAssignableStaff([]);
+    setAssignmentBusy(false);
+    setDateFrom("");
+    setDateTo("");
+    setFilterStatus("all");
+    setSearchInput("");
+    setAppliedSearch("");
+    setActiveOrder(null);
+    setEditForm(null);
+    setSaving(false);
+    setDeleting(false);
+    setConfirmDelete(false);
+    setSaveResult(null);
+    setShowPwds({});
+    setSpotifyPasswordMail(null);
+    setSpotifyPasswordMailBusy(false);
+    setOrderOpenError(null);
+    setSelectedIds(new Set());
+    setBatchMode(false);
+    setBatchBusy(false);
+    setBatchResult(null);
+    setBatchConfirm(null);
+    setConfirmUserAction(null);
+    setUserActionBusy(false);
+    setUserInfo(null);
+    setUserModalOpen(false);
+    setUserModalTarget("");
+    setUserTab("balance");
+    setUserLoading(false);
+    setUserError("");
+    setBalForm({ amount: "", reason: "" });
+    setBalBusy(false);
+    setBalResult(null);
+    setGlobalLog({ entries: [], total: 0, totalAdded: 0, totalDeducted: 0, adminCount: 0, orderCount: 0 });
+    setLogFilter("all");
+    setLogSource("all");
+    setLogQuery("");
+    setLogLoading(false);
+    setLogBatchMode(false);
+    setSelectedLogIds(new Set());
+    setLogDeleteBusy(false);
+    setLogDeleteResult(null);
+    setAllUsers({ users: [], total: 0 });
+    setUserListQuery("");
+    setUserListLoading(false);
+    setWithdrawals([]);
+    setWithdrawalLoading(false);
+    setActiveWithdrawal(null);
+    setWithdrawalStatus("pending");
+    setWithdrawalNote("");
+    setWithdrawalBusy(false);
+    setWithdrawalBatchMode(false);
+    setSelectedWithdrawalIds(new Set());
+    setWithdrawalDeleteBusy(false);
+    setWithdrawalDeleteResult(null);
+    setCodes([]);
+    setCodeBatches([]);
+    setCodesLoading(false);
+    setCodeType("service");
+    setCodeAmount("");
+    setCodeQuantity("1");
+    setCodeRemark("");
+    setCodeCustom("");
+    setCodeServices([]);
+    setCodeBusy("");
+    setCodeResult(null);
+    setActiveCodeBatch(null);
+    setRedeemHistory([]);
+    setRedeemHistoryQuery("");
+    setRedeemHistoryLoading(false);
+    setSelectedRedeemHistoryCodes(new Set());
+    setRedeemHistoryBatchMode(false);
+    setRedeemHistoryDeleteBusy(false);
+    setActiveRedeemHistory(null);
+    setPdfExportModal(null);
+    setSendCodeModal(null);
+    setSendCodeEmail("");
+    setSendCodeBusy(false);
+    setSendCodeResult(null);
+    setSendCodeUncertain(null);
+    setStaffPane({ staff: [], actions: [] });
+    setSelectedActionIds(new Set());
+    setActionDeleteBusy(false);
+    setActionDeleteResult(null);
+    setActiveStaffAction(null);
+    setStaffForm({ username: "", password: "", role: "operator", remark: "" });
+    setStaffBusy("");
+    setActionSearch("");
+    setStaffManage(null);
+    setStaffManageBusy("");
+    setStaffManageMsg(null);
+    setStaffResult(null);
+    setMailLogs([]);
+    setMailSearch("");
+    setMailMode("customer");
+    setMailLogType("customer");
+    setMailLoading(false);
+    setMailBusy(false);
+    setMailScheduleBusy(false);
+    setMailTemplates([]);
+    setMailTplBusy(false);
+    setMailTemplateSaveUncertain(false);
+    setMailMarketingLoading(false);
+    setMailRecipientBusy(false);
+    setMailRecipientPool({ emails: [], registered: 0, orders: 0, label: "" });
+    setMailForm({ to: "", subject: "客服服务通知", content: "" });
+    setMailMarketingHtml("");
+    setMailResult(null);
+    setMailBatchProgress(null);
+    setMailBatchMode(false);
+    setSelectedMailIds(new Set());
+    setMailDeleteBusy(false);
+    setMailComposeOpen(false);
+    setActiveMailLog(null);
+    setMailSendUncertain(false);
+    setOverview(null);
+    setOverviewLoading(false);
+    setPollState(initialAdminPollState);
+    setOrderDetailRefreshToken(0);
+    setSeenAbnormalCount(null);
+    setUsdtChecking(false);
+    setUsdtCheckMsg("");
+    setNewOrderAlert(null);
+    setHighlightOrderIds(new Set());
+    setSearchOpen(false);
+    setGQuery("");
+    setGResults({ orders: [], users: [], codes: [] });
+    setGLoading(false);
+    setGError("");
+    setGRetryToken(0);
+    setAdminLoadErrors({});
+    setUserActionError("");
+    setMailTemplateError("");
+  }, []);
+
+  const enterAdminSignedOutState = useCallback((message = "") => {
+    clearAdminSessionCache();
+    setLoginError(message);
+    setBootstrapError("");
+    setAuthed(false);
+  }, [clearAdminSessionCache]);
+
+  useEffect(() => installAdminUnauthorizedObserver(() => {
+    enterAdminSignedOutState("后台登录已失效，请重新登录后重试。");
+  }), [enterAdminSignedOutState]);
+
+  const beginAdminLoadRequest = useCallback((key) => {
+    const sequence = Number(adminLoadSequenceRef.current[key] || 0) + 1;
+    adminLoadSequenceRef.current[key] = sequence;
+    return sequence;
+  }, []);
+
+  const isCurrentAdminLoadRequest = useCallback((key, sequence) => (
+    Number(adminLoadSequenceRef.current[key] || 0) === Number(sequence)
+  ), []);
+
+  const clearAdminLoadError = useCallback((key) => {
+    setAdminLoadErrors((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }, []);
+
+  const showAdminLoadError = useCallback((key, error, action) => {
+    const message = adminRequestErrorMessage(error, action);
+    if (Number(error?.responseStatus || 0) === 401) {
+      enterAdminSignedOutState(message);
+      return;
+    }
+    setAdminLoadErrors((current) => ({ ...current, [key]: message }));
+  }, [enterAdminSignedOutState]);
 
   function adminMutationFailureMessage(error, fallback = "网络错误") {
     const code = String(error?.message || "");
     if (code.startsWith("admin_mutation_") || code.startsWith("checkout_")) {
       return "检测到尚未确认结果的后台操作。为避免重复扣款、退款或重复变更，请保持当前内容并重试原操作；如仍失败请先核对记录。";
+    }
+    if (isClientRequestTimeout(error) || error?.code === "response_body_timeout") {
+      return "后台响应超时，操作结果尚未确认。请先刷新核对用户余额；如确需重试，请保持原金额和原因不变。";
+    }
+    if (error?.code === "invalid_json" || error instanceof SyntaxError) {
+      return "后台返回了无法解析的数据，操作结果尚未确认。请先刷新核对用户余额后再决定是否重试。";
+    }
+    if (error instanceof TypeError) {
+      return "网络连接中断，操作结果尚未确认。请先刷新核对记录后再决定是否重试。";
     }
     return error?.message || fallback;
   }
@@ -1532,12 +1786,7 @@ export default function AdminPage() {
     if (!silent) setOverviewLoading(true);
     try {
       const res = await fetch("/api/admin/overview", { credentials: "same-origin", cache: "no-store", signal: controller.signal });
-      if (res.status === 401) {
-        setAuthed(false);
-        return;
-      }
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const data = await readAdminJson(res);
       if (isCurrentPollRequest("overview", sequence)) {
         if (data.currentStaff) applyCurrentStaff(data.currentStaff);
         const previous = overviewRef.current;
@@ -1558,20 +1807,26 @@ export default function AdminPage() {
     } catch (e) {
       if (e?.name !== "AbortError" && isCurrentPollRequest("overview", sequence)) {
         console.error(e);
-        markPollFailure("overview", e);
+        if (Number(e?.responseStatus || 0) === 401) {
+          enterAdminSignedOutState(adminRequestErrorMessage(e, "后台总览加载"));
+        } else {
+          markPollFailure("overview", new Error(adminRequestErrorMessage(e, "后台总览加载")));
+        }
       }
     } finally {
-      if (!silent && isCurrentPollRequest("overview", sequence)) setOverviewLoading(false);
+      if (isCurrentPollRequest("overview", sequence)) setOverviewLoading(false);
     }
   }, [triggerNewOrderNotice, applyCurrentStaff, beginPollRequest, isCurrentPollRequest, markPollSuccess, markPollFailure]);
 
   const runUsdtCheck = useCallback(async (manual = false) => {
     if (usdtCheckingRef.current) return;
+    const requestId = beginAdminLoadRequest("usdtCheck");
     usdtCheckingRef.current = true;
     setUsdtChecking(true);
     try {
       const response = await fetch("/api/admin/usdt-check", { method: "POST", credentials: "same-origin" });
       const data = await response.json();
+      if (!isCurrentAdminLoadRequest("usdtCheck", requestId)) return;
       if (manual) {
         const message = data.disabled
           ? "链上自动确认尚未开启"
@@ -1581,150 +1836,194 @@ export default function AdminPage() {
           ? `已扫描 ${data.scanned ?? 0} 笔，确认 ${data.matched ?? 0} 单${data.ambiguous ? `，${data.ambiguous} 笔待人工核对` : ""}`
           : "链上检查失败，请稍后重试";
         setUsdtCheckMsg(message);
-        setTimeout(() => setUsdtCheckMsg(""), 5000);
+        setTimeout(() => {
+          if (isCurrentAdminLoadRequest("usdtCheck", requestId)) setUsdtCheckMsg("");
+        }, 5000);
       }
       if (data.ok && Number(data.matched || 0) > 0) await loadOverview({ silent: true });
     } catch (e) {
-      if (manual) {
+      if (manual && isCurrentAdminLoadRequest("usdtCheck", requestId)) {
         setUsdtCheckMsg("链上检查失败，请稍后重试");
-        setTimeout(() => setUsdtCheckMsg(""), 5000);
+        setTimeout(() => {
+          if (isCurrentAdminLoadRequest("usdtCheck", requestId)) setUsdtCheckMsg("");
+        }, 5000);
       }
     } finally {
-      usdtCheckingRef.current = false;
-      setUsdtChecking(false);
+      if (isCurrentAdminLoadRequest("usdtCheck", requestId)) {
+        usdtCheckingRef.current = false;
+        setUsdtChecking(false);
+      }
     }
-  }, [loadOverview]);
+  }, [beginAdminLoadRequest, isCurrentAdminLoadRequest, loadOverview]);
 
   const loadGlobalLog = useCallback(async (q, filter, source) => {
+    const requestId = beginAdminLoadRequest("balance");
     setLogLoading(true);
+    clearAdminLoadError("balance");
     try {
       const params = new URLSearchParams();
       if (q) params.set("q", q);
       if (filter && filter !== "all") params.set("filter", filter);
       if (source && source !== "all") params.set("source", source);
       const res = await fetch("/api/admin/balance-log?" + params.toString(), { credentials: "same-origin" });
-      const data = await res.json();
-      if (data.ok) {
-        if (data.currentStaff) applyCurrentStaff(data.currentStaff);
-        setGlobalLog({
-          entries: data.entries || [],
-          total: data.total || 0,
-          totalAdded: data.totalAdded || 0,
-          totalDeducted: data.totalDeducted || 0,
-          adminCount: data.adminCount || 0,
-          orderCount: data.orderCount || 0,
-        });
-      }
-    } catch (e) {} finally {
-      setLogLoading(false);
+      const data = await readAdminJson(res);
+      if (!isCurrentAdminLoadRequest("balance", requestId)) return;
+      if (data.currentStaff) applyCurrentStaff(data.currentStaff);
+      setGlobalLog({
+        entries: data.entries || [],
+        total: data.total || 0,
+        totalAdded: data.totalAdded || 0,
+        totalDeducted: data.totalDeducted || 0,
+        adminCount: data.adminCount || 0,
+        orderCount: data.orderCount || 0,
+      });
+    } catch (e) {
+      if (isCurrentAdminLoadRequest("balance", requestId)) showAdminLoadError("balance", e, "余额记录加载");
+    } finally {
+      if (isCurrentAdminLoadRequest("balance", requestId)) setLogLoading(false);
     }
-  }, [applyCurrentStaff]);
+  }, [applyCurrentStaff, beginAdminLoadRequest, clearAdminLoadError, isCurrentAdminLoadRequest, showAdminLoadError]);
 
   const loadWithdrawals = useCallback(async () => {
+    const requestId = beginAdminLoadRequest("withdrawals");
     setWithdrawalLoading(true);
+    clearAdminLoadError("withdrawals");
     try {
       const res = await fetch("/api/admin/withdrawals", { credentials: "same-origin" });
-      if (res.status === 401) { setAuthed(false); return; }
-      const data = await res.json();
-      if (data.ok) {
-        if (data.currentStaff) applyCurrentStaff(data.currentStaff);
-        setWithdrawals(data.withdrawals || []);
-      }
-    } catch (e) {} finally {
-      setWithdrawalLoading(false);
+      const data = await readAdminJson(res);
+      if (!isCurrentAdminLoadRequest("withdrawals", requestId)) return;
+      if (data.currentStaff) applyCurrentStaff(data.currentStaff);
+      setWithdrawals(data.withdrawals || []);
+    } catch (e) {
+      if (isCurrentAdminLoadRequest("withdrawals", requestId)) showAdminLoadError("withdrawals", e, "提现申请加载");
+    } finally {
+      if (isCurrentAdminLoadRequest("withdrawals", requestId)) setWithdrawalLoading(false);
     }
-  }, [applyCurrentStaff]);
+  }, [applyCurrentStaff, beginAdminLoadRequest, clearAdminLoadError, isCurrentAdminLoadRequest, showAdminLoadError]);
 
   const loadCodes = useCallback(async () => {
+    const requestId = beginAdminLoadRequest("codes");
     setCodesLoading(true);
+    clearAdminLoadError("codes");
     try {
       const res = await fetch("/api/admin/redeem-codes", { credentials: "same-origin" });
-      if (res.status === 401) { setAuthed(false); return; }
-      const data = await res.json();
-      if (data.ok) {
-        setCodes(data.codes || []);
-        setCodeBatches(data.batches || []);
-      }
-    } catch (e) {} finally {
-      setCodesLoading(false);
+      const data = await readAdminJson(res);
+      if (!isCurrentAdminLoadRequest("codes", requestId)) return;
+      setCodes(data.codes || []);
+      setCodeBatches(data.batches || []);
+    } catch (e) {
+      if (isCurrentAdminLoadRequest("codes", requestId)) showAdminLoadError("codes", e, "兑换码加载");
+    } finally {
+      if (isCurrentAdminLoadRequest("codes", requestId)) setCodesLoading(false);
     }
-  }, []);
+  }, [beginAdminLoadRequest, clearAdminLoadError, isCurrentAdminLoadRequest, showAdminLoadError]);
 
   const loadRedeemHistory = useCallback(async (q = "") => {
+    const requestId = beginAdminLoadRequest("redeemHistory");
     setRedeemHistoryLoading(true);
+    clearAdminLoadError("redeemHistory");
     try {
       const params = new URLSearchParams();
       if (q) params.set("q", q);
       const res = await fetch("/api/admin/redeem-history?" + params.toString(), { credentials: "same-origin" });
-      if (res.status === 401) { setAuthed(false); return; }
-      const data = await res.json();
-      if (data.ok) {
-        if (data.currentStaff) applyCurrentStaff(data.currentStaff);
-        const nextHistory = data.history || [];
-        setRedeemHistory(nextHistory);
-        const visibleCodes = new Set(nextHistory.map((item) => item.code));
-        setSelectedRedeemHistoryCodes((current) => new Set(Array.from(current).filter((code) => visibleCodes.has(code))));
-      }
-    } catch (e) {} finally {
-      setRedeemHistoryLoading(false);
+      const data = await readAdminJson(res);
+      if (!isCurrentAdminLoadRequest("redeemHistory", requestId)) return;
+      if (data.currentStaff) applyCurrentStaff(data.currentStaff);
+      const nextHistory = data.history || [];
+      setRedeemHistory(nextHistory);
+      const visibleCodes = new Set(nextHistory.map((item) => item.code));
+      setSelectedRedeemHistoryCodes((current) => new Set(Array.from(current).filter((code) => visibleCodes.has(code))));
+    } catch (e) {
+      if (isCurrentAdminLoadRequest("redeemHistory", requestId)) showAdminLoadError("redeemHistory", e, "兑换历史加载");
+    } finally {
+      if (isCurrentAdminLoadRequest("redeemHistory", requestId)) setRedeemHistoryLoading(false);
     }
-  }, [applyCurrentStaff]);
+  }, [applyCurrentStaff, beginAdminLoadRequest, clearAdminLoadError, isCurrentAdminLoadRequest, showAdminLoadError]);
 
   const loadStaff = useCallback(async () => {
+    const requestId = beginAdminLoadRequest("staff");
+    clearAdminLoadError("staff");
+    clearAdminLoadError("staffActions");
     try {
-      const [res, actionRes] = await Promise.all([
+      const [staffRequest, actionRequest] = await Promise.allSettled([
         fetch("/api/admin/staff", { credentials: "same-origin" }),
         fetch("/api/admin/actions", { credentials: "same-origin" }),
       ]);
-      if (res.status === 401) { setAuthed(false); return; }
-      const data = await res.json();
-      const actionData = actionRes.ok ? await actionRes.json() : null;
-      if (data.ok) {
-        applyCurrentStaff(data.currentStaff || { id: data.currentStaffId, root: data.currentStaffRoot });
-        const actions = actionData?.ok ? (actionData.actions || []) : (data.actions || []);
-        setStaffPane({ staff: data.staff || [], actions });
-        setSelectedActionIds((current) => new Set(Array.from(current).filter((id) => actions.some((item) => item.id === id))));
+      if (staffRequest.status === "rejected") throw staffRequest.reason;
+      const data = await readAdminJson(staffRequest.value);
+      if (!isCurrentAdminLoadRequest("staff", requestId)) return;
+      applyCurrentStaff(data.currentStaff || { id: data.currentStaffId, root: data.currentStaffRoot });
+      let actions = data.actions || [];
+      try {
+        if (actionRequest.status === "rejected") throw actionRequest.reason;
+        const actionData = await readAdminJson(actionRequest.value);
+        if (!isCurrentAdminLoadRequest("staff", requestId)) return;
+        actions = actionData.actions || actions;
+      } catch (actionError) {
+        if (isCurrentAdminLoadRequest("staff", requestId)) showAdminLoadError("staffActions", actionError, "操作日志加载");
       }
-    } catch (e) {}
-  }, [applyCurrentStaff]);
+      if (!isCurrentAdminLoadRequest("staff", requestId)) return;
+      setStaffPane({ staff: data.staff || [], actions });
+      setSelectedActionIds((current) => new Set(Array.from(current).filter((id) => actions.some((item) => item.id === id))));
+    } catch (e) {
+      if (isCurrentAdminLoadRequest("staff", requestId)) showAdminLoadError("staff", e, "工作人员数据加载");
+    }
+  }, [applyCurrentStaff, beginAdminLoadRequest, clearAdminLoadError, isCurrentAdminLoadRequest, showAdminLoadError]);
 
   const loadMailLogs = useCallback(async () => {
+    const requestId = beginAdminLoadRequest("mailLogs");
     setMailLoading(true);
+    clearAdminLoadError("mailLogs");
     try {
       const res = await fetch("/api/admin/mail", { credentials: "same-origin" });
-      if (res.status === 401) { setAuthed(false); return; }
-      const data = await res.json();
-      if (data.ok) {
-        if (data.currentStaff) applyCurrentStaff(data.currentStaff);
-        setMailLogs(data.logs || []);
-      }
-    } catch (e) {} finally {
-      setMailLoading(false);
+      const data = await readAdminJson(res);
+      if (!isCurrentAdminLoadRequest("mailLogs", requestId)) return;
+      if (data.currentStaff) applyCurrentStaff(data.currentStaff);
+      setMailLogs(data.logs || []);
+    } catch (e) {
+      if (isCurrentAdminLoadRequest("mailLogs", requestId)) showAdminLoadError("mailLogs", e, "邮件记录加载");
+    } finally {
+      if (isCurrentAdminLoadRequest("mailLogs", requestId)) setMailLoading(false);
     }
-  }, [applyCurrentStaff]);
+  }, [applyCurrentStaff, beginAdminLoadRequest, clearAdminLoadError, isCurrentAdminLoadRequest, showAdminLoadError]);
 
   const loadMailTemplates = useCallback(async () => {
+    if (mailTplBusyRef.current) return;
+    const requestId = beginAdminLoadRequest("mailTemplatesLoad");
+    setMailTemplateError("");
     try {
       const res = await fetch("/api/admin/mail-templates", { credentials: "same-origin", cache: "no-store" });
-      const data = await res.json();
-      if (data.ok) setMailTemplates(data.templates || []);
-    } catch (e) {}
-  }, []);
+      const data = await readAdminJson(res);
+      if (!isCurrentAdminLoadRequest("mailTemplatesLoad", requestId)) return;
+      setMailTemplates(data.templates || []);
+    } catch (e) {
+      if (!isCurrentAdminLoadRequest("mailTemplatesLoad", requestId)) return;
+      const message = adminRequestErrorMessage(e, "邮件模板加载");
+      if (Number(e?.responseStatus || 0) === 401) {
+        enterAdminSignedOutState(message);
+      } else {
+        setMailTemplateError(message);
+      }
+    }
+  }, [beginAdminLoadRequest, isCurrentAdminLoadRequest]);
 
   const loadAllUsers = useCallback(async (q) => {
+    const requestId = beginAdminLoadRequest("users");
     setUserListLoading(true);
+    clearAdminLoadError("users");
     try {
       const params = new URLSearchParams();
       if (q) params.set("q", q);
       const res = await fetch("/api/admin/users/list?" + params.toString(), { credentials: "same-origin" });
-      const data = await res.json();
-      if (data.ok) {
-        setAllUsers({ users: data.users || [], total: data.total || 0 });
-      }
-    } catch (e) {} finally {
-      setUserListLoading(false);
+      const data = await readAdminJson(res);
+      if (!isCurrentAdminLoadRequest("users", requestId)) return;
+      setAllUsers({ users: data.users || [], total: data.total || 0 });
+    } catch (e) {
+      if (isCurrentAdminLoadRequest("users", requestId)) showAdminLoadError("users", e, "用户列表加载");
+    } finally {
+      if (isCurrentAdminLoadRequest("users", requestId)) setUserListLoading(false);
     }
-  }, []);
+  }, [beginAdminLoadRequest, clearAdminLoadError, isCurrentAdminLoadRequest, showAdminLoadError]);
 
   // Load user list when entering users tab; load global log on balance tab
   useEffect(() => {
@@ -1841,19 +2140,43 @@ export default function AdminPage() {
   useEffect(() => {
     if (!searchOpen) return;
     const q = gQuery.trim();
-    if (q.length < 2) { setGResults({ orders: [], users: [], codes: [] }); setGLoading(false); return; }
+    if (q.length < 2) {
+      setGResults({ orders: [], users: [], codes: [] });
+      setGError("");
+      setGLoading(false);
+      return;
+    }
+    const controller = new AbortController();
     setGLoading(true);
+    setGError("");
     const t = setTimeout(async () => {
       try {
-        const r = await fetch("/api/admin/search?q=" + encodeURIComponent(q), { credentials: "same-origin" });
-        const j = await r.json();
-        if (j.ok) setGResults({ orders: j.orders || [], users: j.users || [], codes: j.codes || [] });
-      } catch (e) {} finally { setGLoading(false); }
+        const r = await fetch("/api/admin/search?q=" + encodeURIComponent(q), {
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        const j = await readAdminJson(r);
+        if (!controller.signal.aborted) setGResults({ orders: j.orders || [], users: j.users || [], codes: j.codes || [] });
+      } catch (e) {
+        if (controller.signal.aborted) return;
+        const message = adminRequestErrorMessage(e, "全局搜索");
+        if (Number(e?.responseStatus || 0) === 401) {
+          enterAdminSignedOutState(message);
+          setSearchOpen(false);
+        } else {
+          setGError(message);
+        }
+      } finally {
+        if (!controller.signal.aborted) setGLoading(false);
+      }
     }, 250);
-    return () => clearTimeout(t);
-  }, [gQuery, searchOpen]);
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
+  }, [gQuery, searchOpen, gRetryToken]);
 
-  function closeSearch() { setSearchOpen(false); setGQuery(""); setGResults({ orders: [], users: [], codes: [] }); }
+  function closeSearch() { setSearchOpen(false); setGQuery(""); setGError(""); setGResults({ orders: [], users: [], codes: [] }); }
   function searchGotoOrder(orderId) { closeSearch(); setTab("orders"); setFilterStatus("all"); setDateFrom(""); setDateTo(""); setSearchInput(orderId); setAppliedSearch(orderId); }
   function searchGotoUser(email) { closeSearch(); loadUser(email); }
   function searchGotoCode() { closeSearch(); setTab("codes"); }
@@ -1884,16 +2207,15 @@ export default function AdminPage() {
   async function executeUserAction() {
     if (!confirmUserAction || userActionBusy) return;
     setUserActionBusy(true);
+    setUserActionError("");
     try {
       const { email, action } = confirmUserAction;
       if (action === "delete" && !canDeleteUsers) {
-        setUserError("仅主账号可删除用户");
-        setConfirmUserAction(null);
+        setUserActionError("仅主账号可删除用户");
         return;
       }
       if ((action === "ban" || action === "unban") && !canBanUsers) {
-        setUserError("当前账号不可封禁或解禁用户");
-        setConfirmUserAction(null);
+        setUserActionError("当前账号不可封禁或解禁用户");
         return;
       }
       let res;
@@ -1908,16 +2230,21 @@ export default function AdminPage() {
           body: JSON.stringify({ banned: action === "ban" }),
         });
       }
-      const data = await res.json();
-      if (data.ok) {
-        setConfirmUserAction(null);
-        loadAllUsers(userListQuery);
-        if (userInfo && userInfo.user.email === confirmUserAction.email && action === "delete") {
-          setUserInfo(null);
-          setUserModalOpen(false);
-        }
+      await readAdminJson(res);
+      setConfirmUserAction(null);
+      loadAllUsers(userListQuery);
+      if (userInfo && userInfo.user.email === confirmUserAction.email && action === "delete") {
+        setUserInfo(null);
+        setUserModalOpen(false);
       }
-    } catch (e) {} finally {
+    } catch (e) {
+      const message = adminRequestErrorMessage(e, "用户账号更新");
+      if (Number(e?.responseStatus || 0) === 401) {
+        enterAdminSignedOutState(message);
+      } else {
+        setUserActionError(message);
+      }
+    } finally {
       setUserActionBusy(false);
     }
   }
@@ -1930,7 +2257,7 @@ export default function AdminPage() {
     setUserTab("balance"); // 下次打开默认回到「余额明细」
   }
 
-  async function loadUser(email) {
+  async function loadUser(email, { preserveBalanceResult = false } = {}) {
     if (!email) return;
     const nextEmail = email.trim();
     const requestId = ++loadUserRequestRef.current;
@@ -1939,27 +2266,26 @@ export default function AdminPage() {
     setUserInfo((current) => current?.user?.email === nextEmail ? current : null);
     setUserLoading(true);
     setUserError("");
-    setBalResult(null);
+    if (!preserveBalanceResult) setBalResult(null);
     try {
       const res = await fetch(`/api/admin/users?email=${encodeURIComponent(nextEmail)}`, {
         credentials: "same-origin",
       });
-      const data = await res.json();
+      const data = await readAdminJson(res);
       if (requestId !== loadUserRequestRef.current) return;
-      if (data.ok) {
-        setUserInfo(data);
-        setUserModalOpen(true);
-      } else {
-        setUserInfo(null);
-        setUserModalOpen(false);
-        setUserModalTarget("");
-        setUserError(data.error === "user_not_found" ? "未找到该邮箱的注册用户" : (data.error || "查询失败"));
-      }
+      setUserInfo(data);
+      setUserModalOpen(true);
     } catch (e) {
       if (requestId !== loadUserRequestRef.current) return;
-      setUserModalOpen(false);
-      setUserModalTarget("");
-      setUserError("网络错误");
+      const message = e?.code === "user_not_found"
+        ? "未找到该邮箱的注册用户"
+        : adminRequestErrorMessage(e, "用户详情加载");
+      if (Number(e?.responseStatus || 0) === 401) {
+        enterAdminSignedOutState(message);
+        return;
+      }
+      setUserModalOpen(true);
+      setUserError(message);
     } finally {
       if (requestId === loadUserRequestRef.current) setUserLoading(false);
     }
@@ -1967,7 +2293,7 @@ export default function AdminPage() {
 
   async function refreshAfterAdjust() {
     // Re-load user view, global log, and user list
-    if (userInfo) await loadUser(userInfo.user.email);
+    if (userInfo) await loadUser(userInfo.user.email, { preserveBalanceResult: true });
     await loadGlobalLog(logQuery, logFilter, logSource);
     await loadAllUsers(userListQuery);
   }
@@ -2005,12 +2331,28 @@ export default function AdminPage() {
         headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
         body: JSON.stringify(pending.payload),
       });
-      const data = await res.json();
-      if (data.ok) {
+      let data;
+      try {
+        data = await res.json();
+      } catch (cause) {
+        const parseError = new Error("invalid_json", { cause });
+        parseError.code = cause?.code === "response_body_timeout" ? "response_body_timeout" : "invalid_json";
+        parseError.responseStatus = Number(res.status || 0);
+        throw parseError;
+      }
+      if (res.ok && data?.ok) {
+        const nextBalance = Number(data.balance);
+        if (!Number.isFinite(nextBalance)) {
+          const responseError = new Error("invalid_json");
+          responseError.code = "invalid_json";
+          responseError.responseStatus = Number(res.status || 0);
+          throw responseError;
+        }
         completeAdminMutation(pending.storageKey, pending.operation);
-        setBalResult({ type: "success", message: `已${sign > 0 ? "增加" : "扣除"} ¥${num.toFixed(2)} · 当前余额 ¥${data.balance.toFixed(2)}` });
+        const successMessage = `已${sign > 0 ? "增加" : "扣除"} ¥${num.toFixed(2)} · 当前余额 ¥${nextBalance.toFixed(2)}`;
         setBalForm({ amount: "", reason: "" });
-        refreshAfterAdjust();
+        await refreshAfterAdjust();
+        setBalResult({ type: "success", message: successMessage });
       } else {
         clearTerminalAdminMutation(pending, res, data);
         const msg = {
@@ -2018,7 +2360,19 @@ export default function AdminPage() {
           user_not_found: "用户不存在",
           invalid_amount: "金额无效",
           reason_required: "请填写原因",
-        }[data.error] || data.error || "操作失败";
+          account_record_invalid: "用户资料状态冲突，请刷新用户资料后重试",
+          stale_revision: "该用户数据已被其他管理员修改，请刷新后重试",
+          idempotency_conflict: "本次余额操作与待确认记录不一致，请勿更改内容并先核对余额",
+        }[data?.error]
+          || (res.status === 401 ? "后台登录已失效，请重新登录后重试"
+            : res.status === 403 ? "当前后台账号没有调整余额的权限"
+              : res.status === 409 ? "用户资料已发生变化，请刷新后重试"
+                : [500, 503].includes(res.status) ? "后台服务暂时不可用，操作结果尚未确认。请先刷新核对余额；重试时保持原金额和原因不变"
+                  : "余额调整失败，请刷新核对后重试");
+        if (res.status === 401) {
+          enterAdminSignedOutState(msg);
+          return;
+        }
         setBalResult({ type: "error", message: msg });
       }
       });
@@ -2030,17 +2384,20 @@ export default function AdminPage() {
   }
 
   async function openWithdrawal(id) {
+    const requestId = beginAdminLoadRequest("withdrawalDetail");
     setWithdrawalBusy(true);
+    clearAdminLoadError("withdrawalDetail");
     try {
       const res = await fetch(`/api/admin/withdrawals/${encodeURIComponent(id)}`, { credentials: "same-origin" });
-      const data = await res.json();
-      if (data.ok) {
-        setActiveWithdrawal(data);
-        setWithdrawalStatus(data.withdrawal.status || "pending");
-        setWithdrawalNote(data.withdrawal.reviewNote || "");
-      }
-    } catch (e) {} finally {
-      setWithdrawalBusy(false);
+      const data = await readAdminJson(res);
+      if (!isCurrentAdminLoadRequest("withdrawalDetail", requestId)) return;
+      setActiveWithdrawal(data);
+      setWithdrawalStatus(data.withdrawal.status || "pending");
+      setWithdrawalNote(data.withdrawal.reviewNote || "");
+    } catch (e) {
+      if (isCurrentAdminLoadRequest("withdrawalDetail", requestId)) showAdminLoadError("withdrawalDetail", e, "提现详情加载");
+    } finally {
+      if (isCurrentAdminLoadRequest("withdrawalDetail", requestId)) setWithdrawalBusy(false);
     }
   }
 
@@ -2174,6 +2531,7 @@ export default function AdminPage() {
   }
 
   function applyMailComposerMode(nextMode) {
+    if (mailSendUncertain) return;
     setMailMode(nextMode);
     setMailResult(null);
     setMailBatchProgress(null);
@@ -2196,7 +2554,7 @@ export default function AdminPage() {
   function openMailComposer(nextMode = "customer") {
     applyMailComposerMode(nextMode);
     setMailComposeOpen(true);
-    if (nextMode === "marketing") loadMarketingMailTemplate();
+    if (!mailSendUncertain && nextMode === "marketing") loadMarketingMailTemplate();
   }
 
   function buildMailPayload(to = mailForm.to) {
@@ -2218,6 +2576,7 @@ export default function AdminPage() {
 
   async function loadMarketingMailTemplate(force = false) {
     if (mailMarketingLoading || (!force && mailMarketingHtml.trim())) return;
+    const requestId = beginAdminLoadRequest("mailMarketingTemplate");
     setMailMarketingLoading(true);
     try {
       const res = await fetch(`/api/admin/mail?template=${encodeURIComponent(MARKETING_MAIL_TEMPLATE_ID)}`, {
@@ -2225,6 +2584,7 @@ export default function AdminPage() {
         cache: "no-store",
       });
       const data = await res.json();
+      if (!isCurrentAdminLoadRequest("mailMarketingTemplate", requestId)) return;
       if (data.ok) {
         setMailMarketingHtml(data.html || "");
         setMailForm((current) => ({
@@ -2236,9 +2596,11 @@ export default function AdminPage() {
         setMailResult({ type: "error", message: data.error === "forbidden" ? "当前工作人员没有发信权限" : (data.error || "读取营销邮件模板失败") });
       }
     } catch (e) {
-      setMailResult({ type: "error", message: "读取营销邮件模板失败，请稍后重试" });
+      if (isCurrentAdminLoadRequest("mailMarketingTemplate", requestId)) {
+        setMailResult({ type: "error", message: "读取营销邮件模板失败，请稍后重试" });
+      }
     } finally {
-      setMailMarketingLoading(false);
+      if (isCurrentAdminLoadRequest("mailMarketingTemplate", requestId)) setMailMarketingLoading(false);
     }
   }
 
@@ -2281,6 +2643,7 @@ export default function AdminPage() {
 
   async function loadMarketingRecipientPool(source = "all") {
     if (mailRecipientBusy) return;
+    const requestId = beginAdminLoadRequest("mailRecipientPool");
     setMailRecipientBusy(true);
     setMailBatchProgress(null);
     try {
@@ -2289,6 +2652,7 @@ export default function AdminPage() {
       if (source === "registered" || source === "all") registered = await fetchRegisteredMailEmails();
       if (source === "orders" || source === "all") orders = await fetchOrderMailEmails();
       const emails = normalizeEmailList([...registered, ...orders]);
+      if (!isCurrentAdminLoadRequest("mailRecipientPool", requestId)) return;
       const label = source === "registered" ? "注册用户" : source === "orders" ? "历史订单联系邮箱" : "注册用户 + 历史订单";
       setMailRecipientPool({ emails, registered: registered.length, orders: orders.length, label });
       setMailResult({
@@ -2298,9 +2662,11 @@ export default function AdminPage() {
           : "没有读取到可用邮箱。",
       });
     } catch (e) {
-      setMailResult({ type: "error", message: e?.message || "读取邮箱失败，请稍后重试" });
+      if (isCurrentAdminLoadRequest("mailRecipientPool", requestId)) {
+        setMailResult({ type: "error", message: e?.message || "读取邮箱失败，请稍后重试" });
+      }
     } finally {
-      setMailRecipientBusy(false);
+      if (isCurrentAdminLoadRequest("mailRecipientPool", requestId)) setMailRecipientBusy(false);
     }
   }
 
@@ -2317,7 +2683,7 @@ export default function AdminPage() {
   }
 
   async function sendMarketingMailToRegisteredUsers() {
-    if (mailBusy || mailRecipientBusy) return;
+    if (mailBusy || mailRecipientBusy || mailSendUncertain) return;
     if (mailMode !== "marketing") applyMailComposerMode("marketing");
     if (!mailMarketingHtml.trim()) {
       setMailResult({ type: "error", message: "请先等待营销邮件 HTML 模板加载完成，或手动填写 HTML" });
@@ -2334,6 +2700,7 @@ export default function AdminPage() {
     const batches = splitIntoBatches(emails, MAIL_BATCH_LIMIT);
     let sentTotal = 0;
     let failedTotal = 0;
+    let uncertainResult = false;
     setMailBusy(true);
     setMailBatchProgress({ sent: 0, failed: 0, total: emails.length, batch: 0, batches: batches.length });
     try {
@@ -2353,10 +2720,13 @@ export default function AdminPage() {
         });
         const data = await res.json();
         if (data.ok) {
-          sentTotal += Number(data.sentCount || batch.length);
-          failedTotal += Number(data.failedCount || 0);
+          const batchFailed = Math.max(0, Number(data.failedCount || 0));
+          const batchSent = Math.max(0, Number(data.sentCount ?? Math.max(0, batch.length - batchFailed)));
+          sentTotal += batchSent;
+          failedTotal += batchFailed;
         } else {
           failedTotal += batch.length;
+          if (res.status >= 500) uncertainResult = true;
         }
         setMailBatchProgress({
           sent: sentTotal,
@@ -2366,15 +2736,21 @@ export default function AdminPage() {
           batches: batches.length,
         });
       }
+      const unsafeToRepeat = uncertainResult || (sentTotal > 0 && failedTotal > 0);
+      if (unsafeToRepeat) setMailSendUncertain(true);
       setMailResult({
         type: failedTotal > 0 ? "error" : "success",
         message: failedTotal > 0
-          ? `营销邮件已发送 ${sentTotal} 封，失败 ${failedTotal} 封，请查看发信记录。`
+          ? `营销邮件已发送 ${sentTotal} 封，失败 ${failedTotal} 封。${unsafeToRepeat ? "为避免已成功批次被重复发送，本页已暂停整批重提；请刷新并核对发信记录。" : "请检查失败原因后重试。"}`
           : `营销邮件已发送 ${sentTotal} 封，并已写入发信记录。`,
       });
       await loadMailLogs();
     } catch (e) {
-      setMailResult({ type: "error", message: "批量发送失败，请检查网络或 SMTP 配置后重试" });
+      setMailSendUncertain(true);
+      setMailResult({
+        type: "error",
+        message: `批量发信在处理 ${sentTotal}/${emails.length} 封后结果中断，后续结果尚未确认。为避免整批重复发送，本页已暂停再次提交；请先在邮件投递记录中核对，确认后刷新后台再继续。`,
+      });
       await loadMailLogs();
     } finally {
       setMailBusy(false);
@@ -2382,7 +2758,7 @@ export default function AdminPage() {
   }
 
   async function scheduleMarketingMailForEvenings() {
-    if (mailBusy || mailRecipientBusy) return;
+    if (mailBusy || mailRecipientBusy || mailSendUncertain) return;
     if (mailMode !== "marketing") applyMailComposerMode("marketing");
     if (!mailMarketingHtml.trim()) {
       setMailResult({ type: "error", message: "请先等待营销邮件模板加载完成" });
@@ -2407,6 +2783,7 @@ export default function AdminPage() {
     const campaignGroupId = `MC${Date.now().toString(36).toUpperCase()}`;
     let scheduledTotal = 0;
     let failedTotal = 0;
+    let uncertainResult = false;
     let requestDone = 0;
     const totalRequests = dailyGroups.reduce((sum, group) => sum + Math.ceil(group.length / MARKETING_SCHEDULE_REQUEST_LIMIT), 0);
     setMailBusy(true);
@@ -2437,6 +2814,7 @@ export default function AdminPage() {
           const data = await response.json();
           scheduledTotal += Number(data.scheduledCount || 0);
           failedTotal += Number(data.failedCount ?? (response.ok ? 0 : recipients.length));
+          if (response.status >= 500) uncertainResult = true;
           requestDone += 1;
           setMailBatchProgress({
             sent: scheduledTotal,
@@ -2449,15 +2827,21 @@ export default function AdminPage() {
           });
         }
       }
+      const unsafeToRepeat = uncertainResult || (scheduledTotal > 0 && failedTotal > 0);
+      if (unsafeToRepeat) setMailSendUncertain(true);
       setMailResult({
         type: failedTotal ? "error" : "success",
         message: failedTotal
-          ? `已安排 ${scheduledTotal} 封，${failedTotal} 封排期失败，请在邮件投递中核对。`
+          ? `已安排 ${scheduledTotal} 封，${failedTotal} 封排期失败。${unsafeToRepeat ? "为避免生成重复队列，本页已暂停整批重提；请刷新并核对邮件投递。" : "请检查失败原因后重试。"}`
           : `已安排 ${scheduledTotal} 封，将从最近一个北京时间 18:30 起分 ${dailyGroups.length} 天发送；未来批次不会提前占用 Resend 额度。`,
       });
       await loadMailLogs();
     } catch (e) {
-      setMailResult({ type: "error", message: `排期中断：已安排 ${scheduledTotal} 封，请在邮件投递中核对后重试剩余邮箱。` });
+      setMailSendUncertain(true);
+      setMailResult({
+        type: "error",
+        message: `排期在确认 ${scheduledTotal}/${emails.length} 封后中断，后续结果尚未确认。为避免生成重复队列，本页已暂停再次提交；请先在邮件投递记录中核对，确认后刷新后台再继续。`,
+      });
       await loadMailLogs();
     } finally {
       setMailScheduleBusy(false);
@@ -2467,11 +2851,15 @@ export default function AdminPage() {
 
   // ── 客服发信快捷模板 ──
   async function saveMailTemplate() {
-    if (mailTplBusy) return;
+    if (mailTplBusyRef.current || mailTplBusy || mailTemplateSaveUncertain) return;
     if (!mailForm.content.trim()) { setMailResult({ type: "error", message: "先填写正文再存为模板" }); return; }
     const name = typeof window !== "undefined" ? window.prompt("模板名称(如:发货通知/售后跟进):", mailForm.subject.slice(0, 20)) : "";
     if (!name || !name.trim()) return;
+    const requestId = beginAdminLoadRequest("mailTemplatesMutation");
+    beginAdminLoadRequest("mailTemplatesLoad");
+    mailTplBusyRef.current = true;
     setMailTplBusy(true);
+    setMailTemplateError("");
     try {
       const res = await fetch("/api/admin/mail-templates", {
         method: "POST",
@@ -2479,16 +2867,41 @@ export default function AdminPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name.trim(), subject: mailForm.subject, content: mailForm.content }),
       });
-      const data = await res.json();
-      if (data.ok) setMailTemplates(data.templates || []);
-      else setMailResult({ type: "error", message: data.error || "保存模板失败" });
-    } catch (e) {} finally { setMailTplBusy(false); }
+      const data = await readAdminJson(res);
+      if (isCurrentAdminLoadRequest("mailTemplatesMutation", requestId)) setMailTemplates(data.templates || []);
+    } catch (e) {
+      if (!isCurrentAdminLoadRequest("mailTemplatesMutation", requestId)) return;
+      const message = adminRequestErrorMessage(e, "邮件模板保存");
+      if (Number(e?.responseStatus || 0) === 401) {
+        enterAdminSignedOutState(message);
+      } else if (
+        Number(e?.responseStatus || 0) >= 500
+        || !Number(e?.responseStatus || 0)
+        || e?.name === "TimeoutError"
+        || ["request_timeout", "response_body_timeout", "invalid_json"].includes(e?.code)
+        || e instanceof TypeError
+      ) {
+        setMailTemplateSaveUncertain(true);
+        setMailTemplateError("");
+      } else {
+        setMailTemplateError(message);
+      }
+    } finally {
+      if (isCurrentAdminLoadRequest("mailTemplatesMutation", requestId)) {
+        mailTplBusyRef.current = false;
+        setMailTplBusy(false);
+      }
+    }
   }
 
   async function deleteMailTemplate(id, name) {
-    if (mailTplBusy) return;
+    if (mailTplBusyRef.current || mailTplBusy) return;
     if (typeof window !== "undefined" && !window.confirm(`删除模板「${name}」?`)) return;
+    const requestId = beginAdminLoadRequest("mailTemplatesMutation");
+    beginAdminLoadRequest("mailTemplatesLoad");
+    mailTplBusyRef.current = true;
     setMailTplBusy(true);
+    setMailTemplateError("");
     try {
       const res = await fetch("/api/admin/mail-templates", {
         method: "DELETE",
@@ -2496,14 +2909,27 @@ export default function AdminPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id }),
       });
-      const data = await res.json();
-      if (data.ok) setMailTemplates(data.templates || []);
-    } catch (e) {} finally { setMailTplBusy(false); }
+      const data = await readAdminJson(res);
+      if (isCurrentAdminLoadRequest("mailTemplatesMutation", requestId)) setMailTemplates(data.templates || []);
+    } catch (e) {
+      if (!isCurrentAdminLoadRequest("mailTemplatesMutation", requestId)) return;
+      const message = adminRequestErrorMessage(e, "邮件模板删除");
+      if (Number(e?.responseStatus || 0) === 401) {
+        enterAdminSignedOutState(message);
+      } else {
+        setMailTemplateError(message);
+      }
+    } finally {
+      if (isCurrentAdminLoadRequest("mailTemplatesMutation", requestId)) {
+        mailTplBusyRef.current = false;
+        setMailTplBusy(false);
+      }
+    }
   }
 
   async function sendCustomerMail(e) {
     e.preventDefault();
-    if (mailBusy) return;
+    if (mailBusy || mailSendUncertain) return;
     const isMarketing = mailMode === "marketing";
     if (isMarketing && !mailMarketingHtml.trim()) {
       setMailResult({ type: "error", message: "请先等待营销邮件 HTML 模板加载完成，或手动填写 HTML" });
@@ -2518,21 +2944,25 @@ export default function AdminPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildMailPayload()),
       });
-      const data = await res.json();
-      if (data.ok) {
+      const data = await withClientDeadline(res.json(), 15_000, "response_body_timeout");
+      if (res.ok && data?.ok === true) {
         const sentCount = Number(data.sentCount || 1);
         const failedCount = Number(data.failedCount || 0);
-        setMailForm((current) => ({
-          ...current,
-          to: "",
-          content: isMarketing ? MARKETING_MAIL_PREVIEW : "",
-        }));
-        setMailComposeOpen(false);
-        setMailBatchProgress(null);
+        const partialDelivery = sentCount > 0 && failedCount > 0;
+        setMailSendUncertain(partialDelivery);
+        if (!partialDelivery) {
+          setMailForm((current) => ({
+            ...current,
+            to: "",
+            content: isMarketing ? MARKETING_MAIL_PREVIEW : "",
+          }));
+          setMailComposeOpen(false);
+          setMailBatchProgress(null);
+        }
         setMailResult({
           type: failedCount > 0 ? "error" : "success",
           message: failedCount > 0
-            ? `${isMarketing ? "营销邮件" : "邮件"}已发送 ${sentCount} 封，${failedCount} 封失败，请查看发信记录`
+            ? `${isMarketing ? "营销邮件" : "邮件"}已发送 ${sentCount} 封，${failedCount} 封失败。${partialDelivery ? "为避免重复发送成功收件人，本页已暂停重提；请刷新并核对发信记录。" : "请查看发信记录。"}`
             : `${isMarketing ? "营销邮件" : "邮件"}已发送 ${sentCount} 封，并已记录工作人员编号`,
         });
         await loadMailLogs();
@@ -2547,11 +2977,21 @@ export default function AdminPage() {
           send_failed_after_retry: "邮件发送失败，请检查 SMTP 配置或稍后重试",
           send_failed: "邮件发送失败，请检查 SMTP 配置或稍后重试",
         }[data.error] || data.detail || data.error || "发送失败";
-        setMailResult({ type: "error", message: msg });
+        if (res.status >= 500 || data.uncertain === true) {
+          setMailSendUncertain(true);
+          setMailResult({ type: "error", message: "发信服务返回了无法确认的结果。为避免重复发送，本页已暂停再次提交；请先刷新并核对邮件投递记录。" });
+        } else {
+          setMailResult({ type: "error", message: msg });
+        }
         await loadMailLogs();
       }
     } catch (e) {
-      setMailResult({ type: "error", message: "网络错误" });
+      setMailSendUncertain(true);
+      setMailResult({
+        type: "error",
+        message: "发信结果尚未确认。为避免重复发送，本页已暂停再次提交；请先在邮件投递记录中核对，确认后刷新后台再继续。",
+      });
+      await loadMailLogs();
     } finally {
       setMailBusy(false);
     }
@@ -2839,6 +3279,15 @@ export default function AdminPage() {
       setSendCodeResult({ type: "error", message: "请填写有效邮箱" });
       return;
     }
+    if (
+      sendCodeUncertain
+      && sendCodeUncertain.code === sendCodeModal.code
+      && sendCodeUncertain.email === email
+    ) {
+      setSendCodeResult({ type: "error", message: "这次发信结果尚未确认。为避免重复邮件，请刷新后台并核对发信记录后再决定是否重发。" });
+      return;
+    }
+    const requestId = beginAdminLoadRequest("sendRedeemCode");
     setSendCodeBusy(true);
     setSendCodeResult(null);
     try {
@@ -2849,6 +3298,7 @@ export default function AdminPage() {
         body: JSON.stringify({ email }),
       });
       const data = await res.json();
+      if (!isCurrentAdminLoadRequest("sendRedeemCode", requestId)) return;
       if (data.ok) {
         setSendCodeResult({ type: "success", message: `已发送至 ${email}` });
         setTimeout(() => {
@@ -2857,6 +3307,11 @@ export default function AdminPage() {
           setSendCodeResult(null);
         }, 1200);
       } else {
+        if (res.status >= 500 || data.uncertain === true) {
+          setSendCodeUncertain({ code: sendCodeModal.code, email });
+          setSendCodeResult({ type: "error", message: "发信服务返回了无法确认的结果。为避免重复邮件，已暂停向该邮箱再次发送此兑换码；请刷新后台并核对发信记录。" });
+          return;
+        }
         const msg = {
           invalid_email: "邮箱格式错误",
           code_not_found: "兑换码不存在",
@@ -2866,9 +3321,11 @@ export default function AdminPage() {
         setSendCodeResult({ type: "error", message: msg });
       }
     } catch (err) {
-      setSendCodeResult({ type: "error", message: "网络错误" });
+      if (!isCurrentAdminLoadRequest("sendRedeemCode", requestId)) return;
+      setSendCodeUncertain({ code: sendCodeModal.code, email });
+      setSendCodeResult({ type: "error", message: "发信结果尚未确认。为避免重复邮件，已暂停向该邮箱再次发送此兑换码；请刷新后台并核对发信记录。" });
     } finally {
-      setSendCodeBusy(false);
+      if (isCurrentAdminLoadRequest("sendRedeemCode", requestId)) setSendCodeBusy(false);
     }
   }
 
@@ -3089,8 +3546,9 @@ export default function AdminPage() {
         signal: controller.signal,
       });
       if (res.status === 401) {
-        setBootstrapError("");
-        setAuthed(false);
+        if (isCurrentPollRequest("orders", sequence)) {
+          enterAdminSignedOutState("后台登录已失效，请重新登录后重试。");
+        }
         return;
       }
       let data;
@@ -3178,7 +3636,9 @@ export default function AdminPage() {
         signal: controller.signal,
       });
       if (response.status === 401) {
-        setAuthed(false);
+        if (isCurrentPollRequest("orderRevision", sequence)) {
+          enterAdminSignedOutState("后台登录已失效，请重新登录后重试。");
+        }
         return;
       }
       const data = await response.json();
@@ -3499,26 +3959,29 @@ export default function AdminPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: loginName, password, otp: loginOtp || undefined }),
       });
-      const data = await res.json();
-      if (data.ok) {
+      const data = await withClientDeadline(res.json(), 15_000, "response_body_timeout");
+      if (res.ok && data?.ok === true) {
+        // A successful login starts a fresh client-side authority boundary.
+        // Never render records cached by the previous administrator account.
+        clearAdminSessionCache();
         if (!hasAdminPermissionContext(data.staff)) {
           setBootstrapError("登录成功，但后台没有返回工作人员权限信息。请重试加载；仍失败请联系站长。");
         } else {
           setBootstrapError("");
         }
-        setAuthed(true);
         setCurrentStaff(data.staff || null);
+        setAuthed(true);
         setPassword("");
         setLoginOtp("");
         setLoginNeed2fa(false);
       } else if (data.need2fa) {
         setLoginNeed2fa(true);
-        setLoginError(data.error === "invalid_2fa" ? "动态码错误,请重试(也可输入备用恢复码)" : "");
+        setLoginError(data.error === "invalid_2fa" ? adminLoginErrorMessage(res.status, data) : "");
       } else {
-        setLoginError(data.error === "invalid_password" ? "密码错误" : (data.error || "登录失败"));
+        setLoginError(adminLoginErrorMessage(res.status, data));
       }
-    } catch (e) {
-      setLoginError("网络错误");
+    } catch (error) {
+      setLoginError(adminLoginErrorMessage(0, null, error));
     } finally {
       setLoggingIn(false);
     }
@@ -3536,16 +3999,10 @@ export default function AdminPage() {
       if ((!response.ok || !data?.ok || data.revoked !== true) && !alreadyInvalid) {
         throw new Error("无法持久撤销后台会话，请稍后重试；当前后台仍保持登录。");
       }
+      clearAdminSessionCache();
+      setLoginError("");
+      setBootstrapError("");
       setAuthed(false);
-      setCurrentStaff(null);
-      setOrders([]);
-      ordersCacheRef.current.clear();
-      orderListRevisionRef.current = "0";
-      orderLoadEffectSignatureRef.current = "";
-      overviewRef.current = null;
-      setOverview(null);
-      setSeenAbnormalCount(null);
-      setNewOrderAlert(null);
     } catch (error) {
       setLogoutError(error.message || "安全退出失败，请稍后重试");
     } finally {
@@ -3563,6 +4020,7 @@ export default function AdminPage() {
       return next;
     });
     setOrderOpeningId(orderId);
+    setOrderOpenError(null);
     const { controller, sequence } = beginPollRequest("orderOpen");
     try {
       const response = await fetch(`/api/admin/orders/${encodeURIComponent(orderId)}`, {
@@ -3570,8 +4028,12 @@ export default function AdminPage() {
         cache: "no-store",
         signal: controller.signal,
       });
-      const data = await response.json();
-      if (!response.ok || !data.ok || !data.order) throw new Error(data.error || `HTTP ${response.status}`);
+      const data = await readAdminJson(response);
+      if (!data.order) {
+        const error = new Error("invalid_order_response");
+        error.code = "invalid_json";
+        throw error;
+      }
       if (!isCurrentPollRequest("orderOpen", sequence)) return;
       const items = Array.isArray(data.order.items) ? data.order.items : [];
       const detail = {
@@ -3624,7 +4086,13 @@ export default function AdminPage() {
     } catch (error) {
       if (error?.name !== "AbortError" && isCurrentPollRequest("orderOpen", sequence)) {
         console.error(error);
-        markPollFailure("orderDetail", error);
+        const message = adminRequestErrorMessage(error, "订单详情加载");
+        if (Number(error?.responseStatus || 0) === 401) {
+          enterAdminSignedOutState(message);
+        } else {
+          setOrderOpenError({ message, order });
+          markPollFailure("orderDetail", new Error(message));
+        }
       }
     } finally {
       if (isCurrentPollRequest("orderOpen", sequence)) setOrderOpeningId("");
@@ -4135,6 +4603,12 @@ export default function AdminPage() {
 
   const visiblePollKey = tab === "overview" ? "overview" : (["orders", "abnormal"].includes(tab) ? "orders" : "");
   const visiblePoll = visiblePollKey ? pollState[visiblePollKey] : null;
+  const sendCodeRetryLocked = Boolean(
+    sendCodeModal
+    && sendCodeUncertain
+    && sendCodeUncertain.code === sendCodeModal.code
+    && sendCodeUncertain.email === sendCodeEmail.trim().toLowerCase(),
+  );
   const retryVisiblePoll = () => {
     if (visiblePollKey === "overview") {
       loadOverview({ silent: false, watch: true });
@@ -4318,6 +4792,7 @@ export default function AdminPage() {
       ],
     },
   ];
+  const currentTabAllowed = navGroups.some((group) => group.items.some((item) => item.key === tab && item.show));
 
   // ── Dashboard ──
   return (
@@ -4403,7 +4878,13 @@ export default function AdminPage() {
           </button>
         )}
 
-        {tab === "overview" ? (
+        {!currentTabAllowed ? (
+          <div className="admin-empty" role="alert">
+            <ShieldCheck size={36} />
+            <p>当前后台账号没有访问该栏目权限，正在返回订单管理。</p>
+            <button type="button" className="admin-filter-btn" onClick={() => setTab("orders")}>返回订单管理</button>
+          </div>
+        ) : tab === "overview" ? (
           <div className="admin-overview-page">
             <div className="admin-overview-card">
               <div className="admin-overview-head">
@@ -4414,67 +4895,67 @@ export default function AdminPage() {
               <div className="admin-overview-operations">
                 <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("orders")}>
                   <span>待处理订单</span>
-                  <b>{overview?.receivedOrders ?? 0}</b>
+                  <b>{overview?.receivedOrders ?? "—"}</b>
                 </button>
                 <button type="button" className="admin-overview-item urgent" onClick={() => openOverviewTarget("awaiting_quote")}>
                   <span>代付待报价</span>
-                  <b>{overview?.awaitingQuotes ?? 0}</b>
+                  <b>{overview?.awaitingQuotes ?? "—"}</b>
                 </button>
                 <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("pending_payment")}>
                   <span>代付待付款</span>
-                  <b>{overview?.pendingQuotePayments ?? 0}</b>
+                  <b>{overview?.pendingQuotePayments ?? "—"}</b>
                 </button>
                 <button type="button" className="admin-overview-item warn" onClick={() => openOverviewTarget("abnormal")}>
                   <span>异常订单</span>
-                  <b>{overview?.abnormalOrders ?? 0}</b>
+                  <b>{overview?.abnormalOrders ?? "—"}</b>
                 </button>
                 {overview?.usdtAutoConfirm && (
                   <button type="button" className="admin-overview-item" onClick={() => runUsdtCheck(true)} title="立即检查 TRON 链上到账">
                     <span>USDT 待确认 {usdtChecking && <LoaderCircle size={11} className="spin-icon" />}</span>
-                    <b>{overview?.usdtPendingConfirm ?? 0}</b>
+                    <b>{overview?.usdtPendingConfirm ?? "—"}</b>
                   </button>
                 )}
                 {canReviewWithdrawals && (
                   <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("withdrawals")}>
                     <span>待审核提现</span>
-                    <b>{overview?.pendingWithdrawals ?? 0}</b>
+                    <b>{overview?.pendingWithdrawals ?? "—"}</b>
                   </button>
                 )}
                 {canViewCodes && (
                   <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("codes")}>
                     <span>可用兑换码</span>
-                    <b>{overview?.activeCodes ?? 0}</b>
+                    <b>{overview?.activeCodes ?? "—"}</b>
                   </button>
                 )}
                 {canSendMail && (
                   <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("mail")}>
                     <span>失败邮件</span>
-                    <b>{overview?.failedMails ?? 0}</b>
+                    <b>{overview?.failedMails ?? "—"}</b>
                   </button>
                 )}
                 {canViewUsers && (
                   <button type="button" className="admin-overview-item" onClick={() => openOverviewTarget("users")}>
                     <span>注册用户</span>
-                    <b>{overview?.usersTotal ?? 0}</b>
+                    <b>{overview?.usersTotal ?? "—"}</b>
                   </button>
                 )}
               </div>
               <div className="admin-overview-summary">
                 <div className="admin-overview-mini">
                   <span>今日订单 <DeltaBadge cur={overview?.todayOrders} prev={overview?.yesterdayOrders} /></span>
-                  <b>{overview?.todayOrders ?? 0}</b>
+                  <b>{overview?.todayOrders ?? "—"}</b>
                 </div>
                 <div className="admin-overview-mini money">
                   <span>今日营收 <DeltaBadge cur={overview?.todayRevenue} prev={overview?.yesterdayRevenue} /></span>
-                  <b>¥{Number(overview?.todayRevenue || 0).toFixed(2)}</b>
+                  <b>{overview ? `¥${Number(overview.todayRevenue || 0).toFixed(2)}` : "—"}</b>
                 </div>
                 <div className="admin-overview-mini">
                   <span>累计订单</span>
-                  <b>{overview?.ordersTotal ?? 0}</b>
+                  <b>{overview?.ordersTotal ?? "—"}</b>
                 </div>
                 <div className="admin-overview-mini money">
                   <span>累计营收</span>
-                  <b>¥{Number(overview?.totalRevenue || 0).toFixed(2)}</b>
+                  <b>{overview ? `¥${Number(overview.totalRevenue || 0).toFixed(2)}` : "—"}</b>
                 </div>
               </div>
             </div>
@@ -4482,19 +4963,19 @@ export default function AdminPage() {
             <div className="admin-overview-revenue">
               <div className="admin-overview-revenue-item">
                 <span>近 7 天营收</span>
-                <b>¥{Number(overview?.revenue7d || 0).toFixed(2)}</b>
+                <b>{overview ? `¥${Number(overview.revenue7d || 0).toFixed(2)}` : "—"}</b>
               </div>
               <div className="admin-overview-revenue-item">
                 <span>近 30 天营收</span>
-                <b>¥{Number(overview?.revenue30d || 0).toFixed(2)}</b>
+                <b>{overview ? `¥${Number(overview.revenue30d || 0).toFixed(2)}` : "—"}</b>
               </div>
               <div className="admin-overview-revenue-item">
                 <span>本月营收</span>
-                <b>¥{Number(overview?.revenueMonth || 0).toFixed(2)}</b>
+                <b>{overview ? `¥${Number(overview.revenueMonth || 0).toFixed(2)}` : "—"}</b>
               </div>
               <div className="admin-overview-revenue-item">
-                <span>客单价 · 成交 {overview?.paidOrders ?? 0} 单</span>
-                <b>¥{Number(overview?.avgOrderValue || 0).toFixed(2)}</b>
+                <span>客单价 · 成交 {overview?.paidOrders ?? "—"} 单</span>
+                <b>{overview ? `¥${Number(overview.avgOrderValue || 0).toFixed(2)}` : "—"}</b>
               </div>
             </div>
 
@@ -4552,7 +5033,7 @@ export default function AdminPage() {
           />
         ) : tab === "netflix-code" ? (
           <NetflixCodePanel canEdit={canEditOrders} />
-        ) : tab === "users" ? (
+        ) : tab === "users" && canViewUsers ? (
           <div className="admin-users-pane">
             {/* All registered users */}
             <div className="admin-userlist">
@@ -4576,9 +5057,14 @@ export default function AdminPage() {
                   {userListLoading ? <LoaderCircle size={11} className="spin-icon" /> : "搜索"}
                 </button>
               </form>
+              <AdminRetryAlert
+                message={adminLoadErrors.users}
+                onRetry={() => loadAllUsers(userListQuery)}
+                busy={userListLoading}
+              />
               <div className="admin-userlist-body">
                 {allUsers.users.length === 0 ? (
-                  <div className="admin-userlist-empty">{userListLoading ? "加载中..." : "暂无用户"}</div>
+                  <div className="admin-userlist-empty">{userListLoading ? "加载中..." : adminLoadErrors.users ? "用户数据未更新" : "暂无用户"}</div>
                 ) : allUsers.users.map((u) => (
                   <div key={u.email} className={`admin-userlist-item${u.banned ? " banned" : ""}`}>
                     <button
@@ -4608,7 +5094,7 @@ export default function AdminPage() {
                           type="button"
                           className="admin-userlist-action ban"
                           title={u.banned ? "解除封禁" : "封禁账户"}
-                          onClick={() => setConfirmUserAction({ email: u.email, action: u.banned ? "unban" : "ban" })}
+                          onClick={() => { setUserActionError(""); setConfirmUserAction({ email: u.email, action: u.banned ? "unban" : "ban" }); }}
                         >{u.banned ? "解禁" : "封禁"}</button>
                       )}
                       {canDeleteUsers && (
@@ -4616,7 +5102,7 @@ export default function AdminPage() {
                           type="button"
                           className="admin-userlist-action delete"
                           title="删除账户"
-                          onClick={() => setConfirmUserAction({ email: u.email, action: "delete" })}
+                          onClick={() => { setUserActionError(""); setConfirmUserAction({ email: u.email, action: "delete" }); }}
                         ><Trash2 size={11} /></button>
                       )}
                     </div>
@@ -4625,7 +5111,7 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {userError && <div className="admin-alert error" style={{ marginTop: 8 }}>{userError}</div>}
+            {userError && !userModalOpen && <div className="admin-alert error" style={{ marginTop: 8 }}>{userError}</div>}
 
             {false && userInfo && (
               <>
@@ -4688,7 +5174,7 @@ export default function AdminPage() {
             )}
 
           </div>
-        ) : tab === "withdrawals" ? (
+        ) : tab === "withdrawals" && canReviewWithdrawals ? (
           <div className="admin-withdraw-pane single">
             <div className="admin-withdraw-list">
               <div className="admin-userlist-head">
@@ -4724,9 +5210,13 @@ export default function AdminPage() {
                 </div>
               </div>
               {withdrawalDeleteResult && <div className={`admin-alert ${withdrawalDeleteResult.type}`}>{withdrawalDeleteResult.message}</div>}
+              <AdminRetryAlert message={adminLoadErrors.withdrawals} onRetry={loadWithdrawals} busy={withdrawalLoading} />
+              {adminLoadErrors.withdrawalDetail && (
+                <div className="admin-alert error" role="alert">{adminLoadErrors.withdrawalDetail} 请再次点击该提现记录重试。</div>
+              )}
               <div className="admin-userlist-body">
                 {withdrawals.length === 0 ? (
-                  <div className="admin-userlist-empty">{withdrawalLoading ? "加载中..." : "暂无提现申请"}</div>
+                  <div className="admin-userlist-empty">{withdrawalLoading ? "加载中..." : adminLoadErrors.withdrawals ? "提现数据未更新" : "暂无提现申请"}</div>
                 ) : withdrawals.map((w) => {
                   const selected = selectedWithdrawalIds.has(w.id);
                   return (
@@ -4801,8 +5291,9 @@ export default function AdminPage() {
               )}
             </div>
           </div>
-        ) : tab === "codes" ? (
+        ) : tab === "codes" && canViewCodes ? (
           <div className="admin-codes-pane">
+            <AdminRetryAlert message={adminLoadErrors.codes} onRetry={loadCodes} busy={codesLoading} />
             {!canManageCodes && (
               <div className="admin-code-form admin-code-send-only">
                 <div className="admin-card-title"><Mail size={15} />兑换码发信</div>
@@ -4844,6 +5335,11 @@ export default function AdminPage() {
                       {redeemHistoryLoading ? <LoaderCircle size={11} className="spin-icon" /> : "搜索"}
                     </button>
                   </div>
+                  <AdminRetryAlert
+                    message={adminLoadErrors.redeemHistory}
+                    onRetry={() => loadRedeemHistory(redeemHistoryQuery)}
+                    busy={redeemHistoryLoading}
+                  />
                   {canDeleteRecords && (
                     <div className="admin-inline-actions admin-code-history-actions">
                       <button
@@ -4871,7 +5367,7 @@ export default function AdminPage() {
                     {redeemHistoryLoading ? (
                       <div className="admin-userlist-empty">加载中...</div>
                     ) : redeemHistory.length === 0 ? (
-                      <div className="admin-userlist-empty">暂无兑换历史</div>
+                      <div className="admin-userlist-empty">{adminLoadErrors.redeemHistory ? "兑换历史未更新" : "暂无兑换历史"}</div>
                     ) : redeemHistory.map((item) => {
                       const selected = selectedRedeemHistoryCodes.has(item.code);
                       return (
@@ -5004,7 +5500,7 @@ export default function AdminPage() {
               <>
             <div className="admin-code-batch-list">
               {codeBatches.length === 0 ? (
-                <div className="admin-userlist-empty">{codesLoading ? "加载中..." : "暂无兑换码批次"}</div>
+                <div className="admin-userlist-empty">{codesLoading ? "加载中..." : adminLoadErrors.codes ? "兑换码数据未更新" : "暂无兑换码批次"}</div>
               ) : codeBatches.map((batch) => (
                 <button key={batch.id} type="button" className="admin-code-batch-item" onClick={() => setActiveCodeBatch(batch)}>
                   <span>
@@ -5023,7 +5519,7 @@ export default function AdminPage() {
             </div>
             <div className="admin-code-list">
               {codes.length === 0 ? (
-                <div className="admin-userlist-empty">{codesLoading ? "加载中..." : "暂无兑换码"}</div>
+                <div className="admin-userlist-empty">{codesLoading ? "加载中..." : adminLoadErrors.codes ? "兑换码数据未更新" : "暂无兑换码"}</div>
               ) : codes.map((c) => (
                 <div key={c.code} className={`admin-code-item status-${c.status}`}>
                   <span>
@@ -5057,7 +5553,7 @@ export default function AdminPage() {
               </>
             )}
           </div>
-        ) : tab === "mail" ? (
+        ) : tab === "mail" && canSendMail ? (
           <div className="admin-mail-pane">
             <div className="admin-mail-entry-strip">
               <div className="admin-mail-entry-copy">
@@ -5077,6 +5573,7 @@ export default function AdminPage() {
             <MarketingCampaignPanel />
 
             {mailResult && <div className={`admin-alert ${mailResult.type}`}>{mailResult.message}</div>}
+            <AdminRetryAlert message={adminLoadErrors.mailLogs} onRetry={loadMailLogs} busy={mailLoading} />
 
             <div className="admin-mail-log">
               <div className="admin-userlist-head">
@@ -5146,7 +5643,7 @@ export default function AdminPage() {
               </div>
               <div className="admin-mail-log-list">
                 {visibleMailLogs.length === 0 ? (
-                  <div className="admin-userlist-empty">{mailLoading ? "加载中..." : `暂无${mailLogType === "marketing" ? "营销邮件" : "客服邮件"}记录`}</div>
+                  <div className="admin-userlist-empty">{mailLoading ? "加载中..." : adminLoadErrors.mailLogs ? "邮件记录未更新" : `暂无${mailLogType === "marketing" ? "营销邮件" : "客服邮件"}记录`}</div>
                 ) : visibleMailLogs.map((item) => {
                   const selected = selectedMailIds.has(item.id);
                   const ok = item.ok !== false;
@@ -5189,29 +5686,29 @@ export default function AdminPage() {
               </div>
             </div>
           </div>
-        ) : tab === "insights" ? (
+        ) : tab === "insights" && isRootStaff ? (
           <InsightsPanel />
-        ) : tab === "mail-delivery" ? (
+        ) : tab === "mail-delivery" && isRootStaff ? (
           <MailDeliveryPanel />
-        ) : tab === "health" ? (
+        ) : tab === "health" && isRootStaff ? (
           <SystemHealthPanel />
-        ) : tab === "visitors" ? (
+        ) : tab === "visitors" && isRootStaff ? (
           <VisitorsPanel />
-        ) : tab === "abandoned" ? (
+        ) : tab === "abandoned" && isRootStaff ? (
           <AbandonedPanel />
-        ) : tab === "announce" ? (
+        ) : tab === "announce" && isRootStaff ? (
           <AnnouncePanel />
-        ) : tab === "announce-posts" ? (
+        ) : tab === "announce-posts" && isRootStaff ? (
           <AnnouncePostsPanel />
-        ) : tab === "catalog" ? (
+        ) : tab === "catalog" && isRootStaff ? (
           <CatalogPanel />
-        ) : tab === "settings" ? (
+        ) : tab === "settings" && isRootStaff ? (
           <SettingsPanel />
         ) : tab === "security" ? (
           <SecurityPanel isRoot={isRootStaff} />
-        ) : tab === "ai-quota" ? (
+        ) : tab === "ai-quota" && isRootStaff ? (
           <AIQuotaPanel />
-        ) : tab === "staff" ? (
+        ) : tab === "staff" && isRootStaff ? (
           <div className="admin-staff-pane">
             <form className="admin-staff-form" onSubmit={createStaff}>
               <div className="admin-card-title"><UserPlus size={15} />新增工作人员</div>
@@ -5251,6 +5748,8 @@ export default function AdminPage() {
               </button>
             </form>
             {staffResult && <div className={`admin-alert ${staffResult.type}`}>{staffResult.message}</div>}
+            <AdminRetryAlert message={adminLoadErrors.staff} onRetry={loadStaff} />
+            <AdminRetryAlert message={adminLoadErrors.staffActions} onRetry={loadStaff} />
             <div className="admin-staff-list">
               {staffPane.staff.map((item) => (
                 <div key={item.id} className={`admin-staff-item${item.active === false ? " disabled" : ""}`}>
@@ -5337,7 +5836,7 @@ export default function AdminPage() {
               </div>
             </div>
           </div>
-        ) : tab === "balance" ? (
+        ) : tab === "balance" && canViewBalanceLog ? (
           <div className="admin-balance-pane">
             <div className="admin-global-log">
               <div className="admin-global-log-head">
@@ -5372,6 +5871,11 @@ export default function AdminPage() {
                 )}
               </div>
               {logDeleteResult && <div className={`admin-alert ${logDeleteResult.type}`}>{logDeleteResult.message}</div>}
+              <AdminRetryAlert
+                message={adminLoadErrors.balance}
+                onRetry={() => loadGlobalLog(logQuery, logFilter, logSource)}
+                busy={logLoading}
+              />
               <div className="admin-global-log-toolbar">
                 <form
                   className="admin-search admin-search-mini"
@@ -5418,7 +5922,7 @@ export default function AdminPage() {
               </div>
               <div className="admin-tx-list">
                 {globalLog.entries.length === 0 ? (
-                  <div className="admin-tx-item"><div className="admin-tx-item-info"><small>暂无变动记录</small></div></div>
+                  <div className="admin-tx-item"><div className="admin-tx-item-info"><small>{adminLoadErrors.balance ? "余额记录未更新" : "暂无变动记录"}</small></div></div>
                 ) : globalLog.entries.map((tx) => {
                   const selected = selectedLogIds.has(tx.id);
                   return (
@@ -5566,6 +6070,12 @@ export default function AdminPage() {
           </div>
         )}
 
+        <AdminRetryAlert
+          message={orderOpenError?.message}
+          onRetry={() => orderOpenError?.order && openOrder(orderOpenError.order)}
+          busy={Boolean(orderOpeningId)}
+        />
+
         {loading ? (
           <div className="admin-orders admin-orders-skeleton">
             {[0, 1, 2, 3, 4, 5].map((i) => (
@@ -5577,7 +6087,7 @@ export default function AdminPage() {
             ))}
           </div>
         ) : orders.length === 0 ? (
-          <div className="admin-empty"><Inbox size={36} /><p>{tab === "abnormal" ? "暂无异常订单" : "暂无订单"}</p></div>
+          <div className="admin-empty"><Inbox size={36} /><p>{pollState.orders.failures > 0 ? "订单数据未更新，请点击上方重新加载" : tab === "abnormal" ? "暂无异常订单" : "暂无订单"}</p></div>
         ) : (
           <div className="admin-orders">
             {orders.map((o) => {
@@ -6190,27 +6700,45 @@ export default function AdminPage() {
                   type="button"
                   className={mailMode === "customer" ? "active" : ""}
                   onClick={() => applyMailComposerMode("customer")}
-                  disabled={mailBusy || mailRecipientBusy}
+                  disabled={mailBusy || mailRecipientBusy || mailSendUncertain}
                 >客服邮件</button>
                 <button
                   type="button"
                   className={mailMode === "marketing" ? "active" : ""}
                   onClick={() => { applyMailComposerMode("marketing"); loadMarketingMailTemplate(); }}
-                  disabled={mailBusy || mailRecipientBusy}
+                  disabled={mailBusy || mailRecipientBusy || mailSendUncertain}
                 >营销邮件</button>
               </div>
+              {mailResult && (
+                <div className={`admin-alert ${mailResult.type}`} role={mailResult.type === "error" ? "alert" : "status"}>
+                  {mailResult.message}
+                </div>
+              )}
               {mailMode === "customer" && (
+                <>
                 <div className="admin-mail-tpl-row">
                   <span className="admin-mail-tpl-label">快捷模板</span>
-                  {mailTemplates.length === 0 && <em className="admin-mail-tpl-empty">暂无 · 填好正文后点「存为模板」</em>}
+                  {mailTemplates.length === 0 && !mailTemplateError && <em className="admin-mail-tpl-empty">暂无 · 填好正文后点「存为模板」</em>}
                   {mailTemplates.map((t) => (
                     <span key={t.id} className="admin-mail-tpl-chip">
                       <button type="button" title={t.subject} onClick={() => setMailForm((f) => ({ ...f, subject: t.subject || f.subject, content: t.content }))}>{t.name}</button>
                       <button type="button" className="tpl-del" aria-label="删除模板" onClick={() => deleteMailTemplate(t.id, t.name)}>×</button>
                     </span>
                   ))}
-                  <button type="button" className="admin-mail-tpl-save" onClick={saveMailTemplate} disabled={mailTplBusy}>+ 存为模板</button>
+                  <button type="button" className="admin-mail-tpl-save" onClick={saveMailTemplate} disabled={mailTplBusy || mailTemplateSaveUncertain}>{mailTemplateSaveUncertain ? "结果待核对" : "+ 存为模板"}</button>
                 </div>
+                {mailTemplateSaveUncertain && (
+                  <div className="admin-alert error" role="alert">
+                    模板保存结果尚未确认。为避免生成重复模板，本页已暂停再次保存；请刷新后台并核对模板列表后再继续。
+                  </div>
+                )}
+                {mailTemplateError && (
+                  <div className="admin-alert error" role="alert">
+                    {mailTemplateError}
+                    <button type="button" className="admin-filter-btn" onClick={loadMailTemplates} disabled={mailTplBusy}>重试加载</button>
+                  </div>
+                )}
+                </>
               )}
               <form className="admin-mail-form" onSubmit={sendCustomerMail}>
                 <div className="admin-mail-form-grid">
@@ -6250,11 +6778,11 @@ export default function AdminPage() {
                       {mailRecipientBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Users size={12} />}
                       读取全部来源
                     </button>
-                    <button type="button" onClick={sendMarketingMailToRegisteredUsers} disabled={mailRecipientBusy || mailBusy || (mailRecipientPool.emails || []).length === 0}>
+                    <button type="button" onClick={sendMarketingMailToRegisteredUsers} disabled={mailRecipientBusy || mailBusy || mailSendUncertain || (mailRecipientPool.emails || []).length === 0}>
                       {mailBusy && !mailScheduleBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Megaphone size={12} />}
                       立即批量发送
                     </button>
-                    <button type="button" className="primary" onClick={scheduleMarketingMailForEvenings} disabled={mailRecipientBusy || mailBusy || (!mailForm.to.trim() && (mailRecipientPool.emails || []).length === 0)}>
+                    <button type="button" className="primary" onClick={scheduleMarketingMailForEvenings} disabled={mailRecipientBusy || mailBusy || mailSendUncertain || (!mailForm.to.trim() && (mailRecipientPool.emails || []).length === 0)}>
                       {mailScheduleBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Clock size={12} />}
                       傍晚排期
                     </button>
@@ -6315,9 +6843,9 @@ export default function AdminPage() {
                     已处理 {mailBatchProgress.batch}/{mailBatchProgress.batches} 批 · 成功 {mailBatchProgress.sent}/{mailBatchProgress.total} · 失败 {mailBatchProgress.failed}
                   </div>
                 )}
-                <button type="submit" disabled={mailBusy}>
+                <button type="submit" disabled={mailBusy || mailSendUncertain}>
                   {mailBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Mail size={12} />}
-                  {mailBusy ? "发送中" : (mailMode === "marketing" ? "发送营销邮件" : "发送邮件")}
+                  {mailBusy ? "发送中" : mailSendUncertain ? "结果待核对" : (mailMode === "marketing" ? "发送营销邮件" : "发送邮件")}
                 </button>
               </form>
             </div>
@@ -6451,6 +6979,11 @@ export default function AdminPage() {
             <div className="admin-search-results">
               {gQuery.trim().length < 2 ? (
                 <div className="admin-search-hint">输入至少 2 个字符开始搜索 · Esc 关闭</div>
+              ) : gError ? (
+                <div className="admin-search-hint" role="alert">
+                  {gError}
+                  <button type="button" className="admin-filter-btn" onClick={() => setGRetryToken((value) => value + 1)}>重试</button>
+                </div>
               ) : (gResults.orders.length + gResults.users.length + gResults.codes.length === 0 && !gLoading) ? (
                 <div className="admin-search-hint">无匹配结果</div>
               ) : (
@@ -6498,21 +7031,21 @@ export default function AdminPage() {
         </div>
       )}
 
-      {userModalOpen && (userInfo || userLoading) && (
+      {userModalOpen && (userInfo || userLoading || userError) && (
         <div className="admin-modal-mask" onClick={closeUserModal}>
           <div className="admin-modal admin-compact-modal" onClick={(e) => e.stopPropagation()}>
             <div className="admin-modal-head">
               <div>
                 <div className="admin-modal-id">{userInfo?.user?.username || userModalTarget || "用户详情"}</div>
-                <div className="admin-modal-status status-received">{userInfo ? `余额 ¥${userInfo.user.balance.toFixed(2)}` : "加载中"}</div>
+                <div className="admin-modal-status status-received">{userInfo ? `余额 ¥${userInfo.user.balance.toFixed(2)}` : userLoading ? "加载中" : "加载失败"}</div>
               </div>
               <button type="button" className="admin-modal-close" onClick={closeUserModal} disabled={balBusy}><X size={16} /></button>
             </div>
             <div className="admin-modal-body">
+              {userError && <AdminRetryAlert message={userError} onRetry={() => loadUser(userModalTarget, { preserveBalanceResult: true })} busy={userLoading} />}
               {!userInfo ? (
                 <div className="admin-user-modal-loading">
-                  <LoaderCircle size={16} className="spin-icon" />
-                  正在载入用户余额与明细
+                  {userLoading ? <><LoaderCircle size={16} className="spin-icon" />正在载入用户余额与明细</> : "用户资料尚未成功加载，请重试。"}
                 </div>
               ) : (
               <>
@@ -6802,10 +7335,13 @@ export default function AdminPage() {
                 />
               </label>
               {sendCodeResult && <div className={`admin-alert ${sendCodeResult.type}`}>{sendCodeResult.message}</div>}
+              {sendCodeRetryLocked && !sendCodeResult && (
+                <div className="admin-alert error" role="alert">发信结果尚未确认。请刷新后台并核对发信记录，当前相同兑换码与邮箱已暂停重发。</div>
+              )}
               <div className="admin-send-code-actions">
                 <button type="button" onClick={() => setSendCodeModal(null)} disabled={sendCodeBusy}>取消</button>
-                <button type="submit" className="primary" disabled={sendCodeBusy}>
-                  {sendCodeBusy ? <><LoaderCircle size={13} className="spin-icon" />发送中</> : <><Mail size={13} />发送</>}
+                <button type="submit" className="primary" disabled={sendCodeBusy || sendCodeRetryLocked}>
+                  {sendCodeBusy ? <><LoaderCircle size={13} className="spin-icon" />发送中</> : sendCodeRetryLocked ? <>结果待核对</> : <><Mail size={13} />发送</>}
                 </button>
               </div>
             </form>
@@ -6831,6 +7367,7 @@ export default function AdminPage() {
               {confirmUserAction.action === "ban" && "封禁后用户无法登录现有账户。可随时解除"}
               {confirmUserAction.action === "unban" && "解除后用户可正常登录使用账户"}
             </p>
+            {userActionError && <div className="admin-alert error" role="alert">{userActionError}</div>}
             <div className="admin-confirm-actions">
               <button type="button" onClick={() => setConfirmUserAction(null)} disabled={userActionBusy}>取消</button>
               <button
