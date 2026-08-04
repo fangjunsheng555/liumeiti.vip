@@ -12,12 +12,14 @@ import { effectiveQuoteStatus } from "../../_quote-expiry.js";
 
 function beijingDateKey(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
-  const ts = Number.isNaN(date.getTime()) ? Date.now() : date.getTime();
+  const ts = date.getTime();
+  if (Number.isNaN(ts)) return "";
   return new Date(ts + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 function orderBeijingDateKey(order) {
-  if (order.createdAt) return beijingDateKey(order.createdAt);
+  const createdAtKey = order.createdAt ? beijingDateKey(order.createdAt) : "";
+  if (createdAtKey) return createdAtKey;
   const match = String(order.createdAtBeijing || "").match(/\d{4}-\d{2}-\d{2}/);
   return match ? match[0] : "";
 }

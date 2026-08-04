@@ -14,6 +14,8 @@ const sortedSets = new Map();
 const sets = new Map();
 const commandNames = [];
 const pipelineSizes = [];
+let failOrderIndexReadOnce = false;
+let forceOverviewStaleCount = 0;
 const originalFetch = globalThis.fetch;
 
 function hash(key) {
@@ -73,6 +75,35 @@ function execute(command) {
         lists.set(listKey, row);
       }
       return JSON.stringify({ ok: true, added });
+    }
+    if (script.includes("incomplete_stage") && script.includes("currentRevision")) {
+      const [liveHashKey, liveSummaryKey, stageHashKey, stageSummaryKey, readyKey, revisionKey, countKey] = keys;
+      let currentRevision = "__lm_missing_revision__";
+      if (values.has(revisionKey)) currentRevision = values.get(revisionKey);
+      if (forceOverviewStaleCount > 0) {
+        forceOverviewStaleCount -= 1;
+        currentRevision = String(Number(currentRevision === "__lm_missing_revision__" ? 0 : currentRevision) + 1);
+        values.set(revisionKey, currentRevision);
+      }
+      if (currentRevision !== argv[0]) return JSON.stringify({ ok: false, error: "stale_revision" });
+      if (!hashes.has(stageHashKey) || !sortedSets.has(stageSummaryKey)) {
+        return JSON.stringify({ ok: false, error: "invalid_stage" });
+      }
+      const expectedCount = Number(argv[1]);
+      const stagedHash = new Map(hashes.get(stageHashKey));
+      const stagedSummary = new Map(sortedSets.get(stageSummaryKey));
+      if (stagedHash.size - 1 !== expectedCount || stagedSummary.size - 1 !== expectedCount) {
+        return JSON.stringify({ ok: false, error: "incomplete_stage" });
+      }
+      stagedHash.delete(argv[2]);
+      stagedSummary.delete(argv[2]);
+      hashes.set(liveHashKey, stagedHash);
+      sortedSets.set(liveSummaryKey, stagedSummary);
+      hashes.delete(stageHashKey);
+      sortedSets.delete(stageSummaryKey);
+      values.set(readyKey, "1");
+      values.set(countKey, String(expectedCount));
+      return JSON.stringify({ ok: true });
     }
     const key = args[2];
     const expected = args[3];
@@ -165,7 +196,14 @@ globalThis.fetch = async (input, options = {}) => {
     const commands = JSON.parse(options.body || "[]");
     pipelineSizes.push(commands.length);
     if (commands.length > 100) return Response.json({ error: "pipeline_too_large" }, { status: 413 });
-    return Response.json(commands.map((command) => ({ result: execute(command) })));
+    return Response.json(commands.map((command) => {
+      if (failOrderIndexReadOnce && String(command[0]).toUpperCase() === "LRANGE"
+        && command[1] === "liumeiti:orders:index") {
+        failOrderIndexReadOnce = false;
+        return { error: "temporary_order_index_failure" };
+      }
+      return { result: execute(command) };
+    }));
   }
   const command = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
   return Response.json({ result: execute(command) });
@@ -337,6 +375,62 @@ test("admin order list keeps every order when the store limits pipeline batches"
     delivery.order.staffNotes.match(/核查您的订单来自于第三方平台/g)?.length,
     1,
   );
+
+  const overviewKey = "liumeiti:orders:overview";
+  const summaryKey = "liumeiti:orders:summary-created";
+  const readyKey = "liumeiti:orders:overview:ready:v8";
+  const countKey = "liumeiti:orders:overview:count:v8";
+  const retainedEntry = Array.from(hash(overviewKey).entries())[0];
+  hashes.set(overviewKey, new Map([retainedEntry]));
+  sortedSets.set(summaryKey, new Map([[retainedEntry[0], 1]]));
+  values.set(readyKey, "1");
+  values.set(countKey, "155");
+  const repairedPartialOverview = await utils.getOrderOverviewRows();
+  assert.equal(repairedPartialOverview.length, 155, "a one-row ready shadow must rebuild from authoritative orders");
+  assert.equal(hash(overviewKey).size, 155);
+  assert.equal(sortedSet(summaryKey).size, 155);
+  assert.equal(values.get(countKey), "155");
+
+  hash(overviewKey).set("LMSUMMARY154", "{malformed-shadow-json");
+  const repairedMalformedOverview = await utils.getOrderOverviewRows();
+  assert.equal(repairedMalformedOverview.length, 155, "malformed shadow JSON must never be silently filtered");
+  assert.doesNotMatch(hash(overviewKey).get("LMSUMMARY154"), /malformed-shadow/);
+
+  values.set(countKey, "154");
+  const liveHashBeforeOutage = new Map(hash(overviewKey));
+  const liveSummaryBeforeOutage = new Map(sortedSet(summaryKey));
+  failOrderIndexReadOnce = true;
+  await assert.rejects(utils.getOrderOverviewRows(), /order_store_unavailable/);
+  assert.deepEqual(hash(overviewKey), liveHashBeforeOutage, "a source read outage must not overwrite the live shadow");
+  assert.deepEqual(sortedSet(summaryKey), liveSummaryBeforeOutage);
+
+  values.set(countKey, "154");
+  forceOverviewStaleCount = 3;
+  await assert.rejects(utils.getOrderOverviewRows(), /order_overview_rebuild_busy/);
+  assert.deepEqual(hash(overviewKey), liveHashBeforeOutage, "an unfenced busy snapshot must not replace the live shadow");
+  assert.deepEqual(sortedSet(summaryKey), liveSummaryBeforeOutage);
+
+  const legacyOnlyId = "LMLEGACYONLY001";
+  const legacyOnlyOrder = {
+    orderId: legacyOnlyId,
+    status: "completed",
+    createdAt: "2026-08-05T00:00:00.000Z",
+    createdAtBeijing: "2026-08-05 08:00:00 Beijing Time (UTC+8)",
+    paymentMethod: "alipay",
+    paidCurrency: "CNY",
+    finalAmount: 66,
+    email: "legacy-only@example.com",
+  };
+  lists.set("liumeiti:orders", [JSON.stringify(legacyOnlyOrder)]);
+  lists.get("liumeiti:orders:index").push(legacyOnlyId);
+  const strictHistorical = await utils.getAllOrdersStrict();
+  assert.ok(strictHistorical.some((order) => order.orderId === legacyOnlyId), "legacy-only bodies remain valid historical data");
+  values.delete(readyKey);
+  values.delete(countKey);
+  const repairedWithLegacy = await utils.getOrderOverviewRows();
+  assert.equal(repairedWithLegacy.length, 156);
+  assert.ok(hash(overviewKey).has(legacyOnlyId));
+  assert.equal(values.get(countKey), "156");
 
   const recipientResponse = await ordersRoute.GET(adminRequest("/api/admin/orders?mode=recipient-emails"));
   const recipients = await recipientResponse.json();

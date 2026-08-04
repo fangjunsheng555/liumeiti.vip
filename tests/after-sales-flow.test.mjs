@@ -12,6 +12,7 @@ delete process.env.EMAIL_PROVIDER;
 
 const values = new Map();
 const lists = new Map();
+const hashes = new Map();
 const sortedSets = new Map();
 const sets = new Map();
 const originalFetch = globalThis.fetch;
@@ -28,9 +29,15 @@ function sortedSet(key) {
   return sortedSets.get(key);
 }
 
+function hash(key) {
+  if (!hashes.has(key)) hashes.set(key, new Map());
+  return hashes.get(key);
+}
+
 function mockKeyType(key) {
   if (values.has(key)) return typeof values.get(key) === "string" ? "string" : "other";
   if (lists.has(key)) return "list";
+  if (hashes.has(key)) return "hash";
   if (sortedSets.has(key)) return "zset";
   if (sets.has(key)) return "set";
   return "none";
@@ -39,6 +46,7 @@ function mockKeyType(key) {
 function deleteMockKey(key) {
   values.delete(key);
   lists.delete(key);
+  hashes.delete(key);
   sortedSets.delete(key);
   sets.delete(key);
 }
@@ -87,6 +95,8 @@ function execute(command) {
     args.forEach((key) => {
       if (values.delete(key)) removed += 1;
       if (lists.delete(key)) removed += 1;
+      if (hashes.delete(key)) removed += 1;
+      if (sortedSets.delete(key)) removed += 1;
       if (sets.delete(key)) removed += 1;
     });
     return removed;
@@ -98,7 +108,7 @@ function execute(command) {
   }
   if (name === "EXPIRE") return 1;
   if (name === "EVAL") {
-    const cas = executeOrderCasEval(command, { values, lists, sortedSets, sets });
+    const cas = executeOrderCasEval(command, { values, lists, hashes, sortedSets, sets });
     if (cas.handled) return cas.result;
     const durable = executeDurableOperationEval(command, { values, sortedSet });
     if (durable.handled) return durable.result;
@@ -298,6 +308,28 @@ function execute(command) {
       }
       return JSON.stringify({ ok: true, added });
     }
+    if (script.includes("incomplete_stage") && script.includes("currentRevision")) {
+      const [liveHashKey, liveSummaryKey, stageHashKey, stageSummaryKey, readyKey, revisionKey, countKey] = keys;
+      let currentRevision = "__lm_missing_revision__";
+      if (values.has(revisionKey)) currentRevision = values.get(revisionKey);
+      if (currentRevision !== argv[0]) return JSON.stringify({ ok: false, error: "stale_revision" });
+      if (!hashes.has(stageHashKey) || !sortedSets.has(stageSummaryKey)) return JSON.stringify({ ok: false, error: "invalid_stage" });
+      const expectedCount = Number(argv[1]);
+      const stagedHash = new Map(hashes.get(stageHashKey));
+      const stagedSummary = new Map(sortedSets.get(stageSummaryKey));
+      if (stagedHash.size - 1 !== expectedCount || stagedSummary.size - 1 !== expectedCount) {
+        return JSON.stringify({ ok: false, error: "incomplete_stage" });
+      }
+      stagedHash.delete(argv[2]);
+      stagedSummary.delete(argv[2]);
+      hashes.set(liveHashKey, stagedHash);
+      sortedSets.set(liveSummaryKey, stagedSummary);
+      hashes.delete(stageHashKey);
+      sortedSets.delete(stageSummaryKey);
+      values.set(readyKey, "1");
+      values.set(countKey, String(expectedCount));
+      return JSON.stringify({ ok: true });
+    }
     const key = args[2];
     const expected = args[3];
     if (values.get(key) !== expected) return 0;
@@ -367,7 +399,19 @@ function execute(command) {
     lists.set(args[0], list);
     return "OK";
   }
-  if (name === "HSET" || name === "HDEL") return 1;
+  if (name === "HSET") {
+    hash(args[0]).set(args[1], args[2]);
+    return 1;
+  }
+  if (name === "HGET") return hash(args[0]).get(args[1]) ?? null;
+  if (name === "HVALS") return Array.from(hash(args[0]).values());
+  if (name === "HDEL") return hash(args[0]).delete(args[1]) ? 1 : 0;
+  if (name === "SCAN") {
+    const matchIndex = args.findIndex((value) => String(value).toUpperCase() === "MATCH");
+    const pattern = matchIndex >= 0 ? String(args[matchIndex + 1] || "*") : "*";
+    const prefix = pattern.endsWith("*") ? pattern.slice(0, -1) : pattern;
+    return ["0", Array.from(values.keys()).filter((key) => key.startsWith(prefix))];
+  }
   if (name === "SADD") {
     if (!sets.has(args[0])) sets.set(args[0], new Set());
     let added = 0;

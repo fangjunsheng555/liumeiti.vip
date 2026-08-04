@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { axisScale } from "./chart-axis-scale.js";
 
 function numberValue(value) {
   const parsed = Number(value);
@@ -34,26 +35,6 @@ function formatAxis(value, money) {
   else if (abs >= 1000) output = `${(amount / 1000).toFixed(abs >= 10000 ? 0 : 1)}k`;
   else output = Number.isInteger(amount) ? String(amount) : amount.toFixed(1);
   return money ? `¥${output}` : output;
-}
-
-function niceStep(rawStep) {
-  if (!Number.isFinite(rawStep) || rawStep <= 0) return 1;
-  const exponent = Math.floor(Math.log10(rawStep));
-  const power = 10 ** exponent;
-  const fraction = rawStep / power;
-  const niceFraction = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 2.5 ? 2.5 : fraction <= 5 ? 5 : 10;
-  return niceFraction * power;
-}
-
-function axisScale(maxValue, tickCount = 4, integer = false) {
-  const max = Math.max(0, numberValue(maxValue));
-  const calculatedStep = niceStep(max / tickCount);
-  const step = integer ? Math.max(1, Math.ceil(calculatedStep)) : Math.max(max <= tickCount ? 1 : 0, calculatedStep);
-  const axisMax = Math.max(tickCount, step * tickCount);
-  return {
-    max: axisMax,
-    ticks: Array.from({ length: tickCount + 1 }, (_, index) => step * index),
-  };
 }
 
 function sampleIndices(length, count) {

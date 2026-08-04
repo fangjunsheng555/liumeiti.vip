@@ -5,8 +5,19 @@ import { validateMarketingCampaignDates } from "./marketing-campaign-form.js";
 import { clientFetch as fetch } from "../lib/client-fetch";
 import { beginLatestRequest, invalidateLatestRequest, isLatestRequest } from "../lib/latest-request";
 
-const card = { border: "1px solid #dce5e3", borderRadius: 16, background: "#fff", padding: 18 };
-const input = { width: "100%", boxSizing: "border-box", border: "1px solid #ccd9d6", borderRadius: 9, padding: "9px 11px", background: "#fff", color: "#183e3a" };
+const card = { border: "1px solid #dce5e3", borderRadius: 14, background: "#fff", padding: 12 };
+const input = { width: "100%", boxSizing: "border-box", border: "1px solid #ccd9d6", borderRadius: 8, padding: "7px 10px", background: "#fff", color: "#183e3a" };
+
+const CAMPAIGN_STATUS_LABELS = {
+  draft: "草稿", scheduled: "已排期", sending: "发送中", paused: "已暂停",
+  completed: "已完成", cancelled: "已取消", failed: "失败",
+};
+
+function formatCampaignTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
+}
 
 function campaignId() {
   return `MKT${new Date().toISOString().slice(0, 10).replaceAll("-", "")}${Date.now().toString(36).toUpperCase()}`;
@@ -156,48 +167,49 @@ export default function MarketingCampaignPanel() {
       : current);
   }
 
-  return <section style={{ display: "grid", gap: 16 }}>
-    <div style={card}>
+  return <section className="marketing-campaign-panel">
+    <div className="marketing-campaign-card marketing-campaign-basics" style={card}>
       <h2 style={{ margin: "0 0 6px", color: "#173f3a" }}>营销活动</h2>
-      <p style={{ margin: "0 0 18px", color: "#6d7f7c", fontSize: 13 }}>服务端分群、发送前抑制检查、RFC 8058 退订和订单收入归因使用同一活动 ID。</p>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 12 }}>
+      <p className="marketing-campaign-description">服务端分群、发送前抑制检查、RFC 8058 退订和订单收入归因使用同一活动 ID。</p>
+      <div className="marketing-campaign-basics-grid">
         <label>活动 ID<input style={input} value={form.campaignId} onChange={set("campaignId")} /></label>
         <label>活动名称<input style={input} value={form.name} onChange={set("name")} placeholder="八月会员优惠" /></label>
         <label>计划发送<input style={input} type="datetime-local" value={form.scheduledAt} onChange={set("scheduledAt")} /></label>
         <label>最多收件人<input style={input} type="number" min="1" max="500" value={form.maxRecipients} onChange={set("maxRecipients")} /></label>
       </div>
-      <p role="note" style={{ margin: "10px 0 0", padding: "9px 11px", border: "1px solid #dbe8e4", borderRadius: 9, background: "#f3f8f6", color: "#536c67", fontSize: 12, lineHeight: 1.6 }}>
+      <p role="note" className="marketing-campaign-schedule-note">
         Hobby 调度说明：活动会在计划时间后的下一次小时巡检发送，最多约 1 小时；“计划发送”不是精确到分钟的承诺。
       </p>
-      <label style={{ display: "block", marginTop: 12 }}>邮件主题<input style={input} value={form.subject} onChange={set("subject")} /></label>
+      <label className="marketing-campaign-subject">邮件主题<input style={input} value={form.subject} onChange={set("subject")} /></label>
     </div>
-    <div style={{ ...card, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 18 }}>
-      <div><h3 style={{ marginTop: 0 }}>优惠内容（v7）</h3>{[["badge","角标"],["headline","主标题"],["currentPrice","优惠价文案"],["originalPrice","原价文案"],["savingText","节省文案"],["couponCode","优惠码"],["endsAt","截止时间"],["ctaPath","按钮路径"]].map(([key,label]) => <label key={key} style={{ display: "block", margin: "9px 0", fontSize: 13 }}>{label}<input style={input} type={key === "endsAt" ? "datetime-local" : "text"} value={form[key]} onChange={set(key)} /></label>)}</div>
-      <div><h3 style={{ marginTop: 0 }}>服务端分群</h3>
-        <label style={{ display: "block", margin: "9px 0", fontSize: 13 }}>服务 key（逗号分隔）<input style={input} value={form.serviceKeys} onChange={set("serviceKeys")} placeholder="spotify,ai,rocket" /></label>
-        <label style={{ display: "block", margin: "9px 0", fontSize: 13 }}>最近购买（天内）<input style={input} type="number" value={form.lastPurchaseWithinDays} onChange={set("lastPurchaseWithinDays")} /></label>
-        <label style={{ display: "block", margin: "9px 0", fontSize: 13 }}>最低累计消费<input style={input} type="number" value={form.minSpend} onChange={set("minSpend")} /></label>
-        <label style={{ display: "block", margin: "9px 0", fontSize: 13 }}>到期（天内）<input style={input} type="number" value={form.expiryWithinDays} onChange={set("expiryWithinDays")} /></label>
-        <div style={{ display: "flex", gap: 12, marginTop: 13 }}>{["zh","en"].map((locale) => <label key={locale}><input type="checkbox" checked={form.locales.includes(locale)} onChange={(event) => setForm((current) => ({ ...current, locales: event.target.checked ? [...current.locales, locale] : current.locales.filter((item) => item !== locale) }))} /> {locale === "zh" ? "中文" : "English"}</label>)}</div>
-        {audience ? <div style={{ marginTop: 15, padding: 12, background: "#f2f8f6", borderRadius: 10, fontSize: 13 }}>匹配 {audience.snapshot.matchedCount} · 可发送 {audience.snapshot.eligibleCount} · 已抑制 {audience.snapshot.suppressedCount} · 本次选择 {audience.snapshot.selectedCount}</div> : null}
+    <div className="marketing-campaign-card marketing-campaign-editor" style={card}>
+      <div className="marketing-campaign-offer"><h3>优惠内容（v7）</h3><div className="marketing-campaign-field-grid">{[["badge","角标"],["headline","主标题"],["currentPrice","优惠价文案"],["originalPrice","原价文案"],["savingText","节省文案"],["couponCode","优惠码"],["endsAt","截止时间"],["ctaPath","按钮路径"]].map(([key,label]) => <label key={key} className={key === "headline" ? "wide" : ""}>{label}<input style={input} type={key === "endsAt" ? "datetime-local" : "text"} value={form[key]} onChange={set(key)} /></label>)}</div></div>
+      <div className="marketing-campaign-segment"><h3>服务端分群</h3><div className="marketing-campaign-field-grid">
+        <label className="wide">服务 key（逗号分隔）<input style={input} value={form.serviceKeys} onChange={set("serviceKeys")} placeholder="spotify,ai,rocket" /></label>
+        <label>最近购买（天内）<input style={input} type="number" value={form.lastPurchaseWithinDays} onChange={set("lastPurchaseWithinDays")} /></label>
+        <label>最低累计消费<input style={input} type="number" value={form.minSpend} onChange={set("minSpend")} /></label>
+        <label>到期（天内）<input style={input} type="number" value={form.expiryWithinDays} onChange={set("expiryWithinDays")} /></label>
+        <div className="marketing-campaign-locales">{["zh","en"].map((locale) => <label key={locale}><input type="checkbox" checked={form.locales.includes(locale)} onChange={(event) => setForm((current) => ({ ...current, locales: event.target.checked ? [...current.locales, locale] : current.locales.filter((item) => item !== locale) }))} /> {locale === "zh" ? "中文" : "English"}</label>)}</div>
+        {audience ? <div className="marketing-campaign-audience wide">匹配 {audience.snapshot.matchedCount} · 可发送 {audience.snapshot.eligibleCount} · 已抑制 {audience.snapshot.suppressedCount} · 本次选择 {audience.snapshot.selectedCount}</div> : null}
+      </div>
       </div>
     </div>
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+    <div className="marketing-campaign-actions">
       <button type="button" onClick={previewAudience} disabled={Boolean(state.busy)} style={{ ...input, width: "auto", cursor: "pointer" }}>预览分群</button>
       <button type="button" onClick={previewMail} disabled={Boolean(state.busy)} style={{ ...input, width: "auto", cursor: "pointer" }}>安全预览邮件</button>
-      <button type="button" onClick={schedule} disabled={Boolean(state.busy) || !dateValidation.ok} style={{ border: 0, borderRadius: 9, padding: "10px 16px", background: "#08786c", color: "white", fontWeight: 750, cursor: "pointer", opacity: state.busy || !dateValidation.ok ? 0.55 : 1 }}>确认并排期</button>
+      <button type="button" onClick={schedule} disabled={Boolean(state.busy) || !dateValidation.ok} style={{ border: 0, borderRadius: 8, padding: "8px 14px", background: "#08786c", color: "white", fontWeight: 750, cursor: "pointer", opacity: state.busy || !dateValidation.ok ? 0.55 : 1 }}>确认并排期</button>
       {state.error || !dateValidation.ok ? <span role="alert" style={{ color: "#b42318", alignSelf: "center" }}>{state.error || dateValidation.error}</span> : state.message ? <span role="status" style={{ color: "#08786c", alignSelf: "center" }}>{state.message}</span> : null}
     </div>
-    {preview ? <div style={card}><h3 style={{ marginTop: 0 }}>沙箱预览</h3><iframe title="营销邮件预览" sandbox="" srcDoc={preview} style={{ width: "100%", minHeight: 720, border: "1px solid #d9e3e0", borderRadius: 10, background: "white" }} /></div> : null}
-    <div style={card}>
+    {preview ? <details className="marketing-campaign-card marketing-campaign-preview" style={card} open><summary>沙箱预览</summary><iframe title="营销邮件预览" sandbox="" srcDoc={preview} /></details> : null}
+    <div className="marketing-campaign-card marketing-campaign-list" style={card}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 10 }}><h3 style={{ margin: 0 }}>最近活动</h3><button type="button" onClick={loadCampaigns} disabled={Boolean(state.busy) || campaignsLoading} style={{ ...input, width: "auto", cursor: "pointer" }}>{campaignsLoading ? "加载中" : "刷新列表"}</button></div>
       {campaignsError ? <div role="alert" style={{ color: "#b42318", marginBottom: 10, fontSize: 13 }}>活动列表未更新：{campaignsError}。请点击“刷新列表”重试。</div> : null}
-      <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><thead><tr>{["活动","状态","计划时间","入队","送达","点击","收入","转化率","点击率","操作"].map((label) => <th key={label} style={{ textAlign: "left", padding: 9, borderBottom: "1px solid #dfe7e5", whiteSpace: "nowrap" }}>{label}</th>)}</tr></thead><tbody>{campaignsLoading && campaigns.length === 0 ? <tr><td colSpan={10} style={{ padding: "22px 9px", color: "#82908e", textAlign: "center" }}>活动列表加载中…</td></tr> : campaignsError && campaigns.length === 0 ? <tr><td colSpan={10} style={{ padding: "22px 9px", color: "#b42318", textAlign: "center" }}>活动列表加载失败，当前空白不代表没有活动</td></tr> : campaigns.length === 0 ? <tr><td colSpan={10} style={{ padding: "22px 9px", color: "#82908e", textAlign: "center" }}>暂无营销活动</td></tr> : campaigns.map((campaign) => <tr key={campaign.id} style={{ borderBottom: "1px solid #edf2f1" }}>
-        <td style={{ padding: 9, minWidth: 150 }}><strong>{campaign.name || campaign.id}</strong><div style={{ color: "#82908e", fontSize: 11, marginTop: 3 }}>{campaign.id}</div></td>
-        <td style={{ padding: 9 }}>{campaign.status}</td><td style={{ padding: 9, whiteSpace: "nowrap" }}>{campaign.scheduledAt ? new Date(campaign.scheduledAt).toLocaleString() : "-"}</td>
-        <td style={{ padding: 9 }}>{campaign.counters?.queued || 0}</td><td style={{ padding: 9 }}>{campaign.counters?.delivered || 0}</td><td style={{ padding: 9 }}>{campaign.counters?.uniqueClicks || 0}</td>
-        <td style={{ padding: 9 }}>¥{Number(campaign.attribution?.revenue || 0).toFixed(2)}</td><td style={{ padding: 9 }}>{campaign.attribution?.conversionRate || 0}%</td><td style={{ padding: 9 }}>{campaign.attribution?.clickThroughRate || 0}%</td>
-        <td style={{ padding: 9, minWidth: 220 }}><div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+      <div className="marketing-campaign-table-scroll"><table><thead><tr>{["活动","状态","计划时间","入队","送达","点击","收入","转化率","点击率","操作"].map((label) => <th key={label}>{label}</th>)}</tr></thead><tbody>{campaignsLoading && campaigns.length === 0 ? <tr><td colSpan={10} className="marketing-campaign-empty">活动列表加载中…</td></tr> : campaignsError && campaigns.length === 0 ? <tr><td colSpan={10} className="marketing-campaign-empty error">活动列表加载失败，当前空白不代表没有活动</td></tr> : campaigns.length === 0 ? <tr><td colSpan={10} className="marketing-campaign-empty">暂无营销活动</td></tr> : campaigns.map((campaign) => <tr key={campaign.id}>
+        <td className="marketing-campaign-name"><strong>{campaign.name || campaign.id}</strong><div>{campaign.id}</div></td>
+        <td>{CAMPAIGN_STATUS_LABELS[campaign.status] || campaign.status || "-"}</td><td className="marketing-campaign-time">{formatCampaignTime(campaign.scheduledAt)}</td>
+        <td>{campaign.counters?.queued || 0}</td><td>{campaign.counters?.delivered || 0}</td><td>{campaign.counters?.uniqueClicks || 0}</td>
+        <td>¥{Number(campaign.attribution?.revenue || 0).toFixed(2)}</td><td>{campaign.attribution?.conversionRate || 0}%</td><td>{campaign.attribution?.clickThroughRate || 0}%</td>
+        <td className="marketing-campaign-row-actions"><div>
           <button type="button" onClick={() => viewStats(campaign)} disabled={Boolean(state.busy) || campaignsLoading} style={{ ...input, width: "auto", padding: "6px 8px", cursor: "pointer" }}>详情</button>
           {["scheduled", "sending"].includes(campaign.status) ? <button type="button" onClick={() => manageCampaign(campaign, "pause")} disabled={Boolean(state.busy) || campaignsLoading} style={{ ...input, width: "auto", padding: "6px 8px", cursor: "pointer" }}>暂停</button> : null}
           {campaign.status === "paused" ? <button type="button" onClick={() => manageCampaign(campaign, "resume")} disabled={Boolean(state.busy) || campaignsLoading} style={{ ...input, width: "auto", padding: "6px 8px", cursor: "pointer" }}>恢复</button> : null}
@@ -205,13 +217,13 @@ export default function MarketingCampaignPanel() {
         </div></td>
       </tr>)}</tbody></table></div>
     </div>
-    {selectedStats ? <div style={card}>
+    {selectedStats ? <div className="marketing-campaign-card marketing-campaign-stats" style={card}>
       <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 12, alignItems: "center" }}><div style={{ minWidth: 0, flex: "1 1 220px" }}><h3 style={{ margin: 0, overflowWrap: "anywhere" }}>{selectedStats.campaign.name || selectedStats.campaign.id} · 活动统计</h3><p style={{ margin: "5px 0 0", color: "#748481", fontSize: 12 }}>归因模型：最近一次营销邮件点击，30 天</p></div><div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}><button type="button" onClick={() => viewStats(selectedStats.campaign)} disabled={Boolean(state.busy)} style={{ ...input, width: "auto" }}>刷新统计</button><button type="button" onClick={closeStats} style={{ ...input, width: "auto" }}>关闭</button></div></div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(125px,1fr))", gap: 10, marginTop: 16 }}>{[
+      <div className="marketing-campaign-stat-grid">{[
         ["入队", selectedStats.counters?.queued || 0], ["已提交", selectedStats.counters?.submitted || 0], ["已送达", selectedStats.counters?.delivered || 0], ["唯一点击", selectedStats.counters?.uniqueClicks || 0],
         ["投诉", selectedStats.counters?.complained || 0], ["退订", selectedStats.counters?.unsubscribed || 0], ["成交订单", selectedStats.attribution?.saleCount || 0], ["活动收入", `¥${Number(selectedStats.attribution?.revenue || 0).toFixed(2)}`],
         ["点击转化率", `${selectedStats.attribution?.conversionRate || 0}%`], ["邮件点击率", `${selectedStats.attribution?.clickThroughRate || 0}%`],
-      ].map(([label, value]) => <div key={label} style={{ padding: 12, borderRadius: 10, background: "#f2f8f6" }}><div style={{ color: "#71817e", fontSize: 12 }}>{label}</div><strong style={{ display: "block", color: "#173f3a", fontSize: 19, marginTop: 5 }}>{value}</strong></div>)}</div>
+      ].map(([label, value]) => <div key={label}><div>{label}</div><strong>{value}</strong></div>)}</div>
       {selectedStats.attribution?.orderIds?.length ? <p style={{ marginBottom: 0, color: "#667875", fontSize: 12 }}>归因订单：{selectedStats.attribution.orderIds.join("、")}</p> : null}
     </div> : null}
   </section>;

@@ -48,6 +48,24 @@ test("campaign UI states the Hobby hourly dispatch precision honestly", async ()
   assert.match(source, /role="note"/);
 });
 
+test("campaign editor stays compact and responsive without changing its submission fields", async () => {
+  const source = await readFile(new URL("../app/admin/MarketingCampaignPanel.jsx", import.meta.url), "utf8");
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(source, /className="marketing-campaign-basics-grid"/);
+  assert.match(source, /className="marketing-campaign-field-grid"/);
+  assert.match(source, /className="marketing-campaign-card marketing-campaign-preview"/);
+  assert.match(source, /CAMPAIGN_STATUS_LABELS\[campaign\.status\]/);
+  assert.match(source, /timeZone: "Asia\/Shanghai"/);
+  assert.doesNotMatch(source, /minHeight:\s*720/);
+  assert.match(css, /\.marketing-campaign-basics-grid\s*\{[\s\S]*?grid-template-columns:\s*repeat\(4,/);
+  assert.match(css, /\.marketing-campaign-field-grid\s*\{[\s\S]*?repeat\(2,/);
+  assert.match(css, /@media \(max-width: 480px\)[\s\S]*?\.marketing-campaign-field-grid\s*\{\s*grid-template-columns:\s*1fr/);
+  assert.match(css, /\.marketing-campaign-preview iframe\s*\{[\s\S]*?height:\s*460px/);
+  assert.match(source, /campaignId: form\.campaignId, name: form\.name \|\| form\.subject, subject: form\.subject/);
+  assert.match(source, /scheduledAt: dateValidation\.scheduledIso/);
+  assert.match(source, /segment, maxRecipients: Number\(form\.maxRecipients \|\| 500\), offer/);
+});
+
 test("server rejects offers ending before schedule and cron exposes every dispatch failure as 503", async () => {
   const campaignRoute = await readFile(new URL("../app/api/admin/mail/campaign/route.js", import.meta.url), "utf8");
   const cronRoute = await readFile(new URL("../app/api/cron/marketing-campaign/route.js", import.meta.url), "utf8");

@@ -37,9 +37,10 @@ export const QUOTE_EXPIRY_ORDER_INDEX_KEY = ORDERS_KEY + ":quote-expiry";
 export const ORDER_OVERVIEW_HASH_KEY = ORDERS_KEY + ":overview";
 export const ORDER_SUMMARY_INDEX_KEY = ORDERS_KEY + ":summary-created";
 export const ORDER_LIST_REVISION_KEY = ORDERS_KEY + ":list-revision";
-// v7 rebuilds the summary index after reconciling standalone order records.
-// Historical order records remain untouched; only derived indexes are replaced.
-const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v7";
+// v8 invalidates the partial v7 shadow. Only derived indexes are replaced;
+// authoritative order records remain byte-for-byte untouched.
+const ORDER_OVERVIEW_READY_KEY = ORDER_OVERVIEW_HASH_KEY + ":ready:v8";
+const ORDER_OVERVIEW_COUNT_KEY = ORDER_OVERVIEW_HASH_KEY + ":count:v8";
 const ORDER_INDEX_MIGRATION_READY_KEY = ORDER_INDEX_KEY + ":legacy-ready";
 const ORDER_INDEX_MIGRATION_LOCK_KEY = ORDER_INDEX_KEY + ":legacy-lock";
 const ORDER_INDEX_MEMBERSHIP_READY_KEY = ORDER_INDEX_MEMBERSHIP_KEY + ":ready:v1";
@@ -771,7 +772,25 @@ export async function getAllOrdersStrict() {
   if (!Array.isArray(indexedRaw) || !Array.isArray(legacyRaw) || pong !== "PONG") {
     throw new Error("order_store_unavailable");
   }
-  const ids = Array.from(new Set(indexedRaw.map(normalizeOrderIdForStorage).filter(Boolean)));
+  // The historical record-ready marker is only a migration optimization and
+  // cannot prove that every permanent record remains in the LIST forever.
+  // A strict report re-scans record keys so an old/stale marker cannot hide an
+  // order and understate revenue.
+  const standaloneIds = await scanOrderRecordIds();
+  if (!Array.isArray(standaloneIds)) throw new Error("order_store_unavailable");
+  const legacy = legacyRaw.map((raw) => {
+    const order = parseOrderJson(raw);
+    if (!order || typeof order !== "object" || Array.isArray(order)) throw new Error("order_store_corrupt");
+    return order;
+  });
+  const legacyById = new Map();
+  for (const order of legacy) {
+    const id = normalizeOrderIdForStorage(order.orderId);
+    if (id) legacyById.set(id, order);
+  }
+  const ids = Array.from(new Set(
+    [...indexedRaw, ...standaloneIds].map(normalizeOrderIdForStorage).filter(Boolean),
+  ));
   const indexed = [];
   for (let offset = 0; offset < ids.length; offset += 100) {
     const batchIds = ids.slice(offset, offset + 100);
@@ -781,18 +800,23 @@ export async function getAllOrdersStrict() {
     }
     rows.forEach((entry, index) => {
       const raw = pipelineResultValue(entry);
+      const legacyOrder = legacyById.get(batchIds[index]);
+      if (raw == null) {
+        // Historical indexes may predate standalone record keys. The legacy
+        // list remains authoritative for that valid shape. With neither body,
+        // the order store is corrupt; publishing a smaller "healthy" total
+        // would hide actual data loss and return incorrect revenue.
+        if (!legacyOrder) throw new Error("order_store_corrupt");
+        indexed.push({ orderId: batchIds[index], order: legacyOrder });
+        return;
+      }
       const order = parseOrderJson(raw, batchIds[index]);
-      if (raw == null || !order || typeof order !== "object" || Array.isArray(order)) {
+      if (!order || typeof order !== "object" || Array.isArray(order)) {
         throw new Error("order_store_corrupt");
       }
       indexed.push({ orderId: batchIds[index], order });
     });
   }
-  const legacy = legacyRaw.map((raw) => {
-    const order = parseOrderJson(raw);
-    if (!order || typeof order !== "object" || Array.isArray(order)) throw new Error("order_store_corrupt");
-    return order;
-  });
   const seen = new Set();
   const merged = [];
   for (const order of [...indexed.map((entry) => entry.order), ...legacy]) {
@@ -828,46 +852,135 @@ export async function getAllOrdersWithIndex() {
   });
 }
 
-// Compact shadow index for the 10-second admin overview poll. The first read
-// backfills historical orders once; subsequent order creates/updates maintain it.
-export async function getOrderOverviewRows() {
-  if (!redisConfig()) return [];
-  const ready = await redisCmd(["GET", ORDER_OVERVIEW_READY_KEY]);
-  if (ready === "1") {
-    const values = await redisCmd(["HVALS", ORDER_OVERVIEW_HASH_KEY]);
-    if (Array.isArray(values)) return values.map(parseOrderJson).filter(Boolean);
-  }
-  const legacyReady = await ensureLegacyOrderIndex();
-  const recordsReady = legacyReady && await ensureStandaloneOrderIndex();
-  if (!recordsReady) return getAllOrders();
+const ORDER_OVERVIEW_STAGE_MARKER = "__lm_overview_rebuild_sentinel__";
+const PUBLISH_ORDER_OVERVIEW_SCRIPT = `
+local function keytype(key) local value=redis.call('TYPE',key) if type(value)=='table' then return value.ok end return value end
+local expectedRevision=ARGV[1]
+local expectedCount=tonumber(ARGV[2])
+local currentRevision=redis.call('GET',KEYS[6])
+if not currentRevision then currentRevision='__lm_missing_revision__' end
+if currentRevision~=expectedRevision then return '{"ok":false,"error":"stale_revision"}' end
+if keytype(KEYS[3])~='hash' or keytype(KEYS[4])~='zset' then
+  return '{"ok":false,"error":"invalid_stage"}'
+end
+local hashCount=redis.call('HLEN',KEYS[3])-1
+local summaryCount=redis.call('ZCARD',KEYS[4])-1
+if not expectedCount or expectedCount<0 or hashCount~=expectedCount or summaryCount~=expectedCount then
+  return '{"ok":false,"error":"incomplete_stage"}'
+end
+redis.call('DEL',KEYS[1]); redis.call('RENAME',KEYS[3],KEYS[1]); redis.call('HDEL',KEYS[1],ARGV[3])
+redis.call('DEL',KEYS[2]); redis.call('RENAME',KEYS[4],KEYS[2]); redis.call('ZREM',KEYS[2],ARGV[3])
+redis.call('SET',KEYS[5],'1'); redis.call('SET',KEYS[7],tostring(expectedCount))
+return '{"ok":true}'
+`;
 
-  const orders = await getAllOrders();
-  const snapshots = orders.map(orderOverviewSnapshot).filter(Boolean);
-  const cleared = await redisPipeline([
-    ["DEL", ORDER_OVERVIEW_HASH_KEY],
-    ["DEL", ORDER_SUMMARY_INDEX_KEY],
-  ]);
-  const clearRows = pipelineResults(cleared);
-  let backfillOk = clearRows.length === 2 && clearRows.every((item) => !item?.error);
-  for (let offset = 0; offset < snapshots.length; offset += 50) {
-    if (!backfillOk) break;
-    const commands = snapshots.slice(offset, offset + 50)
-      .flatMap((row) => [
-        ["HSET", ORDER_OVERVIEW_HASH_KEY, row.orderId, JSON.stringify(row)],
-        ["ZADD", ORDER_SUMMARY_INDEX_KEY, String(orderCreatedScore(row)), row.orderId],
+function storageRowsFailed(rows, expectedLength) {
+  return rows.length !== expectedLength || rows.some((entry) => (
+    entry && typeof entry === "object" && Object.hasOwn(entry, "error") && entry.error != null
+  ));
+}
+
+async function readyOrderOverviewRows() {
+  const rows = pipelineResults(await redisPipeline([
+    ["GET", ORDER_OVERVIEW_READY_KEY],
+    ["GET", ORDER_OVERVIEW_COUNT_KEY],
+    ["HVALS", ORDER_OVERVIEW_HASH_KEY],
+    ["ZCARD", ORDER_SUMMARY_INDEX_KEY],
+    ["PING"],
+  ]));
+  if (rows.length !== 5 || (rows[4] && typeof rows[4] === "object" && Object.hasOwn(rows[4], "error"))
+    || pipelineResultValue(rows[4]) !== "PONG") {
+    throw new Error("order_store_unavailable");
+  }
+  // These four keys are disposable derived state. WRONGTYPE or another
+  // per-key cache error must trigger a strict rebuild, not lock staff out of
+  // the overview while every authoritative order record is still readable.
+  if (rows.slice(0, 4).some((entry) => (
+    entry && typeof entry === "object" && Object.hasOwn(entry, "error") && entry.error != null
+  ))) return null;
+  if (pipelineResultValue(rows[0]) !== "1") return null;
+  const manifestCountRaw = pipelineResultValue(rows[1]);
+  const manifestCount = Number(manifestCountRaw);
+  const rawValues = pipelineResultValue(rows[2]);
+  const summaryCount = Number(pipelineResultValue(rows[3]));
+  if (!/^\d+$/.test(String(manifestCountRaw ?? "")) || !Number.isSafeInteger(manifestCount)
+    || manifestCount < 0 || !Array.isArray(rawValues) || !Number.isSafeInteger(summaryCount)) return null;
+  const parsed = rawValues.map((value) => parseOrderJson(value));
+  const uniqueIds = new Set(parsed.map((row) => normalizeOrderIdForStorage(row?.orderId)).filter(Boolean));
+  return parsed.every(Boolean) && parsed.length === rawValues.length && parsed.length === uniqueIds.size
+    && parsed.length === manifestCount && summaryCount === manifestCount
+    ? parsed
+    : null;
+}
+
+async function orderListRevisionToken() {
+  const rows = pipelineResults(await redisPipeline([["GET", ORDER_LIST_REVISION_KEY], ["PING"]]));
+  if (storageRowsFailed(rows, 2) || pipelineResultValue(rows[1]) !== "PONG") {
+    throw new Error("order_store_unavailable");
+  }
+  const revision = pipelineResultValue(rows[0]);
+  return revision == null ? "__lm_missing_revision__" : String(revision);
+}
+
+async function stageOrderOverviewSnapshots(snapshots, token) {
+  const hashKey = `${ORDER_OVERVIEW_HASH_KEY}:stage:${token}`;
+  const summaryKey = `${ORDER_SUMMARY_INDEX_KEY}:stage:${token}`;
+  const initialized = pipelineResults(await redisPipeline([
+    ["HSET", hashKey, ORDER_OVERVIEW_STAGE_MARKER, "1"],
+    ["ZADD", summaryKey, "0", ORDER_OVERVIEW_STAGE_MARKER],
+  ]));
+  if (storageRowsFailed(initialized, 2)) throw new Error("order_overview_rebuild_unavailable");
+  try {
+    for (let offset = 0; offset < snapshots.length; offset += 50) {
+      const commands = snapshots.slice(offset, offset + 50).flatMap((row) => [
+        ["HSET", hashKey, row.orderId, JSON.stringify(row)],
+        ["ZADD", summaryKey, String(orderCreatedScore(row)), row.orderId],
       ]);
-    const result = await redisPipeline(commands);
-    const rows = pipelineResults(result);
-    if (rows.length !== commands.length || rows.some((item) => item?.error)) {
-      backfillOk = false;
-      break;
+      const rows = pipelineResults(await redisPipeline(commands));
+      if (storageRowsFailed(rows, commands.length)) throw new Error("order_overview_rebuild_unavailable");
+    }
+    return { hashKey, summaryKey };
+  } catch (error) {
+    await redisPipeline([["DEL", hashKey], ["DEL", summaryKey]]);
+    throw error;
+  }
+}
+
+async function rebuildOrderOverviewRows() {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const revision = await orderListRevisionToken();
+    const orders = await getAllOrdersStrict();
+    const snapshots = orders.map(orderOverviewSnapshot).filter(Boolean);
+    const token = randomBytes(12).toString("hex");
+    const stage = await stageOrderOverviewSnapshots(snapshots, token);
+    try {
+      const published = await redisEvalAtomic(PUBLISH_ORDER_OVERVIEW_SCRIPT, [
+        ORDER_OVERVIEW_HASH_KEY,
+        ORDER_SUMMARY_INDEX_KEY,
+        stage.hashKey,
+        stage.summaryKey,
+        ORDER_OVERVIEW_READY_KEY,
+        ORDER_LIST_REVISION_KEY,
+        ORDER_OVERVIEW_COUNT_KEY,
+      ], [revision, String(snapshots.length), ORDER_OVERVIEW_STAGE_MARKER]);
+      if (published.ok && published.value?.ok) return snapshots;
+      if (published.ok && published.value?.error === "stale_revision") continue;
+      throw new Error("order_overview_rebuild_unavailable");
+    } finally {
+      await redisPipeline([["DEL", stage.hashKey], ["DEL", stage.summaryKey]]);
     }
   }
-  if (backfillOk) {
-    await redisCmd(["SET", ORDER_OVERVIEW_READY_KEY, "1"]);
-    await redisCmd(["SET", ORDER_LIST_REVISION_KEY, "1", "NX"]);
-  }
-  return snapshots;
+  // Never return an unfenced snapshot after repeated concurrent writes. A
+  // short retry is safer than briefly showing the wrong money or order count.
+  throw new Error("order_overview_rebuild_busy");
+}
+
+// Compact shadow index for the 10-second admin overview poll. A count manifest
+// detects truncated/malformed shadows; rebuilding never mutates order records.
+export async function getOrderOverviewRows() {
+  if (!redisConfig()) throw new Error("order_store_unavailable");
+  const ready = await readyOrderOverviewRows();
+  return ready || rebuildOrderOverviewRows();
 }
 
 // Incremental USDT pending index: the chain scanner reads only unsettled USDT
