@@ -3,9 +3,10 @@
 // 后台「弃单召回」面板。仅超级管理员入口可见。
 // 列表 = /api/admin/abandoned（到结算页未完成下单的访客）。
 // 召回 = POST {id, action:"email"}（复用站点发信）；标记已成交 = action:"converted"；批量删 = DELETE。
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Inbox, LoaderCircle, CheckCircle2, AlertTriangle } from "lucide-react";
 import { clientFetch as fetch } from "../lib/client-fetch";
+import { beginLatestRequest, isLatestRequest } from "../lib/latest-request";
 
 const LIMIT = 50;
 const C = {
@@ -29,19 +30,34 @@ export default function AbandonedPanel() {
   const [msg, setMsg] = useState(null); // { type: "ok"|"error", text }
   const [selected, setSelected] = useState(() => new Set());
   const [reloadFlag, setReloadFlag] = useState(0);
+  const loadRequestRef = useRef(0);
   const ok = (text) => setMsg({ type: "ok", text });
   const err = (text) => setMsg({ type: "error", text });
 
   const load = useCallback(async () => {
+    const requestId = beginLatestRequest(loadRequestRef);
     setLoading(true);
     try {
       const r = await fetch(`/api/admin/abandoned?offset=${offset}&limit=${LIMIT}`, { credentials: "same-origin", cache: "no-store" });
       const d = await r.json();
+      if (!r.ok || !d?.ok) {
+        const error = new Error(d?.error || `http_${r.status}`);
+        error.responseStatus = r.status;
+        throw error;
+      }
       // offset===0 替换，否则追加（滚动加载更多，替代分页）
-      if (d && d.ok) { setRows((prev) => (offset === 0 ? (d.rows || []) : [...prev, ...(d.rows || [])])); setTotal(Number(d.total || 0)); }
-      else if (r.status === 401) err("无权限（仅超级管理员）");
-    } catch (e) { err("加载失败"); }
-    setLoading(false); if (offset === 0) setSelected(new Set());
+      if (!isLatestRequest(loadRequestRef, requestId)) return;
+      setRows((prev) => (offset === 0 ? (d.rows || []) : [...prev, ...(d.rows || [])]));
+      setTotal(Number(d.total || 0));
+      setMsg(null);
+    } catch (e) {
+      if (isLatestRequest(loadRequestRef, requestId)) err(Number(e?.responseStatus || 0) === 401 ? "无权限（仅超级管理员）" : "弃单数据加载失败，请点击重试");
+    } finally {
+      if (isLatestRequest(loadRequestRef, requestId)) {
+        setLoading(false);
+        if (offset === 0) setSelected(new Set());
+      }
+    }
   }, [offset, reloadFlag]);
   useEffect(() => { load(); }, [load]);
   // 从头刷新（刷新/操作/删除后）：offset 非 0 归零触发，否则递增 reloadFlag
@@ -52,6 +68,7 @@ export default function AbandonedPanel() {
   const toggleAll = () => setSelected((s) => (s.size === rows.length ? new Set() : new Set(rows.map((r) => r.id))));
 
   async function act(id, action) {
+    if (loading || busy) return;
     setBusy(id + action); setMsg(null);
     try {
       const r = await fetch("/api/admin/abandoned", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, action }) });
@@ -62,7 +79,7 @@ export default function AbandonedPanel() {
     setBusy("");
   }
   async function delSelected() {
-    if (!selected.size) return;
+    if (loading || busy || !selected.size) return;
     if (typeof window !== "undefined" && !window.confirm(`确认删除选中的 ${selected.size} 条弃单记录？`)) return;
     setBusy("del"); setMsg(null);
     try { const r = await fetch("/api/admin/abandoned", { method: "DELETE", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [...selected] }) }); const d = await r.json(); d && d.ok ? ok(`已删除 ${d.deleted} 条`) : err("删除失败"); } catch (e) { err("删除失败"); }
@@ -81,13 +98,14 @@ export default function AbandonedPanel() {
         <span style={{ color: C.muted, fontSize: 12.5 }}>到结算页但未完成下单 · 共 {total} 条</span>
         <span style={{ flex: 1 }} />
         <button type="button" style={btn(false)} onClick={refresh} disabled={loading}>刷新</button>
-        <button type="button" style={{ ...btn(false), opacity: selected.size ? 1 : 0.5 }} onClick={delSelected} disabled={busy === "del" || !selected.size}>删除选中{selected.size ? `（${selected.size}）` : ""}</button>
+        <button type="button" style={{ ...btn(false), opacity: selected.size ? 1 : 0.5 }} onClick={delSelected} disabled={loading || Boolean(busy) || !selected.size}>删除选中{selected.size ? `（${selected.size}）` : ""}</button>
       </div>
       {msg && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "9px 13px", borderRadius: 10, fontSize: 13, fontWeight: 600,
           background: msg.type === "error" ? "#fef2f2" : "#f0fdf4", border: `1px solid ${msg.type === "error" ? "#fecaca" : "#bbf7d0"}`, color: msg.type === "error" ? C.danger : C.ok }}>
           {msg.type === "error" ? <AlertTriangle size={15} style={{ flex: "none" }} /> : <CheckCircle2 size={15} style={{ flex: "none" }} />}
           <span>{msg.text}</span>
+          {msg.type === "error" && <button type="button" style={{ ...btn(false), marginLeft: "auto" }} onClick={refresh} disabled={loading || Boolean(busy)}>重试</button>}
         </div>
       )}
 
@@ -114,8 +132,8 @@ export default function AbandonedPanel() {
               <tr><td style={{ ...td, padding: "38px 16px", borderBottom: 0 }} colSpan={8}>
                 <div style={{ textAlign: "center" }}>
                   <Inbox size={34} style={{ color: C.faint }} />
-                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginTop: 10 }}>暂无弃单记录</div>
-                  <div style={{ fontSize: 12.5, color: C.muted, marginTop: 4 }}>很好——到结算页的访客都完成下单了</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginTop: 10 }}>{msg?.type === "error" ? "弃单数据未更新" : "暂无弃单记录"}</div>
+                  <div style={{ fontSize: 12.5, color: C.muted, marginTop: 4 }}>{msg?.type === "error" ? "请点击上方重试，当前空白不代表没有弃单" : "很好——到结算页的访客都完成下单了"}</div>
                 </div>
               </td></tr>
             ) : rows.map((r) => {
@@ -131,8 +149,8 @@ export default function AbandonedPanel() {
                   <td style={{ ...td, whiteSpace: "nowrap", color: st.c, fontWeight: 600 }}>{st.t}</td>
                   <td style={td}>
                     <div style={{ display: "flex", gap: 6 }}>
-                      <button type="button" style={{ ...btn(false), padding: "4px 9px", opacity: r.email ? 1 : 0.45 }} disabled={!r.email || busy === r.id + "email"} onClick={() => act(r.id, "email")}>{busy === r.id + "email" ? "发送中" : "召回"}</button>
-                      <button type="button" style={{ ...btn(false), padding: "4px 9px" }} disabled={busy === r.id + "converted"} onClick={() => act(r.id, "converted")}>已成交</button>
+                      <button type="button" style={{ ...btn(false), padding: "4px 9px", opacity: r.email ? 1 : 0.45 }} disabled={loading || Boolean(busy) || !r.email} onClick={() => act(r.id, "email")}>{busy === r.id + "email" ? "发送中" : "召回"}</button>
+                      <button type="button" style={{ ...btn(false), padding: "4px 9px" }} disabled={loading || Boolean(busy)} onClick={() => act(r.id, "converted")}>已成交</button>
                     </div>
                   </td>
                 </tr>

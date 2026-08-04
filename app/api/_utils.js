@@ -2203,6 +2203,31 @@ export async function getBalanceTxs(email) {
 // ── Reset code (forgot password) — 10 min TTL ──
 function resetKey(email) { return "liumeiti:reset:" + String(email).toLowerCase().trim(); }
 
+const GET_OR_CREATE_RESET_CODE_SCRIPT = `
+local keyType=redis.call('TYPE',KEYS[1])
+if type(keyType)=='table' then keyType=keyType.ok end
+if keyType~='none' and keyType~='string' then
+  redis.call('DEL',KEYS[1])
+end
+local existing=redis.call('GET',KEYS[1])
+if existing and string.match(existing,'^%d%d%d%d%d%d$') then
+  redis.call('EXPIRE',KEYS[1],ARGV[2])
+  return existing
+end
+redis.call('SET',KEYS[1],ARGV[1],'EX',ARGV[2])
+return ARGV[1]
+`;
+
+export async function getOrCreateResetCode(email, proposedCode, ttlSec = 600) {
+  const code = String(proposedCode || "").trim();
+  const ttl = Math.max(60, Math.min(3600, Number(ttlSec) || 600));
+  if (!/^\d{6}$/.test(code)) return null;
+  const result = await redisCmd([
+    "EVAL", GET_OR_CREATE_RESET_CODE_SCRIPT, "1", resetKey(email), code, String(ttl),
+  ]);
+  return /^\d{6}$/.test(String(result || "")) ? String(result) : null;
+}
+
 export async function setResetCode(email, code, ttlSec = 600) {
   const r = redisConfig();
   if (!r) return false;

@@ -2,9 +2,11 @@
 
 // 用户 360 — 在用户详情里展示该用户的访问/行为/来源。仅超管入口下渲染。
 // 数据 = /api/admin/user-activity?email=
-import { useEffect, useState } from "react";
-import { Inbox, LoaderCircle } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Inbox, LoaderCircle, RefreshCw } from "lucide-react";
 import { clientFetch as fetch } from "../lib/client-fetch";
+import { adminRequestErrorMessage, readAdminJson } from "./admin-request-feedback";
+import { beginLatestRequest, invalidateLatestRequest, settleLatestRequest } from "../lib/latest-request";
 
 const C = {
   text: "var(--text, #1d1d1f)", muted: "var(--muted, #6e6e73)", faint: "var(--faint, #8a8a8e)",
@@ -25,19 +27,41 @@ function sourceText(a) {
 export default function UserActivity({ email }) {
   const [d, setD] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [retryToken, setRetryToken] = useState(0);
+  const requestRef = useRef(0);
   useEffect(() => {
-    if (!email) { setD(null); return; }
-    let on = true; setLoading(true);
-    fetch("/api/admin/user-activity?email=" + encodeURIComponent(email), { credentials: "same-origin", cache: "no-store" })
-      .then((r) => r.json()).then((j) => { if (on) setD(j); }).catch(() => {}).finally(() => { if (on) setLoading(false); });
-    return () => { on = false; };
-  }, [email]);
-
-  if (loading && !d) return <div style={{ display: "inline-flex", alignItems: "center", gap: 8, color: C.muted, fontSize: 13, padding: "8px 0" }}><LoaderCircle size={15} className="spin-icon" />加载访问数据…</div>;
-  if (!d || !d.ok) return null;
+    if (!email) { invalidateLatestRequest(requestRef); setD(null); setError(""); setLoading(false); return; }
+    const requestId = beginLatestRequest(requestRef);
+    setD(null);
+    setError("");
+    setLoading(true);
+    settleLatestRequest({
+      ref: requestRef,
+      requestId,
+      operation: fetch("/api/admin/user-activity?email=" + encodeURIComponent(email), { credentials: "same-origin", cache: "no-store" }).then(readAdminJson),
+      onSuccess: (value) => setD(value),
+      onError: (caught) => setError(adminRequestErrorMessage(caught, "用户访问数据加载")),
+      onFinally: () => setLoading(false),
+    });
+    return () => { invalidateLatestRequest(requestRef); };
+  }, [email, retryToken]);
 
   const wrap = { marginTop: 14, padding: 14, border: `1px solid ${C.border}`, borderRadius: 12, background: C.surface2 };
   const h = { fontSize: 14, fontWeight: 700, margin: "0 0 10px", color: C.text };
+
+  if (loading && !d) return <div style={{ display: "inline-flex", alignItems: "center", gap: 8, color: C.muted, fontSize: 13, padding: "8px 0" }}><LoaderCircle size={15} className="spin-icon" />加载访问数据…</div>;
+  if (error && !d) return (
+    <div style={wrap} role="alert">
+      <div style={h}>访问与行为</div>
+      <div style={{ color: "#b91c1c", fontSize: 13, marginBottom: 8 }}>{error}</div>
+      <button type="button" className="admin-filter-btn" onClick={() => setRetryToken((value) => value + 1)}>
+        <RefreshCw size={12} />重试
+      </button>
+    </div>
+  );
+  if (!d) return null;
+
   if (!d.found) return <div style={wrap}><div style={h}>访问与行为</div><div style={{ display: "flex", alignItems: "center", gap: 8, color: C.faint, fontSize: 13 }}><Inbox size={16} style={{ flex: "none" }} />暂无记录（该用户登录后产生访问才会出现）。</div></div>;
 
   const chip = { display: "inline-block", padding: "2px 9px", borderRadius: 20, background: C.accentSoft, color: C.accent, fontSize: 12, fontWeight: 600, marginRight: 6, marginBottom: 6 };

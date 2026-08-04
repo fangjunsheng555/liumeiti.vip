@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, MailCheck, RefreshCw, Search, X } from "lucide-react";
 import { clientFetch as fetch } from "../lib/client-fetch";
+import { beginLatestRequest, invalidateLatestRequest, isLatestRequest } from "../lib/latest-request";
 
 const STATUS = {
   scheduled: { label: "已排期", tone: "neutral" },
@@ -92,8 +93,10 @@ export default function MailDeliveryPanel() {
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const requestRef = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = beginLatestRequest(requestRef);
     setLoading(true);
     setMessage("");
     try {
@@ -102,16 +105,22 @@ export default function MailDeliveryPanel() {
       const response = await fetch(`/api/admin/mail-delivery?${params}`, { cache: "no-store", credentials: "same-origin" });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "load_failed");
+      if (!isLatestRequest(requestRef, requestId)) return;
       setRecords(data.records || []);
       setCounts(data.counts || {});
     } catch (error) {
-      setMessage(error?.message === "unauthorized" ? "仅超级管理员可查看邮件投递" : "邮件投递记录加载失败");
+      if (isLatestRequest(requestRef, requestId)) {
+        setMessage(error?.message === "unauthorized" ? "仅超级管理员可查看邮件投递" : "邮件投递记录加载失败，请刷新重试");
+      }
     } finally {
-      setLoading(false);
+      if (isLatestRequest(requestRef, requestId)) setLoading(false);
     }
   }, [status, category, appliedQuery]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    return () => { invalidateLatestRequest(requestRef); };
+  }, [load]);
 
   function search(event) {
     event.preventDefault();

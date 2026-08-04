@@ -23,6 +23,7 @@ export async function GET(request) {
   return Response.json({
     ok: true,
     email: auth.email,
+    accountLifecycleId: auth.accountLifecycleId,
     username: user?.username || "",
     balance,
     coupons: publicCoupons(user),

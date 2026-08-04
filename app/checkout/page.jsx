@@ -66,7 +66,15 @@ import {
   withCheckoutSubmissionCoordination,
   writeCheckoutPendingJournal,
 } from "../lib/checkout-pending-journal";
-import { clientFetch as fetch } from "../lib/client-fetch";
+import { clientFetch as fetch, isClientRequestTimeout } from "../lib/client-fetch";
+import {
+  authenticatedUserMatches,
+  isSuccessfulAuthResponse,
+  safeLoginAfterConfirmedAuth,
+  safeLoginAfterUncertainAuth,
+  shouldReauthenticateAfterAuthVerification,
+  shouldRecoverAuthMutationResponse,
+} from "../lib/auth-recovery";
 
 const CHECKOUT_DRAFT_KEY = "liumeiti:checkout-draft:v2";
 const CHECKOUT_DRAFT_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
@@ -201,7 +209,9 @@ export default function CheckoutPage() {
   const [orderResults, setOrderResults] = useState([]);
   const [authedUser, setAuthedUser] = useState(null); // {email, balance} | null
   const [accountReady, setAccountReady] = useState(false);
+  const [accountError, setAccountError] = useState("");
   const [authModal, setAuthModal] = useState(null); // null | "login" | "register" | "forgot" | "reset"
+  const [authSessionPending, setAuthSessionPending] = useState(false);
   const [authForm, setAuthForm] = useState({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
   const [authCaptcha, setAuthCaptcha] = useState({ token: "", image: "", loading: false, error: "" });
   const [authBusy, setAuthBusy] = useState(false);
@@ -216,13 +226,42 @@ export default function CheckoutPage() {
   const orderRequestRef = useRef(null);
   const pendingOrderRef = useRef(null);
   const pendingReplayStartedRef = useRef(false);
+  const accountLoadRequestRef = useRef(0);
+  const authSessionIdentityRef = useRef(null);
 
-  async function refreshAccountState(isCancelled = () => false) {
+  async function refreshAccountState(isCancelled = () => false, expectedIdentity = null) {
+    const requestId = ++accountLoadRequestRef.current;
+    setAccountReady(false);
+    setAccountError("");
     try {
       const meRes = await fetch("/api/auth/me", { credentials: "same-origin" });
-      const meData = meRes.ok ? await meRes.json() : null;
-      if (isCancelled()) return { ok: false, boughtTrial: false };
-      const accountData = meData?.ok && /^[a-f0-9]{32}$/.test(String(meData.accountLifecycleId || "")) ? meData : null;
+      if (isCancelled() || requestId !== accountLoadRequestRef.current) return { ok: false, boughtTrial: false };
+      if (meRes.status === 401) {
+        setAuthedUser(null);
+        setAccountReady(true);
+        return { ok: false, guest: true, status: 401, boughtTrial: false };
+      }
+      let meData = null;
+      try { meData = await meRes.json(); } catch {
+        throw new SyntaxError("invalid_account_response");
+      }
+      if (!meRes.ok || !meData?.ok || !/^[a-f0-9]{32}$/.test(String(meData.accountLifecycleId || ""))) {
+        const error = new Error("account_state_unavailable");
+        error.status = meRes.status;
+        throw error;
+      }
+      if (expectedIdentity && !authenticatedUserMatches(
+        meData,
+        expectedIdentity.email,
+        expectedIdentity.accountLifecycleId,
+      )) {
+        const error = new Error("auth_identity_changed");
+        error.status = 409;
+        error.identityMismatch = true;
+        throw error;
+      }
+      if (isCancelled() || requestId !== accountLoadRequestRef.current) return { ok: false, boughtTrial: false };
+      const accountData = meData;
       if (accountData) {
         const orders = Array.isArray(meData?.orders) ? meData.orders : [];
         const boughtTrial = orders.some((order) =>
@@ -241,22 +280,40 @@ export default function CheckoutPage() {
           orders,
         });
         setForm((cur) => cur.email ? cur : { ...cur, email: accountData.email });
-        return { ok: true, boughtTrial, email: accountData.email };
+        setAccountReady(true);
+        return { ok: true, boughtTrial, email: accountData.email, accountLifecycleId: accountData.accountLifecycleId };
       }
-      setAuthedUser(null);
-      return { ok: false, boughtTrial: false };
     } catch (e) {
-      return { ok: false, boughtTrial: false };
+      if (isCancelled() || requestId !== accountLoadRequestRef.current) return { ok: false, boughtTrial: false };
+      const message = e?.identityMismatch
+        ? L("当前登录账户与刚才完成操作的账户不一致，请重新登录原账户", "The current session doesn't match the account operation. Sign in to the original account again.")
+        : isClientRequestTimeout(e)
+        ? L("登录状态确认超时，请重试后再付款", "Session verification timed out. Retry before paying.")
+        : [500, 503].includes(e?.status)
+          ? L("账户服务暂时不可用，请稍后重试", "The account service is temporarily unavailable. Please retry.")
+          : e?.status === 403
+            ? L("暂时无法确认登录权限，请刷新登录状态后重试", "Your session permissions couldn't be verified. Refresh and retry.")
+            : e?.status === 409
+              ? L("登录状态已更新，请重试", "Your session changed. Please retry.")
+              : e?.name === "SyntaxError"
+                ? L("账户接口响应异常，请重试", "The account service returned an invalid response. Please retry.")
+                : L("登录状态确认失败，请检查网络后重试", "Session verification failed. Check your connection and retry.");
+      setAccountError(message);
+      return {
+        ok: false,
+        error: message,
+        status: Number(e?.status || 0),
+        identityMismatch: e?.identityMismatch === true,
+        boughtTrial: false,
+      };
     }
   }
 
   // Pre-fill email + load balance for logged-in user
   useEffect(() => {
     let cancelled = false;
-    refreshAccountState(() => cancelled).finally(() => {
-      if (!cancelled) setAccountReady(true);
-    });
-    return () => { cancelled = true; };
+    refreshAccountState(() => cancelled);
+    return () => { cancelled = true; accountLoadRequestRef.current += 1; };
   }, []);
 
   // 当日 USDT 汇率（与服务端一致，每日自动更新）
@@ -274,10 +331,10 @@ export default function CheckoutPage() {
     if (authModal) document.body.style.overflow = "hidden";
     else document.body.style.overflow = "";
     if (!authModal) return () => { document.body.style.overflow = ""; };
-    const onKey = (e) => { if (e.key === "Escape" && !authBusy) setAuthModal(null); };
+    const onKey = (e) => { if (e.key === "Escape" && !authBusy && !authSessionPending) setAuthModal(null); };
     document.addEventListener("keydown", onKey);
     return () => { document.body.style.overflow = ""; document.removeEventListener("keydown", onKey); };
-  }, [authModal, authBusy]);
+  }, [authModal, authBusy, authSessionPending]);
 
   async function refreshAuthCaptcha(clearAnswer = true) {
     setAuthCaptcha((cur) => ({ ...cur, loading: true, error: "" }));
@@ -700,35 +757,80 @@ export default function CheckoutPage() {
     updateProductField("rocket", "plan", plan.id);
   }
 
+  function enterSafeCheckoutLogin(expectedIdentity) {
+    const recovery = expectedIdentity?.recovery || safeLoginAfterConfirmedAuth("login", {
+      ...authForm,
+      email: expectedIdentity?.email || authForm.email,
+    });
+    setAuthSessionPending(false);
+    authSessionIdentityRef.current = null;
+    setAuthModal(recovery.mode);
+    setAuthForm(recovery.form);
+    setAuthError("");
+    setAuthNotice(L(
+      "账户操作已经完成，但当前登录状态无法对应到该账户。请使用刚才的密码重新登录；原注册或重置操作不会再次提交。",
+      "The account operation completed, but the current session doesn't match it. Sign in with the password you just used; the original sign-up or reset won't be submitted again.",
+    ));
+  }
+
   async function doCheckoutAuth(e) {
     e.preventDefault();
     if (authBusy) return;
     setAuthBusy(true);
     setAuthError("");
     setAuthNotice("");
+    const attemptedMode = authModal;
+    const attemptedForm = { ...authForm, email: authForm.email.trim().toLowerCase() };
+    if (!authSessionPending) authSessionIdentityRef.current = null;
+    let responseConfirmed = false;
     try {
-      let endpoint = authModal;
+      if (authSessionPending) {
+        responseConfirmed = true;
+        const expectedIdentity = authSessionIdentityRef.current;
+        const account = expectedIdentity
+          ? await refreshAccountState(() => false, expectedIdentity)
+          : { ok: false, status: 409, identityMismatch: true };
+        if (!account?.ok || !expectedIdentity || !authenticatedUserMatches(account, expectedIdentity.email, expectedIdentity.accountLifecycleId)) {
+          if (shouldReauthenticateAfterAuthVerification(account)) {
+            enterSafeCheckoutLogin(expectedIdentity);
+            return;
+          }
+          setAuthError(account?.error || L("账户操作已成功，但登录状态确认失败。这里只会重试确认，不会重复提交原操作。", "The account operation succeeded, but session verification failed. This retry only verifies the session; it won't repeat the original operation."));
+          return;
+        }
+        setAuthSessionPending(false);
+        authSessionIdentityRef.current = null;
+        setAuthModal(null);
+        const pending = pendingOrderRef.current;
+        if (pending && !pending.invalid && pendingIdentityMatches(pending, account.email)) {
+          pendingReplayStartedRef.current = true;
+          await replayPendingOrder(pending, account.email);
+        }
+        return;
+      }
+
+      const endpoint = attemptedMode;
       let payload;
-      if (authModal === "login") {
+      if (attemptedMode === "login") {
         payload = {
-          email: authForm.email.trim(),
-          password: authForm.password,
+          email: attemptedForm.email,
+          password: attemptedForm.password,
         };
-      } else if (authModal === "register") {
+      } else if (attemptedMode === "register") {
         payload = {
-          email: authForm.email.trim(),
-          password: authForm.password,
+          email: attemptedForm.email,
+          password: attemptedForm.password,
           captchaToken: authCaptcha.token,
-          captchaAnswer: authForm.captchaAnswer.trim(),
+          captchaAnswer: attemptedForm.captchaAnswer.trim(),
           inviteCode: storedInviteCode(),
         };
-      } else if (authModal === "forgot") {
-        payload = { email: authForm.email.trim() };
-      } else if (authModal === "reset") {
+      } else if (attemptedMode === "forgot") {
+        payload = { email: attemptedForm.email };
+      } else if (attemptedMode === "reset") {
         payload = {
-          email: authForm.email.trim(),
-          code: authForm.code.trim(),
-          newPassword: authForm.newPassword,
+          email: attemptedForm.email,
+          code: attemptedForm.code.trim(),
+          newPassword: attemptedForm.newPassword,
         };
       }
 
@@ -737,26 +839,15 @@ export default function CheckoutPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
-
-      if (authModal === "forgot") {
-        setAuthNotice(L("验证码已发送至邮箱。请查看收件箱(或垃圾邮件)", "A code has been sent to your email. Check your inbox (or spam)."));
-        setAuthModal("reset");
-        setAuthForm((f) => ({ ...f, code: "", newPassword: "" }));
-        return;
+      let data = null;
+      try { data = await res.json(); } catch {
+        throw new SyntaxError("invalid_auth_response");
       }
 
-      if (data.ok) {
-        const account = await refreshAccountState();
-        setAuthModal(null);
-        // Do not depend on the authedUser effect to resume an ambiguous order:
-        // re-authenticating A as A may not change that dependency at all.
-        const pending = pendingOrderRef.current;
-        if (pending && !pending.invalid && account?.ok && pendingIdentityMatches(pending, account.email)) {
-          pendingReplayStartedRef.current = true;
-          await replayPendingOrder(pending, account.email);
+      if (!isSuccessfulAuthResponse(res, data, attemptedMode)) {
+        if (shouldRecoverAuthMutationResponse(attemptedMode, res.status, data?.error)) {
+          throw new Error("auth_mutation_result_uncertain");
         }
-      } else {
         const msg = {
           captcha_failed: L("验证码错误，请重新输入", "Wrong captcha, please try again"),
           email_taken: L("该邮箱已注册", "This email is already registered"),
@@ -766,11 +857,67 @@ export default function CheckoutPage() {
           invalid_code: L("验证码格式错误(6 位数字)", "Invalid code format (6 digits)"),
           code_invalid_or_expired: L("验证码错误或已过期", "Code is wrong or expired"),
           user_not_found: L("该邮箱未注册", "This email isn't registered"),
-        }[data.error] || data.error || L("操作失败", "Something went wrong");
-        if (authModal === "register" && data.error === "captcha_failed") refreshAuthCaptcha(true);
+          account_banned: L("该账号已停用，请联系在线客服", "This account is disabled. Contact support."),
+        }[data?.error] || L("操作失败，请重试", "Something went wrong. Please retry.");
+        if (attemptedMode === "register" && data?.error === "captcha_failed") refreshAuthCaptcha(true);
         setAuthError(msg);
+        return;
+      }
+      if (attemptedMode === "forgot") {
+        responseConfirmed = true;
+        setAuthNotice(L("如果该邮箱已注册，验证码会发送至邮箱。请检查收件箱（或垃圾邮件）", "If this email is registered, a code will be sent. Check your inbox or spam."));
+        setAuthModal("reset");
+        setAuthForm((f) => ({ ...f, email: attemptedForm.email, code: "", newPassword: "" }));
+        return;
+      }
+
+      if (!authenticatedUserMatches(data, attemptedForm.email, data?.accountLifecycleId)) {
+        throw new SyntaxError("invalid_auth_identity");
+      }
+      responseConfirmed = true;
+      authSessionIdentityRef.current = {
+        email: attemptedForm.email,
+        accountLifecycleId: String(data.accountLifecycleId).trim().toLowerCase(),
+        recovery: safeLoginAfterConfirmedAuth(attemptedMode, attemptedForm),
+      };
+
+      // The login/register/reset mutation has already succeeded. If the
+      // following /auth/me verification is temporarily unavailable, the next
+      // click must only retry that read and must never repeat the mutation.
+      setAuthSessionPending(true);
+      setAuthNotice(L("账户操作已成功，正在确认登录状态。若确认失败，可安全重试。", "The account operation succeeded. Verifying your session now; verification can be retried safely."));
+      const account = await refreshAccountState(() => false, authSessionIdentityRef.current);
+      if (!account?.ok || !authenticatedUserMatches(account, authSessionIdentityRef.current?.email, authSessionIdentityRef.current?.accountLifecycleId)) {
+        if (shouldReauthenticateAfterAuthVerification(account)) {
+          enterSafeCheckoutLogin(authSessionIdentityRef.current);
+          return;
+        }
+        setAuthError(account?.error || L("登录成功，但账户状态确认失败，请重试", "Signed in, but account verification failed. Please retry."));
+        return;
+      }
+      setAuthSessionPending(false);
+      authSessionIdentityRef.current = null;
+      setAuthModal(null);
+      // Do not depend on the authedUser effect to resume an ambiguous order:
+      // re-authenticating A as A may not change that dependency at all.
+      const pending = pendingOrderRef.current;
+      if (pending && !pending.invalid && pendingIdentityMatches(pending, account.email)) {
+        pendingReplayStartedRef.current = true;
+        await replayPendingOrder(pending, account.email);
       }
     } catch (error) {
+      const recovery = !responseConfirmed ? safeLoginAfterUncertainAuth(attemptedMode, attemptedForm) : null;
+      if (recovery) {
+        setAuthSessionPending(false);
+        authSessionIdentityRef.current = null;
+        setAuthModal(recovery.mode);
+        setAuthForm(recovery.form);
+        setAuthNotice(L(
+          "刚才的注册或重置结果尚未确认，已切换为安全登录验证，不会重复提交原操作。",
+          "The sign-up or reset result is uncertain. We've switched to a safe sign-in check and won't repeat the original operation.",
+        ));
+        return;
+      }
       setAuthError(L("网络错误", "Network error"));
     } finally {
       setAuthBusy(false);
@@ -983,6 +1130,10 @@ export default function CheckoutPage() {
 
   async function goPay(event) {
     event.preventDefault();
+    if (!accountReady) {
+      setStatus({ type: "error", message: accountError || L("正在确认登录状态，请稍候或重试", "Your session is still being verified. Wait or retry.") });
+      return;
+    }
     const pending = pendingOrderRef.current;
     if (pending) {
       if (pending.invalid) {
@@ -1042,6 +1193,10 @@ export default function CheckoutPage() {
 
   async function submitOrders() {
     if (submitting) return;
+    if (!accountReady) {
+      setStatus({ type: "error", message: accountError || L("正在确认登录状态，请稍候或重试", "Your session is still being verified. Wait or retry.") });
+      return;
+    }
     const unresolved = pendingOrderRef.current;
     if (unresolved) {
       if (unresolved.invalid) {
@@ -1312,6 +1467,11 @@ export default function CheckoutPage() {
             )}
           </div>
         )}
+
+        {!accountReady && <div className={`checkout-alert ${accountError ? "error" : "info"}`} role={accountError ? "alert" : "status"}>
+          <span>{accountError || L("正在确认登录状态，确认完成前无法付款", "Verifying your session. Payment stays disabled until this finishes.")}</span>
+          {accountError && <button type="button" className="checkout-alert-action" onClick={() => refreshAccountState()}><RefreshCw size={13} />{L("重试", "Retry")}</button>}
+        </div>}
 
         {serviceRedeemActive && (
           <div className="checkout-alert success">
@@ -1597,7 +1757,7 @@ export default function CheckoutPage() {
                   </div>
                 </div>}
 
-                <button type="submit" className="primary-btn primary-btn-lg checkout-submit-btn" disabled={cartCount === 0 || submitting}>
+                <button type="submit" className="primary-btn primary-btn-lg checkout-submit-btn" disabled={cartCount === 0 || submitting || !accountReady}>
                   {serviceRedeemActive ? L("确认兑换并提交订单", "Confirm & submit order") : `${L("前往支付", "Pay")} · ${paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}`}
                   <ArrowRight size={15} />
                 </button>
@@ -1610,7 +1770,7 @@ export default function CheckoutPage() {
                 <small>{serviceRedeemActive ? L("服务兑换码", "Service code") : paymentMethod === "usdt" ? "USDT-TRC20" : paymentMethod === "balance" ? L("账户余额", "Account balance") : L("支付宝", "Alipay")}</small>
                 <b>{serviceRedeemActive ? L("免支付", "No pay") : paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}</b>
               </div>
-              <button type="submit" className="primary-btn checkout-mobile-cta-btn" disabled={cartCount === 0 || submitting}>
+              <button type="submit" className="primary-btn checkout-mobile-cta-btn" disabled={cartCount === 0 || submitting || !accountReady}>
                 {serviceRedeemActive ? L("提交兑换", "Submit") : L("前往支付", "Pay")}
                 <ArrowRight size={15} />
               </button>
@@ -1736,7 +1896,7 @@ export default function CheckoutPage() {
                 type="button"
                 className="primary-btn primary-btn-lg pay-submit-btn"
                 onClick={submitOrders}
-                disabled={submitting}
+                disabled={submitting || !accountReady}
               >
                 {submitting ? (
                   <>
@@ -1843,17 +2003,19 @@ export default function CheckoutPage() {
         <div
           className="auth-modal-mask"
           onClick={() => {
-            if (!authBusy) {
+            if (!authBusy && !authSessionPending) {
               setAuthModal(null);
             }
           }}
         >
           <div className="auth-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={L("账户登录", "Account")}>
             <div className="auth-modal-head">
-              {authModal === "login" || authModal === "register" ? (
+              {authSessionPending ? (
+                <div className="auth-modal-title">{L("确认登录状态", "Verify session")}</div>
+              ) : authModal === "login" || authModal === "register" ? (
                 <div className="auth-modal-tabs">
-                  <button type="button" className={`auth-tab${authModal === "login" ? " active" : ""}`} onClick={() => setAuthModal("login")}>{L("登录", "Sign in")}</button>
-                  <button type="button" className={`auth-tab register-tab${authModal === "register" ? " active" : ""}`} onClick={() => setAuthModal("register")}>
+                  <button type="button" className={`auth-tab${authModal === "login" ? " active" : ""}`} onClick={() => setAuthModal("login")} disabled={authBusy}>{L("登录", "Sign in")}</button>
+                  <button type="button" className={`auth-tab register-tab${authModal === "register" ? " active" : ""}`} onClick={() => setAuthModal("register")} disabled={authBusy}>
                     {L("注册", "Sign up")}
                     <span className="auth-tab-tip">{L("立减¥8.88", "¥8.88 off")}</span>
                   </button>
@@ -1867,10 +2029,11 @@ export default function CheckoutPage() {
                 type="button"
                 className="auth-close"
                 onClick={() => {
-                  if (!authBusy) {
+                  if (!authBusy && !authSessionPending) {
                     setAuthModal(null);
                   }
                 }}
+                disabled={authBusy || authSessionPending}
               >
                 <X size={18} />
               </button>
@@ -1885,6 +2048,7 @@ export default function CheckoutPage() {
                   placeholder="your@email.com"
                   autoComplete="email"
                   readOnly={authModal === "reset"}
+                  disabled={authBusy || authSessionPending}
                   required
                 />
               </label>
@@ -1899,6 +2063,7 @@ export default function CheckoutPage() {
                     placeholder={authModal === "register" ? L("设置一个密码", "Create a password") : L("登录密码", "Your password")}
                     autoComplete={authModal === "register" ? "new-password" : "current-password"}
                     minLength={6}
+                    disabled={authSessionPending}
                     required
                   />
                 </label>
@@ -1913,6 +2078,7 @@ export default function CheckoutPage() {
                       onChange={(e) => setAuthForm({ ...authForm, code: e.target.value.replace(/\D/g, "") })}
                       placeholder={L("6 位数字验证码", "6-digit code")}
                       inputMode="numeric"
+                      disabled={authSessionPending}
                       required
                     />
                   </label>
@@ -1924,6 +2090,7 @@ export default function CheckoutPage() {
                       onChange={(e) => setAuthForm({ ...authForm, newPassword: e.target.value })}
                       placeholder={L("设置新的登录密码", "Set a new password")}
                       minLength={6}
+                      disabled={authSessionPending}
                       required
                     />
                   </label>
@@ -1943,10 +2110,11 @@ export default function CheckoutPage() {
                         inputMode="numeric"
                         autoComplete="off"
                         maxLength={4}
+                        disabled={authSessionPending}
                         required
                       />
                     </div>
-                    <button type="button" className="auth-captcha-image" onClick={() => refreshAuthCaptcha(true)} disabled={authCaptcha.loading} aria-label={L("刷新验证码", "Refresh captcha")}>
+                    <button type="button" className="auth-captcha-image" onClick={() => refreshAuthCaptcha(true)} disabled={authBusy || authSessionPending || authCaptcha.loading} aria-label={L("刷新验证码", "Refresh captcha")}>
                       {authCaptcha.image && !authCaptcha.loading ? <img src={authCaptcha.image} alt={L("验证码", "Captcha")} /> : <LoaderCircle size={18} className="spin-icon" />}
                       <span><RefreshCw size={12} /></span>
                     </button>
@@ -1958,10 +2126,11 @@ export default function CheckoutPage() {
               {authNotice && <div className="auth-notice">{authNotice}</div>}
               {authError && <div className="auth-error">{authError}</div>}
 
-              <button type="submit" className="auth-submit" disabled={authBusy || (authModal === "register" && (authCaptcha.loading || !authCaptcha.token))}>
+              <button type="submit" className="auth-submit" disabled={authBusy || (!authSessionPending && authModal === "register" && (authCaptcha.loading || !authCaptcha.token))}>
                 {authBusy ? (
                   <><LoaderCircle size={15} className="spin-icon" />{L("处理中...", "Processing...")}</>
-                ) : authModal === "login" ? L("登录", "Sign in")
+                ) : authSessionPending ? L("只重试确认登录状态", "Retry session verification only")
+                  : authModal === "login" ? L("登录", "Sign in")
                   : authModal === "register" ? L("注册并登录", "Sign up & sign in")
                   : authModal === "forgot" ? L("发送邮箱验证码", "Send code")
                   : L("重置密码并登录", "Reset & sign in")}
@@ -1973,27 +2142,33 @@ export default function CheckoutPage() {
 
               {(authModal === "login" || authModal === "register") && (
                 <div className="oauth-login-grid bottom">
-                  <a href={GOOGLE_OAUTH_START} className="oauth-login-btn" onClick={handleGoogleOAuthStart}><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
+                  <a
+                    href={authBusy || authSessionPending ? undefined : GOOGLE_OAUTH_START}
+                    tabIndex={authBusy || authSessionPending ? -1 : undefined}
+                    className="oauth-login-btn"
+                    aria-disabled={authBusy || authSessionPending}
+                    onClick={(event) => authBusy || authSessionPending ? event.preventDefault() : handleGoogleOAuthStart(event)}
+                  ><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
                 </div>
               )}
 
-              <div className="auth-hints">
+              {!authSessionPending && <div className="auth-hints">
                 {authModal === "login" && (
                   <>
-                    <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>{L("忘记密码?", "Forgot password?")}</button>
-                    <span className="auth-hint">{L("还没账号?", "No account?")} <button type="button" className="auth-switch" onClick={() => setAuthModal("register")}>{L("立即注册", "Sign up")}</button></span>
+                    <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")} disabled={authBusy}>{L("忘记密码?", "Forgot password?")}</button>
+                    <span className="auth-hint">{L("还没账号?", "No account?")} <button type="button" className="auth-switch" onClick={() => setAuthModal("register")} disabled={authBusy}>{L("立即注册", "Sign up")}</button></span>
                   </>
                 )}
                 {authModal === "register" && (
-                  <span className="auth-hint">{L("已有账号?", "Have an account?")} <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>{L("去登录", "Sign in")}</button></span>
+                  <span className="auth-hint">{L("已有账号?", "Have an account?")} <button type="button" className="auth-switch" onClick={() => setAuthModal("login")} disabled={authBusy}>{L("去登录", "Sign in")}</button></span>
                 )}
                 {authModal === "forgot" && (
-                  <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>{L("返回登录", "Back to sign in")}</button>
+                  <button type="button" className="auth-switch" onClick={() => setAuthModal("login")} disabled={authBusy}>{L("返回登录", "Back to sign in")}</button>
                 )}
                 {authModal === "reset" && (
-                  <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>{L("重新发送验证码", "Resend code")}</button>
+                  <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")} disabled={authBusy}>{L("重新发送验证码", "Resend code")}</button>
                 )}
-              </div>
+              </div>}
             </form>
           </div>
         </div>

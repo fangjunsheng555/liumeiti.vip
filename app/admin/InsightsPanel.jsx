@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { clientFetch as fetch } from "../lib/client-fetch";
+import { beginLatestRequest, invalidateLatestRequest, isLatestRequest } from "../lib/latest-request";
 import {
   Activity,
   AlertTriangle,
@@ -78,8 +79,10 @@ export default function InsightsPanel() {
   const [message, setMessage] = useState("");
   const [metric, setMetric] = useState("revenue");
   const [detailView, setDetailView] = useState("channels");
+  const requestRef = useRef(0);
 
   const load = useCallback(async (range) => {
+    const requestId = beginLatestRequest(requestRef);
     setLoading(true);
     setMessage("");
     try {
@@ -88,16 +91,20 @@ export default function InsightsPanel() {
         cache: "no-store",
       });
       const payload = await response.json();
+      if (!isLatestRequest(requestRef, requestId)) return;
       if (payload?.ok) setData(payload);
       else setMessage(response.status === 401 ? "当前账号无权查看数据洞察" : "数据加载失败，请稍后重试");
     } catch (error) {
-      setMessage("数据加载失败，请检查网络后重试");
+      if (isLatestRequest(requestRef, requestId)) setMessage("数据加载失败，请检查网络后重试");
     } finally {
-      setLoading(false);
+      if (isLatestRequest(requestRef, requestId)) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { load(days); }, [days, load]);
+  useEffect(() => {
+    load(days);
+    return () => { invalidateLatestRequest(requestRef); };
+  }, [days, load]);
 
   const funnel = data?.funnel;
   const compare = data?.compare;

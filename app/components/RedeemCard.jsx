@@ -10,7 +10,8 @@ import {
   prepareSinglePendingOperation,
   readSinglePendingOperation,
 } from "../lib/single-pending-journal";
-import { clientFetch as fetch } from "../lib/client-fetch";
+import { clientFetch as fetch, isClientRequestTimeout } from "../lib/client-fetch";
+import { authenticatedUserMatches, isSuccessfulAuthResponse, safeLoginAfterUncertainAuth, shouldRecoverAuthMutationResponse } from "../lib/auth-recovery";
 
 function GoogleIcon() {
   return (
@@ -40,7 +41,9 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
   const { t, locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
   const redeemRequestRef = useRef(null);
+  const authLoadRequestRef = useRef(0);
   const [authUser, setAuthUser] = useState(null);
+  const [authLoadError, setAuthLoadError] = useState("");
   const [authModal, setAuthModal] = useState(null);
   const [pendingRedeem, setPendingRedeem] = useState(false);
   const [authForm, setAuthForm] = useState({ email: "", password: "", captchaAnswer: "", code: "", newPassword: "" });
@@ -52,12 +55,45 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
   const [redeemBusy, setRedeemBusy] = useState(false);
   const [redeemStatus, setRedeemStatus] = useState(null);
 
+  async function loadAuthState() {
+    const requestId = ++authLoadRequestRef.current;
+    setAuthUser(null);
+    setAuthLoadError("");
+    try {
+      const response = await fetch("/api/auth/me", { credentials: "same-origin" });
+      if (requestId !== authLoadRequestRef.current) return;
+      if (response.status === 401) {
+        setAuthUser(false);
+        return;
+      }
+      let data = null;
+      try { data = await response.json(); } catch {
+        throw new SyntaxError("invalid_auth_response");
+      }
+      if (!response.ok || !data?.ok) {
+        const error = new Error("auth_state_unavailable");
+        error.status = response.status;
+        throw error;
+      }
+      if (requestId !== authLoadRequestRef.current) return;
+      setAuthUser({ email: data.email, accountLifecycleId: data.accountLifecycleId || "", username: data.username, balance: Number(data.balance || 0) });
+    } catch (error) {
+      if (requestId !== authLoadRequestRef.current) return;
+      const message = isClientRequestTimeout(error)
+        ? L("登录状态确认超时，请重试", "Session verification timed out. Please retry.")
+        : [500, 503].includes(error?.status)
+          ? L("账户服务暂时不可用，请稍后重试", "The account service is temporarily unavailable. Please retry.")
+          : error?.name === "SyntaxError"
+            ? L("账户接口响应异常，请重试", "The account service returned an invalid response. Please retry.")
+            : L("登录状态确认失败，请检查网络后重试", "Session verification failed. Check your connection and retry.");
+      setAuthLoadError(message);
+    }
+  }
+
   useEffect(() => {
-    fetch("/api/auth/me", { credentials: "same-origin" })
-      .then((r) => r.json())
-      .then((d) => setAuthUser(d.ok ? { email: d.email, accountLifecycleId: d.accountLifecycleId || "", username: d.username, balance: Number(d.balance || 0) } : false))
-      .catch(() => setAuthUser(false));
-  }, []);
+    loadAuthState();
+    return () => { authLoadRequestRef.current += 1; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!autoFillFromQuery || typeof window === "undefined") return;
@@ -161,7 +197,11 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
           return;
         }
       }
-      if (!authUser || authUser === false) {
+      if (authUser === null) {
+        setRedeemStatus({ type: "error", message: authLoadError || L("正在确认登录状态，请稍候", "Your session is still being verified. Please wait.") });
+        return;
+      }
+      if (authUser === false) {
         setPendingRedeem(true); // 登录成功后自动重试兑换
         setAuthModal("login");
         setAuthNotice(L("余额兑换码需要先登录账号，登录后将自动为您兑换", "Balance codes require sign-in — we'll redeem automatically once you're signed in."));
@@ -190,7 +230,18 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
       });
       let data = null;
       try { data = await res.json(); } catch {}
-      if (!data.ok) {
+      if (!res.ok || data?.ok !== true) {
+        if (res.status === 401) {
+          setAuthUser(false);
+          setPendingRedeem(false);
+          setAuthModal("login");
+          setAuthNotice(L(
+            "登录状态已过期。原兑换请求和幂等标识已保留；重新登录后请手动再次点击兑换，不会自动重复提交。",
+            "Your session expired. The original redeem request and idempotency key are preserved; sign in, then tap redeem again manually. It won't be replayed automatically.",
+          ));
+          setRedeemStatus({ type: "error", message: L("请重新登录后手动重试原兑换请求", "Sign in again, then manually retry the preserved redeem request") });
+          return;
+        }
         if (isExplicitTerminalIdempotencyResponse(res.status, data)) {
           redeemRequestRef.current = null;
           clearSinglePendingOperation(window.localStorage, storageKey, operation.key);
@@ -228,52 +279,79 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
     setAuthBusy(true);
     setAuthError("");
     setAuthNotice("");
+    const attemptedMode = authModal;
+    const attemptedForm = { ...authForm, email: authForm.email.trim().toLowerCase() };
+    let responseConfirmed = false;
     try {
       let payload = {};
-      if (authModal === "login") payload = { email: authForm.email.trim(), password: authForm.password };
-      if (authModal === "register") payload = {
-        email: authForm.email.trim(),
-        password: authForm.password,
+      if (attemptedMode === "login") payload = { email: attemptedForm.email, password: attemptedForm.password };
+      if (attemptedMode === "register") payload = {
+        email: attemptedForm.email,
+        password: attemptedForm.password,
         captchaToken: authCaptcha.token,
-        captchaAnswer: authForm.captchaAnswer.trim(),
+        captchaAnswer: attemptedForm.captchaAnswer.trim(),
         inviteCode: storedInviteCode(),
       };
-      if (authModal === "forgot") payload = { email: authForm.email.trim() };
-      if (authModal === "reset") payload = {
-        email: authForm.email.trim(),
-        code: authForm.code.trim(),
-        newPassword: authForm.newPassword,
+      if (attemptedMode === "forgot") payload = { email: attemptedForm.email };
+      if (attemptedMode === "reset") payload = {
+        email: attemptedForm.email,
+        code: attemptedForm.code.trim(),
+        newPassword: attemptedForm.newPassword,
       };
-      const res = await fetch(`/api/auth/${authModal}`, {
+      const res = await fetch(`/api/auth/${attemptedMode}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
-      if (authModal === "forgot") {
-        setAuthNotice(L("验证码已发送至邮箱。请查看收件箱(或垃圾邮件)", "A code has been sent to your email. Check your inbox (or spam)."));
+      let data = null;
+      try { data = await res.json(); } catch {
+        throw new SyntaxError("invalid_auth_response");
+      }
+      if (!isSuccessfulAuthResponse(res, data, attemptedMode)) {
+        if (shouldRecoverAuthMutationResponse(attemptedMode, res.status, data?.error)) {
+          throw new Error("auth_mutation_result_uncertain");
+        }
+        const msg = {
+          captcha_failed: L("验证码错误，请重新输入", "Wrong captcha, please try again"),
+          email_taken: L("该邮箱已注册", "This email is already registered"),
+          invalid_email: L("邮箱格式错误", "Invalid email format"),
+          password_length: L("密码 6-64 位", "Password must be 6-64 characters"),
+          invalid_credentials: L("邮箱或密码错误", "Wrong email or password"),
+          invalid_code: L("验证码格式错误(6 位数字)", "Invalid code format (6 digits)"),
+          code_invalid_or_expired: L("验证码错误或已过期", "Code is wrong or expired"),
+          user_not_found: L("该邮箱未注册", "This email isn't registered"),
+          account_banned: L("该账号已停用，请联系在线客服", "This account is disabled. Contact support."),
+        }[data?.error] || L("操作失败，请重试", "Something went wrong. Please retry.");
+        if (attemptedMode === "register" && data?.error === "captcha_failed") refreshAuthCaptcha(true);
+        setAuthError(msg);
+        return;
+      }
+      if (attemptedMode === "forgot") {
+        responseConfirmed = true;
+        setAuthNotice(L("如果该邮箱已注册，验证码会发送至邮箱。请检查收件箱（或垃圾邮件）", "If this email is registered, a code will be sent. Check your inbox or spam."));
         setAuthModal("reset");
-        setAuthForm((f) => ({ ...f, code: "", newPassword: "" }));
+        setAuthForm((f) => ({ ...f, email: attemptedForm.email, code: "", newPassword: "" }));
         return;
       }
-      if (data.ok) {
-        setAuthUser({ email: data.email, accountLifecycleId: data.accountLifecycleId || "", username: data.username || "", balance: Number(data.balance || 0) });
-        setAuthModal(null);
-        return;
+      if (!authenticatedUserMatches(data, attemptedForm.email, data?.accountLifecycleId)) {
+        throw new SyntaxError("invalid_auth_identity");
       }
-      const msg = {
-        captcha_failed: L("验证码错误，请重新输入", "Wrong captcha, please try again"),
-        email_taken: L("该邮箱已注册", "This email is already registered"),
-        invalid_email: L("邮箱格式错误", "Invalid email format"),
-        password_length: L("密码 6-64 位", "Password must be 6-64 characters"),
-        invalid_credentials: L("邮箱或密码错误", "Wrong email or password"),
-        invalid_code: L("验证码格式错误(6 位数字)", "Invalid code format (6 digits)"),
-        code_invalid_or_expired: L("验证码错误或已过期", "Code is wrong or expired"),
-        user_not_found: L("该邮箱未注册", "This email isn't registered"),
-      }[data.error] || data.error || L("操作失败", "Something went wrong");
-      if (authModal === "register" && data.error === "captcha_failed") refreshAuthCaptcha(true);
-      setAuthError(msg);
+      responseConfirmed = true;
+      authLoadRequestRef.current += 1;
+      setAuthUser({ email: data.email, accountLifecycleId: data.accountLifecycleId || "", username: data.username || "", balance: Number(data.balance || 0) });
+      setAuthLoadError("");
+      setAuthModal(null);
     } catch {
+      const recovery = !responseConfirmed ? safeLoginAfterUncertainAuth(attemptedMode, attemptedForm) : null;
+      if (recovery) {
+        setAuthModal(recovery.mode);
+        setAuthForm(recovery.form);
+        setAuthNotice(L(
+          "刚才的注册或重置结果尚未确认，已切换为安全登录验证，不会重复提交原操作。",
+          "The sign-up or reset result is uncertain. We've switched to a safe sign-in check and won't repeat the original operation.",
+        ));
+        return;
+      }
       setAuthError(L("网络错误", "Network error"));
     } finally {
       setAuthBusy(false);
@@ -309,6 +387,7 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
             {redeemBusy ? <LoaderCircle size={14} className="spin-icon" /> : <Gift size={14} />}
             {redeemBusy ? L("兑换中", "Redeeming") : t("redeem.submit")}
           </button>
+          {authLoadError && <div className="redeem-card-status error" role="alert">{authLoadError} <button type="button" onClick={loadAuthState}>{L("重试", "Retry")}</button></div>}
           {redeemStatus && <div className={`redeem-card-status ${redeemStatus.type}`}>{redeemStatus.message}</div>}
         </form>
       </div>
@@ -319,8 +398,8 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
             <div className="auth-modal-head">
               {authModal === "login" || authModal === "register" ? (
                 <div className="auth-modal-tabs">
-                  <button type="button" className={`auth-tab${authModal === "login" ? " active" : ""}`} onClick={() => setAuthModal("login")}>{L("登录", "Sign in")}</button>
-                  <button type="button" className={`auth-tab register-tab${authModal === "register" ? " active" : ""}`} onClick={() => setAuthModal("register")}>
+                  <button type="button" className={`auth-tab${authModal === "login" ? " active" : ""}`} onClick={() => setAuthModal("login")} disabled={authBusy}>{L("登录", "Sign in")}</button>
+                  <button type="button" className={`auth-tab register-tab${authModal === "register" ? " active" : ""}`} onClick={() => setAuthModal("register")} disabled={authBusy}>
                     {L("注册", "Sign up")}
                     <span className="auth-tab-tip">{L("立减¥8.88", "¥8.88 off")}</span>
                   </button>
@@ -335,7 +414,7 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
             <form className="auth-form" onSubmit={doAuth}>
               <label className="auth-field">
                 <span>{L("邮箱", "Email")}</span>
-                <input type="email" value={authForm.email} onChange={(e) => setAuthForm((f) => ({ ...f, email: e.target.value }))} placeholder="example@email.com" required />
+                <input type="email" value={authForm.email} onChange={(e) => setAuthForm((f) => ({ ...f, email: e.target.value }))} placeholder="example@email.com" readOnly={authModal === "reset"} disabled={authBusy} required />
               </label>
               {(authModal === "login" || authModal === "register") && (
                 <label className="auth-field">
@@ -359,7 +438,7 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
                         required
                       />
                     </div>
-                    <button type="button" className="auth-captcha-image" onClick={() => refreshAuthCaptcha(true)} disabled={authCaptcha.loading} aria-label={L("刷新验证码", "Refresh captcha")}>
+                    <button type="button" className="auth-captcha-image" onClick={() => refreshAuthCaptcha(true)} disabled={authBusy || authCaptcha.loading} aria-label={L("刷新验证码", "Refresh captcha")}>
                       {authCaptcha.image && !authCaptcha.loading ? <img src={authCaptcha.image} alt={L("验证码", "Captcha")} /> : <LoaderCircle size={18} className="spin-icon" />}
                       <span><RefreshCw size={12} /></span>
                     </button>
@@ -388,20 +467,20 @@ export default function RedeemCard({ autoFillFromQuery = false }) {
                 <>
                   <div className="auth-divider"><span>{L("或使用", "or")}</span></div>
                   <div className="oauth-login-grid bottom">
-                    <a href="/api/auth/oauth/google/start" className="oauth-login-btn"><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
+                    <a href={authBusy ? undefined : "/api/auth/oauth/google/start"} tabIndex={authBusy ? -1 : undefined} className="oauth-login-btn" aria-disabled={authBusy} onClick={(event) => { if (authBusy) event.preventDefault(); }}><GoogleIcon />{L("Google 登录", "Sign in with Google")}</a>
                   </div>
                 </>
               )}
               <div className="auth-hints">
                 {authModal === "login" && (
                   <>
-                    <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>{L("忘记密码?", "Forgot password?")}</button>
-                    <span className="auth-hint">{L("还没账号?", "No account?")} <button type="button" className="auth-switch" onClick={() => setAuthModal("register")}>{L("立即注册", "Sign up")}</button></span>
+                    <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")} disabled={authBusy}>{L("忘记密码?", "Forgot password?")}</button>
+                    <span className="auth-hint">{L("还没账号?", "No account?")} <button type="button" className="auth-switch" onClick={() => setAuthModal("register")} disabled={authBusy}>{L("立即注册", "Sign up")}</button></span>
                   </>
                 )}
-                {authModal === "register" && <span className="auth-hint">{L("已有账号?", "Have an account?")} <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>{L("去登录", "Sign in")}</button></span>}
-                {authModal === "forgot" && <button type="button" className="auth-switch" onClick={() => setAuthModal("login")}>{L("返回登录", "Back to sign in")}</button>}
-                {authModal === "reset" && <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")}>{L("重新发送验证码", "Resend code")}</button>}
+                {authModal === "register" && <span className="auth-hint">{L("已有账号?", "Have an account?")} <button type="button" className="auth-switch" onClick={() => setAuthModal("login")} disabled={authBusy}>{L("去登录", "Sign in")}</button></span>}
+                {authModal === "forgot" && <button type="button" className="auth-switch" onClick={() => setAuthModal("login")} disabled={authBusy}>{L("返回登录", "Back to sign in")}</button>}
+                {authModal === "reset" && <button type="button" className="auth-switch" onClick={() => setAuthModal("forgot")} disabled={authBusy}>{L("重新发送验证码", "Resend code")}</button>}
               </div>
             </form>
           </div>

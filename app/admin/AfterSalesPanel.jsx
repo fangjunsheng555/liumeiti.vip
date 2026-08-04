@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { clientFetch as fetch } from "../lib/client-fetch";
+import { beginLatestRequest, invalidateLatestRequest, isLatestRequest } from "../lib/latest-request";
 import {
   AlertCircle,
   CheckCircle2,
@@ -61,8 +62,10 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
   const [relatedOrderLoading, setRelatedOrderLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [referenceNoticeOpen, setReferenceNoticeOpen] = useState(false);
+  const ticketsRequestRef = useRef(0);
 
   const loadTickets = useCallback(async ({ silent = false } = {}) => {
+    const requestId = beginLatestRequest(ticketsRequestRef);
     if (!silent) setLoading(true);
     setError("");
     try {
@@ -71,16 +74,20 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
       const response = await fetch(`/api/admin/after-sales?${params.toString()}`, { credentials: "same-origin", cache: "no-store" });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "load_failed");
+      if (!isLatestRequest(ticketsRequestRef, requestId)) return;
       setTickets(data.tickets || []);
       setCounts(data.counts || { all: 0, pending: 0, completed: 0 });
     } catch {
-      setError("售后工单加载失败，请稍后刷新");
+      if (isLatestRequest(ticketsRequestRef, requestId)) setError("售后工单加载失败，请稍后刷新");
     } finally {
-      if (!silent) setLoading(false);
+      if (isLatestRequest(ticketsRequestRef, requestId)) setLoading(false);
     }
   }, [status, appliedSearch]);
 
-  useEffect(() => { loadTickets(); }, [loadTickets]);
+  useEffect(() => {
+    loadTickets();
+    return () => { invalidateLatestRequest(ticketsRequestRef); };
+  }, [loadTickets]);
 
   useEffect(() => {
     if (!active) return;

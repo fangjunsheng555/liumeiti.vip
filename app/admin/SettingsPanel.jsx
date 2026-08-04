@@ -2,9 +2,10 @@
 
 // 站点设置 — 仅超级管理员。读写 /api/admin/settings。
 // 改任何项,保存后前端站点(客服/服务中心/页脚/收款码/结账)与订单邮件即时同步。
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { LoaderCircle, Save, RotateCcw, Settings as SettingsIcon, AlertTriangle, CheckCircle2, Headphones, Coins, Layers, QrCode, Tag, FileText, Bell, Upload, DatabaseBackup } from "lucide-react";
 import { clientFetch as fetch } from "../lib/client-fetch";
+import { beginLatestRequest, isLatestRequest } from "../lib/latest-request";
 
 // 图片压缩:最长边 640px,白底(利于扫码),优先 PNG,超 400KB 降级 JPEG。
 async function compressImage(file) {
@@ -79,16 +80,22 @@ export default function SettingsPanel() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
+  const loadRequestRef = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = beginLatestRequest(loadRequestRef);
     setLoading(true); setMsg(null);
     try {
       const r = await fetch("/api/admin/settings", { credentials: "same-origin", cache: "no-store" });
       const j = await r.json();
-      if (j.ok) setS(j.settings);
+      if (!isLatestRequest(loadRequestRef, requestId)) return;
+      if (r.ok && j.ok) setS(j.settings);
       else setMsg({ type: "error", text: j.error === "unauthorized" ? "仅超级管理员可管理站点设置" : (j.error || "加载失败") });
-    } catch (e) { setMsg({ type: "error", text: "网络错误" }); }
-    finally { setLoading(false); }
+    } catch (e) {
+      if (isLatestRequest(loadRequestRef, requestId)) setMsg({ type: "error", text: "网络错误" });
+    } finally {
+      if (isLatestRequest(loadRequestRef, requestId)) setLoading(false);
+    }
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -104,6 +111,7 @@ export default function SettingsPanel() {
   const I = (path, props = {}) => <input value={s ? get(s, path) ?? "" : ""} onChange={(e) => set(path, e.target.value)} {...props} />;
 
   async function save() {
+    if (saving || loading) return;
     setSaving(true); setMsg(null);
     try {
       const r = await fetch("/api/admin/settings", {
@@ -131,8 +139,8 @@ export default function SettingsPanel() {
         <h2><SettingsIcon size={19} />站点设置</h2>
         <span className="sub">改完保存,前端站点与结账/邮件即时同步</span>
         <span className="spacer" />
-        <button type="button" className="admin-settings-btn" onClick={load} disabled={saving}><RotateCcw size={13} />重载</button>
-        <button type="button" className="admin-settings-btn primary" onClick={save} disabled={saving}>
+        <button type="button" className="admin-settings-btn" onClick={load} disabled={saving || loading}><RotateCcw size={13} />重载</button>
+        <button type="button" className="admin-settings-btn primary" onClick={save} disabled={saving || loading}>
           {saving ? <LoaderCircle size={14} className="spin-icon" /> : <Save size={14} />}{saving ? "保存中" : "保存全部"}
         </button>
       </div>

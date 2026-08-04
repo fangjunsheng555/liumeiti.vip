@@ -2,10 +2,11 @@
 
 // 商品/价格/库存管理 — 仅超级管理员。读写 /api/admin/catalog。
 // 改价格/规格/文案/上下架/库存,保存后前端(首页/选购/服务页/结账)与结账实收价即时同步。
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { LoaderCircle, Save, RotateCcw, Package, AlertTriangle, CheckCircle2, History, Undo2, X } from "lucide-react";
 import { getCatalogDisplayPrice } from "../lib/catalog-price.js";
 import { clientFetch as fetch } from "../lib/client-fetch";
+import { beginLatestRequest, isLatestRequest } from "../lib/latest-request";
 
 export default function CatalogPanel() {
   const [catalog, setCatalog] = useState(null);
@@ -16,22 +17,29 @@ export default function CatalogPanel() {
   const [currentVersion, setCurrentVersion] = useState("");
   const [versions, setVersions] = useState([]);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [rollbackBusy, setRollbackBusy] = useState("");
+  const loadRequestRef = useRef(0);
 
   const load = useCallback(async () => {
+    const requestId = beginLatestRequest(loadRequestRef);
     setLoading(true); setMsg(null);
     try {
       const r = await fetch("/api/admin/catalog", { credentials: "same-origin", cache: "no-store" });
       const j = await r.json();
-      if (j.ok) {
+      if (!isLatestRequest(loadRequestRef, requestId)) return;
+      if (r.ok && j.ok) {
         setCatalog(j.catalog);
         setStockEdits({});
         setCurrentVersion(j.currentVersion || "");
         setVersions(j.versions || []);
       }
       else setMsg({ type: "error", text: j.error === "unauthorized" ? "仅超级管理员可管理商品" : (j.error || "加载失败") });
-    } catch (e) { setMsg({ type: "error", text: "网络错误" }); }
-    finally { setLoading(false); }
+    } catch (e) {
+      if (isLatestRequest(loadRequestRef, requestId)) setMsg({ type: "error", text: "网络错误" });
+    } finally {
+      if (isLatestRequest(loadRequestRef, requestId)) setLoading(false);
+    }
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -57,6 +65,7 @@ export default function CatalogPanel() {
   }
 
   async function save() {
+    if (saving || loading || historyLoading || rollbackBusy) return;
     setSaving(true); setMsg(null);
     try {
       const r = await fetch("/api/admin/catalog", {
@@ -79,19 +88,24 @@ export default function CatalogPanel() {
   }
 
   async function openHistory() {
+    if (saving || loading || historyLoading || rollbackBusy) return;
     setHistoryOpen(true);
+    setHistoryLoading(true);
     try {
       const response = await fetch("/api/admin/catalog/versions", { credentials: "same-origin", cache: "no-store" });
       const data = await response.json();
-      if (response.ok && data.ok) {
-        setVersions(data.versions || []);
-        setCurrentVersion(data.currentVersion || currentVersion);
-      }
-    } catch (e) {}
+      if (!response.ok || data?.ok !== true) throw new Error(data?.error || "version_history_failed");
+      setVersions(data.versions || []);
+      setCurrentVersion(data.currentVersion || currentVersion);
+    } catch (e) {
+      setMsg({ type: "error", text: "版本记录加载失败，请关闭后重试" });
+    } finally {
+      setHistoryLoading(false);
+    }
   }
 
   async function rollback(version) {
-    if (!version?.id || version.id === currentVersion) return;
+    if (!version?.id || version.id === currentVersion || saving || loading || historyLoading || rollbackBusy) return;
     if (!window.confirm(`恢复到版本 ${version.id}？实时库存不会回滚。`)) return;
     setRollbackBusy(version.id);
     setMsg(null);
@@ -129,9 +143,9 @@ export default function CatalogPanel() {
         <h2><Package size={19} />商品 / 价格管理</h2>
         <span className="sub">价格/规格/文案/上下架/库存,保存即全站+结账生效</span>
         <span className="spacer" />
-        <button type="button" className="admin-settings-btn" onClick={openHistory} disabled={saving}><History size={13} />版本记录</button>
-        <button type="button" className="admin-settings-btn" onClick={load} disabled={saving}><RotateCcw size={13} />重载</button>
-        <button type="button" className="admin-settings-btn primary" onClick={save} disabled={saving}>
+        <button type="button" className="admin-settings-btn" onClick={openHistory} disabled={saving || loading || historyLoading || Boolean(rollbackBusy)}><History size={13} />{historyLoading ? "加载记录" : "版本记录"}</button>
+        <button type="button" className="admin-settings-btn" onClick={load} disabled={saving || loading || historyLoading || Boolean(rollbackBusy)}><RotateCcw size={13} />重载</button>
+        <button type="button" className="admin-settings-btn primary" onClick={save} disabled={saving || loading || historyLoading || Boolean(rollbackBusy)}>
           {saving ? <LoaderCircle size={14} className="spin-icon" /> : <Save size={14} />}{saving ? "保存中" : "保存全部"}
         </button>
       </div>
@@ -200,15 +214,15 @@ export default function CatalogPanel() {
       ))}
 
       {historyOpen && (
-        <div className="admin-drawer-mask" onMouseDown={(event) => event.target === event.currentTarget && setHistoryOpen(false)}>
+        <div className="admin-drawer-mask" onMouseDown={(event) => event.target === event.currentTarget && !rollbackBusy && setHistoryOpen(false)}>
           <aside className="admin-compact-drawer admin-version-drawer" role="dialog" aria-modal="true" aria-label="商品目录版本记录">
             <header>
               <div><span>商品目录</span><strong>版本记录</strong></div>
-              <button type="button" onClick={() => setHistoryOpen(false)} aria-label="关闭"><X size={18} /></button>
+              <button type="button" onClick={() => setHistoryOpen(false)} disabled={Boolean(rollbackBusy)} aria-label="关闭"><X size={18} /></button>
             </header>
             <p className="admin-version-note">恢复价格、规格与商品文案；实时库存不会回滚。</p>
             <div className="admin-version-list">
-              {versions.length === 0 ? <div className="admin-compact-empty">暂无版本记录</div> : versions.map((version) => {
+              {historyLoading ? <div className="admin-compact-empty">版本记录加载中…</div> : versions.length === 0 ? <div className="admin-compact-empty">暂无版本记录</div> : versions.map((version) => {
                 const current = version.id === currentVersion;
                 const summary = version.summary || {};
                 return (
