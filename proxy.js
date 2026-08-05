@@ -45,6 +45,7 @@ function isToolReadOnlyAccountApiPath(pathname, method) {
 
 function isProtectedCookieApiPath(pathname) {
   return pathname === "/api/order"
+    || pathname === "/api/order-query"
     || pathname === "/api/quote-orders"
     || pathname.startsWith("/api/quote-orders/")
     || pathname === "/api/account"
@@ -263,6 +264,7 @@ export const config = {
     "/api/account/:path*",
     "/api/tool/:path*",
     "/api/order",
+    "/api/order-query",
     "/api/quote-orders/:path*",
     "/api/track",
     "/api/admin/:path*",

@@ -58,6 +58,7 @@ test("credentialed CORS is restricted to exact tool origins and tool paths", asy
 test("all cookie-authenticated account routes are covered by the proxy matcher", async () => {
   const { config } = await loadProxy();
   assert.ok(config.matcher.includes("/api/account/:path*"));
+  assert.ok(config.matcher.includes("/api/order-query"));
 });
 
 test("the tool origin can only read account identity, never mutate account, money, orders or admin APIs", async () => {
@@ -88,6 +89,7 @@ test("the tool origin can only read account identity, never mutate account, mone
     ["/api/auth/transfer", "POST"],
     ["/api/account/email-preferences", "PATCH"],
     ["/api/order", "POST"],
+    ["/api/order-query", "POST"],
     ["/api/quote-orders/LM123", "POST"],
     ["/api/netflix-code", "POST"],
     ["/api/test-email", "POST"],
@@ -129,6 +131,13 @@ test("the tool origin can only read account identity, never mutate account, mone
   }));
   assert.equal(sameOriginPreferences.status, 200);
   assert.equal(sameOriginPreferences.headers.get("x-middleware-next"), "1");
+
+  const sameOriginOrderQuery = await proxy(request("/api/order-query", {
+    method: "POST",
+    origin: "https://www.liumeiti.vip",
+  }));
+  assert.equal(sameOriginOrderQuery.status, 200);
+  assert.equal(sameOriginOrderQuery.headers.get("x-middleware-next"), "1");
 });
 
 test("apex and www storefront origins trust each other without trusting lookalikes", async () => {
