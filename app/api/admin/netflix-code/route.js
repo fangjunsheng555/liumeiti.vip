@@ -37,6 +37,7 @@ import {
   normalizeNetflixRecordQuery,
 } from "./_records.js";
 import { readUserAuthState } from "../../_auth-session.js";
+import { isNetflixOrderItem } from "../../../lib/netflix-delivery.js";
 
 export const runtime = "nodejs";
 
@@ -60,19 +61,34 @@ function pipelineValue(entry) {
     : entry;
 }
 
+function netflixItemEntry(order) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const index = items.findIndex((item, itemIndex) => isNetflixOrderItem(order, item, itemIndex));
+  if (index >= 0) return { item: items[index], index, fromItems: true };
+  return !items.length && isNetflixOrderItem(order, order, 0)
+    ? { item: order, index: -1, fromItems: false }
+    : null;
+}
+
 function netflixItem(order) {
-  return (Array.isArray(order?.items) ? order.items : []).find((item) => item?.service === "netflix")
-    || (String(order?.service || "").toLowerCase() === "netflix" ? order : null);
+  return netflixItemEntry(order)?.item || null;
 }
 
 function accountFor(order) {
-  const item = netflixItem(order);
-  return String(item?.staffAccount || item?.account || order?.staffAccount || order?.account || "").trim().toLowerCase();
+  const entry = netflixItemEntry(order);
+  if (!entry) return "";
+  const allowTopLevelFallback = !entry.fromItems || entry.index === 0;
+  return String(entry.item?.staffAccount
+    || entry.item?.account
+    || (allowTopLevelFallback ? order?.staffAccount || order?.account : "")
+    || "").trim().toLowerCase();
 }
 
 function directoryOrder(order) {
-  const item = netflixItem(order);
-  if (!item) return null;
+  const entry = netflixItemEntry(order);
+  if (!entry) return null;
+  const { item } = entry;
+  const allowTopLevelFallback = !entry.fromItems || entry.index === 0;
   return {
     orderId: order.orderId,
     email: order.email,
@@ -81,8 +97,9 @@ function directoryOrder(order) {
     service: "netflix",
     serviceLabel: order.serviceLabel,
     netflixSelfServiceEnabled: order.netflixSelfServiceEnabled,
-    staffAccount: item.staffAccount || order.staffAccount || "",
-    account: item.account || order.account || "",
+    netflixDeliveryMode: order.netflixDeliveryMode,
+    staffAccount: item.staffAccount || (allowTopLevelFallback ? order.staffAccount || "" : ""),
+    account: item.account || (allowTopLevelFallback ? order.account || "" : ""),
     items: [{
       service: "netflix",
       staffAccount: item.staffAccount || "",
@@ -163,10 +180,6 @@ export async function GET(request) {
   const accountByOrderId = new Map();
   for (const order of orders) {
     const account = accountFor(order);
-    if (!account) continue;
-    const hash = netflixAccountHash(account);
-    if (!accountByHash.has(hash)) accountByHash.set(hash, account);
-    if (!byHash.has(hash)) byHash.set(hash, []);
     const { ownerEmail, deliveryEmail, linkedUserEmail } = netflixOrderIdentity(order);
     const user = userByEmail.get(ownerEmail) || null;
     const control = {
@@ -179,12 +192,26 @@ export async function GET(request) {
       linkedUserEmail,
       status: order.status || "received",
       serviceLabel: order.serviceLabel || "Netflix",
+      account,
+      deliveryMode: order.netflixDeliveryMode === "self_service"
+        || order.netflixDeliveryMode === undefined
+        || order.netflixDeliveryMode === null
+        || order.netflixDeliveryMode === ""
+        ? "self_service"
+        : "password",
       enabled: order.netflixSelfServiceEnabled !== false,
       userRegistered: Boolean(user),
       userEnabled: !user?.netflixSelfServiceDisabled,
     };
-    byHash.get(hash).push(control);
+    // Keep every Netflix order in the stable control list, including an
+    // account-less order that staff still need to switch to manual delivery or
+    // whose registered buyer needs self-service restored.
     orderControls.set(order.orderId, control);
+    if (!account) continue;
+    const hash = netflixAccountHash(account);
+    if (!accountByHash.has(hash)) accountByHash.set(hash, account);
+    if (!byHash.has(hash)) byHash.set(hash, []);
+    byHash.get(hash).push(control);
     accountByOrderId.set(order.orderId, account);
   }
   const receipts = await latestNetflixMailReceipts(Array.from(byHash.keys()));

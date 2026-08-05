@@ -472,7 +472,7 @@ test("after-sales mail effects have durable plans, outboxes and exact client jou
   assert.match(completion, /principal: ticketId/);
   assert.doesNotMatch(reference, /principal:[^\n]*staffId/);
   assert.doesNotMatch(completion, /principal:[^\n]*staffId/);
-  assert.match(reference, /orders: recipientOrders\.map\(referenceNoticeOrderSnapshot\)/);
+  assert.match(reference, /orders: sortedOrders\.map\(referenceNoticeOrderSnapshot\)/);
   assert.match(reference, /idempotencyKey: stableId/);
   assert.match(reference, /reference_notice_retryable/);
   assert.match(completion, /completion_email_retryable/);

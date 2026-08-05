@@ -33,12 +33,21 @@ function compactTime(value) {
   return match ? `${match[1]} ${match[2]}` : value || "未记录";
 }
 
+function validEmail(value) {
+  const email = String(value || "").trim();
+  return email.length > 3
+    && email.length <= 254
+    && !/[\x00-\x1f\x7f]/.test(email)
+    && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
 function credentialDrafts(ticket) {
   return (ticket?.items || []).map((item, index) => ({
     index: Number.isFinite(Number(item.index)) ? Number(item.index) : index,
-    service: item.service || "",
+    service: String(item.service || "").toLowerCase(),
     account: item.account || "",
-    password: item.password || "",
+    password: item.netflixSelfService ? "" : item.password || "",
+    netflixSelfService: item.netflixSelfService === true,
     editable: Boolean(item.credentialManaged || item.account || item.password),
     apply: Boolean(item.applyCredentialsByDefault),
   }));
@@ -160,7 +169,11 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
 
   async function completeTicket() {
     if (!active || (active.status !== "pending" && !completionRecoveryPending) || completing || !canEdit) return;
-    if (credentialItems.some((item) => item.editable && item.apply && (!item.account.trim() || !item.password.trim()))) {
+    if (credentialItems.some((item) => item.editable && item.apply && item.netflixSelfService && !validEmail(item.account))) {
+      setResult({ type: "error", message: "请填写有效的 Netflix 登录邮箱后再完成工单" });
+      return;
+    }
+    if (credentialItems.some((item) => item.editable && item.apply && !item.netflixSelfService && (!item.account.trim() || !item.password.trim()))) {
       setResult({ type: "error", message: "请完整填写该服务的账号和密码后再完成工单" });
       return;
     }
@@ -200,6 +213,7 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
           clearAdminMutationJournal(window.localStorage, pending.storageKey, operation.key);
         }
         const requestError = new Error(data.error || "complete_failed");
+        requestError.code = data.error || "complete_failed";
         requestError.manualReview = Boolean(data.manualReview);
         throw requestError;
       }
@@ -222,7 +236,14 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
         setResult({ type: "warning", message: "邮件结果不确定，系统已停止自动重发；请先在邮件服务商记录中人工核对。" });
         return;
       }
-      setResult({ type: "error", message: "完成工单失败，请稍后再试" });
+      const message = error?.code === "invalid_netflix_email"
+        ? "Netflix 登录邮箱格式不正确，请检查后重试"
+        : error?.code === "netflix_account_conflict"
+          ? "同一订单的 Netflix 商品必须使用同一个登录邮箱，请全部更新为同一邮箱后重试"
+        : error?.code === "missing_credentials"
+          ? "请完整填写要写回订单的账号和密码"
+          : "完成工单失败，请稍后再试";
+      setResult({ type: "error", message });
     } finally {
       setCompleting(false);
     }
@@ -334,24 +355,26 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
                     const itemIndex = Number.isFinite(Number(item.index)) ? Number(item.index) : index;
                     const draft = credentialItems.find((entry) => entry.index === itemIndex) || { account: item.account || "", password: item.password || "" };
                     const hasCredentials = Boolean(item.credentialManaged || item.account || item.password);
+                    const netflixSelfService = item.netflixSelfService === true;
                     return (
                       <div className="admin-after-sales-item" key={`${item.service}-${itemIndex}`}>
                         <div className="admin-after-sales-item-head"><span>{index + 1}</span><strong>{item.label}</strong></div>
                         {hasCredentials && active.status === "pending" ? (
                           <div className="admin-after-sales-credential-edit">
                             <label>
-                              <span>账号</span>
-                              <input value={draft.account} onChange={(event) => updateCredential(itemIndex, "account", event.target.value)} maxLength={80} autoComplete="off" required disabled={!canEdit || completing} />
+                              <span>{netflixSelfService ? "Netflix 登录邮箱" : "账号"}</span>
+                              <input value={draft.account} onChange={(event) => updateCredential(itemIndex, "account", event.target.value)} maxLength={80} autoComplete="off" required={draft.apply} disabled={!canEdit || completing} />
                             </label>
-                            <label>
+                            {!netflixSelfService && <label>
                               <span>密码</span>
                               <div>
-                                <input type={shownPasswords[itemIndex] ? "text" : "password"} value={draft.password} onChange={(event) => updateCredential(itemIndex, "password", event.target.value)} maxLength={120} autoComplete="new-password" required disabled={!canEdit || completing} />
+                                <input type={shownPasswords[itemIndex] ? "text" : "password"} value={draft.password} onChange={(event) => updateCredential(itemIndex, "password", event.target.value)} maxLength={120} autoComplete="new-password" required={draft.apply} disabled={!canEdit || completing} />
                                 <button type="button" onClick={() => setShownPasswords((current) => ({ ...current, [itemIndex]: !current[itemIndex] }))} aria-label={shownPasswords[itemIndex] ? "隐藏密码" : "显示密码"}>
                                   {shownPasswords[itemIndex] ? <EyeOff size={14} /> : <Eye size={14} />}
                                 </button>
                               </div>
-                            </label>
+                            </label>}
+                            {netflixSelfService && <small>自助接码订单只同步登录邮箱，不显示或改写订单内保留的密码。</small>}
                             <button
                               type="button"
                               className={`admin-after-sales-credential-apply${draft.apply ? " active" : ""}`}
@@ -365,8 +388,8 @@ export default function AfterSalesPanel({ canEdit = false, canSendMail = false, 
                           </div>
                         ) : hasCredentials ? (
                           <div className="admin-after-sales-item-fields">
-                            <div><span>账号</span><code>{item.account}</code></div>
-                            <div><span>密码</span><code>{item.password}</code></div>
+                            <div><span>{netflixSelfService ? "Netflix 登录邮箱" : "账号"}</span><code>{item.account}</code></div>
+                            {!netflixSelfService && <div><span>密码</span><code>{item.password}</code></div>}
                           </div>
                         ) : null}
                         {(item.platformUrl || item.productPrice) && <div className="admin-after-sales-item-fields">

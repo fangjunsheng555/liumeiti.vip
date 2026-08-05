@@ -5,6 +5,7 @@ import {
   getOrderById,
   rateLimitResponse,
   redisCmd,
+  validEmail,
 } from "../_utils.js";
 import {
   authenticateUserRequest,
@@ -17,6 +18,7 @@ import { orderExpirySummary } from "../../lib/order-expiry.js";
 import { shouldAwaitAcceptedSibling } from "./_policy.js";
 import { isNetflixOrderOwner, netflixOrderIdentity } from "./_ownership.js";
 import { withApiTelemetry } from "../_observability.js";
+import { isNetflixOrderItem } from "../../lib/netflix-delivery.js";
 import {
   findLatestNetflixMailState,
   maskNetflixEmail,
@@ -39,13 +41,25 @@ function normalizeEmail(value) {
 
 function netflixItem(order) {
   const items = Array.isArray(order?.items) ? order.items : [];
-  return items.find((item) => String(item?.service || "").toLowerCase() === "netflix")
-    || (String(order?.service || "").toLowerCase() === "netflix" ? order : null);
+  return items.find((item, index) => isNetflixOrderItem(order, item, index))
+    || (!items.length && isNetflixOrderItem(order, order, 0) ? order : null);
 }
 
-function effectiveNetflixAccount(order) {
-  const item = netflixItem(order);
-  return normalizeEmail(item?.staffAccount || item?.account || order?.staffAccount || order?.account);
+function effectiveNetflixAccounts(order) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const accounts = items.flatMap((item, index) => (
+    isNetflixOrderItem(order, item, index)
+      ? [normalizeEmail(
+        item?.staffAccount
+          || item?.account
+          || (index === 0 ? order?.staffAccount || order?.account : ""),
+      )]
+      : []
+  ));
+  if (accounts.length > 0) return accounts;
+  return isNetflixOrderItem(order, order, 0)
+    ? [normalizeEmail(order?.staffAccount || order?.account)]
+    : [];
 }
 
 async function accessForOrder(request, order, providedToken = "") {
@@ -71,9 +85,20 @@ async function accessForOrder(request, order, providedToken = "") {
 export async function eligibility(order) {
   if (!order || !["received", "completed"].includes(order.status)) return { ok: false, error: "order_not_eligible" };
   if (!netflixItem(order)) return { ok: false, error: "netflix_order_required" };
-  if (order.netflixSelfServiceEnabled === false) return { ok: false, error: "self_service_disabled" };
-  const account = effectiveNetflixAccount(order);
-  if (!account || !account.includes("@")) return { ok: false, error: "netflix_account_missing" };
+  const storedDeliveryMode = order.netflixDeliveryMode;
+  const hasStoredDeliveryMode = storedDeliveryMode !== undefined
+    && storedDeliveryMode !== null
+    && storedDeliveryMode !== "";
+  if ((hasStoredDeliveryMode && storedDeliveryMode !== "self_service") || order.netflixSelfServiceEnabled === false) {
+    return { ok: false, error: "self_service_disabled" };
+  }
+  const accounts = effectiveNetflixAccounts(order);
+  if (!accounts.length || accounts.some((account) => !validEmail(account))) {
+    return { ok: false, error: "netflix_account_missing" };
+  }
+  const uniqueAccounts = Array.from(new Set(accounts));
+  if (uniqueAccounts.length !== 1) return { ok: false, error: "netflix_account_conflict" };
+  const account = uniqueAccounts[0];
   const expiry = orderExpirySummary(order);
   if (expiry?.expired) return { ok: false, error: "service_expired" };
   const { ownerEmail } = netflixOrderIdentity(order);

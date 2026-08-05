@@ -22,11 +22,14 @@ import { idempotencyPayloadHash, requiredIdempotencyKey } from "../../../_money.
 import { claimDurableOperation, completeDurableOperation } from "../../../_durable-operation.js";
 import { enqueueOrderPushEvent } from "../../../_push.js";
 import { appendBusinessTraceEvent, withApiTelemetry } from "../../../_observability.js";
+import { readUserAuthState } from "../../../_auth-session.js";
+import { netflixOrderIdentity } from "../../../netflix-code/_ownership.js";
 import {
   applyThirdPartyNotice,
   buildDeliveryMessage,
   normalizeFulfillment,
 } from "../../../../lib/order-fulfillment.js";
+import { orderItemService } from "../../../../lib/netflix-delivery.js";
 
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
 const SITE_DOMAIN = process.env.SITE_DOMAIN || "www.liumeiti.vip";
@@ -112,7 +115,7 @@ function orderItemsForAdmin(order) {
   return source.map(({ passwordCorrectionTokenHash, ...item }) => item);
 }
 
-function missingCompletionCredential(order, itemUpdates = []) {
+function missingCompletionCredential(order, itemUpdates = [], netflixSelfServiceDelivery = order?.netflixDeliveryMode === "self_service") {
   const items = Array.isArray(order?.items) && order.items.length > 0
     ? order.items
     : [legacyOrderItem(order)];
@@ -121,12 +124,38 @@ function missingCompletionCredential(order, itemUpdates = []) {
     const index = Number(update?.index);
     if (Number.isInteger(index) && index >= 0) updates.set(index, update);
   }
+  let netflixLoginEmail = "";
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
-    if (!STAFF_CREDENTIAL_SERVICES.has(String(item?.service || "").trim().toLowerCase())) continue;
+    const service = orderItemService(order, item, index);
+    if (!STAFF_CREDENTIAL_SERVICES.has(service)) continue;
     const update = updates.get(index);
-    const staffAccount = clean(typeof update?.staffAccount === "string" ? update.staffAccount : item?.staffAccount, 80);
-    const staffPassword = clean(typeof update?.staffPassword === "string" ? update.staffPassword : item?.staffPassword, 120);
+    const originalStaffAccount = item?.staffAccount || (index === 0 ? order?.staffAccount : "");
+    const originalStaffPassword = item?.staffPassword || (index === 0 ? order?.staffPassword : "");
+    const staffAccount = clean(typeof update?.staffAccount === "string" ? update.staffAccount : originalStaffAccount, 80);
+    const staffPassword = clean(typeof update?.staffPassword === "string" ? update.staffPassword : originalStaffPassword, 120);
+    if (service === "netflix" && netflixSelfServiceDelivery) {
+      const loginEmail = staffAccount
+        || clean(item?.account, 80)
+        || (index === 0 ? clean(order?.staffAccount || order?.account, 80) : "");
+      if (validEmail(loginEmail)) {
+        const normalizedLoginEmail = loginEmail.toLowerCase();
+        if (netflixLoginEmail && netflixLoginEmail !== normalizedLoginEmail) {
+          return {
+            index,
+            label: clean(item?.label || item?.service || `#${index + 1}`, 180),
+            reason: "netflix_account_conflict",
+          };
+        }
+        netflixLoginEmail = normalizedLoginEmail;
+        continue;
+      }
+      return {
+        index,
+        label: clean(item?.label || item?.service || `#${index + 1}`, 180),
+        reason: "netflix_email_required",
+      };
+    }
     if (staffAccount && staffPassword) continue;
     return {
       index,
@@ -134,6 +163,33 @@ function missingCompletionCredential(order, itemUpdates = []) {
     };
   }
   return null;
+}
+
+function completionCredentialsChanged(order, itemUpdates = []) {
+  const items = Array.isArray(order?.items) && order.items.length > 0
+    ? order.items
+    : [legacyOrderItem(order)];
+  return (Array.isArray(itemUpdates) ? itemUpdates : []).some((update) => {
+    const index = Number(update?.index);
+    const item = Number.isInteger(index) && index >= 0 ? items[index] : null;
+    if (!item || !STAFF_CREDENTIAL_SERVICES.has(orderItemService(order, item, index))) return false;
+    return [
+      ["account", 80],
+      ["password", 120],
+      ["staffAccount", 80],
+      ["staffPassword", 120],
+    ].some(([field, max]) => typeof update?.[field] === "string"
+      && clean(update[field], max) !== clean(item?.[field], max));
+  });
+}
+
+async function netflixUserSelfServiceState(order) {
+  const { ownerEmail } = netflixOrderIdentity(order);
+  if (!ownerEmail) return { ok: true, disabled: false };
+  const state = await readUserAuthState(ownerEmail);
+  if (state?.ok) return { ok: true, disabled: Boolean(state.user?.netflixSelfServiceDisabled) };
+  if (state?.status === 401) return { ok: true, disabled: false };
+  return { ok: false, disabled: true, error: state?.error || "auth_store_unavailable" };
 }
 
 function orderForAdminResponse(order) {
@@ -192,12 +248,18 @@ async function sendCompletionEmail(order) {
         locale: emailLocale,
       });
     }
+    const netflixUserState = order.netflixDeliveryMode === "self_service"
+      ? await netflixUserSelfServiceState(order)
+      : { ok: true, disabled: false };
+    const emailOrder = !netflixUserState.ok || netflixUserState.disabled
+      ? { ...order, netflixSelfServiceEnabled: false }
+      : order;
     const supportContact = supportText(settings.support, emailLocale);
     const html = buildCompletionEmailHtml({
-      order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, supportContact, support: settings.support, locale: emailLocale,
+      order: emailOrder, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, supportContact, support: settings.support, locale: emailLocale,
     });
     const text = buildCompletionEmailText({
-      order, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale: emailLocale,
+      order: emailOrder, brandName, siteDomain: SITE_DOMAIN, siteUrl: SITE_URL, locale: emailLocale,
     });
     const subject = emailLocale === "en"
       ? `🎉 Order ${order.orderId} is ready · ${brandName}`
@@ -532,12 +594,53 @@ async function updateOrderHandler(request, { params }) {
     order.items = [legacyOrderItem(order)];
   }
   const currentRevision = Math.max(0, Number(order.revision || 0));
-  if (newStatus === "completed" && order.status !== "completed") {
-    const missing = missingCompletionCredential(order, itemUpdates);
+  const currentNetflixDeliveryMode = ["self_service", "password"].includes(order.netflixDeliveryMode)
+    ? order.netflixDeliveryMode
+    : "";
+  const hasNetflixDeliveryMode = Object.prototype.hasOwnProperty.call(body, "netflixDeliveryMode");
+  const nextNetflixDeliveryMode = hasNetflixDeliveryMode
+    ? clean(body.netflixDeliveryMode, 20)
+    : currentNetflixDeliveryMode;
+  if (hasNetflixDeliveryMode && !["self_service", "password"].includes(nextNetflixDeliveryMode)) {
+    return Response.json({ ok: false, error: "invalid_netflix_delivery_mode" }, { status: 400 });
+  }
+  const enteringCompleted = newStatus === "completed" && order.status !== "completed";
+  const changingCompletedNetflixMode = order.status === "completed"
+    && hasNetflixDeliveryMode
+    && nextNetflixDeliveryMode !== currentNetflixDeliveryMode;
+  const changingCompletedCredentials = order.status === "completed"
+    && completionCredentialsChanged(order, itemUpdates);
+  const nextNetflixOperationallyEnabled = typeof body.netflixSelfServiceEnabled === "boolean"
+    ? body.netflixSelfServiceEnabled
+    : order.netflixSelfServiceEnabled !== false;
+  const enablingCompletedOperational = order.status === "completed"
+    && body.netflixSelfServiceEnabled === true
+    && order.netflixSelfServiceEnabled === false
+    && nextNetflixDeliveryMode !== "password";
+  const enteringOrChangingExclusiveSelfService = (enteringCompleted || changingCompletedNetflixMode)
+    && nextNetflixDeliveryMode === "self_service";
+  if (enteringOrChangingExclusiveSelfService && !nextNetflixOperationallyEnabled) {
+    return Response.json({ ok: false, error: "completion_netflix_self_service_paused" }, { status: 409 });
+  }
+  if (enteringOrChangingExclusiveSelfService || enablingCompletedOperational) {
+    const netflixUserState = await netflixUserSelfServiceState(order);
+    if (!netflixUserState.ok) {
+      return Response.json({ ok: false, error: "completion_netflix_user_state_unavailable" }, { status: 503 });
+    }
+    if (netflixUserState.disabled) {
+      return Response.json({ ok: false, error: "completion_netflix_user_self_service_paused" }, { status: 409 });
+    }
+  }
+  if (enteringCompleted || changingCompletedNetflixMode || changingCompletedCredentials || enablingCompletedOperational) {
+    const missing = missingCompletionCredential(order, itemUpdates, nextNetflixDeliveryMode === "self_service");
     if (missing) {
       return Response.json({
         ok: false,
-        error: "completion_credentials_required",
+        error: missing.reason === "netflix_email_required"
+          ? "completion_netflix_email_required"
+          : missing.reason === "netflix_account_conflict"
+            ? "completion_netflix_account_conflict"
+            : "completion_credentials_required",
         itemIndex: missing.index,
         itemLabel: missing.label,
       }, { status: 400 });
@@ -907,16 +1010,17 @@ async function updateOrderHandler(request, { params }) {
         if (typeof upd.staffAccount === "string") it.staffAccount = clean(upd.staffAccount, 80);
         if (typeof upd.staffPassword === "string") it.staffPassword = clean(upd.staffPassword, 120);
         if (upd.fulfillment && typeof upd.fulfillment === "object") {
-          it.fulfillment = normalizeFulfillment(it.service, upd.fulfillment, it);
+          it.fulfillment = normalizeFulfillment(orderItemService(order, it, idx), upd.fulfillment, it);
         }
-        if (it.service === "spotify") {
+        const service = orderItemService(order, it, idx);
+        if (service === "spotify") {
           // Spotify uses the buyer credential fields in the admin editor. Old
           // staff overrides would otherwise hide a newer account or password.
           it.staffAccount = "";
           it.staffPassword = "";
         }
         // Refresh subscription links if rocket
-        if (it.service === "rocket") {
+        if (service === "rocket") {
           const u = it.staffAccount || it.account;
           if (u) it.subscriptionLinks = subscriptionLinks(u);
         }
@@ -930,6 +1034,7 @@ async function updateOrderHandler(request, { params }) {
   if (typeof body.netflixSelfServiceEnabled === "boolean") {
     order.netflixSelfServiceEnabled = body.netflixSelfServiceEnabled;
   }
+  if (hasNetflixDeliveryMode) order.netflixDeliveryMode = nextNetflixDeliveryMode;
   if (typeof body.thirdPartyPlatformNotice === "boolean") {
     order.thirdPartyPlatformNotice = body.thirdPartyPlatformNotice;
   }

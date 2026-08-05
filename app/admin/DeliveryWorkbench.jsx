@@ -166,7 +166,6 @@ export default function DeliveryWorkbench({
   customerMessage,
   internalNotes,
   internalReference,
-  netflixSelfServiceEnabled,
   thirdPartyPlatformNotice,
   deliveryMessageMode,
   onFulfillmentChange,
@@ -174,11 +173,9 @@ export default function DeliveryWorkbench({
   onCustomerMessageChange,
   onInternalNotesChange,
   onInternalReferenceChange,
-  onNetflixSelfServiceChange,
   onThirdPartyChange,
 }) {
   const expiryOrder = { ...order, items };
-  const hasNetflix = items.some((item) => item.service === "netflix");
   return (
     <section className="admin-modal-section admin-delivery-workbench">
       <div className="admin-delivery-heading">
@@ -235,14 +232,6 @@ export default function DeliveryWorkbench({
             placeholder="用于关联、搜索与批量通知"
           />
         </label>
-        {hasNetflix && (
-          <CompactSwitch
-            checked={netflixSelfServiceEnabled !== false}
-            onChange={onNetflixSelfServiceChange}
-            label="允许 Netflix 自助接码"
-            hint="仅限已核验的订单用户"
-          />
-        )}
       </div>
 
       <label className="admin-delivery-internal">

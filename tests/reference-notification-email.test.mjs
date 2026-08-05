@@ -59,6 +59,66 @@ test("reference notice uses a concise customer-facing default subject", () => {
   assert.doesNotMatch(result.html, /客服通知/);
 });
 
+test("reference notice never exposes a retained Netflix password in self-service mode", () => {
+  const selfServiceOrder = {
+    ...order,
+    netflixDeliveryMode: "self_service",
+    deliveryMessageMode: "auto",
+    staffNotes: "旧说明：请使用 retained-internal-password 登录",
+    items: order.items.map((item) => ({
+      ...item,
+      staffAccount: "netflix-login@example.com",
+      staffPassword: "retained-internal-password",
+    })),
+  };
+  const result = buildReferenceNotificationEmail({
+    orders: [selfServiceOrder],
+    subject: "Netflix 登录资料更新",
+    message: "请查看最新登录资料。",
+    brandName: "冒央会社",
+    siteDomain: "www.liumeiti.vip",
+    locale: "zh",
+  });
+  assert.match(result.html, /Netflix 登录邮箱/);
+  assert.match(result.html, /netflix-login@example\.com/);
+  assert.doesNotMatch(result.html, /retained-internal-password/);
+  assert.match(result.text, /Netflix 登录邮箱: netflix-login@example\.com/);
+  assert.doesNotMatch(result.text, /retained-internal-password/);
+  assert.doesNotMatch(result.html, /旧说明/);
+});
+
+test("reference notice scrubs password-era custom copy for legacy Netflix service shapes", () => {
+  const selfServiceOrder = {
+    ...order,
+    service: "NETFLIX",
+    password: "top-buyer-password",
+    staffPassword: "top-staff-password",
+    netflixDeliveryMode: "self_service",
+    deliveryMessageMode: "custom",
+    staffNotes: "Temporary password: top-buyer-password",
+    items: [{
+      ...order.items[0],
+      service: "   ",
+      password: "item-buyer-password",
+      staffAccount: "legacy-shape@example.com",
+      staffPassword: "retained-internal-password",
+    }],
+  };
+  const result = buildReferenceNotificationEmail({
+    orders: [selfServiceOrder],
+    subject: "Password retained-internal-password",
+    message: "Use retained-internal-password\nUse item-buyer-password\nUse top-staff-password\nUse top-buyer-password\nThe order details have been updated.",
+    brandName: "Maoyang",
+    siteDomain: "www.liumeiti.vip",
+    locale: "en",
+  });
+
+  assert.equal(result.subject, "Order service update");
+  assert.match(`${result.html}\n${result.text}`, /legacy-shape@example\.com/);
+  assert.match(`${result.html}\n${result.text}`, /The order details have been updated/);
+  assert.doesNotMatch(`${result.html}\n${result.text}`, /retained-internal-password|item-buyer-password|top-staff-password|top-buyer-password|Temporary password/);
+});
+
 test("reference notice preserves legacy no-items staff credentials and subscription links", () => {
   const legacy = {
     orderId: "LMLEGACYROCKET1",

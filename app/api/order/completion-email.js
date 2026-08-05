@@ -1,7 +1,12 @@
 import { buildEmailBrandHeader } from "../email-brand.js";
+import { validEmail } from "../_utils.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { supportContactHtml } from "../support-links.js";
 import { supportHtml } from "../../lib/settings-defaults.js";
+import {
+  orderItemService,
+  publicNetflixStaffNotes,
+} from "../../lib/netflix-delivery.js";
 
 function escapeHtml(value) {
   return String(value || "")
@@ -15,9 +20,23 @@ function escapeHtml(value) {
 function formatMoney(value) { return "¥" + Number(value || 0).toFixed(0); }
 
 function completionItems(order) {
-  if (Array.isArray(order?.items) && order.items.length > 0) return order.items;
+  if (Array.isArray(order?.items) && order.items.length > 0) {
+    return order.items.map((item, index) => {
+      const service = orderItemService(order, item, index);
+      return index === 0 && service === "netflix"
+        ? {
+          ...item,
+          service,
+          account: item.account || order.account || "",
+          password: item.password || order.password || "",
+          staffAccount: item.staffAccount || order.staffAccount || "",
+          staffPassword: item.staffPassword || order.staffPassword || "",
+        }
+        : { ...item, service };
+    });
+  }
   return [{
-    service: order?.service || "",
+    service: orderItemService(order, order, 0),
     label: order?.serviceLabel || "",
     cycle: order?.cycle || "",
     amount: Number(order?.finalAmount || 0),
@@ -40,14 +59,36 @@ export function buildCompletionEmailHtml({ order, brandName, siteDomain, siteUrl
   }));
   const isUsdt = order.paymentMethod === "usdt";
   const orderQueryUrl = `${siteUrl || "https://" + (siteDomain || "")}/service-center?order=${encodeURIComponent(order.orderId)}`;
+  const netflixCodeUrl = `${siteUrl || "https://" + (siteDomain || "")}/netflix-code`;
+  const netflixSelfServiceDelivery = order.netflixDeliveryMode === "self_service";
+  const netflixAccounts = items
+    .filter((item) => item.service === "netflix")
+    .map((item) => String(item.staffAccount || item.account || "").trim().toLowerCase());
+  const netflixAccountReady = netflixAccounts.length > 0
+    && netflixAccounts.every(validEmail)
+    && new Set(netflixAccounts).size === 1;
+  const netflixOnlineCodeEnabled = netflixSelfServiceDelivery
+    && order.netflixSelfServiceEnabled !== false
+    && netflixAccountReady;
+  const netflixOnlineCodePaused = netflixSelfServiceDelivery
+    && !netflixOnlineCodeEnabled;
+  const visibleStaffNotes = publicNetflixStaffNotes(order, {
+    onlineCodeAvailable: netflixOnlineCodeEnabled,
+  });
 
   const itemsRows = items.map((it, idx) => {
     // Use staff-filled credentials if present, otherwise buyer's
     const account = it.staffAccount || it.account;
-    const password = it.staffPassword || it.password;
+    const password = it.service === "netflix" && netflixSelfServiceDelivery
+      ? ""
+      : it.staffPassword || it.password;
     const accountRow = account
       ? `<div style="margin-top:6px;font-size:12.5px;color:#475569;line-height:1.7;">
-          <span style="color:#94a3b8;">${it.service === "rocket" ? L("用户名", "Username") : L("账号", "Account")}:</span>
+          <span style="color:#94a3b8;">${it.service === "rocket"
+            ? L("用户名", "Username")
+            : it.service === "netflix" && netflixSelfServiceDelivery
+              ? L("Netflix 登录邮箱", "Netflix sign-in email")
+              : L("账号", "Account")}:</span>
           <span style="font-family:ui-monospace,Menlo,Consolas,monospace;color:#0f172a;font-weight:700;background:#f8fafc;padding:1px 6px;border-radius:4px;">${escapeHtml(account)}</span>
         </div>`
       : "";
@@ -123,10 +164,27 @@ export function buildCompletionEmailHtml({ order, brandName, siteDomain, siteUrl
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${itemsRows}</table>
         </td></tr>
 
-        ${order.staffNotes ? `
+        ${netflixOnlineCodeEnabled ? `
+        <tr><td style="padding:18px 32px 0;">
+          <div style="padding:14px 16px;border-radius:12px;background:#f0fdfa;border:1px solid #99f6e4;color:#134e4a;font-size:13px;line-height:1.7;">
+            <strong style="display:block;color:#0f766e;margin-bottom:4px;">${L("需要 Netflix 登录码？", "Need a Netflix sign-in code?")}</strong>
+            ${L("请先在 Netflix 官方登录页输入订单中的邮箱并继续，再按页面提示在线获取登录码或打开官方确认链接。", "Enter the email shown in the order on Netflix’s official sign-in page and continue, then follow the page instructions to retrieve a sign-in code or open the official confirmation link.")}
+            <div style="margin-top:10px;"><a href="${escapeHtml(netflixCodeUrl)}" style="display:inline-block;padding:8px 13px;border-radius:8px;background:#0f766e;color:#ffffff;font-size:12px;font-weight:800;text-decoration:none;">${L("在线获取 Netflix 登录码", "Get Netflix sign-in code")}</a></div>
+          </div>
+        </td></tr>` : ""}
+
+        ${netflixOnlineCodePaused ? `
+        <tr><td style="padding:18px 32px 0;">
+          <div style="padding:12px 14px;border-radius:10px;background:#fffbeb;border:1px solid #fde68a;color:#92400e;font-size:12.5px;line-height:1.65;">
+            <strong>${L("在线获取登录码暂不可用", "Online sign-in codes are temporarily unavailable")}</strong><br>
+            ${L("如需登录帮助，请通过订单详情联系在线客服。", "For sign-in help, contact online support from your order details.")}
+          </div>
+        </td></tr>` : ""}
+
+        ${visibleStaffNotes ? `
         <tr><td style="padding:18px 32px 0;">
           <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;margin-bottom:6px;">${L("客服备注", "Support note")}</div>
-          <div style="padding:13px 16px;border-radius:12px;background:#fef3c7;border:1px solid #fcd34d;color:#92400e;font-size:13px;line-height:1.7;white-space:pre-wrap;">${escapeHtml(order.staffNotes)}</div>
+          <div style="padding:13px 16px;border-radius:12px;background:#fef3c7;border:1px solid #fcd34d;color:#92400e;font-size:13px;line-height:1.7;white-space:pre-wrap;">${escapeHtml(visibleStaffNotes)}</div>
         </td></tr>` : ""}
 
         <tr><td style="padding:24px 32px 0;">
@@ -173,6 +231,22 @@ export function buildCompletionEmailText({ order, brandName, siteDomain, siteUrl
     cycle: localizeCycle(it.cycle || "1年", locale),
   }));
   const queryUrl = `${siteUrl || "https://" + (siteDomain || "")}/service-center?order=${encodeURIComponent(order.orderId)}`;
+  const netflixCodeUrl = `${siteUrl || "https://" + (siteDomain || "")}/netflix-code`;
+  const netflixSelfServiceDelivery = order.netflixDeliveryMode === "self_service";
+  const netflixAccounts = items
+    .filter((item) => item.service === "netflix")
+    .map((item) => String(item.staffAccount || item.account || "").trim().toLowerCase());
+  const netflixAccountReady = netflixAccounts.length > 0
+    && netflixAccounts.every(validEmail)
+    && new Set(netflixAccounts).size === 1;
+  const netflixOnlineCodeEnabled = netflixSelfServiceDelivery
+    && order.netflixSelfServiceEnabled !== false
+    && netflixAccountReady;
+  const netflixOnlineCodePaused = netflixSelfServiceDelivery
+    && !netflixOnlineCodeEnabled;
+  const visibleStaffNotes = publicNetflixStaffNotes(order, {
+    onlineCodeAvailable: netflixOnlineCodeEnabled,
+  });
   const lines = [
     `${brandName} - ${L("订单已开通", "Order ready")} 🎉`,
     `===========================`,
@@ -185,17 +259,36 @@ export function buildCompletionEmailText({ order, brandName, siteDomain, siteUrl
   ];
   items.forEach((it) => {
     const account = it.staffAccount || it.account;
-    const password = it.staffPassword || it.password;
+    const password = it.service === "netflix" && netflixSelfServiceDelivery
+      ? ""
+      : it.staffPassword || it.password;
     lines.push(`  · ${it.label} (${it.cycle || L("1年", "1 yr")})`);
-    if (account) lines.push(`      ${it.service === "rocket" ? L("用户名", "Username") : L("账号", "Account")}: ${account}`);
+    if (account) lines.push(`      ${it.service === "rocket"
+      ? L("用户名", "Username")
+      : it.service === "netflix" && netflixSelfServiceDelivery
+        ? L("Netflix 登录邮箱", "Netflix sign-in email")
+        : L("账号", "Account")}: ${account}`);
     if (password) lines.push(`      ${L("密码", "Password")}: ${password}`);
     if (it.subscriptionLinks) {
       lines.push(`      Shadowrocket: ${it.subscriptionLinks.shadowrocket}`);
       lines.push(`      Clash: ${it.subscriptionLinks.clash}`);
     }
   });
-  if (order.staffNotes) {
-    lines.push(``, `${L("客服备注:", "Support note:")}`, order.staffNotes);
+  if (netflixOnlineCodeEnabled) {
+    lines.push(
+      ``,
+      `${L("在线获取 Netflix 登录码", "Get Netflix sign-in code")}: ${netflixCodeUrl}`,
+      L("请先在 Netflix 官方登录页输入订单中的邮箱并继续，再按页面提示读取登录码或打开官方确认链接。", "Enter the email shown in the order on Netflix’s official sign-in page and continue, then follow the page instructions to retrieve the code or open the official confirmation link."),
+    );
+  }
+  if (netflixOnlineCodePaused) {
+    lines.push(
+      ``,
+      L("在线获取登录码暂不可用。如需登录帮助，请通过订单详情联系在线客服。", "Online sign-in codes are temporarily unavailable. For sign-in help, contact online support from your order details."),
+    );
+  }
+  if (visibleStaffNotes) {
+    lines.push(``, `${L("客服备注:", "Support note:")}`, visibleStaffNotes);
   }
   lines.push(``, L("如有问题请联系在线客服", "Questions? Reach our online support"), `${L("查询订单", "Track order")}: ${queryUrl}`);
   return lines.join("\n");

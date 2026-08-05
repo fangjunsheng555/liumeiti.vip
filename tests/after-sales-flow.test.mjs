@@ -430,7 +430,13 @@ globalThis.fetch = async (input, options = {}) => {
   if (url.origin === "https://api.resend.com") {
     const payload = JSON.parse(options.body || "{}");
     const email = String(Array.isArray(payload.to) ? payload.to[0] : payload.to || "").toLowerCase();
-    resendRequests.push({ email, idempotencyKey: options.headers?.["Idempotency-Key"] || "", text: String(payload.text || "") });
+    resendRequests.push({
+      email,
+      idempotencyKey: options.headers?.["Idempotency-Key"] || "",
+      subject: String(payload.subject || ""),
+      html: String(payload.html || ""),
+      text: String(payload.text || ""),
+    });
     const remaining = Number(resendFailuresRemaining.get(email) || 0);
     if (remaining > 0) {
       resendFailuresRemaining.set(email, remaining - 1);
@@ -468,9 +474,12 @@ const referenceNoticeRoute = await import("../app/api/admin/after-sales/notify-b
 const store = await import("../app/api/after-sales/_store.js");
 const adminOrderRoute = await import("../app/api/admin/orders/[orderId]/route.js");
 const adminOrdersRoute = await import("../app/api/admin/orders/route.js");
+const adminNetflixRoute = await import("../app/api/admin/netflix-code/route.js");
+const netflixCodeRoute = await import("../app/api/netflix-code/route.js");
 const passwordUpdateRoute = await import("../app/api/order-password-update/[orderId]/route.js");
 const passwordUpdateEmail = await import("../app/api/order-password-update/email.js");
 const completionEffects = await import("../app/api/after-sales/_completion-effects.js");
+const afterSalesEmail = await import("../app/api/after-sales/_email.js");
 const orderQueryRoute = await import("../app/api/order-query/route.js");
 const authMeRoute = await import("../app/api/auth/me/route.js");
 const authSession = await import("../app/api/_auth-session.js");
@@ -866,6 +875,15 @@ test("reference notices resume only failed recipients from one immutable deliver
     ...orderRecord("LMREFERENCEORDER2", "reference-two@example.com"),
     internalReference: reference,
     remark: "second immutable note",
+    serviceLabel: "Netflix · 单独车位",
+    netflixDeliveryMode: "password",
+    items: [{
+      service: "netflix",
+      label: "Netflix · 单独车位",
+      account: "original-netflix@example.com",
+      password: "original-netflix-password",
+      amount: 168,
+    }],
   };
   values.set(`liumeiti:orders:record:${firstOrder.orderId}`, JSON.stringify(firstOrder));
   values.set(`liumeiti:orders:record:${secondOrder.orderId}`, JSON.stringify(secondOrder));
@@ -904,8 +922,7 @@ test("reference notices resume only failed recipients from one immutable deliver
   const mutated = {
     ...secondOrder,
     remark: "MUTATED CONTENT MUST NOT LEAK INTO RETRY",
-    account: "latest-reference-account@example.com",
-    password: "latest-reference-password",
+    netflixDeliveryMode: "self_service",
     items: [{
       ...secondOrder.items[0],
       account: "latest-reference-account@example.com",
@@ -925,14 +942,395 @@ test("reference notices resume only failed recipients from one immutable deliver
   assert.match(secondRecipientAttempts.at(-1).text, /second immutable note/);
   assert.doesNotMatch(secondRecipientAttempts.at(-1).text, /MUTATED CONTENT/);
   assert.match(secondRecipientAttempts.at(-1).text, /latest-reference-account@example\.com/);
-  assert.match(secondRecipientAttempts.at(-1).text, /latest-reference-password/);
-  assert.doesNotMatch(secondRecipientAttempts.at(-1).text, /original-password/);
+  assert.match(secondRecipientAttempts.at(-1).text, /Netflix 登录邮箱/);
+  assert.doesNotMatch(secondRecipientAttempts.at(-1).text, /latest-reference-password|original-netflix-password/);
 
   const replay = await referenceNoticeRoute.POST(request());
   assert.equal(replay.status, 200);
   assert.equal((await replay.json()).idempotent, true);
   assert.equal(resendRequests.filter((entry) => entry.email === firstOrder.email).length, 1);
   assert.equal(resendRequests.filter((entry) => entry.email === secondOrder.email).length, 3);
+});
+
+test("self-service reference notice retries scrub stale planned secrets after a password change", async () => {
+  const reference = "REFNOTICESELFSERVICESTALE1";
+  const oldSecret = "old-reference-plan-password-918273";
+  const newSecret = "new-current-order-password-564738";
+  const email = "reference-self-service-stale@example.com";
+  const order = {
+    ...orderRecord("LMREFSELFSERVICESTALE1", email),
+    internalReference: reference,
+    service: "netflix",
+    serviceLabel: "Netflix · 单独车位",
+    remark: `保留的下单备注\n旧密码：${oldSecret}\n备注结尾`,
+    staffNotes: `保留的自动发货说明\n登录密码：${oldSecret}\n说明结尾`,
+    deliveryMessageMode: "auto",
+    netflixDeliveryMode: "self_service",
+    netflixSelfServiceEnabled: true,
+    items: [{
+      service: "netflix",
+      label: "Netflix · 单独车位",
+      staffAccount: "planned-netflix-login@example.com",
+      staffPassword: oldSecret,
+      amount: 168,
+    }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  sets.set(`liumeiti:orders:reference:${reference}`, new Set([order.orderId]));
+  const adminToken = utils.signSession({
+    role: "admin",
+    staffId: 1,
+    staffUsername: "admin",
+    exp: Date.now() + 60_000,
+  });
+  const body = {
+    reference,
+    orderIds: [order.orderId],
+    subject: `订单资料更新 ${oldSecret}`,
+    message: `请查看当前资料。\n历史登录密码：${oldSecret}\n其余说明保持不变。`,
+  };
+  const request = () => new Request("https://www.liumeiti.vip/api/admin/after-sales/notify-by-reference", {
+    method: "POST",
+    headers: {
+      cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": "reference-notice-self-service-stale-0001",
+    },
+    body: JSON.stringify(body),
+  });
+  const start = resendRequests.length;
+  resendFailuresRemaining.set(email, 2);
+
+  const first = await referenceNoticeRoute.POST(request());
+  assert.equal(first.status, 503);
+  assert.equal((await first.json()).error, "reference_notice_retryable");
+
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify({
+    ...order,
+    remark: `当前订单新备注不应替换耐久计划 ${newSecret}`,
+    staffNotes: `当前订单新说明不应替换耐久计划 ${newSecret}`,
+    items: [{
+      ...order.items[0],
+      staffAccount: "current-netflix-login@example.com",
+      staffPassword: newSecret,
+    }],
+  }));
+
+  const retry = await referenceNoticeRoute.POST(request());
+  const result = await retry.json();
+  assert.equal(retry.status, 200, JSON.stringify(result));
+  assert.equal(result.delivered, 1);
+  const attempts = resendRequests.slice(start).filter((entry) => entry.email === email);
+  assert.equal(attempts.length, 3);
+  assert.equal(new Set(attempts.map((entry) => entry.idempotencyKey)).size, 1);
+
+  const delivered = attempts.at(-1);
+  const deliveredContent = `${delivered.subject}\n${delivered.text}\n${delivered.html}`;
+  assert.doesNotMatch(deliveredContent, new RegExp(oldSecret));
+  assert.doesNotMatch(deliveredContent, new RegExp(newSecret));
+  assert.match(delivered.text, /current-netflix-login@example\.com/);
+  assert.match(delivered.text, /保留的下单备注/);
+  assert.match(delivered.text, /备注结尾/);
+  assert.match(delivered.text, /保留的自动发货说明/);
+  assert.match(delivered.text, /说明结尾/);
+  assert.match(delivered.text, /其余说明保持不变/);
+  assert.doesNotMatch(delivered.text, /当前订单新备注|当前订单新说明/);
+});
+
+test("password-mode reference notice retries send only the current Netflix password", async () => {
+  const reference = "REFNOTICEPASSWORDSTALE1";
+  const oldSecret = "old-manual-plan-password-314159";
+  const newSecret = "new-manual-current-password-271828";
+  const email = "reference-password-stale@example.com";
+  const order = {
+    ...orderRecord("LMREFPASSWORDSTALE1", email),
+    internalReference: reference,
+    service: "netflix",
+    serviceLabel: "Netflix · 单独车位",
+    remark: `保留的下单备注\n旧密码：${oldSecret}\n备注结尾`,
+    staffNotes: `保留的手动交付说明\n登录密码：${oldSecret}\n说明结尾`,
+    deliveryMessageMode: "auto",
+    netflixDeliveryMode: "password",
+    items: [{
+      service: "netflix",
+      label: "Netflix · 单独车位",
+      staffAccount: "planned-manual-login@example.com",
+      staffPassword: oldSecret,
+      amount: 168,
+    }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  sets.set(`liumeiti:orders:reference:${reference}`, new Set([order.orderId]));
+  const adminToken = utils.signSession({
+    role: "admin",
+    staffId: 1,
+    staffUsername: "admin",
+    exp: Date.now() + 60_000,
+  });
+  const body = {
+    reference,
+    orderIds: [order.orderId],
+    subject: `订单资料更新 ${oldSecret}`,
+    message: `请查看当前资料。\n历史登录密码：${oldSecret}\n其余说明保持不变。`,
+  };
+  const request = () => new Request("https://www.liumeiti.vip/api/admin/after-sales/notify-by-reference", {
+    method: "POST",
+    headers: {
+      cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": "reference-notice-password-stale-0001",
+    },
+    body: JSON.stringify(body),
+  });
+  const start = resendRequests.length;
+  resendFailuresRemaining.set(email, 2);
+
+  const first = await referenceNoticeRoute.POST(request());
+  assert.equal(first.status, 503);
+  assert.equal((await first.json()).error, "reference_notice_retryable");
+
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify({
+    ...order,
+    items: [{
+      ...order.items[0],
+      staffAccount: "current-manual-login@example.com",
+      staffPassword: newSecret,
+    }],
+  }));
+
+  const retry = await referenceNoticeRoute.POST(request());
+  const result = await retry.json();
+  assert.equal(retry.status, 200, JSON.stringify(result));
+  assert.equal(result.delivered, 1);
+  const attempts = resendRequests.slice(start).filter((entry) => entry.email === email);
+  assert.equal(attempts.length, 3);
+  assert.equal(new Set(attempts.map((entry) => entry.idempotencyKey)).size, 1);
+  const delivered = attempts.at(-1);
+  const deliveredContent = `${delivered.subject}\n${delivered.text}\n${delivered.html}`;
+  assert.doesNotMatch(deliveredContent, new RegExp(oldSecret));
+  assert.match(deliveredContent, new RegExp(newSecret));
+  assert.match(delivered.text, /current-manual-login@example\.com/);
+  assert.match(delivered.text, /保留的下单备注/);
+  assert.match(delivered.text, /保留的手动交付说明/);
+  assert.match(delivered.text, /其余说明保持不变/);
+});
+
+test("a reference notice keeps same-recipient order ids aligned with their snapshots", async () => {
+  const reference = "REFNOTICESAMEEMAIL1";
+  const email = "reference-same-recipient@example.com";
+  const laterIdOrder = {
+    ...orderRecord("LMZZZSAMEREFERENCE1", email),
+    internalReference: reference,
+    remark: "snapshot for Z order",
+  };
+  const earlierIdOrder = {
+    ...orderRecord("LMAAASAMEREFERENCE1", email),
+    internalReference: reference,
+    remark: "snapshot for A order",
+  };
+  const invalidEmailOrder = {
+    ...orderRecord("LMMIXEDINVALIDEMAIL1", "not-an-email"),
+    internalReference: reference,
+    remark: "invalid recipient must not block valid recipients",
+  };
+  values.set(`liumeiti:orders:record:${laterIdOrder.orderId}`, JSON.stringify(laterIdOrder));
+  values.set(`liumeiti:orders:record:${earlierIdOrder.orderId}`, JSON.stringify(earlierIdOrder));
+  values.set(`liumeiti:orders:record:${invalidEmailOrder.orderId}`, JSON.stringify(invalidEmailOrder));
+  // Deliberately reverse canonical order-id order to reproduce the production
+  // shape that previously invalidated a freshly persisted plan.
+  sets.set(`liumeiti:orders:reference:${reference}`, new Set([laterIdOrder.orderId, invalidEmailOrder.orderId, earlierIdOrder.orderId]));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const start = resendRequests.length;
+  const response = await referenceNoticeRoute.POST(new Request("https://www.liumeiti.vip/api/admin/after-sales/notify-by-reference", {
+    method: "POST",
+    headers: {
+      cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": "reference-notice-same-email-0001",
+    },
+    body: JSON.stringify({
+      reference,
+      orderIds: [laterIdOrder.orderId, invalidEmailOrder.orderId, earlierIdOrder.orderId],
+      subject: "同一邮箱订单资料",
+      message: "请核对两笔订单。",
+    }),
+  }));
+  const result = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(result));
+  assert.equal(result.delivered, 1);
+  const mail = resendRequests.slice(start).find((entry) => entry.email === email);
+  assert.match(mail?.text || "", new RegExp(laterIdOrder.orderId));
+  assert.match(mail?.text || "", new RegExp(earlierIdOrder.orderId));
+  assert.match(mail?.text || "", /snapshot for Z order/);
+  assert.match(mail?.text || "", /snapshot for A order/);
+  assert.doesNotMatch(mail?.text || "", new RegExp(invalidEmailOrder.orderId));
+});
+
+test("reference notice retries reject changed item services before provider delivery while accepting normalized legacy identities", async () => {
+  const reference = "REFNOTICESERVICEIDENTITY1";
+  const changedOrder = {
+    ...orderRecord("LMREFSERVICECHANGED1", "reference-service-changed@example.com"),
+    service: "spotify",
+    internalReference: reference,
+  };
+  const caseOrder = {
+    ...orderRecord("LMREFSERVICECASE1", "reference-service-case@example.com"),
+    service: "Netflix",
+    serviceLabel: "Netflix",
+    internalReference: reference,
+    items: [{
+      service: "Netflix",
+      label: "Netflix",
+      account: "case-account@example.com",
+      password: "case-password",
+      amount: 168,
+    }],
+  };
+  const fallbackOrder = {
+    ...orderRecord("LMREFSERVICEFALLBACK1", "reference-service-fallback@example.com"),
+    service: "Netflix",
+    serviceLabel: "Netflix",
+    internalReference: reference,
+    items: [{
+      service: "",
+      label: "Netflix",
+      account: "fallback-account@example.com",
+      password: "fallback-password",
+      amount: 168,
+    }],
+  };
+  for (const order of [changedOrder, caseOrder, fallbackOrder]) {
+    values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  }
+  sets.set(`liumeiti:orders:reference:${reference}`, new Set([
+    changedOrder.orderId,
+    caseOrder.orderId,
+    fallbackOrder.orderId,
+  ]));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const body = {
+    reference,
+    orderIds: [changedOrder.orderId, caseOrder.orderId, fallbackOrder.orderId],
+    subject: "服务资料更新",
+    message: "请核对当前服务资料。",
+  };
+  const request = () => new Request("https://www.liumeiti.vip/api/admin/after-sales/notify-by-reference", {
+    method: "POST",
+    headers: {
+      cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": "reference-notice-service-identity-0001",
+    },
+    body: JSON.stringify(body),
+  });
+  for (const order of [changedOrder, caseOrder, fallbackOrder]) {
+    resendFailuresRemaining.set(order.email, 2);
+  }
+  const start = resendRequests.length;
+  const first = await referenceNoticeRoute.POST(request());
+  assert.equal(first.status, 503);
+  assert.equal((await first.json()).error, "reference_notice_retryable");
+
+  values.set(`liumeiti:orders:record:${changedOrder.orderId}`, JSON.stringify({
+    ...changedOrder,
+    service: "netflix",
+    items: changedOrder.items.map((item) => ({ ...item, service: "netflix" })),
+  }));
+  values.set(`liumeiti:orders:record:${caseOrder.orderId}`, JSON.stringify({
+    ...caseOrder,
+    service: "NETFLIX",
+    items: caseOrder.items.map((item) => ({ ...item, service: "NETFLIX" })),
+  }));
+  values.set(`liumeiti:orders:record:${fallbackOrder.orderId}`, JSON.stringify({
+    ...fallbackOrder,
+    service: "NETFLIX",
+    items: fallbackOrder.items.map((item) => ({ ...item, service: "netflix" })),
+  }));
+
+  const retry = await referenceNoticeRoute.POST(request());
+  const retryBody = await retry.json();
+  assert.equal(retry.status, 200, JSON.stringify(retryBody));
+  assert.equal(retryBody.ok, false);
+  assert.equal(retryBody.delivered, 2);
+  assert.equal(retryBody.results.find((entry) => entry.email === changedOrder.email)?.error, "reference_notice_order_identity_changed");
+  const attempts = resendRequests.slice(start);
+  assert.equal(attempts.filter((entry) => entry.email === changedOrder.email).length, 2, "changed service must stop before another provider call");
+  assert.equal(attempts.filter((entry) => entry.email === caseOrder.email).length, 3, "service identity comparison must be case-insensitive");
+  assert.equal(attempts.filter((entry) => entry.email === fallbackOrder.email).length, 3, "index zero may use the legacy top-level service identity");
+});
+
+test("reference notice retries reject service changes for legacy no-items snapshots", async () => {
+  const reference = "REFNOTICELEGACYSERVICEIDENTITY1";
+  const topLevelChanged = {
+    ...orderRecord("LMREFLEGACYTOPCHANGED1", "reference-legacy-top-changed@example.com"),
+    service: "spotify",
+    serviceLabel: "Spotify",
+    internalReference: reference,
+  };
+  delete topLevelChanged.items;
+  topLevelChanged.staffAccount = "spotify-top@example.com";
+  topLevelChanged.staffPassword = "spotify-top-password";
+
+  const itemizedChanged = {
+    ...topLevelChanged,
+    orderId: "LMREFLEGACYITEMIZED1",
+    email: "reference-legacy-itemized@example.com",
+  };
+  for (const order of [topLevelChanged, itemizedChanged]) {
+    values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+    resendFailuresRemaining.set(order.email, 2);
+  }
+  sets.set(`liumeiti:orders:reference:${reference}`, new Set([
+    topLevelChanged.orderId,
+    itemizedChanged.orderId,
+  ]));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const body = {
+    reference,
+    orderIds: [topLevelChanged.orderId, itemizedChanged.orderId],
+    subject: "Service update",
+    message: "Review the current service details.",
+  };
+  const request = () => new Request("https://www.liumeiti.vip/api/admin/after-sales/notify-by-reference", {
+    method: "POST",
+    headers: {
+      cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": "reference-notice-legacy-service-identity-0001",
+    },
+    body: JSON.stringify(body),
+  });
+  const start = resendRequests.length;
+  const first = await referenceNoticeRoute.POST(request());
+  assert.equal(first.status, 503);
+  assert.equal((await first.json()).error, "reference_notice_retryable");
+
+  values.set(`liumeiti:orders:record:${topLevelChanged.orderId}`, JSON.stringify({
+    ...topLevelChanged,
+    service: "netflix",
+    serviceLabel: "Netflix",
+    staffAccount: "netflix-new@example.com",
+    staffPassword: "netflix-new-password",
+  }));
+  values.set(`liumeiti:orders:record:${itemizedChanged.orderId}`, JSON.stringify({
+    ...itemizedChanged,
+    items: [{
+      service: "netflix",
+      label: "Netflix",
+      staffAccount: "netflix-itemized@example.com",
+      staffPassword: "netflix-itemized-password",
+    }],
+  }));
+
+  const retry = await referenceNoticeRoute.POST(request());
+  const retryBody = await retry.json();
+  assert.equal(retry.status, 200, JSON.stringify(retryBody));
+  assert.equal(retryBody.ok, false);
+  assert.equal(retryBody.delivered, 0);
+  assert.equal(retryBody.results.every((entry) => entry.error === "reference_notice_order_identity_changed"), true);
+  const attempts = resendRequests.slice(start);
+  assert.equal(attempts.filter((entry) => entry.email === topLevelChanged.email).length, 2);
+  assert.equal(attempts.filter((entry) => entry.email === itemizedChanged.email).length, 2);
 });
 
 test("an uncertain reference delivery enters manual review and is never automatically resent", async () => {
@@ -1338,6 +1736,7 @@ test("admin cannot complete a staff-credential service with blank delivery crede
   const order = {
     orderId: "LMADMINMISSINGCREDENTIAL1",
     status: "received",
+    netflixDeliveryMode: "password",
     revision: 0,
     createdAt: new Date().toISOString(),
     locale: "zh",
@@ -1382,6 +1781,768 @@ test("admin cannot complete a staff-credential service with blank delivery crede
     operationCountBefore,
     "invalid completion input is rejected before creating a durable operation",
   );
+});
+
+test("Netflix self-service completion requires an email but not a password", async () => {
+  const order = {
+    orderId: "LMNETFLIXSELFSERVICE1",
+    status: "received",
+    revision: 0,
+    netflixDeliveryMode: "self_service",
+    createdAt: new Date().toISOString(),
+    locale: "zh",
+    email: "netflix-self-service-buyer@example.com",
+    paymentMethod: "alipay",
+    items: [{
+      service: "netflix",
+      label: "Netflix · 单独车位",
+      account: "",
+      password: "",
+      staffAccount: "",
+      staffPassword: "",
+      amount: 168,
+      fulfillment: { profileNumber: "2", pin: "", loginHelp: true },
+    }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const headers = {
+    cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+    "Content-Type": "application/json",
+  };
+
+  for (const [index, invalidEmail] of ["not-an-email", "@", "foo@bar"].entries()) {
+    const missingEmailResponse = await adminOrderRoute.PATCH(
+      new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+        method: "PATCH",
+        headers: { ...headers, "Idempotency-Key": `netflix-self-service-invalid-email-000${index + 1}` },
+        body: JSON.stringify({
+          expectedRevision: 0,
+          status: "completed",
+          netflixDeliveryMode: "self_service",
+          items: [{ index: 0, staffAccount: invalidEmail, staffPassword: "" }],
+        }),
+      }),
+      { params: Promise.resolve({ orderId: order.orderId }) },
+    );
+    const missingEmail = await missingEmailResponse.json();
+    assert.equal(missingEmailResponse.status, 400, JSON.stringify(missingEmail));
+    assert.equal(missingEmail.error, "completion_netflix_email_required");
+    assert.equal((await utils.getOrderById(order.orderId)).status, "received");
+  }
+
+  const completedResponse = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: { ...headers, "Idempotency-Key": "netflix-self-service-complete-0001" },
+      body: JSON.stringify({
+        expectedRevision: 0,
+        status: "completed",
+        netflixDeliveryMode: "self_service",
+        deliveryMessageMode: "auto",
+        items: [{ index: 0, staffAccount: "netflix-login@example.com", staffPassword: "" }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  const completed = await completedResponse.json();
+  assert.equal(completedResponse.status, 200, JSON.stringify(completed));
+  const persisted = await utils.getOrderById(order.orderId);
+  assert.equal(persisted.status, "completed");
+  assert.equal(persisted.netflixDeliveryMode, "self_service");
+  assert.equal(persisted.netflixSelfServiceEnabled, undefined);
+  assert.equal(persisted.items[0].staffAccount, "netflix-login@example.com");
+  assert.equal(persisted.items[0].staffPassword, "");
+  assert.match(persisted.staffNotes, /liumeiti\.vip\/netflix-code/);
+});
+
+test("a completed Netflix self-service order without a password cannot be switched to password mode", async () => {
+  const order = {
+    orderId: "LMNETFLIXMODEGUARD1",
+    status: "completed",
+    revision: 0,
+    netflixDeliveryMode: "self_service",
+    createdAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+    locale: "zh",
+    email: "netflix-mode-guard-buyer@example.com",
+    items: [{
+      service: "netflix",
+      label: "Netflix · 单独车位",
+      staffAccount: "netflix-mode@example.com",
+      staffPassword: "",
+      amount: 168,
+    }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const response = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: {
+        cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": "netflix-mode-guard-0001",
+      },
+      body: JSON.stringify({
+        expectedRevision: 0,
+        status: "completed",
+        netflixDeliveryMode: "password",
+        items: [{ index: 0, staffAccount: "netflix-mode@example.com", staffPassword: "" }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  const result = await response.json();
+  assert.equal(response.status, 400, JSON.stringify(result));
+  assert.equal(result.error, "completion_credentials_required");
+  assert.equal((await utils.getOrderById(order.orderId)).netflixDeliveryMode, "self_service");
+});
+
+test("a paused Netflix order cannot be completed with self-service as its only delivery path", async () => {
+  const order = {
+    orderId: "LMNETFLIXPAUSEDCOMPLETE1",
+    status: "received",
+    revision: 0,
+    netflixDeliveryMode: "self_service",
+    netflixSelfServiceEnabled: false,
+    createdAt: new Date().toISOString(),
+    locale: "zh",
+    email: "netflix-paused-complete-buyer@example.com",
+    items: [{
+      service: "netflix",
+      label: "Netflix · 单独车位",
+      staffAccount: "netflix-paused-complete@example.com",
+      staffPassword: "",
+      amount: 168,
+    }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const response = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: {
+        cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": "netflix-paused-complete-0001",
+      },
+      body: JSON.stringify({
+        expectedRevision: 0,
+        status: "completed",
+        netflixDeliveryMode: "self_service",
+        items: [{ index: 0, staffAccount: "netflix-paused-complete@example.com", staffPassword: "" }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).error, "completion_netflix_self_service_paused");
+  assert.equal((await utils.getOrderById(order.orderId)).status, "received");
+});
+
+test("a user-level Netflix pause blocks self-service completion but still allows manual password delivery", async () => {
+  const ownerEmail = "netflix-user-paused@example.com";
+  const order = {
+    orderId: "LMNETFLIXUSERPAUSED1",
+    status: "received",
+    revision: 0,
+    netflixDeliveryMode: "self_service",
+    createdAt: new Date().toISOString(),
+    locale: "zh",
+    email: "netflix-user-paused-delivery@example.com",
+    userEmail: ownerEmail,
+    items: [{ service: "netflix", label: "Netflix · 单独车位", staffAccount: "paused-login@example.com", staffPassword: "", amount: 168 }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  values.set(`liumeiti:users:${ownerEmail}`, JSON.stringify({
+    email: ownerEmail,
+    username: "paused-netflix-user",
+    balance: 0,
+    coupons: [],
+    netflixSelfServiceDisabled: true,
+  }));
+  values.set(`lm:user:authver:${ownerEmail}`, "1");
+  values.set(`lm:user:lifecycle:${ownerEmail}`, "abcdefabcdefabcdefabcdefabcdefab");
+  values.set(`liumeiti:users:${ownerEmail}:balance:cents`, "0");
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const headers = { cookie: `lm_admin=${encodeURIComponent(adminToken)}`, "Content-Type": "application/json" };
+
+  const blocked = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: { ...headers, "Idempotency-Key": "netflix-user-paused-self-0001" },
+      body: JSON.stringify({
+        expectedRevision: 0,
+        status: "completed",
+        netflixDeliveryMode: "self_service",
+        items: [{ index: 0, staffAccount: "paused-login@example.com", staffPassword: "" }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(blocked.status, 409);
+  assert.equal((await blocked.json()).error, "completion_netflix_user_self_service_paused");
+  assert.equal((await utils.getOrderById(order.orderId)).status, "received");
+
+  const manual = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: { ...headers, "Idempotency-Key": "netflix-user-paused-manual-0001" },
+      body: JSON.stringify({
+        expectedRevision: 0,
+        status: "completed",
+        netflixDeliveryMode: "password",
+        items: [{ index: 0, staffAccount: "paused-login@example.com", staffPassword: "manual-password" }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(manual.status, 200, await manual.text());
+  const persisted = await utils.getOrderById(order.orderId);
+  assert.equal(persisted.status, "completed");
+  assert.equal(persisted.netflixDeliveryMode, "password");
+  assert.equal(persisted.items[0].staffPassword, "manual-password");
+});
+
+test("Netflix self-service completion fails safely when the linked user state cannot be read", async () => {
+  const ownerEmail = "netflix-user-state-broken@example.com";
+  const order = {
+    orderId: "LMNETFLIXUSERSTATEFAIL1",
+    status: "received",
+    revision: 0,
+    netflixDeliveryMode: "self_service",
+    createdAt: new Date().toISOString(),
+    locale: "zh",
+    email: "netflix-user-state-delivery@example.com",
+    userEmail: ownerEmail,
+    items: [{ service: "netflix", label: "Netflix", staffAccount: "state-login@example.com", staffPassword: "retained-password", amount: 168 }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  values.set(`liumeiti:users:${ownerEmail}`, "{invalid-json");
+  values.set(`lm:user:authver:${ownerEmail}`, "1");
+  values.set(`lm:user:lifecycle:${ownerEmail}`, "1234567890abcdef1234567890abcdef");
+  values.set(`liumeiti:users:${ownerEmail}:balance:cents`, "0");
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const response = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: {
+        cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": "netflix-user-state-fail-0001",
+      },
+      body: JSON.stringify({
+        expectedRevision: 0,
+        status: "completed",
+        netflixDeliveryMode: "self_service",
+        items: [{ index: 0, staffAccount: "state-login@example.com", staffPassword: "retained-password" }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  const result = await response.json();
+  assert.equal(response.status, 503, JSON.stringify(result));
+  assert.equal(result.error, "completion_netflix_user_state_unavailable");
+  assert.equal((await utils.getOrderById(order.orderId)).status, "received");
+});
+
+test("multi-item Netflix self-service requires one shared valid login email", async () => {
+  const order = {
+    orderId: "LMNETFLIXMULTIACCOUNT1",
+    status: "received",
+    revision: 0,
+    netflixDeliveryMode: "self_service",
+    createdAt: new Date().toISOString(),
+    locale: "zh",
+    email: "netflix-multi-buyer@example.com",
+    items: [
+      { service: "netflix", label: "Netflix 车位 1", staffAccount: "first-login@example.com", staffPassword: "", amount: 84 },
+      { service: "netflix", label: "Netflix 车位 2", staffAccount: "second-login@example.com", staffPassword: "", amount: 84 },
+    ],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const headers = { cookie: `lm_admin=${encodeURIComponent(adminToken)}`, "Content-Type": "application/json" };
+  const conflict = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: { ...headers, "Idempotency-Key": "netflix-multi-conflict-0001" },
+      body: JSON.stringify({
+        expectedRevision: 0,
+        status: "completed",
+        netflixDeliveryMode: "self_service",
+        items: [
+          { index: 0, staffAccount: "first-login@example.com", staffPassword: "" },
+          { index: 1, staffAccount: "second-login@example.com", staffPassword: "" },
+        ],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(conflict.status, 400);
+  assert.equal((await conflict.json()).error, "completion_netflix_account_conflict");
+  assert.equal((await utils.getOrderById(order.orderId)).status, "received");
+
+  const completed = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: { ...headers, "Idempotency-Key": "netflix-multi-shared-0001" },
+      body: JSON.stringify({
+        expectedRevision: 0,
+        status: "completed",
+        netflixDeliveryMode: "self_service",
+        items: [
+          { index: 0, staffAccount: "shared-login@example.com", staffPassword: "" },
+          { index: 1, staffAccount: "SHARED-login@example.com", staffPassword: "" },
+        ],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(completed.status, 200, await completed.text());
+  const persisted = await utils.getOrderById(order.orderId);
+  assert.equal(persisted.status, "completed");
+  assert.equal((await netflixCodeRoute.eligibility(persisted)).ok, true);
+});
+
+test("completed Netflix credential edits cannot remove the active delivery path", async () => {
+  const selfOrder = {
+    orderId: "LMNETFLIXEDITSELF1",
+    status: "completed",
+    revision: 0,
+    netflixDeliveryMode: "self_service",
+    createdAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+    email: "edit-self-buyer@example.com",
+    items: [{ service: "netflix", label: "Netflix", staffAccount: "valid-self@example.com", staffPassword: "retained-password" }],
+  };
+  const manualOrder = {
+    ...selfOrder,
+    orderId: "LMNETFLIXEDITMANUAL1",
+    email: "edit-manual-buyer@example.com",
+    netflixDeliveryMode: "password",
+    items: [{ service: "netflix", label: "Netflix", staffAccount: "valid-manual@example.com", staffPassword: "manual-password" }],
+  };
+  values.set(`liumeiti:orders:record:${selfOrder.orderId}`, JSON.stringify(selfOrder));
+  values.set(`liumeiti:orders:record:${manualOrder.orderId}`, JSON.stringify(manualOrder));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const patchOrder = (orderId, idempotencyKey, body) => adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${orderId}`, {
+      method: "PATCH",
+      headers: {
+        cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": idempotencyKey,
+      },
+      body: JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ orderId }) },
+  );
+  const invalidSelf = await patchOrder(selfOrder.orderId, "netflix-edit-self-invalid-0001", {
+    expectedRevision: 0,
+    status: "completed",
+    netflixDeliveryMode: "self_service",
+    items: [{ index: 0, staffAccount: "foo@bar", staffPassword: "retained-password" }],
+  });
+  assert.equal(invalidSelf.status, 400);
+  assert.equal((await invalidSelf.json()).error, "completion_netflix_email_required");
+  assert.equal((await utils.getOrderById(selfOrder.orderId)).items[0].staffAccount, "valid-self@example.com");
+
+  const blankManual = await patchOrder(manualOrder.orderId, "netflix-edit-manual-blank-0001", {
+    expectedRevision: 0,
+    status: "completed",
+    netflixDeliveryMode: "password",
+    items: [{ index: 0, staffAccount: "valid-manual@example.com", staffPassword: "" }],
+  });
+  assert.equal(blankManual.status, 400);
+  assert.equal((await blankManual.json()).error, "completion_credentials_required");
+  assert.equal((await utils.getOrderById(manualOrder.orderId)).items[0].staffPassword, "manual-password");
+});
+
+test("after-sales completion email hides retained Netflix passwords in self-service mode", async () => {
+  const order = {
+    orderId: "LMNETFLIXAFTERSALEMAIL1",
+    status: "completed",
+    netflixDeliveryMode: "self_service",
+    netflixSelfServiceEnabled: true,
+    locale: "zh",
+    email: "netflix-after-sales-email@example.com",
+    serviceLabel: "Netflix · 单独车位",
+    password: "top-buyer-after-sales-password",
+    staffPassword: "top-staff-after-sales-password",
+    items: [{
+      service: "netflix",
+      label: "Netflix · 单独车位",
+      password: "item-buyer-after-sales-password",
+      staffAccount: "after-sales-login@example.com",
+      staffPassword: "retained-after-sales-password",
+    }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const start = resendRequests.length;
+  const sent = await afterSalesEmail.sendAfterSalesEmail({
+    ticketId: "ASNETFLIXEMAIL1",
+    orderId: order.orderId,
+    status: "completed",
+    locale: "zh",
+    email: order.email,
+    serviceLabel: order.serviceLabel,
+    staffNote: [
+      "Temporary password: retained-after-sales-password",
+      "Buyer password: item-buyer-after-sales-password",
+      "Top staff password: top-staff-after-sales-password",
+      "Top buyer password: top-buyer-after-sales-password",
+      "登录邮箱已核对",
+    ].join("\n"),
+    items: [{ index: 0, service: "netflix", label: order.serviceLabel, credentialManaged: true }],
+  }, "completed", { idempotencyKey: "netflix-after-sales-email-0001" });
+  assert.equal(sent.ok, true, JSON.stringify(sent));
+  const mail = resendRequests.slice(start).find((entry) => entry.email === order.email);
+  assert.match(mail?.text || "", /Netflix 登录邮箱: after-sales-login@example\.com/);
+  assert.match(mail?.text || "", /登录邮箱已核对/);
+  assert.doesNotMatch(mail?.text || "", /retained-after-sales-password|item-buyer-after-sales-password|top-staff-after-sales-password|top-buyer-after-sales-password/);
+});
+
+test("after-sales completion email never replays credentials for a removed order item", async () => {
+  const order = {
+    orderId: "LMNETFLIXREMOVEDITEMEMAIL1",
+    status: "completed",
+    netflixDeliveryMode: "self_service",
+    locale: "en",
+    email: "netflix-removed-item-email@example.com",
+    serviceLabel: "Netflix",
+    items: [{
+      service: "netflix",
+      label: "Netflix profile 1",
+      staffAccount: "current-profile@example.com",
+      staffPassword: "CURRENT-RETAINED-PASSWORD",
+    }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const start = resendRequests.length;
+  const sent = await afterSalesEmail.sendAfterSalesEmail({
+    ticketId: "ASNETFLIXREMOVEDITEM1",
+    orderId: order.orderId,
+    status: "completed",
+    locale: "en",
+    email: order.email,
+    serviceLabel: "Netflix",
+    staffNote: [
+      "Resolved. Old password was OLD-REMOVED-PASSWORD",
+      "The current order details have been checked.",
+    ].join("\n"),
+    items: [{
+      index: 0,
+      service: "netflix",
+      label: "Netflix profile 1",
+      credentialManaged: true,
+      account: "old-profile-1@example.com",
+      password: "OLD-PROFILE-1-PASSWORD",
+    }, {
+      index: 1,
+      service: "netflix",
+      label: "Removed Netflix profile",
+      credentialManaged: true,
+      account: "old-removed@example.com",
+      password: "OLD-REMOVED-PASSWORD",
+    }],
+  }, "completed", { idempotencyKey: "netflix-after-sales-removed-item-0001" });
+  assert.equal(sent.ok, true, JSON.stringify(sent));
+  const mail = resendRequests.slice(start).find((entry) => entry.email === order.email);
+  assert.match(mail?.text || "", /Netflix sign-in email: current-profile@example\.com/);
+  assert.match(mail?.text || "", /The current order details have been checked\./);
+  assert.doesNotMatch(`${mail?.text || ""}\n${mail?.html || ""}`, /OLD-|old-removed@example\.com|old-profile-1@example\.com|CURRENT-RETAINED-PASSWORD/);
+});
+
+test("Netflix operational pause remains independent from the password or self-service delivery mode", async () => {
+  const order = {
+    orderId: "LMNETFLIXPAUSEMODE1",
+    status: "completed",
+    revision: 0,
+    netflixDeliveryMode: "self_service",
+    netflixSelfServiceEnabled: true,
+    createdAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+    locale: "zh",
+    email: "netflix-pause-buyer@example.com",
+    items: [{
+      service: "netflix",
+      label: "Netflix · 单独车位",
+      staffAccount: "netflix-pause@example.com",
+      staffPassword: "retained-netflix-password",
+      amount: 168,
+    }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const headers = {
+    cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+    "Content-Type": "application/json",
+  };
+
+  const pausedResponse = await adminNetflixRoute.PATCH(new Request("https://www.liumeiti.vip/api/admin/netflix-code", {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ action: "toggle_order", orderId: order.orderId, enabled: false }),
+  }));
+  assert.equal(pausedResponse.status, 200, await pausedResponse.text());
+  const paused = await utils.getOrderById(order.orderId);
+  assert.equal(paused.netflixDeliveryMode, "self_service");
+  assert.equal(paused.netflixSelfServiceEnabled, false);
+  assert.deepEqual(await netflixCodeRoute.eligibility(paused), { ok: false, error: "self_service_disabled" });
+
+  const passwordResponse = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: { ...headers, "Idempotency-Key": "netflix-pause-switch-password-0001" },
+      body: JSON.stringify({
+        expectedRevision: paused.revision,
+        status: "completed",
+        netflixDeliveryMode: "password",
+        netflixSelfServiceEnabled: false,
+        items: [{ index: 0, staffAccount: "netflix-pause@example.com", staffPassword: "retained-netflix-password" }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(passwordResponse.status, 200, await passwordResponse.text());
+  const passwordMode = await utils.getOrderById(order.orderId);
+  assert.equal(passwordMode.netflixDeliveryMode, "password");
+  assert.equal(passwordMode.netflixSelfServiceEnabled, false);
+  assert.deepEqual(await netflixCodeRoute.eligibility(passwordMode), { ok: false, error: "self_service_disabled" });
+
+  const resumedResponse = await adminNetflixRoute.PATCH(new Request("https://www.liumeiti.vip/api/admin/netflix-code", {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ action: "toggle_order", orderId: order.orderId, enabled: true }),
+  }));
+  assert.equal(resumedResponse.status, 200, await resumedResponse.text());
+  const resumed = await utils.getOrderById(order.orderId);
+  assert.equal(resumed.netflixDeliveryMode, "password");
+  assert.equal(resumed.netflixSelfServiceEnabled, true);
+  assert.deepEqual(await netflixCodeRoute.eligibility(resumed), { ok: false, error: "self_service_disabled" });
+
+  const selfServiceResponse = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: { ...headers, "Idempotency-Key": "netflix-pause-switch-self-0001" },
+      body: JSON.stringify({
+        expectedRevision: resumed.revision,
+        status: "completed",
+        netflixDeliveryMode: "self_service",
+        netflixSelfServiceEnabled: true,
+        items: [{ index: 0, staffAccount: "netflix-pause@example.com", staffPassword: "retained-netflix-password" }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(selfServiceResponse.status, 200, await selfServiceResponse.text());
+  const selfService = await utils.getOrderById(order.orderId);
+  assert.equal(selfService.netflixDeliveryMode, "self_service");
+  assert.equal(selfService.netflixSelfServiceEnabled, true);
+  assert.equal((await netflixCodeRoute.eligibility(selfService)).ok, true);
+
+  const legacyMode = { ...selfService };
+  delete legacyMode.netflixDeliveryMode;
+  assert.equal((await netflixCodeRoute.eligibility(legacyMode)).ok, true);
+  const invalidAccount = { ...legacyMode, items: [{ ...legacyMode.items[0], staffAccount: "foo@bar" }] };
+  assert.deepEqual(await netflixCodeRoute.eligibility(invalidAccount), { ok: false, error: "netflix_account_missing" });
+  const invalidMode = { ...selfService, netflixDeliveryMode: "unexpected" };
+  assert.deepEqual(await netflixCodeRoute.eligibility(invalidMode), { ok: false, error: "self_service_disabled" });
+  const topLevelFirstItem = {
+    ...legacyMode,
+    staffAccount: "legacy-top-level@example.com",
+    items: [{ ...legacyMode.items[0], staffAccount: "", account: "" }],
+  };
+  assert.equal((await netflixCodeRoute.eligibility(topLevelFirstItem)).account, "legacy-top-level@example.com");
+  const mixedOrder = {
+    ...legacyMode,
+    staffAccount: "spotify-top-level@example.com",
+    items: [
+      { service: "spotify", staffAccount: "spotify-top-level@example.com", staffPassword: "spotify-password" },
+      { service: "netflix", staffAccount: "", account: "" },
+    ],
+  };
+  assert.deepEqual(await netflixCodeRoute.eligibility(mixedOrder), { ok: false, error: "netflix_account_missing" });
+});
+
+test("resuming a completed Netflix self-service order revalidates the user control and login email", async () => {
+  const disabledOwner = "netflix-resume-disabled-owner@example.com";
+  const disabledOrder = {
+    orderId: "LMNETFLIXRESUMEDISABLED1",
+    status: "completed",
+    revision: 0,
+    netflixDeliveryMode: "self_service",
+    netflixSelfServiceEnabled: false,
+    createdAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+    locale: "zh",
+    email: "netflix-resume-disabled-delivery@example.com",
+    userEmail: disabledOwner,
+    items: [{ service: "netflix", label: "Netflix", staffAccount: "resume-disabled-login@example.com", staffPassword: "retained-password" }],
+  };
+  values.set(`liumeiti:orders:record:${disabledOrder.orderId}`, JSON.stringify(disabledOrder));
+  values.set(`liumeiti:users:${disabledOwner}`, JSON.stringify({
+    email: disabledOwner,
+    username: "netflix-resume-disabled",
+    balance: 0,
+    coupons: [],
+    netflixSelfServiceDisabled: true,
+  }));
+  values.set(`lm:user:authver:${disabledOwner}`, "1");
+  values.set(`lm:user:lifecycle:${disabledOwner}`, "1234567890abcdef1234567890abcdef");
+  values.set(`liumeiti:users:${disabledOwner}:balance:cents`, "0");
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const headers = { cookie: `lm_admin=${encodeURIComponent(adminToken)}`, "Content-Type": "application/json" };
+  const disabledResponse = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${disabledOrder.orderId}`, {
+      method: "PATCH",
+      headers: { ...headers, "Idempotency-Key": "netflix-resume-disabled-user-0001" },
+      body: JSON.stringify({ expectedRevision: 0, netflixSelfServiceEnabled: true }),
+    }),
+    { params: Promise.resolve({ orderId: disabledOrder.orderId }) },
+  );
+  assert.equal(disabledResponse.status, 409);
+  assert.equal((await disabledResponse.json()).error, "completion_netflix_user_self_service_paused");
+  assert.equal((await utils.getOrderById(disabledOrder.orderId)).netflixSelfServiceEnabled, false);
+
+  const invalidEmailOrder = {
+    ...disabledOrder,
+    orderId: "LMNETFLIXRESUMEINVALIDEMAIL1",
+    revision: 0,
+    email: "netflix-resume-invalid-delivery@example.com",
+    userEmail: "",
+    items: [{ service: "Netflix", label: "Netflix", staffAccount: "foo@bar", staffPassword: "retained-password" }],
+  };
+  values.set(`liumeiti:orders:record:${invalidEmailOrder.orderId}`, JSON.stringify(invalidEmailOrder));
+  const invalidResponse = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${invalidEmailOrder.orderId}`, {
+      method: "PATCH",
+      headers: { ...headers, "Idempotency-Key": "netflix-resume-invalid-email-0001" },
+      body: JSON.stringify({ expectedRevision: 0, netflixSelfServiceEnabled: true }),
+    }),
+    { params: Promise.resolve({ orderId: invalidEmailOrder.orderId }) },
+  );
+  assert.equal(invalidResponse.status, 400);
+  assert.equal((await invalidResponse.json()).error, "completion_netflix_email_required");
+  assert.equal((await utils.getOrderById(invalidEmailOrder.orderId)).netflixSelfServiceEnabled, false);
+});
+
+test("legacy Netflix orders preserve password delivery until an admin explicitly changes the mode", async () => {
+  const order = {
+    orderId: "LMNETFLIXLEGACYMODE1",
+    status: "received",
+    revision: 0,
+    createdAt: new Date().toISOString(),
+    locale: "zh",
+    email: "netflix-legacy-buyer@example.com",
+    userEmail: "netflix-legacy-paused-owner@example.com",
+    netflixSelfServiceEnabled: false,
+    paymentMethod: "alipay",
+    items: [{
+      service: "netflix",
+      label: "Netflix · 单独车位",
+      account: "legacy-netflix-login@example.com",
+      password: "legacy-netflix-password",
+      staffAccount: "",
+      staffPassword: "",
+      amount: 168,
+      fulfillment: { profileNumber: "1", pin: "", loginHelp: true },
+    }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  values.set("liumeiti:users:netflix-legacy-paused-owner@example.com", JSON.stringify({
+    email: "netflix-legacy-paused-owner@example.com",
+    username: "legacy-paused-owner",
+    balance: 0,
+    coupons: [],
+    netflixSelfServiceDisabled: true,
+  }));
+  values.set("lm:user:authver:netflix-legacy-paused-owner@example.com", "1");
+  values.set("lm:user:lifecycle:netflix-legacy-paused-owner@example.com", "abcdefabcdefabcdefabcdefabcdefab");
+  values.set("liumeiti:users:netflix-legacy-paused-owner@example.com:balance:cents", "0");
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const response = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: {
+        cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": "netflix-legacy-mode-complete-0001",
+      },
+      body: JSON.stringify({
+        expectedRevision: 0,
+        status: "completed",
+        deliveryMessageMode: "auto",
+        items: [{ index: 0, staffAccount: "legacy-netflix-login@example.com", staffPassword: "legacy-netflix-password" }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  const result = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(result));
+  const persisted = await utils.getOrderById(order.orderId);
+  assert.equal(persisted.status, "completed");
+  assert.equal(persisted.items[0].account, "legacy-netflix-login@example.com");
+  assert.equal(persisted.items[0].staffPassword, "legacy-netflix-password");
+  assert.equal(persisted.netflixDeliveryMode, undefined);
+  assert.equal(persisted.netflixSelfServiceEnabled, false);
+  assert.doesNotMatch(persisted.staffNotes, /liumeiti\.vip\/netflix-code/);
+  assert.match(persisted.staffNotes, /获取帮助 \/ Get Help/);
+
+  const clearLegacyPassword = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: {
+        cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": "netflix-legacy-mode-clear-password-0001",
+      },
+      body: JSON.stringify({
+        expectedRevision: persisted.revision,
+        items: [{ index: 0, staffAccount: "legacy-netflix-login@example.com", staffPassword: "" }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(clearLegacyPassword.status, 400);
+  assert.equal((await clearLegacyPassword.json()).error, "completion_credentials_required");
+  const unchanged = await utils.getOrderById(order.orderId);
+  assert.equal(unchanged.revision, persisted.revision);
+  assert.equal(unchanged.items[0].staffPassword, "legacy-netflix-password");
+
+  values.set("liumeiti:users:netflix-legacy-paused-owner@example.com", JSON.stringify({
+    email: "netflix-legacy-paused-owner@example.com",
+    username: "legacy-paused-owner",
+    balance: 0,
+    coupons: [],
+    netflixSelfServiceDisabled: false,
+  }));
+
+  const explicitSelfService = await adminOrderRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+      method: "PATCH",
+      headers: {
+        cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": "netflix-legacy-mode-explicit-self-0001",
+      },
+      body: JSON.stringify({
+        expectedRevision: unchanged.revision,
+        netflixDeliveryMode: "self_service",
+        netflixSelfServiceEnabled: true,
+        deliveryMessageMode: "auto",
+        items: [{ index: 0, staffAccount: "legacy-netflix-login@example.com", staffPassword: "" }],
+      }),
+    }),
+    { params: Promise.resolve({ orderId: order.orderId }) },
+  );
+  assert.equal(explicitSelfService.status, 200, await explicitSelfService.text());
+  const selfService = await utils.getOrderById(order.orderId);
+  assert.equal(selfService.netflixDeliveryMode, "self_service");
+  assert.equal(selfService.items[0].staffPassword, "");
+  assert.equal((await netflixCodeRoute.eligibility(selfService)).ok, true);
 });
 
 test("shared email delivery adds the three configured clickable support contacts once", () => {
@@ -1672,6 +2833,90 @@ test("legacy no-items credentials stay consistent across customer, admin, after-
   assert.equal(persisted.staffPassword, "staff-materialized-password");
 });
 
+test("legacy-cased Netflix self-service projections hide retained passwords and password-era notes", async () => {
+  const email = "legacy-shaped-netflix@example.com";
+  const order = {
+    orderId: "LMLEGACYSHAPENETFLIX1",
+    status: "completed",
+    locale: "en",
+    email,
+    userEmail: email,
+    service: "NETFLIX",
+    password: "top-buyer-projection-secret",
+    staffPassword: "top-staff-projection-secret",
+    serviceLabel: "Netflix",
+    netflixDeliveryMode: "self_service",
+    netflixSelfServiceEnabled: true,
+    deliveryMessageMode: "custom",
+    staffNotes: [
+      "Temporary password: projection-secret",
+      "Buyer password: item-buyer-projection-secret",
+      "Top staff password: top-staff-projection-secret",
+      "Top buyer password: top-buyer-projection-secret",
+    ].join("\n"),
+    items: [{
+      service: "   ",
+      label: "Netflix",
+      password: "item-buyer-projection-secret",
+      staffAccount: "legacy-shaped-login@example.com",
+      staffPassword: "projection-secret",
+      amount: 168,
+    }],
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  lists.set("liumeiti:orders:index", [
+    order.orderId,
+    ...(lists.get("liumeiti:orders:index") || []).filter((id) => id !== order.orderId),
+  ]);
+  lists.set(`liumeiti:orders:email:${email}`, [order.orderId]);
+  values.set(`liumeiti:users:${email}`, JSON.stringify({
+    email,
+    username: "legacy-shaped-netflix",
+    avatarId: "avatar-01",
+    inviteCode: "LEGACYNET1",
+    coupons: [],
+    balance: 0,
+  }));
+  values.set(`lm:user:authver:${email}`, "1");
+  values.set(`lm:user:lifecycle:${email}`, "11223344556677889900aabbccddeeff");
+  values.set(`liumeiti:users:${email}:balance:cents`, "0");
+
+  const userToken = authSession.signUserSessionForVersion(email, 1);
+  const meResponse = await authMeRoute.GET(new Request("https://www.liumeiti.vip/api/auth/me", {
+    headers: { cookie: `lm_user=${encodeURIComponent(userToken)}; locale=en` },
+  }));
+  const me = await meResponse.json();
+  const meOrder = me.orders.find((entry) => entry.orderId === order.orderId);
+  assert.equal(meResponse.status, 200, JSON.stringify(me));
+  assert.equal(meOrder.items[0].service, "netflix");
+  assert.equal(meOrder.items[0].account, "legacy-shaped-login@example.com");
+  assert.equal(meOrder.items[0].password, "");
+  assert.equal(meOrder.staffNotes, "");
+  assert.equal(meOrder.netflixSelfServiceEnabled, true);
+
+  const mailStart = resendRequests.length;
+  const challenge = await orderQueryRoute.POST(new Request("https://www.liumeiti.vip/api/order-query", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: "locale=en" },
+    body: JSON.stringify({ query: order.orderId }),
+  }));
+  assert.equal(challenge.status, 200, await challenge.text());
+  const verificationMail = resendRequests.slice(mailStart).find((entry) => entry.email === email);
+  const code = verificationMail?.text?.match(/\b(\d{6})\b/)?.[1];
+  assert.match(code || "", /^\d{6}$/);
+  const queryResponse = await orderQueryRoute.POST(new Request("https://www.liumeiti.vip/api/order-query", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: "locale=en" },
+    body: JSON.stringify({ query: order.orderId, code }),
+  }));
+  const queried = await queryResponse.json();
+  assert.equal(queryResponse.status, 200, JSON.stringify(queried));
+  assert.equal(queried.orders[0].items[0].service, "netflix");
+  assert.equal(queried.orders[0].items[0].account, "legacy-shaped-login@example.com");
+  assert.equal(queried.orders[0].items[0].password, "");
+  assert.equal(queried.orders[0].staffNotes, "");
+});
+
 test("non-Spotify ticket snapshots cannot roll back newer order credentials", async () => {
   const order = {
     orderId: "LMAFTERSALESSTALEAI1",
@@ -1771,6 +3016,312 @@ test("non-Spotify ticket snapshots cannot roll back newer order credentials", as
   assert.match(email?.text || "", /ai-newer@example\.com/);
   assert.match(email?.text || "", /ai-newer-password/);
   assert.doesNotMatch(email?.text || "", /ai-old-password/);
+});
+
+async function openNetflixCredentialTicket({ order, requestedItems, issue }) {
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const token = utils.signSession({
+    type: "after-sales-order",
+    orderId: order.orderId,
+    email: order.email,
+    exp: Date.now() + 60_000,
+  });
+  const createdResponse = await customerRoute.POST(new Request("https://www.liumeiti.vip/api/after-sales", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      orderId: order.orderId,
+      token,
+      issue,
+      items: requestedItems,
+    }),
+  }));
+  const created = await createdResponse.json();
+  assert.equal(createdResponse.status, 200, JSON.stringify(created));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const adminHeaders = { cookie: `lm_admin=${encodeURIComponent(adminToken)}`, "Content-Type": "application/json" };
+  const detailResponse = await adminDetailRoute.GET(
+    new Request(`https://www.liumeiti.vip/api/admin/after-sales/${created.ticket.ticketId}`, { headers: adminHeaders }),
+    { params: Promise.resolve({ ticketId: created.ticket.ticketId }) },
+  );
+  const detail = await detailResponse.json();
+  assert.equal(detailResponse.status, 200, JSON.stringify(detail));
+  return { ticketId: created.ticket.ticketId, detail: detail.ticket, adminHeaders };
+}
+
+async function completeNetflixCredentialTicket({ ticketId, adminHeaders, credentialOrderHash, items, idempotencyKey }) {
+  return adminDetailRoute.PATCH(
+    new Request(`https://www.liumeiti.vip/api/admin/after-sales/${ticketId}`, {
+      method: "PATCH",
+      headers: { ...adminHeaders, "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({
+        status: "completed",
+        credentialOrderHash,
+        items,
+      }),
+    }),
+    { params: Promise.resolve({ ticketId }) },
+  );
+}
+
+test("Netflix self-service after-sales updates preserve one shared login email across every item", async () => {
+  const order = {
+    orderId: "LMNETFLIXAFTERMULTI1",
+    status: "completed",
+    revision: 0,
+    locale: "zh",
+    email: "netflix-after-multi@example.com",
+    service: "netflix",
+    serviceLabel: "Netflix · 两个车位",
+    netflixDeliveryMode: "self_service",
+    netflixSelfServiceEnabled: true,
+    staffAccount: "shared-after-sales@example.com",
+    staffPassword: "retained-multi-password-0",
+    items: [{
+      service: "netflix",
+      label: "Netflix · 车位 1",
+      staffAccount: "shared-after-sales@example.com",
+      staffPassword: "retained-multi-password-0",
+    }, {
+      service: "Netflix",
+      label: "Netflix · 车位 2",
+      staffAccount: "shared-after-sales@example.com",
+      staffPassword: "retained-multi-password-1",
+    }],
+  };
+  const opened = await openNetflixCredentialTicket({
+    order,
+    requestedItems: [{ index: 0 }, { index: 1 }],
+    issue: "需要更新 Netflix 登录邮箱",
+  });
+  const before = await utils.getOrderById(order.orderId);
+  const conflict = await completeNetflixCredentialTicket({
+    ticketId: opened.ticketId,
+    adminHeaders: opened.adminHeaders,
+    credentialOrderHash: opened.detail.credentialOrderHash,
+    items: [{ index: 0, account: "new-shared-after-sales@example.com", password: "" }],
+    idempotencyKey: "after-sales-netflix-multi-conflict-0001",
+  });
+  assert.equal(conflict.status, 400);
+  assert.equal((await conflict.json()).error, "netflix_account_conflict");
+  assert.deepEqual(await utils.getOrderById(order.orderId), before);
+  assert.equal((await store.getAfterSalesTicket(opened.ticketId)).status, "pending");
+
+  const completedResponse = await completeNetflixCredentialTicket({
+    ticketId: opened.ticketId,
+    adminHeaders: opened.adminHeaders,
+    credentialOrderHash: opened.detail.credentialOrderHash,
+    items: [
+      { index: 0, account: "new-shared-after-sales@example.com", password: "" },
+      { index: 1, account: "new-shared-after-sales@example.com", password: "" },
+    ],
+    idempotencyKey: "after-sales-netflix-multi-shared-0001",
+  });
+  const completed = await completedResponse.json();
+  assert.equal(completedResponse.status, 200, JSON.stringify(completed));
+  const persisted = await utils.getOrderById(order.orderId);
+  assert.deepEqual(persisted.items.map((item) => item.staffAccount), [
+    "new-shared-after-sales@example.com",
+    "new-shared-after-sales@example.com",
+  ]);
+  assert.deepEqual(persisted.items.map((item) => item.staffPassword), [
+    "retained-multi-password-0",
+    "retained-multi-password-1",
+  ]);
+  assert.equal((await netflixCodeRoute.eligibility(persisted)).ok, true);
+});
+
+test("Netflix self-service ticket hydration is case-insensitive and never exposes a retained password", async () => {
+  const serviceShapes = [
+    { itemService: "netflix", orderService: "" },
+    { itemService: "Netflix", orderService: "" },
+    { itemService: "NETFLIX", orderService: "" },
+    { itemService: "   ", orderService: " Netflix " },
+  ];
+  for (const [index, { itemService, orderService }] of serviceShapes.entries()) {
+    const retainedPassword = `retained-case-secret-${index}`;
+    const order = {
+      orderId: `LMNETFLIXAFTERCASE${index}`,
+      status: "completed",
+      revision: 0,
+      locale: "zh",
+      email: `netflix-after-case-${index}@example.com`,
+      service: orderService,
+      serviceLabel: "Netflix · 单独车位",
+      netflixDeliveryMode: "self_service",
+      items: [{
+        service: itemService,
+        label: "Netflix · 单独车位",
+        staffAccount: `netflix-case-login-${index}@example.com`,
+        staffPassword: retainedPassword,
+      }],
+    };
+    const opened = await openNetflixCredentialTicket({
+      order,
+      requestedItems: [{ index: 0 }],
+      issue: "自助接码登录资料需要核对",
+    });
+    const item = opened.detail.items[0];
+    assert.equal(item.service, "netflix");
+    assert.equal(item.credentialManaged, true);
+    assert.equal(item.netflixSelfService, true);
+    assert.equal(item.account, `netflix-case-login-${index}@example.com`);
+    assert.equal(item.password, "");
+    assert.equal(item.currentPassword, "");
+    assert.equal(item.submittedPassword, "");
+    assert.equal(item.applyCredentialsByDefault, false);
+    assert.doesNotMatch(JSON.stringify(opened.detail), new RegExp(retainedPassword));
+    const stored = await store.getAfterSalesTicket(opened.ticketId);
+    assert.doesNotMatch(JSON.stringify(stored), new RegExp(retainedPassword));
+  }
+});
+
+test("legacy no-items Netflix self-service can update only the login email while preserving passwords", async () => {
+  const retainedPassword = "retained-legacy-self-service-secret";
+  const buyerPassword = "legacy-buyer-password";
+  const order = {
+    orderId: "LMNETFLIXAFTERLEGACYSELF1",
+    status: "completed",
+    revision: 0,
+    locale: "zh",
+    email: "netflix-after-legacy-self@example.com",
+    service: "Netflix",
+    serviceLabel: "Netflix · 整号购买",
+    account: "legacy-buyer-account@example.com",
+    password: buyerPassword,
+    staffAccount: "legacy-old-login@example.com",
+    staffPassword: retainedPassword,
+    netflixDeliveryMode: "self_service",
+  };
+  const opened = await openNetflixCredentialTicket({
+    order,
+    requestedItems: [{ index: 0 }],
+    issue: "需要更换自助接码登录邮箱",
+  });
+  assert.equal(opened.detail.items[0].service, "netflix");
+  assert.equal(opened.detail.items[0].netflixSelfService, true);
+  assert.equal(opened.detail.items[0].account, "legacy-old-login@example.com");
+  assert.equal(opened.detail.items[0].password, "");
+  assert.doesNotMatch(JSON.stringify(opened.detail), new RegExp(retainedPassword));
+
+  const beforeInvalid = await utils.getOrderById(order.orderId);
+  const invalidResponse = await completeNetflixCredentialTicket({
+    ticketId: opened.ticketId,
+    adminHeaders: opened.adminHeaders,
+    credentialOrderHash: opened.detail.credentialOrderHash,
+    items: [{ index: 0, account: "foo@bar", password: "must-be-ignored" }],
+    idempotencyKey: "after-sales-netflix-self-invalid-0001",
+  });
+  assert.equal(invalidResponse.status, 400);
+  assert.equal((await invalidResponse.json()).error, "invalid_netflix_email");
+  assert.deepEqual(await utils.getOrderById(order.orderId), beforeInvalid);
+  assert.equal((await store.getAfterSalesTicket(opened.ticketId)).status, "pending");
+
+  const sendsBefore = resendRequests.length;
+  const completedResponse = await completeNetflixCredentialTicket({
+    ticketId: opened.ticketId,
+    adminHeaders: opened.adminHeaders,
+    credentialOrderHash: opened.detail.credentialOrderHash,
+    items: [{ index: 0, account: "legacy-new-login@example.com", password: "" }],
+    idempotencyKey: "after-sales-netflix-self-account-only-0001",
+  });
+  const completed = await completedResponse.json();
+  assert.equal(completedResponse.status, 200, JSON.stringify(completed));
+  assert.equal(completed.ticket.items[0].netflixSelfService, true);
+  assert.equal(completed.ticket.items[0].account, "legacy-new-login@example.com");
+  assert.equal(completed.ticket.items[0].password, "");
+  assert.doesNotMatch(JSON.stringify(completed.ticket), new RegExp(retainedPassword));
+
+  const persisted = await utils.getOrderById(order.orderId);
+  assert.equal(persisted.items[0].service, "netflix");
+  assert.equal(persisted.items[0].account, "legacy-buyer-account@example.com");
+  assert.equal(persisted.items[0].password, buyerPassword);
+  assert.equal(persisted.items[0].staffAccount, "legacy-new-login@example.com");
+  assert.equal(persisted.items[0].staffPassword, retainedPassword);
+  assert.equal(persisted.account, "legacy-buyer-account@example.com");
+  assert.equal(persisted.password, buyerPassword);
+  assert.equal(persisted.staffAccount, "legacy-new-login@example.com");
+  assert.equal(persisted.staffPassword, retainedPassword);
+  const completedStored = await store.hydrateAfterSalesTicketCredentials(await store.getAfterSalesTicket(opened.ticketId));
+  assert.doesNotMatch(JSON.stringify(completedStored), new RegExp(retainedPassword));
+  const mail = resendRequests.slice(sendsBefore).find((entry) => entry.email === order.email);
+  assert.match(mail?.text || "", /Netflix 登录邮箱: legacy-new-login@example\.com/);
+  assert.doesNotMatch(`${mail?.text || ""}\n${mail?.html || ""}`, new RegExp(retainedPassword));
+});
+
+test("manual Netflix after-sales credential updates still require both account and password", async () => {
+  const order = {
+    orderId: "LMNETFLIXAFTERMANUAL1",
+    status: "completed",
+    revision: 0,
+    locale: "zh",
+    email: "netflix-after-manual@example.com",
+    serviceLabel: "Netflix · 单独车位",
+    netflixDeliveryMode: "password",
+    items: [{
+      service: "NETFLIX",
+      label: "Netflix · 单独车位",
+      staffAccount: "manual-current-login@example.com",
+      staffPassword: "manual-current-password",
+    }],
+  };
+  const opened = await openNetflixCredentialTicket({
+    order,
+    requestedItems: [{ index: 0 }],
+    issue: "手动密码登录资料需要核对",
+  });
+  assert.equal(opened.detail.items[0].netflixSelfService, false);
+  assert.equal(opened.detail.items[0].password, "manual-current-password");
+  const before = await utils.getOrderById(order.orderId);
+  const response = await completeNetflixCredentialTicket({
+    ticketId: opened.ticketId,
+    adminHeaders: opened.adminHeaders,
+    credentialOrderHash: opened.detail.credentialOrderHash,
+    items: [{ index: 0, account: "manual-new-login@example.com", password: "" }],
+    idempotencyKey: "after-sales-netflix-manual-incomplete-0001",
+  });
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error, "missing_credentials");
+  assert.deepEqual(await utils.getOrderById(order.orderId), before);
+  assert.equal((await store.getAfterSalesTicket(opened.ticketId)).status, "pending");
+});
+
+test("Netflix self-service tickets complete without a credential write-back", async () => {
+  const order = {
+    orderId: "LMNETFLIXAFTERNOAPPLY1",
+    status: "completed",
+    revision: 0,
+    locale: "zh",
+    email: "netflix-after-no-apply@example.com",
+    serviceLabel: "Netflix · 单独车位",
+    netflixDeliveryMode: "self_service",
+    items: [{
+      service: "Netflix",
+      label: "Netflix · 单独车位",
+      staffAccount: "no-apply-login@example.com",
+      staffPassword: "no-apply-retained-password",
+    }],
+  };
+  const opened = await openNetflixCredentialTicket({
+    order,
+    requestedItems: [{ index: 0 }],
+    issue: "仅需完成售后处理不修改登录资料",
+  });
+  const before = await utils.getOrderById(order.orderId);
+  const response = await completeNetflixCredentialTicket({
+    ticketId: opened.ticketId,
+    adminHeaders: opened.adminHeaders,
+    credentialOrderHash: opened.detail.credentialOrderHash,
+    items: [],
+    idempotencyKey: "after-sales-netflix-self-no-apply-0001",
+  });
+  const result = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(result));
+  const persisted = await utils.getOrderById(order.orderId);
+  assert.equal(persisted.items[0].staffAccount, before.items[0].staffAccount);
+  assert.equal(persisted.items[0].staffPassword, before.items[0].staffPassword);
+  assert.equal((persisted.staffAudit || []).filter((entry) => entry.action === "after_sales_credentials_sync").length, 0);
+  assert.doesNotMatch(JSON.stringify(result.ticket), /no-apply-retained-password/);
 });
 
 test("creation outbox drains oldest failures beyond the former latest-30 window", async () => {

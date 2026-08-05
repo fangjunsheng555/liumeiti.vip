@@ -9,6 +9,7 @@ import {
   redisConfig,
   replaceTopLevelJsonFields,
   setOrderAt,
+  validEmail,
 } from "../_utils.js";
 import { createHash, randomBytes } from "node:crypto";
 
@@ -268,15 +269,42 @@ function isCredentialService(service) {
   return CREDENTIAL_SERVICES.has(clean(service, 40).toLowerCase());
 }
 
+function normalizedService(value) {
+  return clean(value, 40).toLowerCase();
+}
+
+function orderItemService(order, item, index) {
+  return normalizedService(item?.service)
+    || (index === 0 ? normalizedService(order?.service) : "");
+}
+
+function orderItemCredential(order, item, index, staffField, buyerField, maxLength) {
+  const staffValue = clean(item?.[staffField], maxLength);
+  if (staffValue) return staffValue;
+  const buyerValue = clean(item?.[buyerField], maxLength);
+  if (buyerValue) return buyerValue;
+  if (index !== 0) return "";
+  return clean(order?.[staffField], maxLength) || clean(order?.[buyerField], maxLength);
+}
+
 function orderCredentialItems(order) {
-  if (Array.isArray(order?.items) && order.items.length) return order.items;
+  if (Array.isArray(order?.items) && order.items.length) {
+    return order.items.map((item, index) => ({
+      ...item,
+      service: orderItemService(order, item, index),
+      account: clean(item?.account || (index === 0 ? order?.account : ""), 80),
+      password: clean(item?.password || (index === 0 ? order?.password : ""), 120),
+      staffAccount: clean(item?.staffAccount || (index === 0 ? order?.staffAccount : ""), 80),
+      staffPassword: clean(item?.staffPassword || (index === 0 ? order?.staffPassword : ""), 120),
+    }));
+  }
   if (!order) return [];
   return [{
-    service: order.service || "",
-    account: order.account || "",
-    password: order.password || "",
-    staffAccount: order.staffAccount || "",
-    staffPassword: order.staffPassword || "",
+    service: normalizedService(order.service),
+    account: clean(order.account, 80),
+    password: clean(order.password, 120),
+    staffAccount: clean(order.staffAccount, 80),
+    staffPassword: clean(order.staffPassword, 120),
   }];
 }
 
@@ -295,20 +323,83 @@ function orderCredentialFingerprint(order) {
 
 export async function hydrateAfterSalesTicketCredentials(ticket) {
   if (!ticket) return null;
-  if (ticket.status !== "pending") return ticket;
   const order = await getOrderById(ticket.orderId);
   const orderItems = orderCredentialItems(order);
+  if (ticket.status !== "pending") {
+    return {
+      ...ticket,
+      items: (Array.isArray(ticket.items) ? ticket.items : []).map((item, arrayIndex) => {
+        const index = Number.isFinite(Number(item?.index)) ? Number(item.index) : arrayIndex;
+        const source = orderItems[index] || {};
+        const ticketService = normalizedService(item?.service);
+        const sourceService = normalizedService(source.service);
+        const service = ticketService || sourceService;
+        if (ticketService && sourceService && ticketService !== sourceService) {
+          return {
+            ...item,
+            index,
+            service: ticketService,
+            account: "",
+            password: "",
+            staffPassword: "",
+            submittedPassword: "",
+            currentPassword: "",
+            credentialIdentityChanged: true,
+          };
+        }
+        const netflixSelfService = service === "netflix" && (order
+          ? order.netflixDeliveryMode === "self_service"
+          : item?.netflixSelfService === true);
+        return {
+          ...item,
+          index,
+          service,
+          netflixSelfService,
+          ...(netflixSelfService ? {
+            password: "",
+            staffPassword: "",
+            submittedPassword: "",
+            currentPassword: "",
+          } : {}),
+        };
+      }),
+    };
+  }
   return {
     ...ticket,
     credentialOrderHash: orderCredentialFingerprint(order),
     items: (Array.isArray(ticket.items) ? ticket.items : []).map((item, arrayIndex) => {
       const index = Number.isFinite(Number(item?.index)) ? Number(item.index) : arrayIndex;
       const source = orderItems[index] || {};
-      const credentialManaged = Boolean(item.credentialManaged || isCredentialService(item.service || source.service));
+      const credentialManaged = Boolean(item.credentialManaged
+        || isCredentialService(normalizedService(item.service) || source.service));
       if (!credentialManaged) return { ...item, index };
-      const service = clean(item.service || source.service, 40).toLowerCase();
-      const currentAccount = clean(source.staffAccount || source.account, 80);
-      const currentPassword = clean(source.staffPassword || source.password, 120);
+      const ticketService = normalizedService(item.service);
+      const sourceService = normalizedService(source.service);
+      const service = ticketService || sourceService;
+      if (ticketService && sourceService && ticketService !== sourceService) {
+        return {
+          ...item,
+          index,
+          service: ticketService,
+          credentialManaged: true,
+          credentialIdentityChanged: true,
+          account: "",
+          password: "",
+          staffPassword: "",
+          submittedAccount: clean(item.account, 80),
+          submittedPassword: "",
+          currentAccount: "",
+          currentPassword: "",
+          applyCredentialsByDefault: false,
+        };
+      }
+      const currentAccount = orderItemCredential(order, source, index, "staffAccount", "account", 80);
+      const retainedPassword = orderItemCredential(order, source, index, "staffPassword", "password", 120);
+      const netflixSelfService = service === "netflix" && (order
+        ? order.netflixDeliveryMode === "self_service"
+        : item?.netflixSelfService === true);
+      const currentPassword = netflixSelfService ? "" : retainedPassword;
       // Spotify credentials are explicitly editable in the customer ticket
       // form, so its submitted values are intentional. Other credential
       // services are hidden from that form: their stored values are only a
@@ -318,13 +409,17 @@ export async function hydrateAfterSalesTicketCredentials(ticket) {
         ...item,
         index,
         credentialManaged: true,
+        netflixSelfService,
         customerCredentialEditable: customerSubmitted,
         submittedAccount: clean(item.account, 80),
-        submittedPassword: clean(item.password, 120),
+        submittedPassword: netflixSelfService ? "" : clean(item.password, 120),
         currentAccount,
         currentPassword,
         account: customerSubmitted ? clean(item.account || currentAccount, 80) : currentAccount,
-        password: customerSubmitted ? clean(item.password || currentPassword, 120) : currentPassword,
+        password: netflixSelfService
+          ? ""
+          : customerSubmitted ? clean(item.password || currentPassword, 120) : currentPassword,
+        ...(netflixSelfService ? { staffPassword: "" } : {}),
         applyCredentialsByDefault: customerSubmitted,
       };
     }),
@@ -367,6 +462,8 @@ function mergeCompletionItems(ticket, updates) {
     if (!hasCredentials) return { ...item, index };
     const hasUpdate = submitted.has(index);
     const update = submitted.get(index) || {};
+    const service = normalizedService(item?.service);
+    const netflixSelfService = service === "netflix" && item?.netflixSelfService === true;
     const {
       submittedAccount: _submittedAccount,
       submittedPassword: _submittedPassword,
@@ -378,20 +475,28 @@ function mergeCompletionItems(ticket, updates) {
     return {
       ...storedItem,
       index,
+      service,
       credentialManaged: true,
+      netflixSelfService,
       account: clean(update.account ?? item.account, 80),
-      password: clean(update.password ?? item.password, 120),
+      password: netflixSelfService ? "" : clean(update.password ?? item.password, 120),
       credentialsApplied: hasUpdate,
     };
   });
-  if (items.some((item) => item.credentialsApplied && (!item.account || !item.password))) {
+  if (items.some((item) => item.credentialsApplied && item.netflixSelfService && !validEmail(item.account))) {
+    return { ok: false, error: "invalid_netflix_email" };
+  }
+  if (items.some((item) => item.credentialsApplied && !item.netflixSelfService && (!item.account || !item.password))) {
     return { ok: false, error: "missing_credentials" };
   }
   return { ok: true, items };
 }
 
 async function syncOrderCredentials(ticket, items, actor, operationId = "", requestHash = "", expectedCredentialHash = "") {
-  const credentialItems = items.filter((item) => item.credentialsApplied && item.credentialManaged && item.account && item.password);
+  const credentialItems = items.filter((item) => item.credentialsApplied
+    && item.credentialManaged
+    && item.account
+    && (item.netflixSelfService || item.password));
   if (!credentialItems.length) return { ok: true };
 
   const orderEntry = await getOrderEntryById(ticket.orderId);
@@ -421,22 +526,44 @@ async function syncOrderCredentials(ticket, items, actor, operationId = "", requ
   if (!Array.isArray(order.items) || !order.items.length) {
     const source = credentialItems[0] || items[0] || {};
     order.items = [{
-      service: order.service || source.service || "",
+      service: normalizedService(order.service) || normalizedService(source.service),
       label: order.serviceLabel || source.label || "",
       cycle: order.cycle || "",
       amount: Number(order.finalAmount || 0),
       plan: order.plan || order.rocketPlan || source.plan || "",
-      account: order.account || source.account || "",
-      password: order.password || source.password || "",
+      account: clean(order.account, 80),
+      password: clean(order.password, 120),
+      staffAccount: clean(order.staffAccount, 80),
+      staffPassword: clean(order.staffPassword, 120),
     }];
   }
 
+  const preservedCredentials = new Map();
   for (const item of credentialItems) {
     const index = Number(item.index);
     const target = Number.isFinite(index) ? order.items[index] : null;
     if (!target) return { ok: false, error: "order_item_not_found" };
-    const service = clean(item.service || target.service, 40).toLowerCase();
-    if (service === "spotify") {
+    const service = normalizedService(item.service)
+      || normalizedService(target.service)
+      || (index === 0 ? normalizedService(order.service) : "");
+    const targetService = orderItemService(order, target, index);
+    if (service && targetService && service !== targetService) {
+      return { ok: false, error: "order_item_identity_changed" };
+    }
+    preservedCredentials.set(index, {
+      account: target.account || "",
+      password: target.password || "",
+      staffPassword: target.staffPassword || "",
+    });
+    if (item.netflixSelfService) {
+      if (targetService !== "netflix" || order.netflixDeliveryMode !== "self_service" || !validEmail(item.account)) {
+        return { ok: false, error: "invalid_netflix_email" };
+      }
+      // Only change the effective Netflix login email. Retained password fields
+      // stay byte-for-byte unchanged so a later explicit switch back to manual
+      // delivery still has the administrator's existing credential.
+      target.staffAccount = item.account;
+    } else if (service === "spotify") {
       // Spotify credentials are buyer-provided and edited through account/password
       // throughout the order UI. Remove stale staff overrides so the latest values
       // are also returned by the customer-facing order views.
@@ -447,6 +574,21 @@ async function syncOrderCredentials(ticket, items, actor, operationId = "", requ
     } else {
       target.staffAccount = item.account;
       target.staffPassword = item.password;
+    }
+  }
+
+  if (credentialItems.some((item) => item.netflixSelfService)) {
+    const netflixAccounts = order.items.flatMap((target, index) => {
+      if (orderItemService(order, target, index) !== "netflix") return [];
+      const account = orderItemCredential(order, target, index, "staffAccount", "account", 80)
+        .toLowerCase();
+      return [account];
+    });
+    if (!netflixAccounts.length || netflixAccounts.some((account) => !validEmail(account))) {
+      return { ok: false, error: "invalid_netflix_email" };
+    }
+    if (new Set(netflixAccounts).size !== 1) {
+      return { ok: false, error: "netflix_account_conflict" };
     }
   }
 
@@ -495,8 +637,14 @@ async function syncOrderCredentials(ticket, items, actor, operationId = "", requ
   const credentialsMatch = credentialItems.every((item) => {
     const target = persistedItems[Number(item.index)];
     if (!target) return false;
-    const service = clean(item.service || target.service, 40).toLowerCase();
-    return service === "spotify"
+    const service = normalizedService(item.service) || normalizedService(target.service);
+    const preserved = preservedCredentials.get(Number(item.index)) || {};
+    return item.netflixSelfService
+      ? target.staffAccount === item.account
+        && (target.account || "") === (preserved.account || "")
+        && (target.password || "") === (preserved.password || "")
+        && (target.staffPassword || "") === (preserved.staffPassword || "")
+      : service === "spotify"
       ? target.account === item.account
         && target.password === item.password
         && !target.staffAccount

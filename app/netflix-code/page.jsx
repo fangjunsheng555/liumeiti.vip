@@ -19,20 +19,12 @@ import {
 import MobileNav from "../components/MobileNav";
 import { useLocale } from "../components/LocaleProvider";
 import { fetchNetflixJson } from "./fetch-json";
+import { eligibleNetflixCodeOrder } from "./order-eligibility";
 import styles from "./netflix-code.module.css";
 
 const RESULT_POLL_MS = 6000;
 const RESULT_POLL_LIMIT = 15;
 const RESULT_DELAY_NOTICE_AT = 5;
-function hasNetflix(order) {
-  return (Array.isArray(order?.items) ? order.items : []).some((item) => item?.service === "netflix")
-    || String(order?.service || "").toLowerCase() === "netflix";
-}
-
-function eligibleOrder(order) {
-  return hasNetflix(order) && ["received", "completed"].includes(order?.status);
-}
-
 function compactOrderId(value) {
   const id = String(value || "");
   return id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
@@ -69,7 +61,7 @@ export default function NetflixCodePage() {
   const [copied, setCopied] = useState(false);
   const [codeCopyState, setCodeCopyState] = useState("idle");
 
-  const availableOrders = useMemo(() => orders.filter(eligibleOrder), [orders]);
+  const availableOrders = useMemo(() => orders.filter(eligibleNetflixCodeOrder), [orders]);
 
   const stopPolling = useCallback(() => {
     if (pollTimer.current) window.clearTimeout(pollTimer.current);
@@ -125,6 +117,7 @@ export default function NetflixCodePage() {
       order_not_eligible: L("仅已收到或已完成的 Netflix 订单可使用", "Only received or completed Netflix orders are eligible"),
       netflix_order_required: L("该订单不包含 Netflix 服务", "This order does not include Netflix"),
       netflix_account_missing: L("订单尚未交付 Netflix 登录邮箱，请稍后再试", "The Netflix sign-in email has not been assigned yet"),
+      netflix_account_conflict: L("该订单包含多个 Netflix 登录邮箱，请联系在线客服", "This order contains multiple Netflix sign-in emails; contact support"),
       self_service_disabled: L("此订单暂时无法在线获取登录码，请联系在线客服", "Online sign-in codes are unavailable for this order; contact support"),
       service_expired: L("该订单服务期已结束", "This order has expired"),
       session_expired: L("本次核验已过期，请重新选择订单", "This verification has expired; select the order again"),
@@ -158,7 +151,7 @@ export default function NetflixCodePage() {
         setStatus({ type: "info", text: L("验证邮件已发送，请查收", "Check your inbox for the verification email") });
         return;
       }
-      const matched = (Array.isArray(data.orders) ? data.orders : []).filter(eligibleOrder);
+      const matched = (Array.isArray(data.orders) ? data.orders : []).filter(eligibleNetflixCodeOrder);
       setOrders(matched);
       setVerification(null);
       setCode("");

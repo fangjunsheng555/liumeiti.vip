@@ -92,6 +92,17 @@ export default function NetflixCodePanel({ canEdit = false }) {
   const acceptedCount = useMemo(() => Number(data?.recentAcceptedCount ?? (data?.events || []).filter((event) => event.accepted).length), [data]);
   const mailRows = useMemo(() => data?.events || [], [data]);
   const accessRows = useMemo(() => data?.access || [], [data]);
+  const orderRows = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    const rows = Array.isArray(data?.orders) ? data.orders : [];
+    if (!normalized) return rows;
+    return rows.filter((order) => [
+      order.orderId,
+      order.account,
+      order.deliveryEmail,
+      order.ownerEmail,
+    ].some((value) => String(value || "").toLowerCase().includes(normalized)));
+  }, [data, query]);
   const mailRowIds = useMemo(() => mailRows.map((event) => event.eventId).filter(Boolean), [mailRows]);
   const accessRowIds = useMemo(() => accessRows.map((entry) => entry.id).filter(Boolean), [accessRows]);
   const batchVisibleIds = tab === "mail" ? mailRowIds : tab === "access" ? accessRowIds : [];
@@ -195,6 +206,20 @@ export default function NetflixCodePanel({ canEdit = false }) {
     }
   }
 
+  function managementMenu(order) {
+    if (!canEdit) return null;
+    return <details className={styles.actionMenu}>
+      <summary>管理</summary>
+      <div className={styles.actions}>
+        {order.deliveryMode === "password"
+          ? <span className={styles.muted}>手动密码交付</span>
+          : <button type="button" onClick={() => update("toggle_order", order, !order.enabled)} disabled={Boolean(busyKey)}>{order.enabled ? "暂停订单接码" : "恢复订单接码"}</button>}
+        {order.userRegistered && <button type="button" onClick={() => update("toggle_user", order, !order.userEnabled)} disabled={Boolean(busyKey)}>{order.userEnabled ? "暂停用户接码" : "恢复用户接码"}</button>}
+        <button type="button" onClick={() => update("clear_lock", order, true)} disabled={Boolean(busyKey)}>解除限制</button>
+      </div>
+    </details>;
+  }
+
   return (
     <section className={styles.panel}>
       <header className={styles.header}>
@@ -261,14 +286,7 @@ export default function NetflixCodePanel({ canEdit = false }) {
                       <small>购买账号：{order.ownerEmail}</small>
                     )}
                   </span>
-                  {canEdit && <details className={styles.actionMenu}>
-                    <summary>管理</summary>
-                    <div className={styles.actions}>
-                      <button type="button" onClick={() => update("toggle_order", order, !order.enabled)} disabled={Boolean(busyKey)}>{order.enabled ? "停用订单" : "启用订单"}</button>
-                      {order.userRegistered && <button type="button" onClick={() => update("toggle_user", order, !order.userEnabled)} disabled={Boolean(busyKey)}>{order.userEnabled ? "停用用户" : "启用用户"}</button>}
-                      <button type="button" onClick={() => update("clear_lock", order, true)} disabled={Boolean(busyKey)}>解除限制</button>
-                    </div>
-                  </details>}
+                  {managementMenu(order)}
                 </div>
               )) : <span className={styles.muted}>{event.matchedOrderCount > 1 ? `${event.matchedOrderCount} 个订单使用此账号` : "暂无关联订单"}</span>}</div>
               <div className={styles.resultCell}>
@@ -323,6 +341,20 @@ export default function NetflixCodePanel({ canEdit = false }) {
               </article>
             );
           }) : <div className={styles.empty}>{query ? "没有符合条件的账号" : "暂无绑定 Netflix 账号的订单"}</div>}
+          <div className={styles.controlHeading}><b>订单与用户接码状态</b><span>无需等待收件记录即可暂停或恢复</span></div>
+          <div className={`${styles.tableHead} ${styles.controlGrid}`}><span>订单号</span><span>Netflix 账号</span><span>交付与接码状态</span><span>操作</span></div>
+          {orderRows.length ? orderRows.map((order) => (
+            <article key={order.orderId} className={`${styles.row} ${styles.controlGrid}`}>
+              <div className={styles.when}><b className={styles.orderId}>{order.orderId}</b><small>{order.deliveryEmail || "--"}</small></div>
+              <div className={styles.email}>{order.account || "尚未填写"}</div>
+              <div className={styles.controlState}>
+                <span>{order.deliveryMode === "password" ? "手动账号密码" : "自助接码"}</span>
+                {order.deliveryMode !== "password" && <small>{order.enabled ? "订单接码正常" : "订单接码已暂停"}</small>}
+                {order.userRegistered && <small>{order.userEnabled ? "用户接码正常" : "用户接码已暂停"}</small>}
+              </div>
+              <div>{managementMenu(order)}</div>
+            </article>
+          )) : <div className={styles.empty}>{query ? "没有符合条件的订单" : "暂无 Netflix 订单"}</div>}
         </div>
       )}
 

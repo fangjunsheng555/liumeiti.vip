@@ -64,7 +64,7 @@ export const SERVICE_PAGES = [
     ],
     faq: [
       ["是否支持电视端", "支持常见电视端、手机端与浏览器端登录使用"],
-      ["如何使用服务", "下载 Netflix app 或使用网页登录我们提供的账号，即可开始使用"],
+      ["如何使用服务", "在 Netflix 官方应用或网页端输入订单提供的登录邮箱；订单如标注支持在线获取登录码，可按交付说明前往 Netflix 登录码页面读取，其他订单按提供的账号和密码登录"],
       ["车位是否稳定", "单独车位可上锁，减少档案被误用的情况"],
     ],
   },
@@ -190,7 +190,7 @@ const SERVICE_EN = {
     ],
     faq: [
       ["Does it work on TV", "Works on common TVs, phones and browsers"],
-      ["How to use the service", "Download the Netflix app or sign in on the web with the account we provide"],
+      ["How to use the service", "Enter the sign-in email shown in the order in the official Netflix app or website. If the order supports online sign-in code retrieval, follow its delivery instructions to open the Netflix Sign-in Code page; otherwise use the email and password provided"],
       ["Is the Profile stable", "A dedicated Profile can be PIN-locked to reduce misuse"],
     ],
   },

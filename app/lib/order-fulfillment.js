@@ -1,4 +1,5 @@
 import { orderExpirySummary } from "./order-expiry.js";
+import { normalizedService, orderItemService } from "./netflix-delivery.js";
 
 export const THIRD_PARTY_NOTICE_ZH = "核查您的订单来自于第三方平台，请在该平台确认收货，方便的话给予真实评价！";
 export const THIRD_PARTY_NOTICE_EN = "We confirmed that this order originated from a third-party platform. Please confirm receipt there and, if convenient, leave an honest review.";
@@ -38,6 +39,7 @@ function defaultSpotifyOutcome(item) {
 }
 
 export function normalizeFulfillment(service, input = {}, item = {}) {
+  service = normalizedService(service);
   const source = input && typeof input === "object" ? input : {};
   if (service === "spotify") {
     const outcome = Object.prototype.hasOwnProperty.call(SPOTIFY_OUTCOMES, source.outcome)
@@ -175,9 +177,15 @@ function profileServiceMessage(order, item, fulfillment, locale) {
   const en = locale === "en";
   const name = item.service === "max" ? "HBO Max" : item.service === "disney" ? "Disney+" : "Netflix";
   const fullAccount = item.plan === "full";
+  const netflixSelfServiceDelivery = item.service === "netflix"
+    && order?.netflixDeliveryMode === "self_service";
   const parts = [
     en ? `${name} is active.` : `${name} 已开通。`,
-    credentialSentence(locale),
+    netflixSelfServiceDelivery
+      ? (en
+        ? "The Netflix sign-in email is included with the order and can be viewed in the completion email or order details."
+        : "Netflix 登录邮箱已随订单交付，可在完成邮件或订单详情中查看。")
+      : credentialSentence(locale),
   ];
   if (fulfillment.profileNumber) {
     parts.push(en
@@ -189,9 +197,15 @@ function profileServiceMessage(order, item, fulfillment, locale) {
   }
   if (fulfillment.loginHelp) {
     if (item.service === "netflix") {
-      parts.push(en
-        ? "To sign in with the password, enter the email address, select “Get Help,” then enter the password shown in the order. If you still cannot sign in, request after-sales support from the order details."
-        : "使用密码登录时，请先输入邮箱，再点击“获取帮助 / Get Help”，然后输入订单中的密码；如仍无法登录，可从订单详情申请售后。");
+      if (netflixSelfServiceDelivery) {
+        parts.push(en
+          ? "On Netflix, enter the email address shown in the order and continue. If Netflix asks for a sign-in code or identity confirmation, open https://www.liumeiti.vip/netflix-code and follow the page instructions to select or verify your order, then retrieve the sign-in code or open Netflix’s official confirmation link. Codes and confirmation links expire, so use the result promptly."
+          : "请先在 Netflix 官方登录页输入订单中的邮箱并继续；如页面要求登录码或身份确认，请打开 https://www.liumeiti.vip/netflix-code，按页面提示选择或核验订单，再读取登录码或打开 Netflix 官方确认链接。登录码和确认链接有时效，请及时使用。");
+      } else {
+        parts.push(en
+          ? "To sign in with the password, enter the email address, select “Get Help,” then enter the password shown in the order. If you still cannot sign in, request after-sales support from the order details."
+          : "使用密码登录时，请先输入邮箱，再点击“获取帮助 / Get Help”，然后输入订单中的密码；如仍无法登录，可从订单详情申请售后。");
+      }
     } else {
       parts.push(en
         ? "If you cannot sign in, verify the account and password first. You can request after-sales support from the order details if the issue continues."
@@ -260,15 +274,17 @@ function genericMessage(order, item, locale) {
 
 export function buildDeliveryMessage(order, items = order?.items || [], thirdPartyPlatformNotice = false) {
   const locale = order?.locale === "en" ? "en" : "zh";
-  const messages = (Array.isArray(items) ? items : []).map((item) => {
-    const fulfillment = normalizeFulfillment(item?.service, item?.fulfillment, item);
-    if (item?.service === "spotify") return spotifyMessage(order, item, fulfillment, locale);
-    if (["netflix", "disney", "max"].includes(item?.service)) {
-      return profileServiceMessage(order, item, fulfillment, locale);
+  const messages = (Array.isArray(items) ? items : []).map((item, index) => {
+    const service = orderItemService(order, item, index);
+    const normalizedItem = { ...item, service };
+    const fulfillment = normalizeFulfillment(service, item?.fulfillment, normalizedItem);
+    if (service === "spotify") return spotifyMessage(order, normalizedItem, fulfillment, locale);
+    if (["netflix", "disney", "max"].includes(service)) {
+      return profileServiceMessage(order, normalizedItem, fulfillment, locale);
     }
-    if (item?.service === "rocket") return rocketMessage(order, item, fulfillment, locale);
-    if (item?.service === "ai") return aiMessage(order, item, fulfillment, locale);
-    return genericMessage(order, item, locale);
+    if (service === "rocket") return rocketMessage(order, normalizedItem, fulfillment, locale);
+    if (service === "ai") return aiMessage(order, normalizedItem, fulfillment, locale);
+    return genericMessage(order, normalizedItem, locale);
   }).filter(Boolean);
   return applyThirdPartyNotice(messages.join("\n\n"), thirdPartyPlatformNotice, locale);
 }

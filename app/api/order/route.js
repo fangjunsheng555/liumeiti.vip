@@ -647,6 +647,7 @@ async function handler(request) {
     contact,
     remark,
     staffNotes: "",
+    netflixDeliveryMode: items.some((item) => item.service === "netflix") ? "self_service" : undefined,
     completedAt: null,
     completedAtBeijing: null,
     // Legacy fields for backward compat with old query UI

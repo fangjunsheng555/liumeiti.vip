@@ -95,6 +95,7 @@ test("English orders receive an English generated message", () => {
   const order = {
     status: "completed",
     locale: "en",
+    netflixDeliveryMode: "password",
     completedAt: "2026-07-27T10:00:00.000Z",
     items: [{
       service: "netflix",
@@ -118,6 +119,7 @@ test("Netflix delivery copy gives concise password sign-in steps", () => {
   const order = {
     status: "completed",
     locale: "zh",
+    netflixDeliveryMode: "password",
     completedAt: "2026-07-27T10:00:00.000Z",
     items: [{
       service: "netflix",
@@ -132,6 +134,49 @@ test("Netflix delivery copy gives concise password sign-in steps", () => {
   assert.match(message, /输入邮箱，再点击“获取帮助 \/ Get Help”，然后输入订单中的密码/);
   assert.match(message, /不要修改账号订阅、密码或其他用户档案/);
   assert.doesNotMatch(message, /不要修改账号资料/);
+});
+
+test("Netflix self-service delivery copy follows the order switch without exposing internal details", () => {
+  const order = {
+    status: "completed",
+    locale: "zh",
+    netflixDeliveryMode: "self_service",
+    completedAt: "2026-07-27T10:00:00.000Z",
+    items: [{
+      service: "netflix",
+      label: "Netflix · 单独车位",
+      cycle: "1年",
+      plan: "seat",
+      fulfillment: { profileNumber: "3", pin: "", loginHelp: true },
+    }],
+  };
+  const message = buildDeliveryMessage(order);
+  assert.match(message, /Netflix 登录邮箱已随订单交付/);
+  assert.match(message, /Netflix 官方登录页输入订单中的邮箱并继续/);
+  assert.match(message, /https:\/\/www\.liumeiti\.vip\/netflix-code/);
+  assert.match(message, /登录码或打开 Netflix 官方确认链接/);
+  assert.doesNotMatch(message, /然后输入订单中的密码/);
+  assert.doesNotMatch(message, /账号与密码已随订单交付/);
+  assert.doesNotMatch(message, /转发|解析|收件规则|codes\.liumeiti\.vip|后台/);
+});
+
+test("legacy Netflix orders without a delivery mode keep the original password guidance in English", () => {
+  const order = {
+    status: "completed",
+    locale: "en",
+    completedAt: "2026-07-27T10:00:00.000Z",
+    items: [{
+      service: "netflix",
+      label: "Netflix · Dedicated profile",
+      cycle: "1 year",
+      plan: "seat",
+      fulfillment: { profileNumber: "2", pin: "", loginHelp: true },
+    }],
+  };
+  const message = buildDeliveryMessage(order);
+  assert.match(message, /login email and password are included/);
+  assert.match(message, /then enter the password shown in the order/);
+  assert.doesNotMatch(message, /https:\/\/www\.liumeiti\.vip\/netflix-code/);
 });
 
 test("full-account delivery copy does not apply shared-profile restrictions", () => {

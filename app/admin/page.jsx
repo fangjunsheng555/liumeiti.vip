@@ -46,6 +46,7 @@ import {
   hasThirdPartyNotice,
   normalizeFulfillment,
 } from "../lib/order-fulfillment";
+import { orderItemService } from "../lib/netflix-delivery";
 import {
   ArrowLeft, ChevronDown, Copy, Eye, EyeOff, ExternalLink,
   LoaderCircle, LogOut, Search, ShieldCheck,
@@ -4051,7 +4052,12 @@ export default function AdminPage() {
         staffNotes: detail.staffNotes || "",
         internalNotes: detail.internalNotes || "",
         internalReference: detail.internalReference || "",
-        netflixSelfServiceEnabled: detail.netflixSelfServiceEnabled !== false,
+        netflixDeliveryMode: ["self_service", "password"].includes(detail.netflixDeliveryMode)
+          ? detail.netflixDeliveryMode
+          : detail.netflixDeliveryMode === undefined || detail.netflixDeliveryMode === null || detail.netflixDeliveryMode === ""
+            ? ""
+            : "password",
+        netflixOperationalEnabled: detail.netflixSelfServiceEnabled !== false,
         thirdPartyPlatformNotice: Boolean(
           detail.thirdPartyPlatformNotice || hasThirdPartyNotice(detail.staffNotes),
         ),
@@ -4068,9 +4074,13 @@ export default function AdminPage() {
           subscriptionLinks: item.subscriptionLinks || null,
           account: item.account || "",
           password: item.password || "",
-          staffAccount: item.staffAccount || "",
-          staffPassword: item.staffPassword || "",
-          fulfillment: normalizeFulfillment(item.service, item.fulfillment, item),
+          staffAccount: item.staffAccount || (orderItemService(detail, item, index) === "netflix"
+            ? item.account || (index === 0 ? detail.staffAccount || detail.account || "" : "")
+            : ""),
+          staffPassword: item.staffPassword || (orderItemService(detail, item, index) === "netflix"
+            ? item.password || (index === 0 ? detail.staffPassword || detail.password || "" : "")
+            : ""),
+          fulfillment: normalizeFulfillment(orderItemService(detail, item, index), item.fulfillment, item),
           passwordCorrectionRequestedAt: item.passwordCorrectionRequestedAt || "",
           passwordCorrectionRequestedAtBeijing: item.passwordCorrectionRequestedAtBeijing || "",
           passwordCorrectionEmailSentAtBeijing: item.passwordCorrectionEmailSentAtBeijing || "",
@@ -4325,11 +4335,12 @@ export default function AdminPage() {
     }));
   }
 
-  function deliveryPreviewOrder(items) {
+  function deliveryPreviewOrder(items, overrides = {}) {
     return {
       ...activeOrder,
       items,
       status: activeOrder?.status || "received",
+      ...overrides,
     };
   }
 
@@ -4338,7 +4349,7 @@ export default function AdminPage() {
       const items = current.items.map((item, itemIndex) => {
         if (itemIndex !== idx) return item;
         const fulfillment = normalizeFulfillment(
-          item.service,
+          orderItemService(activeOrder, item, itemIndex),
           { ...(item.fulfillment || {}), ...patch },
           item,
         );
@@ -4347,7 +4358,9 @@ export default function AdminPage() {
       const next = { ...current, items };
       if (current.deliveryMessageMode === "auto") {
         next.staffNotes = buildDeliveryMessage(
-          deliveryPreviewOrder(items),
+          deliveryPreviewOrder(items, {
+            netflixDeliveryMode: current.netflixDeliveryMode,
+          }),
           items,
           current.thirdPartyPlatformNotice,
         );
@@ -4361,11 +4374,32 @@ export default function AdminPage() {
       ...current,
       deliveryMessageMode: "auto",
       staffNotes: buildDeliveryMessage(
-        deliveryPreviewOrder(current.items),
+        deliveryPreviewOrder(current.items, {
+          netflixDeliveryMode: current.netflixDeliveryMode,
+        }),
         current.items,
         current.thirdPartyPlatformNotice,
       ),
     }));
+  }
+
+  function updateNetflixDeliveryMode(enabled) {
+    setEditForm((current) => {
+      const netflixDeliveryMode = enabled ? "self_service" : "password";
+      return {
+        ...current,
+        netflixDeliveryMode,
+        deliveryMessageMode: "auto",
+        // Delivery-mode changes must always refresh customer instructions.
+        // This also prevents a password-era custom note from being published
+        // after switching the order to self-service.
+        staffNotes: buildDeliveryMessage(
+          deliveryPreviewOrder(current.items, { netflixDeliveryMode }),
+          current.items,
+          current.thirdPartyPlatformNotice,
+        ),
+      };
+    });
   }
 
   function updateThirdPartyPlatformNotice(enabled) {
@@ -4460,7 +4494,10 @@ export default function AdminPage() {
         staffNotes: customerMessage,
         internalNotes: editForm.internalNotes,
         internalReference: editForm.internalReference,
-        netflixSelfServiceEnabled: editForm.netflixSelfServiceEnabled,
+        ...(["self_service", "password"].includes(editForm.netflixDeliveryMode)
+          ? { netflixDeliveryMode: editForm.netflixDeliveryMode }
+          : {}),
+        netflixSelfServiceEnabled: editForm.netflixOperationalEnabled !== false,
         thirdPartyPlatformNotice: editForm.thirdPartyPlatformNotice,
         deliveryMessageMode: editForm.deliveryMessageMode,
         items: editForm.items.map((it) => ({
@@ -4495,7 +4532,12 @@ export default function AdminPage() {
           staffNotes: data.order.staffNotes || "",
           internalNotes: data.order.internalNotes || "",
           internalReference: data.order.internalReference || "",
-          netflixSelfServiceEnabled: data.order.netflixSelfServiceEnabled !== false,
+          netflixDeliveryMode: ["self_service", "password"].includes(data.order.netflixDeliveryMode)
+            ? data.order.netflixDeliveryMode
+            : data.order.netflixDeliveryMode === undefined || data.order.netflixDeliveryMode === null || data.order.netflixDeliveryMode === ""
+              ? ""
+              : "password",
+          netflixOperationalEnabled: data.order.netflixSelfServiceEnabled !== false,
           thirdPartyPlatformNotice: Boolean(data.order.thirdPartyPlatformNotice),
           deliveryMessageMode: data.order.deliveryMessageMode === "auto" ? "auto" : "custom",
           items: current.items.map((item, index) => {
@@ -4505,7 +4547,7 @@ export default function AdminPage() {
               ...savedItem,
               index: item.index,
               fulfillment: normalizeFulfillment(
-                savedItem.service || item.service,
+                orderItemService(data.order, savedItem, index),
                 savedItem.fulfillment || item.fulfillment,
                 savedItem,
               ),
@@ -4517,10 +4559,17 @@ export default function AdminPage() {
         clearTerminalAdminMutation(pending, res, data);
         const message = data.error === "completion_credentials_required"
           ? `请先完整填写「${data.itemLabel || `商品 ${Number(data.itemIndex || 0) + 1}`}」的客服账号和密码，再标记完成`
+          : data.error === "completion_netflix_email_required"
+            ? `请先填写「${data.itemLabel || `商品 ${Number(data.itemIndex || 0) + 1}`}」的 Netflix 登录邮箱，再标记完成`
           : ({
           quote_required: "请先填写报价并发送付款邮件",
           payment_not_received: "订单尚未收到付款，不能直接标记完成",
           invalid_status: "当前状态不可用",
+          invalid_netflix_delivery_mode: "Netflix 交付方式无效，请刷新后重试",
+          completion_netflix_self_service_paused: "该订单的在线接码已暂停，请先在交付方式旁点击恢复后再完成发货",
+          completion_netflix_user_self_service_paused: "该用户的在线接码已暂停，请先在 Netflix 接码面板恢复用户后再完成发货",
+          completion_netflix_user_state_unavailable: "暂时无法确认该用户的接码状态，请稍后重试，或切换为手动账号密码交付",
+          completion_netflix_account_conflict: "同一订单的 Netflix 商品使用了不同登录邮箱，请改为同一邮箱或使用手动账号密码交付",
         }[data.error] || data.error || "保存失败");
         setSaveResult({ type: "error", message });
       }
@@ -6514,9 +6563,17 @@ export default function AdminPage() {
               <section className="admin-modal-section">
                 <h3>商品配置 · {editForm.items.length} 件</h3>
                 {editForm.items.map((it, idx) => {
-                  const isRocket = it.service === "rocket";
-                  const isSpotify = it.service === "spotify";
-                  const isProxy = it.service === "proxy-pay";
+                  const service = orderItemService(activeOrder, it, idx);
+                  const isRocket = service === "rocket";
+                  const isSpotify = service === "spotify";
+                  const isProxy = service === "proxy-pay";
+                  const isNetflix = service === "netflix";
+                  const isFirstNetflix = isNetflix && editForm.items.findIndex((item, itemIndex) => (
+                    orderItemService(activeOrder, item, itemIndex) === "netflix"
+                  )) === idx;
+                  const netflixLegacyDelivery = editForm.netflixDeliveryMode === "";
+                  const netflixSelfServiceEnabled = editForm.netflixDeliveryMode !== "password";
+                  const netflixSelfServiceOnly = editForm.netflixDeliveryMode === "self_service";
                   const isStaffFill = !isSpotify && !isRocket && !isProxy; // netflix/disney/max
                   return (
                     <div key={idx} className="admin-item-card">
@@ -6524,7 +6581,13 @@ export default function AdminPage() {
                         <strong>{idx + 1}. {it.label}</strong>
                         <div className="admin-item-head-actions">
                           {!isRocket && (
-                            <span className="admin-item-tag">{isStaffFill ? "客服填写账号密码" : "可修改买家输入"}</span>
+                            <span className="admin-item-tag">
+                              {isNetflix && netflixSelfServiceOnly
+                                ? "客服填写登录邮箱"
+                                : isNetflix && netflixLegacyDelivery
+                                  ? "客服填写账号密码 · 可接码"
+                                : isStaffFill ? "客服填写账号密码" : "可修改买家输入"}
+                            </span>
                           )}
                           {isSpotify && (
                             <button
@@ -6559,27 +6622,67 @@ export default function AdminPage() {
                       ) : isStaffFill ? (
                         <>
                           <label className="admin-field">
-                            <span>账号 <em>*</em></span>
+                            <span>{isNetflix ? "Netflix 登录邮箱" : "账号"} <em>*</em></span>
                             <input
                               value={it.staffAccount}
                               onChange={(e) => updateItem(idx, "staffAccount", e.target.value)}
-                              placeholder="工作人员填写要发给买家的账号"
+                              placeholder={isNetflix ? "填写订单对应的 Netflix 登录邮箱" : "工作人员填写要发给买家的账号"}
                             />
                           </label>
-                          <label className="admin-field">
-                            <span>密码 <em>*</em></span>
-                            <div className="admin-pwd-wrap">
-                              <input
-                                type={showPwds[idx] ? "text" : "password"}
-                                value={it.staffPassword}
-                                onChange={(e) => updateItem(idx, "staffPassword", e.target.value)}
-                                placeholder="工作人员填写密码"
-                              />
-                              <button type="button" onClick={() => setShowPwds((s) => ({ ...s, [idx]: !s[idx] }))}>
-                                {showPwds[idx] ? <EyeOff size={14} /> : <Eye size={14} />}
-                              </button>
+                          {(!isNetflix || !netflixSelfServiceOnly) && (
+                            <label className="admin-field">
+                              <span>密码 <em>*</em></span>
+                              <div className="admin-pwd-wrap">
+                                <input
+                                  type={showPwds[idx] ? "text" : "password"}
+                                  value={it.staffPassword}
+                                  onChange={(e) => updateItem(idx, "staffPassword", e.target.value)}
+                                  placeholder="工作人员填写密码"
+                                />
+                                <button type="button" onClick={() => setShowPwds((s) => ({ ...s, [idx]: !s[idx] }))}>
+                                  {showPwds[idx] ? <EyeOff size={14} /> : <Eye size={14} />}
+                                </button>
+                              </div>
+                            </label>
+                          )}
+                          {isFirstNetflix && (
+                            <div className={`admin-netflix-self-service${netflixSelfServiceEnabled ? " active" : ""}`}>
+                              <div className="admin-delivery-switch-row">
+                                <button
+                                  type="button"
+                                  role="switch"
+                                  aria-checked={netflixSelfServiceEnabled}
+                                  aria-label="切换 Netflix 交付方式"
+                                  className={`admin-compact-switch${netflixSelfServiceEnabled ? " active" : ""}`}
+                                  onClick={() => updateNetflixDeliveryMode(!netflixSelfServiceEnabled)}
+                                >
+                                  <span />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="admin-delivery-switch-copy"
+                                  onClick={() => updateNetflixDeliveryMode(!netflixSelfServiceEnabled)}
+                                >
+                                  <b>{netflixLegacyDelivery ? "历史订单 · 密码与接码均可用" : netflixSelfServiceEnabled ? "自助接码" : "手动账号密码"}</b>
+                                  <small>{netflixLegacyDelivery ? "保留原账号密码，同时兼容在线获取登录码" : netflixSelfServiceEnabled ? "用户可在线获取 Netflix 登录码" : "用户使用订单中的账号和密码登录"}</small>
+                                </button>
+                              </div>
+                              {netflixSelfServiceEnabled && editForm.netflixOperationalEnabled !== false && (
+                                <a href="/netflix-code" target="_blank" rel="noopener noreferrer" className="admin-netflix-self-service-link">
+                                  打开接码页 <ExternalLink size={11} />
+                                </a>
+                              )}
+                              {netflixSelfServiceEnabled && editForm.netflixOperationalEnabled === false && (
+                                <button
+                                  type="button"
+                                  className="admin-netflix-self-service-restore"
+                                  onClick={() => setEditForm((current) => ({ ...current, netflixOperationalEnabled: true }))}
+                                >
+                                  接码已暂停 · 点击恢复
+                                </button>
+                              )}
                             </div>
-                          </label>
+                          )}
                         </>
                       ) : isRocket ? null : (
                         <>
@@ -6618,7 +6721,6 @@ export default function AdminPage() {
                 customerMessage={editForm.staffNotes}
                 internalNotes={editForm.internalNotes}
                 internalReference={editForm.internalReference}
-                netflixSelfServiceEnabled={editForm.netflixSelfServiceEnabled}
                 thirdPartyPlatformNotice={editForm.thirdPartyPlatformNotice}
                 deliveryMessageMode={editForm.deliveryMessageMode}
                 onFulfillmentChange={updateFulfillment}
@@ -6635,10 +6737,6 @@ export default function AdminPage() {
                 onInternalReferenceChange={(value) => setEditForm((current) => ({
                   ...current,
                   internalReference: value,
-                }))}
-                onNetflixSelfServiceChange={(value) => setEditForm((current) => ({
-                  ...current,
-                  netflixSelfServiceEnabled: value,
                 }))}
                 onThirdPartyChange={updateThirdPartyPlatformNotice}
               />

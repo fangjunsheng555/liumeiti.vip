@@ -1619,6 +1619,7 @@ function orderOverview(order) {
     usdtConfirmedAt: order?.usdtConfirmedAt || "", usdtTxId: order?.usdtTxId || "",
     referral: order?.referral ? { levelOneEmail: order.referral.levelOneEmail || "" } : null,
     assignedStaffId: 0, assignedStaffUsername: "", assignedAt: "", assignedAtBeijing: "", internalReference: "", netflixSelfServiceEnabled: true,
+    netflixDeliveryMode: ["self_service", "password"].includes(order?.netflixDeliveryMode) ? order.netflixDeliveryMode : "",
   };
 }
 

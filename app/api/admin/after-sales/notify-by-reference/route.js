@@ -21,9 +21,18 @@ import {
 import { idempotencyPayloadHash, requiredIdempotencyKey } from "../../../_money.js";
 import { withApiTelemetry } from "../../../_observability.js";
 import { buildReferenceNotificationEmail } from "../reference-notification-email.js";
+import { netflixCredentialSecrets } from "../../../../lib/netflix-delivery.js";
 import { createHash } from "node:crypto";
 
 export const runtime = "nodejs";
+
+function cleanMultiline(value, limit = 2000) {
+  return String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\x00-\x09\x0b-\x1f\x7f]/g, " ")
+    .trim()
+    .slice(0, limit);
+}
 
 function publicOrderSummary(order) {
   const items = Array.isArray(order?.items) ? order.items : [];
@@ -66,12 +75,17 @@ function referenceNoticeOrderSnapshot(order) {
     service: clean(order?.service, 80),
     cycle: clean(order?.cycle, 80),
     locale: order?.locale === "en" ? "en" : "zh",
-    remark: clean(order?.remark, 1500),
-    staffNotes: clean(order?.staffNotes, 3000),
+    remark: cleanMultiline(order?.remark, 1500),
+    staffNotes: cleanMultiline(order?.staffNotes, 3000),
+    deliveryMessageMode: order?.deliveryMessageMode === "auto" ? "auto" : "custom",
     account: clean(order?.account, 200),
     password: clean(order?.password, 300),
     staffAccount: clean(order?.staffAccount, 200),
     staffPassword: clean(order?.staffPassword, 300),
+    netflixDeliveryMode: ["self_service", "password"].includes(order?.netflixDeliveryMode)
+      ? order.netflixDeliveryMode
+      : "",
+    netflixSelfServiceEnabled: order?.netflixSelfServiceEnabled !== false,
     subscriptionLinks: order?.subscriptionLinks && typeof order.subscriptionLinks === "object" ? {
       shadowrocket: clean(order.subscriptionLinks.shadowrocket, 1000),
       clash: clean(order.subscriptionLinks.clash, 1000),
@@ -92,18 +106,81 @@ function referenceNoticeOrderSnapshot(order) {
   };
 }
 
+function normalizedReferenceItemService(order, item, index) {
+  const itemService = clean(item?.service, 80).trim().toLowerCase();
+  if (itemService) return itemService;
+  return index === 0 ? clean(order?.service, 80).trim().toLowerCase() : "";
+}
+
+function stripReferenceRetrySecrets(value, plannedOrders, currentOrders) {
+  return plannedOrders.reduce((text, plannedOrder, index) => {
+    const currentOrder = currentOrders[index];
+    // A durable plan may have been captured before the order switched from
+    // one delivery mode to another. Remove both planned and current Netflix
+    // secrets from immutable prose in every mode; the credential section is
+    // populated separately and continues to show only the current credentials.
+    const plannedSecrets = netflixCredentialSecrets({
+      ...plannedOrder,
+      netflixDeliveryMode: "self_service",
+    });
+    const currentSecrets = netflixCredentialSecrets(currentOrder);
+    return [...plannedSecrets, ...currentSecrets].reduce(
+      (safeText, secret) => safeText.split(secret).join(""),
+      text,
+    ).replace(/[ \t]{2,}/g, " ").trim();
+  }, String(value || ""));
+}
+
 function overlayCurrentOrderCredentials(plannedOrder, currentOrder) {
   const currentItems = Array.isArray(currentOrder?.items) && currentOrder.items.length
     ? currentOrder.items
     : [];
   const plannedItems = Array.isArray(plannedOrder?.items) ? plannedOrder.items : [];
   if (plannedItems.length && currentItems.length !== plannedItems.length) return null;
+  if (!plannedItems.length) {
+    // A legacy top-level order still has a service identity. Allow the normal
+    // one-item materialization of that same service, but never overlay a new
+    // service (or a newly-created bundle) under the old snapshot label.
+    if (currentItems.length > 1) return null;
+    const plannedService = normalizedReferenceItemService(plannedOrder, plannedOrder, 0);
+    const currentService = currentItems.length
+      ? normalizedReferenceItemService(currentOrder, currentItems[0], 0)
+      : normalizedReferenceItemService(currentOrder, currentOrder, 0);
+    if (!plannedService || plannedService !== currentService) return null;
+  }
+  if (plannedItems.some((plannedItem, index) => (
+    normalizedReferenceItemService(plannedOrder, plannedItem, index)
+      !== normalizedReferenceItemService(currentOrder, currentItems[index], index)
+  ))) return null;
+  const materializedPrimary = !plannedItems.length && currentItems.length === 1;
+  const currentPrimary = materializedPrimary
+    ? currentItems[0]
+    : currentOrder;
+  const primaryHasAccount = materializedPrimary
+    && Boolean(clean(currentPrimary?.staffAccount || currentPrimary?.account, 200));
+  const primaryHasPassword = materializedPrimary
+    && Boolean(clean(currentPrimary?.staffPassword || currentPrimary?.password, 300));
   return {
     ...plannedOrder,
-    account: clean(currentOrder?.account, 200),
-    password: clean(currentOrder?.password, 300),
-    staffAccount: clean(currentOrder?.staffAccount, 200),
-    staffPassword: clean(currentOrder?.staffPassword, 300),
+    remark: stripReferenceRetrySecrets(
+      plannedOrder?.remark,
+      [plannedOrder],
+      [currentOrder],
+    ),
+    staffNotes: stripReferenceRetrySecrets(
+      plannedOrder?.staffNotes,
+      [plannedOrder],
+      [currentOrder],
+    ),
+    account: clean(currentPrimary?.account || (!primaryHasAccount ? currentOrder?.account : ""), 200),
+    password: clean(currentPrimary?.password || (!primaryHasPassword ? currentOrder?.password : ""), 300),
+    staffAccount: clean(currentPrimary?.staffAccount || (!primaryHasAccount ? currentOrder?.staffAccount : ""), 200),
+    staffPassword: clean(currentPrimary?.staffPassword || (!primaryHasPassword ? currentOrder?.staffPassword : ""), 300),
+    deliveryMessageMode: currentOrder?.deliveryMessageMode === "auto" ? "auto" : "custom",
+    netflixDeliveryMode: ["self_service", "password"].includes(currentOrder?.netflixDeliveryMode)
+      ? currentOrder.netflixDeliveryMode
+      : "",
+    netflixSelfServiceEnabled: currentOrder?.netflixSelfServiceEnabled !== false,
     items: plannedItems.map((item, index) => {
       const current = currentItems[index];
       if (!current) return null;
@@ -193,7 +270,10 @@ async function sendReferenceNoticeHandler(request) {
   try { body = await request.json(); } catch {}
   const reference = normalizeInternalReference(body.reference);
   const subject = clean(body.subject, 160);
-  const message = clean(body.message, 2000);
+  const message = cleanMultiline(body.message, 2000);
+  // Preserve the historical single-line hash shape so an operation started
+  // before this deployment can still be retried with the same idempotency key.
+  const messageForHash = clean(body.message, 2000);
   const requestedOrderIds = Array.from(new Set((Array.isArray(body.orderIds) ? body.orderIds : [])
     .map((value) => clean(value, 80).toUpperCase())
     .filter(Boolean))).sort();
@@ -204,7 +284,12 @@ async function sendReferenceNoticeHandler(request) {
   const idempotency = requiredIdempotencyKey(request);
   if (!idempotency.ok) return Response.json({ ok: false, error: idempotency.error }, { status: 400 });
   const actor = adminActorFromSession(auth.session);
-  const requestHash = idempotencyPayloadHash({ reference, orderIds: requestedOrderIds, subject, message });
+  const requestHash = idempotencyPayloadHash({
+    reference,
+    orderIds: requestedOrderIds,
+    subject,
+    message: messageForHash,
+  });
   const operation = await claimDurableOperation({
     scope: "admin-reference-notice",
     principal: reference,
@@ -230,10 +315,10 @@ async function sendReferenceNoticeHandler(request) {
   if (!plan) {
     if (!orders.length) return Response.json({ ok: false, error: "orders_not_found" }, { status: 404 });
 
+    const deliverableOrders = orders.filter((order) => validEmail(String(order?.email || "").trim().toLowerCase()));
     const grouped = new Map();
-    for (const order of orders) {
+    for (const order of deliverableOrders) {
       const email = String(order.email || "").trim().toLowerCase();
-      if (!validEmail(email)) continue;
       if (!grouped.has(email)) grouped.set(email, []);
       grouped.get(email).push(order);
     }
@@ -241,13 +326,18 @@ async function sendReferenceNoticeHandler(request) {
     const settings = await getSettings();
     const proposedPlan = {
       reference,
-      orderIds: orders.map((order) => String(order.orderId || "").toUpperCase()).filter(Boolean).sort(),
-      recipients: [...grouped.entries()].map(([email, recipientOrders]) => ({
-        email,
-        orderIds: recipientOrders.map((order) => String(order.orderId || "").toUpperCase()).filter(Boolean).sort(),
-        orders: recipientOrders.map(referenceNoticeOrderSnapshot),
-        locale: recipientOrders.some((order) => order.locale === "en") ? "en" : "zh",
-      })).sort((left, right) => left.email.localeCompare(right.email)),
+      orderIds: deliverableOrders.map((order) => String(order.orderId || "").toUpperCase()).filter(Boolean).sort(),
+      recipients: [...grouped.entries()].map(([email, recipientOrders]) => {
+        const sortedOrders = [...recipientOrders].sort((left, right) => (
+          String(left?.orderId || "").toUpperCase().localeCompare(String(right?.orderId || "").toUpperCase())
+        ));
+        return {
+          email,
+          orderIds: sortedOrders.map((order) => String(order.orderId || "").toUpperCase()).filter(Boolean),
+          orders: sortedOrders.map(referenceNoticeOrderSnapshot),
+          locale: recipientOrders.some((order) => order.locale === "en") ? "en" : "zh",
+        };
+      }).sort((left, right) => left.email.localeCompare(right.email)),
       emailContext: {
         brandName: settings.brand.name,
         brandNameEn: settings.brand.nameEn,
@@ -281,8 +371,8 @@ async function sendReferenceNoticeHandler(request) {
       if (!refreshed.ok) return refreshed;
       const content = buildReferenceNotificationEmail({
         orders: refreshed.orders,
-        subject,
-        message,
+        subject: stripReferenceRetrySecrets(subject, recipientOrders, refreshed.orders),
+        message: stripReferenceRetrySecrets(message, recipientOrders, refreshed.orders),
         brandName: locale === "en"
           ? (plan.emailContext?.brandNameEn || plan.emailContext?.brandName)
           : plan.emailContext?.brandName,

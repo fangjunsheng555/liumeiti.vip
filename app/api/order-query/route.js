@@ -12,13 +12,18 @@ import {
   redisConfig,
   getCookieFromRequest,
 } from "../_utils.js";
-import { signAfterSalesToken } from "../_auth-session.js";
+import { readUserAuthState, signAfterSalesToken } from "../_auth-session.js";
+import { netflixOrderIdentity } from "../netflix-code/_ownership.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { buildEmailBrandHeader } from "../email-brand.js";
 import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../after-sales/_store.js";
 import { orderExpirySummary, renewalCheckoutPath } from "../../lib/order-expiry.js";
 import { getSpotifyPasswordAttention } from "../../lib/order-attention.js";
 import { effectiveQuoteStatus } from "../_quote-expiry.js";
+import {
+  orderItemService,
+  publicNetflixStaffNotes,
+} from "../../lib/netflix-delivery.js";
 
 const QUERY_CODE_TTL_SECONDS = 10 * 60;
 const BRAND_NAME = process.env.BRAND_NAME || "冒央会社";
@@ -60,15 +65,29 @@ function subscriptionLinks(username) {
   };
 }
 
-function publicOrder(order, type, locale = "zh") {
+function publicOrder(order, type, locale = "zh", netflixUserSelfServiceEnabled = true) {
+  const hasStoredNetflixDeliveryMode = order.netflixDeliveryMode !== undefined
+    && order.netflixDeliveryMode !== null
+    && order.netflixDeliveryMode !== "";
+  const netflixDeliveryMode = ["self_service", "password"].includes(order.netflixDeliveryMode)
+    ? order.netflixDeliveryMode
+    : hasStoredNetflixDeliveryMode ? "password" : "legacy";
+  const netflixSelfServiceDelivery = netflixDeliveryMode === "self_service";
   let items;
   if (Array.isArray(order.items) && order.items.length > 0) {
-    items = order.items.map((it) => {
-      const account = it.staffAccount || it.account || "";
-      const password = it.staffPassword || it.password || "";
+    items = order.items.map((it, index) => {
+      const service = orderItemService(order, it, index);
+      // Top-level credentials are a legacy mirror of items[0]. Never apply
+      // them to a later Netflix item in a mixed-service order.
+      const legacyAccount = index === 0 ? order.staffAccount || order.account || "" : "";
+      const legacyPassword = index === 0 ? order.staffPassword || order.password || "" : "";
+      const account = it.staffAccount || it.account || legacyAccount;
+      const password = service === "netflix" && netflixSelfServiceDelivery
+        ? ""
+        : it.staffPassword || it.password || legacyPassword;
       const out = {
-        service: it.service || "",
-        label: localizeOrderItemLabel(it.service, it.plan || it.rocketPlan, it.label || "", locale),
+        service,
+        label: localizeOrderItemLabel(service, it.plan || it.rocketPlan, it.label || "", locale),
         cycle: localizeCycle(it.cycle || "", locale),
         amount: Number(it.amount || 0),
         plan: it.plan || it.rocketPlan || "",
@@ -77,7 +96,7 @@ function publicOrder(order, type, locale = "zh") {
         account,
         password,
       };
-      if (it.service === "rocket") {
+      if (service === "rocket") {
         out.subscriptionLinks = subscriptionLinks(order.orderId) || it.subscriptionLinks;
       } else if (it.subscriptionLinks) {
         out.subscriptionLinks = it.subscriptionLinks;
@@ -86,10 +105,13 @@ function publicOrder(order, type, locale = "zh") {
     });
   } else {
     const account = order.staffAccount || order.account || "";
-    const password = order.staffPassword || order.password || "";
+    const service = orderItemService(order, order, 0);
+    const password = service === "netflix" && netflixSelfServiceDelivery
+      ? ""
+      : order.staffPassword || order.password || "";
     const it = {
-      service: order.service || "",
-      label: localizeOrderItemLabel(order.service, order.plan || order.rocketPlan, order.serviceLabel || "", locale),
+      service,
+      label: localizeOrderItemLabel(service, order.plan || order.rocketPlan, order.serviceLabel || "", locale),
       cycle: localizeCycle(order.cycle || "", locale),
       amount: Number(order.finalAmount || 0),
       account,
@@ -99,6 +121,18 @@ function publicOrder(order, type, locale = "zh") {
     items = [it];
   }
 
+  const netflixAccounts = items
+    .filter((item) => item.service === "netflix")
+    .map((item) => String(item.account || "").trim().toLowerCase());
+  const netflixSelfServiceEnabled = netflixDeliveryMode !== "password"
+    && order.netflixSelfServiceEnabled !== false
+    && netflixUserSelfServiceEnabled
+    && netflixAccounts.length > 0
+    && netflixAccounts.every(validEmail)
+    && new Set(netflixAccounts).size === 1;
+  const staffNotes = publicNetflixStaffNotes(order, {
+    onlineCodeAvailable: netflixSelfServiceEnabled,
+  });
   const output = {
     matchType: type || "",
     orderId: order.orderId || "",
@@ -107,7 +141,7 @@ function publicOrder(order, type, locale = "zh") {
     createdAt: order.createdAt || "",
     createdAtBeijing: order.createdAtBeijing || "",
     completedAtBeijing: order.completedAtBeijing || "",
-    staffNotes: order.staffNotes || "",
+    staffNotes,
     items,
     itemCount: items.length,
     serviceLabel: items.map((i) => i.label).join(" + "),
@@ -135,6 +169,8 @@ function publicOrder(order, type, locale = "zh") {
     cycle: items[0]?.cycle || "",
     account: items[0]?.account || "",
     password: items[0]?.password || "",
+    netflixDeliveryMode,
+    netflixSelfServiceEnabled,
   };
   if (output.service === "rocket" && output.account) {
     output.subscriptionLinks = subscriptionLinks(output.account);
@@ -158,6 +194,33 @@ function publicOrder(order, type, locale = "zh") {
     });
   }
   return output;
+}
+
+function mayUseNetflixSelfService(order) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const hasNetflix = items.some((item, index) => orderItemService(order, item, index) === "netflix")
+    || (!items.length && orderItemService(order, order, 0) === "netflix");
+  if (!hasNetflix || order?.netflixSelfServiceEnabled === false) return false;
+  const mode = order?.netflixDeliveryMode;
+  const hasStoredMode = mode !== undefined && mode !== null && mode !== "";
+  return !hasStoredMode || mode === "self_service";
+}
+
+export async function netflixUserStatesByOwner(orders, readState = readUserAuthState) {
+  const pending = new Map();
+  for (const order of Array.isArray(orders) ? orders : []) {
+    if (!mayUseNetflixSelfService(order)) continue;
+    const { ownerEmail } = netflixOrderIdentity(order);
+    if (!ownerEmail || pending.has(ownerEmail)) continue;
+    pending.set(ownerEmail, Promise.resolve()
+      .then(() => readState(ownerEmail))
+      .catch(() => null));
+  }
+  const resolved = new Map();
+  await Promise.all(Array.from(pending, async ([ownerEmail, statePromise]) => {
+    resolved.set(ownerEmail, await statePromise);
+  }));
+  return resolved;
 }
 
 async function readBody(request) {
@@ -344,11 +407,15 @@ async function handle(request) {
   }
 
   const activeTickets = await getActiveAfterSalesTickets(matched.map((order) => order.orderId));
+  const netflixOwnerStates = await netflixUserStatesByOwner(matched);
   const verifiedOrders = matched.map((order) => {
     const eligible = order.status !== "invalid";
     const activeTicket = eligible ? activeTickets[normalizeOrderId(order.orderId)] : null;
+    const { ownerEmail } = netflixOrderIdentity(order);
+    const ownerState = ownerEmail ? netflixOwnerStates.get(ownerEmail) : null;
+    const netflixUserSelfServiceEnabled = !(ownerState?.ok && ownerState.user?.netflixSelfServiceDisabled);
     return {
-      ...publicOrder(order, matchType(type), locale),
+      ...publicOrder(order, matchType(type), locale, netflixUserSelfServiceEnabled),
       afterSalesEligible: eligible,
       afterSalesToken: eligible ? signAfterSalesToken({
         orderId: normalizeOrderId(order.orderId),

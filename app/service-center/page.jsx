@@ -1175,7 +1175,11 @@ export default function ServiceCenterPage() {
                     </div>
                     {(item.account || item.password) && (
                       <div className="query-modal-item-creds">
-                        {item.account && <div><span>{item.service === "rocket" ? L("用户名", "Username") : L("账号", "Account")}</span><code>{item.account}</code></div>}
+                        {item.account && <div><span>{item.service === "rocket"
+                          ? L("用户名", "Username")
+                          : item.service === "netflix" && queryDetailOrder.netflixDeliveryMode !== "password"
+                            ? L("Netflix 登录邮箱", "Netflix sign-in email")
+                            : L("账号", "Account")}</span><code>{item.account}</code></div>}
                         {item.password && <div><span>{L("密码", "Password")}</span><code>{item.password}</code></div>}
                       </div>
                     )}
@@ -1192,6 +1196,30 @@ export default function ServiceCenterPage() {
                   </div>
                 ))}
               </div>
+              {queryDetailOrder.status === "completed"
+                && queryDetailOrder.netflixSelfServiceEnabled !== false
+                && !queryDetailOrder.expiry?.expired
+                && queryItems.some((item) => item.service === "netflix") && (
+                <Link href="/netflix-code" className="account-netflix-code-link">
+                  <span>
+                    <strong>{L("在线获取 Netflix 登录码", "Get Netflix sign-in code")}</strong>
+                    <small>{L("需要登录码或身份确认时，可使用订单中的 Netflix 登录邮箱在线获取", "Use the Netflix sign-in email in this order when a code or confirmation is required")}</small>
+                  </span>
+                  <ExternalLink size={14} />
+                </Link>
+              )}
+              {queryDetailOrder.status === "completed"
+                && queryDetailOrder.netflixDeliveryMode === "self_service"
+                && queryDetailOrder.netflixSelfServiceEnabled === false
+                && !queryDetailOrder.expiry?.expired
+                && queryItems.some((item) => item.service === "netflix") && (
+                <div className="account-netflix-code-link is-disabled">
+                  <span>
+                    <strong>{L("在线获取登录码暂不可用", "Online sign-in codes are temporarily unavailable")}</strong>
+                    <small>{L("如需登录帮助，请从本订单联系在线客服", "For sign-in help, contact online support from this order")}</small>
+                  </span>
+                </div>
+              )}
               {queryDetailOrder.staffNotes && (
                 <div className="query-modal-staff-notes">
                   <div className="query-modal-staff-notes-label">{L("客服备注", "Support note")}</div>

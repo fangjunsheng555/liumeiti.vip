@@ -1538,7 +1538,11 @@ export default function AccountPage() {
                       <div className="account-modal-creds">
                         {it.account && (
                           <div>
-                            <span>{it.service === "rocket" ? L("用户名", "Username") : L("账号", "Account")}</span>
+                            <span>{it.service === "rocket"
+                              ? L("用户名", "Username")
+                              : it.service === "netflix" && activeOrder.netflixDeliveryMode !== "password"
+                                ? L("Netflix 登录邮箱", "Netflix sign-in email")
+                                : L("账号", "Account")}</span>
                             <code>{it.account}</code>
                             <button type="button" onClick={() => handleCopy(it.account, `acc-${idx}`)}>
                               {copiedKey === `acc-${idx}` ? L("已复制", "Copied") : <Copy size={11} />}
@@ -1577,6 +1581,31 @@ export default function AccountPage() {
                   </div>
                 ))}
               </div>
+
+              {activeOrder.status === "completed"
+                && activeOrder.netflixSelfServiceEnabled !== false
+                && !activeOrder.expiry?.expired
+                && activeOrder.items.some((item) => item.service === "netflix") && (
+                <Link href="/netflix-code" className="account-netflix-code-link">
+                  <span>
+                    <strong>{L("在线获取 Netflix 登录码", "Get Netflix sign-in code")}</strong>
+                    <small>{L("需要登录码或身份确认时，可使用订单中的 Netflix 登录邮箱在线获取", "Use the Netflix sign-in email in this order when a code or confirmation is required")}</small>
+                  </span>
+                  <ExternalLink size={14} />
+                </Link>
+              )}
+              {activeOrder.status === "completed"
+                && activeOrder.netflixDeliveryMode === "self_service"
+                && activeOrder.netflixSelfServiceEnabled === false
+                && !activeOrder.expiry?.expired
+                && activeOrder.items.some((item) => item.service === "netflix") && (
+                <div className="account-netflix-code-link is-disabled">
+                  <span>
+                    <strong>{L("在线获取登录码暂不可用", "Online sign-in codes are temporarily unavailable")}</strong>
+                    <small>{L("如需登录帮助，请从本订单联系在线客服", "For sign-in help, contact online support from this order")}</small>
+                  </span>
+                </div>
+              )}
 
               {activeOrder.staffNotes && (
                 <div className="account-modal-staff-notes">

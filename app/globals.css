@@ -7205,6 +7205,44 @@ body:has(.admin-page) {
 .admin-item-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .admin-item-head strong { font-size: 13px; font-weight: 800; color: var(--primary); }
 .admin-item-head-actions { min-width: 0; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 5px; }
+.admin-netflix-self-service {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 7px 9px;
+  border: 1px solid #d7e0e7;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.admin-netflix-self-service.active {
+  border-color: #99f6e4;
+  background: #f0fdfa;
+}
+.admin-netflix-self-service .admin-delivery-switch-row { flex: 1 1 180px; min-width: 0; }
+.admin-netflix-self-service-link {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #0f766e;
+  font-size: 10px;
+  font-weight: 850;
+  text-decoration: none;
+}
+.admin-netflix-self-service-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+.admin-netflix-self-service-restore {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: #b45309;
+  font-size: 10px;
+  font-weight: 850;
+  cursor: pointer;
+}
+.admin-netflix-self-service-restore:hover { text-decoration: underline; text-underline-offset: 2px; }
 .admin-delivery-workbench {
   padding-top: 2px;
   border-top: 1px solid var(--line);
@@ -7392,7 +7430,7 @@ body:has(.admin-page) {
 }
 .admin-delivery-internal-tools {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(190px, .55fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: end;
   gap: 10px;
   margin-top: 9px;
@@ -8500,6 +8538,25 @@ body:has(.admin-page) {
   color: var(--accent);
   white-space: nowrap;
 }
+.account-netflix-code-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid #99f6e4;
+  border-radius: 9px;
+  background: #f0fdfa;
+  color: #0f766e;
+  text-decoration: none;
+}
+.account-netflix-code-link:hover { border-color: #5eead4; background: #ccfbf1; }
+.account-netflix-code-link.is-disabled { border-color: #fde68a; background: #fffbeb; color: #92400e; }
+.account-netflix-code-link.is-disabled small { color: #a16207; }
+.account-netflix-code-link span { min-width: 0; display: grid; gap: 1px; }
+.account-netflix-code-link strong { font-size: 11.5px; font-weight: 850; }
+.account-netflix-code-link small { color: #47736f; font-size: 9.5px; line-height: 1.35; }
+.account-netflix-code-link > svg { flex: none; }
 
 .account-modal-staff-notes {
   padding: 11px 13px;

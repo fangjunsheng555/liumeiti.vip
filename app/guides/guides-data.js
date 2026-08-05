@@ -72,7 +72,7 @@ export const GUIDES = [
   {
     slug: "netflix-4k-seat-vs-full-account",
     service: "netflix",
-    updated: "2026-07-11",
+    updated: "2026-08-05",
     title: "Netflix 4K 会员购买指南：单独车位与整号怎么选",
     titleEn: "Netflix 4K Buying Guide: Dedicated Profile or Full Account",
     desc: "说明 Netflix 4K 杜比单独车位和整号的账号归属、档案数量、适用场景与交付方式。",
@@ -82,24 +82,40 @@ export const GUIDES = [
     steps: [
       ["按使用人数选择", "单人长期观看选择单独车位更划算；家庭、多用户或需要完整账号管理权时选择整号。"],
       ["提交订单", "选择规格，填写接收交付信息的邮箱；联系方式与备注可按实际需要填写。"],
-      ["接收登录资料", "工作人员核对订单后提供账号、对应车位或整号信息及使用说明。"],
-      ["登录并检查播放条件", "在 Netflix 官方应用或网页端登录。4K 与杜比效果取决于片源、设备、套餐支持和网络条件。"],
+      ["接收登录资料", "工作人员核对订单后提供登录邮箱、对应车位或整号资料及使用说明。订单如支持在线获取登录码，交付说明中会明确标注；其他订单按交付的账号和密码登录。"],
+      ["需要登录码时", {
+        parts: [
+          "先在 Netflix 官方登录页输入订单中的邮箱并继续。如页面要求登录码或身份确认，请打开本站",
+          { text: "Netflix 登录码页面", href: "/netflix-code", ariaLabel: "前往 Netflix 登录码页面" },
+          "，按页面提示选择或核验订单并读取结果。登录码和确认链接有时效，请及时使用。",
+        ],
+      }],
+      ["登录并检查播放条件", "请仅在 Netflix 官方应用或网页端使用交付信息。4K 与杜比效果取决于片源、设备、套餐支持和网络条件。"],
     ],
     stepsEn: [
       ["Choose by number of viewers", "A Dedicated Profile is the better-value option for one viewer. Choose a Full Account for a household, multiple users or full account control."],
       ["Place the order", "Select the plan and provide the email that should receive delivery details. Contact and notes can be added when needed."],
-      ["Receive access details", "After checking the order, we provide the account, assigned profile or full-account details, and usage instructions."],
-      ["Sign in and check playback requirements", "Use the official Netflix app or website. 4K and Dolby availability depends on the title, device, plan support and network conditions."],
+      ["Receive access details", "After checking the order, we provide the sign-in email, assigned profile or full-account details, and usage instructions. Orders that support online sign-in code retrieval are clearly marked; other orders use the email and password provided."],
+      ["When Netflix asks for a code", {
+        parts: [
+          "Enter the email shown in the order on Netflix’s official sign-in page and continue. If Netflix asks for a sign-in code or identity confirmation, open our ",
+          { text: "Netflix Sign-in Code page", href: "/netflix-code", ariaLabel: "Open the Netflix Sign-in Code page" },
+          ", then follow the instructions to select or verify your order and retrieve the result. Codes and confirmation links expire, so use the result promptly.",
+        ],
+      }],
+      ["Sign in and check playback requirements", "Use delivery details only in the official Netflix app or website. 4K and Dolby availability depends on the title, device, plan support and network conditions."],
     ],
     faq: [
       ["单独车位是独立账号吗？", "不是。车位是共享账号内分配给一位用户的独立档案，可设置 PIN，观看记录与其他档案分开。"],
       ["整号可以建立几个档案？", "当前整号规格最多支持 5 个用户档案。"],
       ["是否需要提供自己的 Netflix 账号？", "不需要，登录资料由我们按所选规格提供。"],
+      ["如何获取 Netflix 登录码？", "仅订单交付说明中标注支持在线获取时可用。先在 Netflix 输入订单提供的登录邮箱并继续，再打开本站 Netflix 登录码页面，登录本站账号或核验订单后读取结果。登录码和确认链接有时效，请及时使用。"],
     ],
     faqEn: [
       ["Is a Dedicated Profile a separate account?", "No. It is an assigned profile on a shared account. It can be PIN-locked and keeps viewing history separate from other profiles."],
       ["How many profiles does a Full Account support?", "The current Full Account plan supports up to five profiles."],
       ["Do I provide my own Netflix account?", "No. We supply the access details for the plan you order."],
+      ["How do I get a Netflix sign-in code?", "Use online retrieval only when the delivery instructions say it is supported. Enter the sign-in email shown in the order on Netflix and continue, then open our Netflix Sign-in Code page and sign in or verify the order to retrieve the result. Codes and confirmation links expire, so use the result promptly."],
     ],
   },
   {

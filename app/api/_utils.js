@@ -374,6 +374,7 @@ function orderOverviewSnapshot(order) {
     assignedAtBeijing: order.assignedAtBeijing || "",
     internalReference: normalizeInternalReference(order.internalReference),
     netflixSelfServiceEnabled: order.netflixSelfServiceEnabled !== false,
+    netflixDeliveryMode: ["self_service", "password"].includes(order.netflixDeliveryMode) ? order.netflixDeliveryMode : "",
     slaReminderKey: order.slaReminderKey || "",
     slaReminderSentAt: order.slaReminderSentAt || "",
   };

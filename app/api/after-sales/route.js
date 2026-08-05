@@ -30,6 +30,20 @@ function isCredentialService(service) {
   return ["spotify", "ai", "netflix", "disney", "max"].includes(clean(service, 40).toLowerCase());
 }
 
+function orderItemService(order, item, index) {
+  const itemService = clean(item?.service, 40).toLowerCase();
+  return itemService || (index === 0 ? clean(order?.service, 40).toLowerCase() : "");
+}
+
+function orderItemCredential(order, item, index, staffField, buyerField, maxLength) {
+  return clean(
+    item?.[staffField]
+      || item?.[buyerField]
+      || (index === 0 ? order?.[staffField] || order?.[buyerField] : ""),
+    maxLength,
+  );
+}
+
 async function createAfterSalesHandler(request) {
   let body = {};
   try { body = await request.json(); } catch {}
@@ -67,7 +81,7 @@ async function createAfterSalesHandler(request) {
   if (!guard.ok) return rateLimitResponse(guard, "售后申请提交过于频繁，请稍后再试");
 
   const catalog = await getMergedCatalog();
-  const catalogByKey = Object.fromEntries(catalog.map((product) => [product.key, product]));
+  const catalogByKey = Object.fromEntries(catalog.map((product) => [clean(product?.key, 40).toLowerCase(), product]));
   const sourceItems = Array.isArray(order.items) && order.items.length ? order.items : [{
     service: order.service,
     label: order.serviceLabel,
@@ -84,13 +98,22 @@ async function createAfterSalesHandler(request) {
   for (let index = 0; index < sourceItems.length; index += 1) {
     const source = sourceItems[index] || {};
     const submitted = submittedItemAt(body.items, index);
-    const product = catalogByKey[source.service] || {};
-    const credentialManaged = isCredentialService(source.service);
-    const customerCredentialsRequired = Boolean(product.needsAccountPassword || source.service === "spotify");
-    const isProxy = source.service === "proxy-pay";
+    const service = orderItemService(order, source, index);
+    const product = catalogByKey[service] || {};
+    const credentialManaged = isCredentialService(service);
+    const netflixSelfService = service === "netflix" && order.netflixDeliveryMode === "self_service";
+    const customerCredentialsRequired = Boolean(!netflixSelfService && (product.needsAccountPassword || service === "spotify"));
+    const isProxy = service === "proxy-pay";
     contactRequired = contactRequired || Boolean(product.needsContact || isProxy);
-    const account = credentialManaged ? clean(submitted.account ?? source.staffAccount ?? source.account, 80) : "";
-    const password = credentialManaged ? clean(submitted.password ?? source.staffPassword ?? source.password, 120) : "";
+    const currentAccount = orderItemCredential(order, source, index, "staffAccount", "account", 80);
+    const currentPassword = orderItemCredential(order, source, index, "staffPassword", "password", 120);
+    const account = credentialManaged ? clean(submitted.account ?? currentAccount, 80) : "";
+    // A self-service order can retain a password internally so an administrator
+    // can switch it back to manual delivery later. That retained secret must not
+    // be copied into an after-sales ticket or any customer/staff ticket view.
+    const password = credentialManaged && !netflixSelfService
+      ? clean(submitted.password ?? currentPassword, 120)
+      : "";
     const platformUrl = isProxy ? clean(submitted.platformUrl ?? source.platformUrl ?? order.platformUrl, 1000) : "";
     const productPrice = isProxy ? clean(submitted.productPrice ?? source.productPrice ?? order.productPrice, 120) : "";
     if (customerCredentialsRequired && (!account || !password)) {
@@ -101,10 +124,11 @@ async function createAfterSalesHandler(request) {
     }
     items.push({
       index,
-      service: clean(source.service, 40),
+      service,
       label: clean(source.label || order.serviceLabel || source.service, 180),
       plan: clean(source.plan || source.rocketPlan, 40),
       credentialManaged,
+      netflixSelfService,
       account,
       password,
       platformUrl,
