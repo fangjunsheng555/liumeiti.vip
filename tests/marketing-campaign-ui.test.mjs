@@ -36,8 +36,8 @@ test("campaign UI has responsive detail actions, explicit empty state and announ
   const source = await readFile(new URL("../app/admin/MarketingCampaignPanel.jsx", import.meta.url), "utf8");
   assert.match(source, /flexWrap:\s*"wrap"[\s\S]*?selectedStats\.campaign\.name/);
   assert.match(source, /暂无营销活动/);
-  assert.match(source, /<span role="alert"/);
-  assert.match(source, /<span role="status"/);
+  assert.match(source, /role="alert"/);
+  assert.match(source, /role="status"/);
   assert.match(source, /opacity:\s*state\.busy \|\| !dateValidation\.ok \? 0\.55 : 1/);
 });
 
@@ -82,4 +82,47 @@ test("legacy bulk scheduler gives each recipient batch its own campaign idempote
   assert.match(source, /const campaignGroupId = `MC\$\{Date\.now\(\)\.toString\(36\)\.toUpperCase\(\)\}`/);
   assert.match(source, /const campaignId = `\$\{campaignGroupId\}-D\$\{dayIndex \+ 1\}-B\$\{requestIndex \+ 1\}`/);
   assert.doesNotMatch(source, /const campaignId = `MC\$\{Date\.now\(\)\.toString\(36\)\.toUpperCase\(\)\}`/);
+});
+
+test("mail workspace opens on records and keeps the send action visible", async () => {
+  const source = await readFile(new URL("../app/admin/page.jsx", import.meta.url), "utf8");
+  assert.match(source, /const \[mailWorkspace, setMailWorkspace\] = useState\("records"\)/);
+  assert.match(source, /className="admin-mail-workspace-header"/);
+  assert.match(source, /role="tablist" aria-label="客服发信工作区"/);
+  assert.match(source, /aria-selected=\{mailWorkspace === "records"\}/);
+  assert.match(source, /aria-selected=\{mailWorkspace === "campaigns"\}/);
+  assert.match(source, /className="admin-mail-primary-action"[\s\S]*?aria-label="发信"[\s\S]*?openMailComposer\("customer"\)/);
+});
+
+test("mail records and campaign editor are separate persistent workspaces", async () => {
+  const source = await readFile(new URL("../app/admin/page.jsx", import.meta.url), "utf8");
+  assert.match(source, /id="admin-mail-campaigns-panel"[\s\S]*?hidden=\{mailWorkspace !== "campaigns"\}[\s\S]*?<MarketingCampaignPanel \/>/);
+  assert.match(source, /id="admin-mail-records-panel"[\s\S]*?hidden=\{mailWorkspace !== "records"\}[\s\S]*?className="admin-mail-log"/);
+  assert.match(source, /if \(it\.key === "mail"\) setMailWorkspace\("records"\)/);
+  assert.match(source, /event\.target !== event\.currentTarget[\s\S]*?\["Enter", " "\]/);
+});
+
+test("campaign workspace explains the workflow and keeps its long editor collapsed", async () => {
+  const source = await readFile(new URL("../app/admin/MarketingCampaignPanel.jsx", import.meta.url), "utf8");
+  assert.match(source, /const \[editorOpen, setEditorOpen\] = useState\(false\)/);
+  assert.match(source, /aria-label="营销活动使用步骤"/);
+  assert.match(source, /设置活动[\s\S]*?选择收件人[\s\S]*?预览并排期/);
+  assert.match(source, /<details[\s\S]*?className="marketing-campaign-create"[\s\S]*?open=\{editorOpen\}/);
+  assert.match(source, /购买过的服务（逗号分隔，留空不限）/);
+  assert.match(source, /最近购买（天内，留空不限）/);
+  assert.match(source, /最低累计消费（元）/);
+  assert.match(source, /服务到期（天内，留空不限）/);
+  assert.match(source, /邮件语言（不选则全部）/);
+  assert.match(source, /自动跳过退订、退信和投诉地址/);
+  assert.match(source, /<\/details>[\s\S]*?marketing-campaign-feedback error[\s\S]*?marketing-campaign-list/);
+  assert.match(source, /<\/details>[\s\S]*?marketing-campaign-feedback success[\s\S]*?marketing-campaign-list/);
+});
+
+test("mail workspace remains usable on desktop and mobile", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /\.admin-mail-workspace-header\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?top:\s*0/);
+  assert.match(css, /\.admin-mail-workspace-tabs\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2,/);
+  assert.match(css, /\.admin-mail-workspace-panel\[hidden\]\s*\{\s*display:\s*none\s*!important/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*?\.admin-mail-workspace-header\s*\{\s*top:\s*53px/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*?\.admin-mail-workspace-tabs > button\s*\{\s*min-height:\s*43px/);
 });

@@ -1372,6 +1372,7 @@ export default function AdminPage() {
   const [mailResult, setMailResult] = useState(null);
   const [mailMode, setMailMode] = useState("customer");
   const [mailLogType, setMailLogType] = useState("customer");
+  const [mailWorkspace, setMailWorkspace] = useState("records");
   const [mailRecipientBusy, setMailRecipientBusy] = useState(false);
   const [mailBatchProgress, setMailBatchProgress] = useState(null);
   const [mailScheduleBusy, setMailScheduleBusy] = useState(false);
@@ -1547,6 +1548,7 @@ export default function AdminPage() {
     setMailSearch("");
     setMailMode("customer");
     setMailLogType("customer");
+    setMailWorkspace("records");
     setMailLoading(false);
     setMailBusy(false);
     setMailScheduleBusy(false);
@@ -4838,7 +4840,11 @@ export default function AdminPage() {
                         type="button"
                         className={`admin-nav-item${tab === it.key ? " active" : ""}`}
                         aria-current={tab === it.key ? "page" : undefined}
-                        onClick={() => { setTab(it.key); setNavOpen(false); }}
+                        onClick={() => {
+                          setTab(it.key);
+                          if (it.key === "mail") setMailWorkspace("records");
+                          setNavOpen(false);
+                        }}
                       >
                         <Icon size={16} className="admin-nav-icon" />
                         <span className="admin-nav-label">{it.label}</span>
@@ -5555,27 +5561,84 @@ export default function AdminPage() {
           </div>
         ) : tab === "mail" && canSendMail ? (
           <div className="admin-mail-pane">
-            <div className="admin-mail-entry-strip">
-              <div className="admin-mail-entry-copy">
-                <strong><Mail size={15} />客服发信</strong>
-                <span>客服邮件与营销邮件分开记录，避免混在一起</span>
+            <div className="admin-mail-workspace-header">
+              <div className="admin-mail-entry-strip">
+                <div className="admin-mail-entry-copy">
+                  <strong><Mail size={15} />客服发信</strong>
+                  <span>右上角可发客服或批量营销邮件；分群、预览和排期请进入“营销活动”</span>
+                </div>
+                <div className="admin-mail-entry-actions">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => setMailWorkspace("campaigns")}
+                  >
+                    <Megaphone size={13} />营销活动
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-mail-primary-action"
+                    aria-label="发信"
+                    onClick={() => {
+                      setMailWorkspace("records");
+                      openMailComposer("customer");
+                    }}
+                  >
+                    <Mail size={13} />发信
+                  </button>
+                </div>
               </div>
-              <div className="admin-mail-entry-actions">
-                <button type="button" onClick={() => openMailComposer("customer")}>
-                  <Mail size={13} />写客服邮件
+              <div className="admin-mail-workspace-tabs" role="tablist" aria-label="客服发信工作区">
+                <button
+                  type="button"
+                  id="admin-mail-records-tab"
+                  role="tab"
+                  aria-selected={mailWorkspace === "records"}
+                  aria-controls="admin-mail-records-panel"
+                  className={mailWorkspace === "records" ? "active" : ""}
+                  onClick={() => setMailWorkspace("records")}
+                >
+                  <Inbox size={14} />
+                  <span><strong>发信记录</strong><small>查看客服与营销发送结果</small></span>
+                  <em>{mailLogs.length}</em>
                 </button>
-                <button type="button" className="secondary" onClick={() => openMailComposer("marketing")}>
-                  <Megaphone size={13} />发送营销邮件
+                <button
+                  type="button"
+                  id="admin-mail-campaigns-tab"
+                  role="tab"
+                  aria-selected={mailWorkspace === "campaigns"}
+                  aria-controls="admin-mail-campaigns-panel"
+                  className={mailWorkspace === "campaigns" ? "active" : ""}
+                  onClick={() => setMailWorkspace("campaigns")}
+                >
+                  <Megaphone size={14} />
+                  <span><strong>营销活动</strong><small>分群、预览并排期发送</small></span>
+                  <em className="new">新功能</em>
                 </button>
               </div>
             </div>
 
-            <MarketingCampaignPanel />
+            <section
+              id="admin-mail-campaigns-panel"
+              className="admin-mail-workspace-panel"
+              role="tabpanel"
+              aria-labelledby="admin-mail-campaigns-tab"
+              hidden={mailWorkspace !== "campaigns"}
+            >
+              <MarketingCampaignPanel />
+            </section>
 
-            {mailResult && <div className={`admin-alert ${mailResult.type}`}>{mailResult.message}</div>}
-            <AdminRetryAlert message={adminLoadErrors.mailLogs} onRetry={loadMailLogs} busy={mailLoading} />
+            <section
+              id="admin-mail-records-panel"
+              className="admin-mail-workspace-panel"
+              role="tabpanel"
+              aria-labelledby="admin-mail-records-tab"
+              hidden={mailWorkspace !== "records"}
+            >
+              {mailResult && <div className={`admin-alert ${mailResult.type}`}>{mailResult.message}</div>}
+              <AdminRetryAlert message={adminLoadErrors.mailLogs} onRetry={loadMailLogs} busy={mailLoading} />
 
-            <div className="admin-mail-log">
+              <div className="admin-mail-log">
               <div className="admin-userlist-head">
                 <h3>{mailLogType === "marketing" ? "营销邮件记录" : "客服邮件记录"} <em>{visibleMailLogs.length}{mailSearchText ? ` / ${scopedMailLogs.length}` : ""}</em></h3>
                 <div className="admin-inline-actions">
@@ -5654,6 +5717,12 @@ export default function AdminPage() {
                       className={`admin-mail-log-item${ok ? " ok" : " failed"}${mailBatchMode ? " batch-mode" : ""}${selected ? " selected" : ""}`}
                       data-staff-id={item.staffId ? String(item.staffId) : ""}
                       onClick={() => mailBatchMode ? toggleMailSelect(item.id) : setActiveMailLog(item)}
+                      onKeyDown={(event) => {
+                        if (event.target !== event.currentTarget || !["Enter", " "].includes(event.key)) return;
+                        event.preventDefault();
+                        if (mailBatchMode) toggleMailSelect(item.id);
+                        else setActiveMailLog(item);
+                      }}
                       role="button"
                       tabIndex={0}
                     >
@@ -5685,6 +5754,7 @@ export default function AdminPage() {
                 })}
               </div>
             </div>
+            </section>
           </div>
         ) : tab === "insights" && isRootStaff ? (
           <InsightsPanel />

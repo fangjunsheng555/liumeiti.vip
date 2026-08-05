@@ -41,6 +41,7 @@ export default function MarketingCampaignPanel() {
   const [campaignsLoading, setCampaignsLoading] = useState(false);
   const [campaignsError, setCampaignsError] = useState("");
   const [selectedStats, setSelectedStats] = useState(null);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [state, setState] = useState({ busy: "", message: "", error: "" });
   const campaignsRequestRef = useRef(0);
   const statsRequestRef = useRef(0);
@@ -119,7 +120,11 @@ export default function MarketingCampaignPanel() {
       scheduledAt: dateValidation.scheduledIso, template: "service_selection_edm_v7", locale: form.locales.length === 1 ? form.locales[0] : "zh",
       segment, maxRecipients: Number(form.maxRecipients || 500), offer,
     });
-    if (data) { setForm((current) => ({ ...current, campaignId: campaignId() })); await loadCampaigns(); }
+    if (data) {
+      setForm((current) => ({ ...current, campaignId: campaignId() }));
+      setEditorOpen(false);
+      await loadCampaigns();
+    }
   }
 
   async function manageCampaign(campaign, action) {
@@ -168,9 +173,31 @@ export default function MarketingCampaignPanel() {
   }
 
   return <section className="marketing-campaign-panel">
+    <div className="marketing-campaign-card marketing-campaign-intro" style={card}>
+      <div>
+        <h2>营销活动</h2>
+        <p>按目标人群发送优惠邮件。系统会自动跳过退订、退信和投诉地址，并统计活动带来的订单收入。</p>
+      </div>
+      <ol aria-label="营销活动使用步骤">
+        <li><b>1</b><span><strong>设置活动</strong><small>填写内容与发送时间</small></span></li>
+        <li><b>2</b><span><strong>选择收件人</strong><small>按服务、语言和消费筛选</small></span></li>
+        <li><b>3</b><span><strong>预览并排期</strong><small>核对人数和邮件后确认</small></span></li>
+      </ol>
+    </div>
+
+    <details
+      className="marketing-campaign-create"
+      open={editorOpen}
+      onToggle={(event) => setEditorOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <span><strong>{editorOpen ? "正在编辑营销活动" : "新建营销活动"}</strong><small>{editorOpen ? "填写完成后先预览，再确认排期" : "点击展开活动设置、分群和预览"}</small></span>
+        <em>{editorOpen ? "收起" : "开始创建"}</em>
+      </summary>
+      <div className="marketing-campaign-create-body">
     <div className="marketing-campaign-card marketing-campaign-basics" style={card}>
-      <h2 style={{ margin: "0 0 6px", color: "#173f3a" }}>营销活动</h2>
-      <p className="marketing-campaign-description">服务端分群、发送前抑制检查、RFC 8058 退订和订单收入归因使用同一活动 ID。</p>
+      <h2 style={{ margin: "0 0 6px", color: "#173f3a" }}>基础设置</h2>
+      <p className="marketing-campaign-description">活动 ID 用于统一关联退订、投递和收入统计；创建新活动时通常无需修改。</p>
       <div className="marketing-campaign-basics-grid">
         <label>活动 ID<input style={input} value={form.campaignId} onChange={set("campaignId")} /></label>
         <label>活动名称<input style={input} value={form.name} onChange={set("name")} placeholder="八月会员优惠" /></label>
@@ -185,11 +212,11 @@ export default function MarketingCampaignPanel() {
     <div className="marketing-campaign-card marketing-campaign-editor" style={card}>
       <div className="marketing-campaign-offer"><h3>优惠内容（v7）</h3><div className="marketing-campaign-field-grid">{[["badge","角标"],["headline","主标题"],["currentPrice","优惠价文案"],["originalPrice","原价文案"],["savingText","节省文案"],["couponCode","优惠码"],["endsAt","截止时间"],["ctaPath","按钮路径"]].map(([key,label]) => <label key={key} className={key === "headline" ? "wide" : ""}>{label}<input style={input} type={key === "endsAt" ? "datetime-local" : "text"} value={form[key]} onChange={set(key)} /></label>)}</div></div>
       <div className="marketing-campaign-segment"><h3>服务端分群</h3><div className="marketing-campaign-field-grid">
-        <label className="wide">服务 key（逗号分隔）<input style={input} value={form.serviceKeys} onChange={set("serviceKeys")} placeholder="spotify,ai,rocket" /></label>
-        <label>最近购买（天内）<input style={input} type="number" value={form.lastPurchaseWithinDays} onChange={set("lastPurchaseWithinDays")} /></label>
-        <label>最低累计消费<input style={input} type="number" value={form.minSpend} onChange={set("minSpend")} /></label>
-        <label>到期（天内）<input style={input} type="number" value={form.expiryWithinDays} onChange={set("expiryWithinDays")} /></label>
-        <div className="marketing-campaign-locales">{["zh","en"].map((locale) => <label key={locale}><input type="checkbox" checked={form.locales.includes(locale)} onChange={(event) => setForm((current) => ({ ...current, locales: event.target.checked ? [...current.locales, locale] : current.locales.filter((item) => item !== locale) }))} /> {locale === "zh" ? "中文" : "English"}</label>)}</div>
+        <label className="wide">购买过的服务（逗号分隔，留空不限）<input style={input} value={form.serviceKeys} onChange={set("serviceKeys")} placeholder="spotify,ai,rocket" /></label>
+        <label>最近购买（天内，留空不限）<input style={input} type="number" value={form.lastPurchaseWithinDays} onChange={set("lastPurchaseWithinDays")} /></label>
+        <label>最低累计消费（元）<input style={input} type="number" value={form.minSpend} onChange={set("minSpend")} /></label>
+        <label>服务到期（天内，留空不限）<input style={input} type="number" value={form.expiryWithinDays} onChange={set("expiryWithinDays")} /></label>
+        <div className="marketing-campaign-locales"><strong>邮件语言（不选则全部）</strong>{["zh","en"].map((locale) => <label key={locale}><input type="checkbox" checked={form.locales.includes(locale)} onChange={(event) => setForm((current) => ({ ...current, locales: event.target.checked ? [...current.locales, locale] : current.locales.filter((item) => item !== locale) }))} /> {locale === "zh" ? "中文" : "English"}</label>)}</div>
         {audience ? <div className="marketing-campaign-audience wide">匹配 {audience.snapshot.matchedCount} · 可发送 {audience.snapshot.eligibleCount} · 已抑制 {audience.snapshot.suppressedCount} · 本次选择 {audience.snapshot.selectedCount}</div> : null}
       </div>
       </div>
@@ -198,9 +225,12 @@ export default function MarketingCampaignPanel() {
       <button type="button" onClick={previewAudience} disabled={Boolean(state.busy)} style={{ ...input, width: "auto", cursor: "pointer" }}>预览分群</button>
       <button type="button" onClick={previewMail} disabled={Boolean(state.busy)} style={{ ...input, width: "auto", cursor: "pointer" }}>安全预览邮件</button>
       <button type="button" onClick={schedule} disabled={Boolean(state.busy) || !dateValidation.ok} style={{ border: 0, borderRadius: 8, padding: "8px 14px", background: "#08786c", color: "white", fontWeight: 750, cursor: "pointer", opacity: state.busy || !dateValidation.ok ? 0.55 : 1 }}>确认并排期</button>
-      {state.error || !dateValidation.ok ? <span role="alert" style={{ color: "#b42318", alignSelf: "center" }}>{state.error || dateValidation.error}</span> : state.message ? <span role="status" style={{ color: "#08786c", alignSelf: "center" }}>{state.message}</span> : null}
+      {!dateValidation.ok ? <span role="alert" style={{ color: "#b42318", alignSelf: "center" }}>{dateValidation.error}</span> : null}
     </div>
     {preview ? <details className="marketing-campaign-card marketing-campaign-preview" style={card} open><summary>沙箱预览</summary><iframe title="营销邮件预览" sandbox="" srcDoc={preview} /></details> : null}
+      </div>
+    </details>
+    {state.error ? <div className="marketing-campaign-feedback error" role="alert">{state.error}</div> : state.message ? <div className="marketing-campaign-feedback success" role="status">{state.message}</div> : null}
     <div className="marketing-campaign-card marketing-campaign-list" style={card}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", marginBottom: 10 }}><h3 style={{ margin: 0 }}>最近活动</h3><button type="button" onClick={loadCampaigns} disabled={Boolean(state.busy) || campaignsLoading} style={{ ...input, width: "auto", cursor: "pointer" }}>{campaignsLoading ? "加载中" : "刷新列表"}</button></div>
       {campaignsError ? <div role="alert" style={{ color: "#b42318", marginBottom: 10, fontSize: 13 }}>活动列表未更新：{campaignsError}。请点击“刷新列表”重试。</div> : null}
