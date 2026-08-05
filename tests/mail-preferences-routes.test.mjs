@@ -298,8 +298,16 @@ test("recipient-specific preference links occupy the template footer slot exactl
   const templateHtml = marketingTemplateV7.buildMarketingMailV7Html({
     brandName: "冒央会社",
     siteUrl: "https://www.liumeiti.vip",
-    products: [],
-    offer: { headline: "邮件页脚检查", ctaPath: "/shop" },
+    products: [{
+      key: "spotify",
+      name: "Spotify",
+      subtitle: "个人、双人及家庭套餐",
+      price: "¥128/年起",
+      icon: "/products/spotify.jpg",
+      href: "https://www.liumeiti.vip/services/spotify",
+    }],
+    benefits: { bundleTier2Label: "95 折", bundleTier3Label: "9 折", usdtDiscountLabel: "9 折" },
+    offer: { headline: "邮件页脚检查", featuredServiceKeys: ["spotify"], ctaPath: "/shop" },
   });
   const prepared = await preferences.prepareMarketingEmail({
     to: "footer-slot@example.com",
@@ -315,8 +323,10 @@ test("recipient-specific preference links occupy the template footer slot exactl
   assert.match(prepared.html, /管理邮件偏好/);
   assert.match(prepared.html, /退订营销邮件/);
   assert.match(prepared.html, /\/email\/unsubscribe\?token=/);
+  assert.ok((prepared.html.match(/\/api\/marketing\/click\?token=/g) || []).length >= 3, "logo, CTA and product links must all retain campaign attribution");
   assert.ok(prepared.html.indexOf("Maoyang Taiwan Inc.") < prepared.html.indexOf("LM_MARKETING_PREFERENCES_V1"));
-  assert.ok(prepared.html.indexOf("LM_MARKETING_PREFERENCES_V1") < prepared.html.indexOf("优惠、价格与库存以活动页面实时状态为准"));
+  assert.ok(prepared.html.indexOf("LM_MARKETING_PREFERENCES_V1") < prepared.html.indexOf("服务内容、价格与库存以商品详情页及提交订单时显示为准"));
+  assert.doesNotMatch(prepared.html, /优惠码|活动页面|DIGITAL MEMBERSHIP DESK|WHY IT MATTERS|RECOMMENDED FOR YOU/i);
 
   const englishPrepared = await preferences.prepareMarketingEmail({
     to: "footer-slot-en@example.com",

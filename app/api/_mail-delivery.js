@@ -12,6 +12,7 @@ const MAX_EVENTS = 24;
 const EVENT_TTL_SECONDS = 180 * 24 * 60 * 60;
 
 export const DELIVERY_STATUSES = ["scheduled", "sent", "delivered", "recovered", "delayed", "bounced", "complained", "failed", "suppressed"];
+const PROVIDER_OUTCOME_CLASSES = new Set(["success", "suppressed", "quota", "policy_retry", "uncertain", "definite_failure", "idempotency_conflict"]);
 
 const RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const RECOVERABLE_STATUSES = new Set(["failed", "bounced", "suppressed"]);
@@ -321,6 +322,10 @@ export async function registerEmailDelivery({ args = {}, result = {} } = {}) {
     ? requestedStatus
     : (resultValid && result.ok === true ? (result?.scheduled ? "scheduled" : "sent") : "failed");
   const fallbackError = clean(result?.fallbackError || "", 260);
+  const requestedOutcomeClass = clean(result?.providerOutcomeClass || "", 40);
+  const providerOutcomeClass = PROVIDER_OUTCOME_CLASSES.has(requestedOutcomeClass)
+    ? requestedOutcomeClass
+    : (existing?.providerOutcomeClass || "");
   const sendError = clean(resultValid ? (result?.error || result?.reason || "send_failed") : "invalid_delivery_result", 260);
   const fallbackLabel = result?.fallbackProvider === "brevo"
     ? "Brevo"
@@ -334,6 +339,9 @@ export async function registerEmailDelivery({ args = {}, result = {} } = {}) {
     messageId,
     providerMessageId: canonicalMessageId(result?.providerMessageId || existing?.providerMessageId),
     provider: clean(result?.provider || "resend", 30),
+    providerOutcomeClass,
+    providerErrorCode: clean(result?.providerErrorCode || result?.errorCode || existing?.providerErrorCode || "", 80),
+    providerUncertain: Boolean(result?.providerUncertain ?? result?.uncertain ?? existing?.providerUncertain),
     fallback: Boolean(result?.fallback || existing?.fallback),
     primaryProvider: clean(result?.primaryProvider || existing?.primaryProvider || "", 30),
     primaryError: clean(result?.primaryError || existing?.primaryError || "", 300),

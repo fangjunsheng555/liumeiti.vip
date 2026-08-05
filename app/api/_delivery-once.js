@@ -6,6 +6,7 @@ const DELIVERY_SENDING_INDEX = "lm:delivery:v2:status:sending";
 const DELIVERY_UNCERTAIN_INDEX = "lm:delivery:v2:status:uncertain";
 const DELIVERY_RETRYABLE_INDEX = "lm:delivery:v2:status:retryable";
 const DELIVERY_BACKFILL_CURSOR = "lm:delivery:v2:backfill-cursor";
+const MIN_STALE_RECOVERY_MS = 60 * 1000;
 
 const CLAIM_SCRIPT = `
 local function validtype(key,expected) local value=redis.call('TYPE',key) local actual=type(value)=='table' and value.ok or value return actual=='none' or actual==expected end local function safescore(value) local score=tonumber(value) if not score or score~=score or score~=math.floor(score) or score<0 or score>9007199254740991 then return nil end return score end local function clearIndexes(member) redis.call('ZREM',KEYS[2],member) redis.call('ZREM',KEYS[3],member) redis.call('ZREM',KEYS[4],member) end local function indexStatus(status,score,member) clearIndexes(member) if status=='sending' then redis.call('ZADD',KEYS[2],score,member) end if status=='uncertain' then redis.call('ZADD',KEYS[3],score,member) end if status=='retryable' then redis.call('ZADD',KEYS[4],score,member) end end if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') or not validtype(KEYS[3],'zset') or not validtype(KEYS[4],'zset') then return redis.error_reply('delivery_storage_type_error') end local claimScore=safescore(ARGV[3]) local createdOk,created=pcall(cjson.decode,ARGV[2]) local createdScore=createdOk and type(created)=='table' and safescore(created.score) or nil if not claimScore or ARGV[1]=='' or ARGV[4]=='' or ARGV[4]~=KEYS[1] or not createdOk or type(created)~='table' or tostring(created.status or '')~='sending' or type(created.token)~='string' or created.token~=ARGV[1] or createdScore~=claimScore then return redis.error_reply('delivery_invalid_claim') end local raw=redis.call('GET',KEYS[1]) if raw then if raw=='done' then clearIndexes(ARGV[4]); return 'done' end local ok,state=pcall(cjson.decode,raw) if not ok or type(state)~='table' then indexStatus('uncertain',claimScore,ARGV[4]) return 'uncertain' end local status=tostring(state.status or '') if status=='done' and type(state.result)=='table' and state.result.ok==true then clearIndexes(ARGV[4]); return raw end if status=='sending' or status=='uncertain' then indexStatus(status,safescore(state.score) or claimScore,ARGV[4]) return status end if status~='retryable' then indexStatus('uncertain',safescore(state.score) or claimScore,ARGV[4]) return 'uncertain' end end redis.call('SET',KEYS[1],ARGV[2]) indexStatus('sending',claimScore,ARGV[4]) return 'acquired'
@@ -18,6 +19,26 @@ local function validtype(key,expected) local value=redis.call('TYPE',key) local 
 const DONE_SCRIPT = `
 -- Legacy test/storage compatibility marker: redis.call('SET',KEYS[1],'done')
 local function validtype(key,expected) local value=redis.call('TYPE',key) local actual=type(value)=='table' and value.ok or value return actual=='none' or actual==expected end local function safescore(value) local score=tonumber(value) if not score or score~=score or score~=math.floor(score) or score<0 or score>9007199254740991 then return nil end return score end if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') or not validtype(KEYS[3],'zset') or not validtype(KEYS[4],'zset') then return redis.error_reply('delivery_storage_type_error') end local replacementOk,replacement=pcall(cjson.decode,ARGV[3]) if ARGV[1]=='' or ARGV[2]=='' or ARGV[2]~=KEYS[1] or not replacementOk or type(replacement)~='table' or tostring(replacement.status or '')~='done' or type(replacement.token)~='string' or replacement.token~=ARGV[1] or not safescore(replacement.score) or type(replacement.result)~='table' or replacement.result.ok~=true then return redis.error_reply('delivery_invalid_completion') end local raw=redis.call('GET',KEYS[1]) if raw=='done' then redis.call('ZREM',KEYS[2],ARGV[2]); redis.call('ZREM',KEYS[3],ARGV[2]); redis.call('ZREM',KEYS[4],ARGV[2]) return 1 end local ok,current=pcall(cjson.decode,raw or '') if not ok or type(current)~='table' or tostring(current.token or '')~=ARGV[1] then return 0 end redis.call('SET',KEYS[1],ARGV[3]) redis.call('ZREM',KEYS[2],ARGV[2]); redis.call('ZREM',KEYS[3],ARGV[2]); redis.call('ZREM',KEYS[4],ARGV[2]) return 1
+`;
+
+const RECOVER_STALE_SENDING_SCRIPT = `
+-- DELIVERY_STALE_SENDING_RECOVERY_V1
+local function validtype(key,expected) local value=redis.call('TYPE',key) local actual=type(value)=='table' and value.ok or value return actual=='none' or actual==expected end
+local function safescore(value) local score=tonumber(value) if not score or score~=score or score~=math.floor(score) or score<0 or score>9007199254740991 then return nil end return score end
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') or not validtype(KEYS[3],'zset') or not validtype(KEYS[4],'zset') then return redis.error_reply('delivery_storage_type_error') end
+local cutoff=safescore(ARGV[2])
+if ARGV[1]=='' or ARGV[3]=='' or ARGV[3]~=KEYS[1] or not cutoff then return redis.error_reply('delivery_invalid_recovery') end
+local raw=redis.call('GET',KEYS[1])
+if not raw then return 'missing' end
+local ok,state=pcall(cjson.decode,raw)
+if not ok or type(state)~='table' then return 'invalid' end
+if tostring(state.status or '')~='sending' then return 'not_sending' end
+if tostring(state.storageKey or '')~=KEYS[1] or tostring(state.recoveryTag or '')~=ARGV[1] then return 'tag_mismatch' end
+local score=safescore(state.score)
+if not score or score>cutoff then return 'too_fresh' end
+redis.call('DEL',KEYS[1])
+redis.call('ZREM',KEYS[2],ARGV[3]); redis.call('ZREM',KEYS[3],ARGV[3]); redis.call('ZREM',KEYS[4],ARGV[3])
+return 'recovered'
 `;
 
 function deliveryKey(id) {
@@ -82,12 +103,16 @@ async function completeDelivery(key, token, result) {
 // Serialize one external delivery and keep a permanent dispatch journal.
 // Journal state and operational indexes are updated in the same Redis script,
 // so the health page never claims a queue is empty while work is unresolved.
-export async function deliverOnce(id, deliver) {
+export async function deliverOnce(id, deliver, { recoveryTag = "" } = {}) {
   const stableId = clean(id, 300);
   if (!stableId || typeof deliver !== "function") return { ok: false, error: "invalid_delivery" };
   const key = deliveryKey(stableId);
   const token = randomBytes(18).toString("hex");
-  const sendingRecord = journalRecord("sending", token, { storageKey: key });
+  const safeRecoveryTag = clean(recoveryTag, 200);
+  const sendingRecord = journalRecord("sending", token, {
+    storageKey: key,
+    ...(safeRecoveryTag ? { recoveryTag: safeRecoveryTag } : {}),
+  });
   const sendingRaw = JSON.stringify(sendingRecord);
   let claim = await redisCmd([
     "EVAL", CLAIM_SCRIPT, "4",
@@ -117,7 +142,7 @@ export async function deliverOnce(id, deliver) {
   if (claim !== "acquired") return { ok: false, error: "delivery_journal_unavailable" };
 
   try {
-    const value = await deliver(stableId);
+    const value = await deliver(stableId, { attemptToken: token });
     if (value == null) {
       const terminal = { ok: true, terminal: true, skipped: true, delivered: false, value: null };
       const recorded = await completeDelivery(key, token, terminal);
@@ -169,6 +194,41 @@ export async function deliverOnce(id, deliver) {
     await transitionDelivery(key, token, "uncertain", { error: deliveryError });
     return { ok: false, uncertain: true, error: deliveryError };
   }
+}
+
+// Explicit, opt-in recovery for callers that persist a provider-idempotent
+// attempt before claiming this journal. Legacy and ordinary delivery journals
+// have no matching recoveryTag and therefore remain fail-safe.
+export async function recoverStaleSendingDelivery(id, {
+  recoveryTag = "",
+  minimumAgeMs = 90 * 1000,
+  now = Date.now(),
+} = {}) {
+  const stableId = clean(id, 300);
+  const safeRecoveryTag = clean(recoveryTag, 200);
+  const safeNow = Number(now);
+  const safeAge = Math.max(MIN_STALE_RECOVERY_MS, Math.floor(Number(minimumAgeMs) || 0));
+  if (!stableId || !safeRecoveryTag || !Number.isSafeInteger(safeNow) || safeNow < safeAge) {
+    return { ok: false, error: "invalid_delivery_recovery" };
+  }
+  const key = deliveryKey(stableId);
+  const cutoff = safeNow - safeAge;
+  const result = await redisCmd([
+    "EVAL", RECOVER_STALE_SENDING_SCRIPT, "4",
+    key, DELIVERY_SENDING_INDEX, DELIVERY_UNCERTAIN_INDEX, DELIVERY_RETRYABLE_INDEX,
+    safeRecoveryTag, String(cutoff), key,
+  ]);
+  if (result === "recovered") return { ok: true, recovered: true };
+  if (["missing", "too_fresh", "tag_mismatch", "not_sending", "invalid"].includes(String(result || ""))) {
+    return { ok: true, recovered: false, state: String(result) };
+  }
+
+  // A Redis HTTP response can be lost after the atomic delete commits. Only a
+  // verified missing key is treated as recovered; any live/unknown value stays
+  // locked and cannot fall through to the provider.
+  const verified = checkedPipelineValues(await redisPipeline([["GET", key], ["PING"]]), 2);
+  if (verified?.[1] === "PONG" && verified[0] == null) return { ok: true, recovered: true, responseLost: true };
+  return { ok: false, error: "delivery_journal_unavailable" };
 }
 
 function parseJournal(value) {
@@ -246,5 +306,6 @@ export const deliveryInternals = {
   DELIVERY_UNCERTAIN_INDEX,
   deliveryKey,
   deliveryStorageKey,
+  MIN_STALE_RECOVERY_MS,
   statusIndex,
 };

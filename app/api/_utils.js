@@ -2507,7 +2507,7 @@ async function currentEmailSupport() {
   return emailSupportCache;
 }
 
-function mailFromAddress() {
+export function mailFromAddress() {
   return clean(process.env.MAIL_FROM || process.env.SMTP_FROM || "info@liumeiti.vip", 200);
 }
 
@@ -2526,9 +2526,12 @@ function formatMailFrom(name, address) {
 async function readEmailApiError(res) {
   try {
     const data = await res.json();
-    return data?.message || data?.error || JSON.stringify(data);
+    return {
+      message: data?.message || data?.error || JSON.stringify(data),
+      code: clean(data?.name || data?.error_code || data?.code || "", 80),
+    };
   } catch (e) {
-    try { return await res.text(); } catch (er) { return res.statusText || "request_failed"; }
+    try { return { message: await res.text(), code: "" }; } catch (er) { return { message: res.statusText || "request_failed", code: "" }; }
   }
 }
 
@@ -2538,10 +2541,10 @@ function resendTag(value, fallback = "") {
 
 async function sendViaResend({
   to, subject, text, html, fromName, marketing = false, category = "", relatedType = "", relatedId = "",
-  scheduledAt = "", idempotencyKey = "", oneClickUnsubscribeUrl = "",
+  scheduledAt = "", idempotencyKey = "", oneClickUnsubscribeUrl = "", fromAddress = "",
 }) {
   const apiKey = process.env.RESEND_API_KEY;
-  const from = mailFromAddress();
+  const from = validEmail(fromAddress) ? String(fromAddress).trim().toLowerCase() : mailFromAddress();
   if (!apiKey || !from || !to) return { ok: false, reason: "resend_or_to_missing" };
   if (!validEmail(from)) return { ok: false, reason: "invalid_mail_from" };
   const recipients = Array.isArray(to) ? to : [to];
@@ -2582,13 +2585,20 @@ async function sendViaResend({
         signal: controller.signal,
       });
       clearTimeout(timer);
-      if (!res.ok) return {
-        ok: false,
-        error: await readEmailApiError(res),
-        code: res.status,
-        attempt,
-        uncertain: res.status >= 500 || res.status === 408 || res.status === 425,
-      };
+      if (!res.ok) {
+        const apiError = await readEmailApiError(res);
+        const concurrentIdempotency = res.status === 409 && apiError.code === "concurrent_idempotent_requests";
+        const invalidIdempotency = res.status === 409 && apiError.code === "invalid_idempotent_request";
+        return {
+          ok: false,
+          error: apiError.message,
+          errorCode: apiError.code,
+          code: res.status,
+          attempt,
+          uncertain: res.status >= 500 || res.status === 408 || res.status === 425 || concurrentIdempotency,
+          idempotencyConflict: invalidIdempotency,
+        };
+      }
       const data = await res.json();
       return {
         ok: true,
@@ -2607,6 +2617,7 @@ async function sendViaResend({
 
   const r1 = await attemptSend(1);
   if (r1.ok) return r1;
+  if (r1.idempotencyConflict) return { ...r1, provider: "resend", reason: "idempotency_payload_conflict" };
   console.warn(`[email:resend] attempt 1 failed (${r1.code || "?"}): ${r1.error}; retrying...`);
   await new Promise((res) => setTimeout(res, 1200));
   const r2 = await attemptSend(2);
@@ -2617,8 +2628,10 @@ async function sendViaResend({
     provider: "resend",
     reason: "send_failed_after_retry",
     error: r2.error,
+    errorCode: r2.errorCode || r1.errorCode || "",
     code: r2.code,
     uncertain: Boolean(r1.uncertain || r2.uncertain),
+    idempotencyConflict: Boolean(r1.idempotencyConflict || r2.idempotencyConflict),
   };
 }
 
@@ -2839,7 +2852,9 @@ export async function sendSimpleEmail(args) {
     }
     return result;
   }
-  const provider = String(process.env.EMAIL_PROVIDER || "resend").toLowerCase();
+  const configuredProvider = String(process.env.EMAIL_PROVIDER || "resend").toLowerCase();
+  const forcedProvider = clean(prepared.forceProvider, 20).toLowerCase();
+  const provider = ["resend", "smtp"].includes(forcedProvider) ? forcedProvider : configuredProvider;
   let result;
   let primaryResult = null;
   let fallbackResult = null;

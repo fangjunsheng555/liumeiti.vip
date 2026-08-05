@@ -4,6 +4,7 @@ import { ensureMailContact, getMailSendDecision, mailContactId } from "./_mail-p
 import {
   clean,
   formatBeijingTime,
+  mailFromAddress,
   pushAdminMailLog,
   redisCmd,
   redisPipeline,
@@ -18,6 +19,7 @@ const JOB_PREFIX = "lm:mail:marketing:job:";
 const CLAIM_PREFIX = "lm:mail:marketing:claim:";
 const DISPATCH_LOCK_KEY = "lm:mail:marketing:dispatch-lock";
 const DAILY_COUNT_PREFIX = "lm:mail:marketing:daily:";
+const DAILY_ATTEMPT_PREFIX = "lm:mail:marketing:daily-attempt:";
 const CAMPAIGN_INDEX_KEY = "lm:mail:marketing:campaign:index";
 const CAMPAIGN_STATS_PREFIX = "lm:mail:marketing:campaign:stats:";
 const CAMPAIGN_METRIC_EVENT_PREFIX = "lm:mail:marketing:campaign:metric-event:";
@@ -28,8 +30,12 @@ const CAMPAIGN_PENDING_PREFIX = "lm:mail:marketing:pending:";
 const RECORD_TTL_SECONDS = 90 * 24 * 60 * 60;
 const CAMPAIGN_TTL_SECONDS = 400 * 24 * 60 * 60;
 const METRIC_TTL_SECONDS = 2 * 365 * 24 * 60 * 60;
-const DAILY_LIMIT = 40;
+export const MARKETING_DAILY_LIMIT = 50;
+const DAILY_LIMIT = MARKETING_DAILY_LIMIT;
 const RETRY_DELAY_MS = 15 * 60 * 1000;
+// Resend keeps idempotency keys for 24 hours. Leave two hours of scheduler and
+// network headroom when recovering an attempt whose provider outcome is absent.
+const RESEND_IDEMPOTENCY_RECOVERY_MS = 22 * 60 * 60 * 1000;
 const DISPATCH_LOCK_TTL_SECONDS = 120;
 const DISPATCH_LOCK_HEARTBEAT_MS = 40_000;
 const ENQUEUE_CONCURRENCY = 12;
@@ -165,6 +171,21 @@ function beijingDayKey(now = Date.now()) {
   return new Date(now + 8 * 60 * 60 * 1000).toISOString().slice(0, 10).replace(/-/g, "");
 }
 
+function nextBeijingDayStart(now = Date.now()) {
+  const beijing = new Date(now + 8 * 60 * 60 * 1000);
+  return Date.UTC(
+    beijing.getUTCFullYear(),
+    beijing.getUTCMonth(),
+    beijing.getUTCDate() + 1,
+  ) - 8 * 60 * 60 * 1000;
+}
+
+function dailyAttemptKey(job) {
+  const attempts = Number(job?.attempts || 1);
+  if (!validJob(job, clean(job?.id, 80)) || !Number.isSafeInteger(attempts) || attempts < 1) return "";
+  return `${DAILY_ATTEMPT_PREFIX}${job.id}:${attempts}`;
+}
+
 function nextBeijingEvening(now = Date.now()) {
   const beijing = new Date(now + 8 * 60 * 60 * 1000);
   let result = Date.UTC(
@@ -189,6 +210,43 @@ function retryTimestamp(result, now = Date.now()) {
   return isQuotaFailure(result) ? nextBeijingEvening(now) : now + RETRY_DELAY_MS;
 }
 
+function providerOutcomeClass(result) {
+  if (result?.suppressed) return "suppressed";
+  if (result?.ok) return "success";
+  if (result?.idempotencyConflict) return "idempotency_conflict";
+  // A later definite response cannot prove that an earlier timeout, 5xx or
+  // concurrent-idempotency response was not accepted by Resend. Preserve the
+  // uncertainty window unless a later response is a success or an explicit
+  // same-key/different-payload conflict.
+  if (result?.uncertain) return "uncertain";
+  if (isQuotaFailure(result)) return "quota";
+  if (result?.policyUnavailable || result?.retryable) return "policy_retry";
+  return "definite_failure";
+}
+
+function withoutProviderAttemptState(job) {
+  const {
+    providerAttemptStartedAt: _startedAt,
+    resendIdempotencyDeadlineAt: _deadlineAt,
+    ...rest
+  } = job || {};
+  return rest;
+}
+
+function ambiguousRecoveryScore(deadlineMs) {
+  const safeDeadline = Number.isFinite(Number(deadlineMs))
+    ? Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(Number(deadlineMs))))
+    : Number.MAX_SAFE_INTEGER;
+  return Number.MIN_SAFE_INTEGER + safeDeadline;
+}
+
+function inflightRecoveryScore(startedMs) {
+  const safeStarted = Number.isFinite(Number(startedMs))
+    ? Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(Number(startedMs))))
+    : 0;
+  return Number.MIN_SAFE_INTEGER + safeStarted;
+}
+
 const CREATE_CAMPAIGN_SCRIPT = `
 local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'zset') then return '__storage_type__' end local score=tonumber(ARGV[2]); local ttl=tonumber(ARGV[4]) if not score or score~=score or not ttl or ttl~=math.floor(ttl) or ttl<1 then return '__invalid_args__' end local existing=redis.call('GET',KEYS[1]) if existing then local ok,doc=pcall(cjson.decode,existing) if not ok or type(doc)~='table' or tostring(doc.id or '')~=ARGV[3] then return -2 end if tostring(doc.requestHash or '')~=ARGV[1] then return -1 end redis.call('EXPIRE',KEYS[1],ARGV[4]) redis.call('ZADD',KEYS[2],'NX',ARGV[2],ARGV[3]) return 0 end local nextOk,nextDoc=pcall(cjson.decode,ARGV[5]) if not nextOk or type(nextDoc)~='table' or tostring(nextDoc.id or '')~=ARGV[3] or tostring(nextDoc.requestHash or '')~=ARGV[1] then return -2 end redis.call('SET',KEYS[1],ARGV[5],'EX',ARGV[4]) redis.call('ZADD',KEYS[2],'NX',ARGV[2],ARGV[3]) return 1
 `;
@@ -208,6 +266,7 @@ local function validtype(key,expected) local value=redis.call('TYPE',key); local
 async function createCampaign(campaign) {
   if (!validNewCampaign(campaign, safeCampaignId(campaign?.id))) return { ok: false, error: "invalid_campaign" };
   const score = Number(campaign.createdAtMs || Date.now());
+  const campaignRaw = JSON.stringify(campaign);
   const result = await redisCmd([
     "EVAL",
     CREATE_CAMPAIGN_SCRIPT,
@@ -218,11 +277,24 @@ async function createCampaign(campaign) {
     String(score),
     campaign.id,
     String(CAMPAIGN_TTL_SECONDS),
-    JSON.stringify(campaign),
+    campaignRaw,
   ]);
-  if (Number(result) === 1) return { ok: true, created: true };
-  if (Number(result) === 0) return { ok: true, created: false, duplicate: true };
-  if (Number(result) === -1) return { ok: false, error: "campaign_conflict" };
+  if (result === 1 || result === "1") return { ok: true, created: true };
+  if (result === 0 || result === "0") return { ok: true, created: false, duplicate: true };
+  if (result === -1 || result === "-1") return { ok: false, error: "campaign_conflict" };
+  if (result != null) return { ok: false, error: "storage_failed" };
+
+  const recovery = await readRedis([
+    ["GET", campaignKey(campaign.id)],
+    ["ZSCORE", CAMPAIGN_INDEX_KEY, campaign.id],
+    ["PING"],
+  ]);
+  const recovered = parseJson(recovery.rows[0]);
+  if (recovery.ok && recovery.rows[2] === "PONG" && recovery.rows[1] != null
+      && validCampaign(recovered, campaign.id) && recovered.requestHash === campaign.requestHash) {
+    const created = recovery.rows[0] === campaignRaw && Number(recovery.rows[1]) === score;
+    return { ok: true, created, duplicate: !created, recovered: true };
+  }
   return { ok: false, error: "storage_failed" };
 }
 
@@ -500,8 +572,9 @@ async function saveJob(job, score) {
     String(CAMPAIGN_TTL_SECONDS),
     raw,
   ]);
-  if (Number(result) === 1) return { ok: true, created: true };
-  if (Number(result) === 0) return { ok: true, created: false, duplicate: true };
+  if (result === 1 || result === "1") return { ok: true, created: true };
+  if (result === 0 || result === "0") return { ok: true, created: false, duplicate: true };
+  if (result != null) return { ok: false, error: "storage_failed" };
   const recovery = await readRedis([
     ["GET", jobKey(job.id)], ["ZSCORE", QUEUE_KEY, job.id],
     ["SISMEMBER", campaignJobIndexKey(job.campaignId), job.id],
@@ -585,7 +658,7 @@ function campaignTransitionDocuments(raw, job, mode, timestamp) {
 }
 
 const TRANSITION_JOB_SCRIPT = `
-local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end local expectedTypes={'string','zset','set','string','set','string','zset','string'} for index,key in ipairs(KEYS) do if not validtype(key,expectedTypes[index]) then return '__storage_type__' end end local recordTtl=tonumber(ARGV[3]); local campaignTtl=tonumber(ARGV[4]); local queueScore=tonumber(ARGV[6]); local dailyTtl=tonumber(ARGV[12]); local campaignScore=tonumber(ARGV[13]) if not recordTtl or recordTtl~=math.floor(recordTtl) or recordTtl<1 or not campaignTtl or campaignTtl~=math.floor(campaignTtl) or campaignTtl<1 or not queueScore or queueScore~=queueScore or queueScore<-9007199254740991 or queueScore>9007199254740991 or not dailyTtl or dailyTtl~=math.floor(dailyTtl) or dailyTtl<1 or not campaignScore or campaignScore~=campaignScore or campaignScore<-9007199254740991 or campaignScore>9007199254740991 then return '__invalid_args__' end if ARGV[11]=='1' then local dailyRaw=redis.call('GET',KEYS[8]); local dailyCount=dailyRaw and tonumber(dailyRaw) or 0 if not dailyCount or dailyCount~=math.floor(dailyCount) or dailyCount<0 or dailyCount>=9007199254740991 then return '__invalid_daily_count__' end end local raw=redis.call('GET',KEYS[1]) if not raw then return '__missing__' end local ok,current=pcall(cjson.decode,raw) if not ok or type(current)~='table' or tostring(current.id or '')~=ARGV[8] or tostring(current.campaignId or '')~=ARGV[7] then return '__corrupt__' end local currentStatus=tostring(current.status or '') local expected='|'..ARGV[1]..'|' if not string.find(expected,'|'..currentStatus..'|',1,true) then return '__invalid__:'..currentStatus end local campaignRaw=redis.call('GET',KEYS[6]) if campaignRaw then if campaignRaw~=ARGV[14] then return '__campaign_conflict__' end elseif ARGV[14]~='__lm_marketing_missing__' then return '__campaign_conflict__' end local campaign=nil if campaignRaw then local campaignOk,decoded=pcall(cjson.decode,campaignRaw) if not campaignOk or type(decoded)~='table' or tostring(decoded.id or '')~=ARGV[7] then return '__campaign_corrupt__' end campaign=decoded end if ARGV[9]=='sending' then if not campaign then return '__campaign_missing__' end local campaignStatus=tostring(campaign.status or '') if campaignStatus~='scheduled' and campaignStatus~='sending' then return '__campaign_blocked__:'..campaignStatus end end local nextOk,nextDoc=pcall(cjson.decode,ARGV[2]) if not nextOk or type(nextDoc)~='table' or tostring(nextDoc.id or '')~=ARGV[8] or tostring(nextDoc.campaignId or '')~=ARGV[7] then return '__corrupt_next__' end local responseNextOk,responseNext=pcall(cjson.decode,ARGV[17]) local responseFinalOk,responseFinal=pcall(cjson.decode,ARGV[18]) if not responseNextOk or type(responseNext)~='table' or responseNext.ok~=true or not responseFinalOk or type(responseFinal)~='table' or responseFinal.ok~=true then return '__corrupt_next__' end if campaign then local campaignNextOk,campaignNext=pcall(cjson.decode,ARGV[15]) local campaignFinalOk,campaignFinal=pcall(cjson.decode,ARGV[16]) if not campaignNextOk or type(campaignNext)~='table' or tostring(campaignNext.id or '')~=ARGV[7] or not campaignFinalOk or type(campaignFinal)~='table' or tostring(campaignFinal.id or '')~=ARGV[7] then return '__corrupt_next__' end end redis.call('SET',KEYS[1],ARGV[2],'EX',ARGV[3]) redis.call('SADD',KEYS[5],ARGV[8]) redis.call('EXPIRE',KEYS[5],ARGV[4]) if ARGV[5]=='terminal' then redis.call('ZREM',KEYS[2],ARGV[8]) redis.call('SREM',KEYS[3],ARGV[8]) redis.call('DEL',KEYS[4]) elseif ARGV[5]=='schedule' then redis.call('ZADD',KEYS[2],ARGV[6],ARGV[8]) redis.call('SADD',KEYS[3],ARGV[8]) redis.call('EXPIRE',KEYS[3],ARGV[4]) redis.call('DEL',KEYS[4]) else redis.call('SADD',KEYS[3],ARGV[8]) redis.call('EXPIRE',KEYS[3],ARGV[4]) end if ARGV[11]=='1' then redis.call('INCR',KEYS[8]) redis.call('EXPIRE',KEYS[8],ARGV[12]) end if campaign then local campaignEncoded=ARGV[15] local responseEncoded=ARGV[17] if ARGV[5]=='terminal' and redis.call('SCARD',KEYS[3])==0 then campaignEncoded=ARGV[16] responseEncoded=ARGV[18] end redis.call('SET',KEYS[6],campaignEncoded,'EX',ARGV[4]) redis.call('ZADD',KEYS[7],'NX',ARGV[13],ARGV[7]) return responseEncoded end return ARGV[17]
+local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end local expectedTypes={'string','zset','set','string','set','string','zset','string'} for index,key in ipairs(KEYS) do if not validtype(key,expectedTypes[index]) then return '__storage_type__' end end local recordTtl=tonumber(ARGV[3]); local campaignTtl=tonumber(ARGV[4]); local queueScore=tonumber(ARGV[6]); local dailyTtl=tonumber(ARGV[12]); local campaignScore=tonumber(ARGV[13]) if not recordTtl or recordTtl~=math.floor(recordTtl) or recordTtl<1 or not campaignTtl or campaignTtl~=math.floor(campaignTtl) or campaignTtl<1 or not queueScore or queueScore~=queueScore or queueScore<-9007199254740991 or queueScore>9007199254740991 or not dailyTtl or dailyTtl~=math.floor(dailyTtl) or dailyTtl<1 or not campaignScore or campaignScore~=campaignScore or campaignScore<-9007199254740991 or campaignScore>9007199254740991 then return '__invalid_args__' end if ARGV[11]=='1' then local dailyRaw=redis.call('GET',KEYS[8]); local dailyCount=dailyRaw and tonumber(dailyRaw) or 0 if not dailyCount or dailyCount~=math.floor(dailyCount) or dailyCount<0 or dailyCount>=9007199254740991 then return '__invalid_daily_count__' end end local raw=redis.call('GET',KEYS[1]) if not raw then return '__missing__' end local ok,current=pcall(cjson.decode,raw) if not ok or type(current)~='table' or tostring(current.id or '')~=ARGV[8] or tostring(current.campaignId or '')~=ARGV[7] then return '__corrupt__' end local currentStatus=tostring(current.status or '') local expected='|'..ARGV[1]..'|' if not string.find(expected,'|'..currentStatus..'|',1,true) then return '__invalid__:'..currentStatus end local campaignRaw=redis.call('GET',KEYS[6]) if campaignRaw then if campaignRaw~=ARGV[14] then return '__campaign_conflict__' end elseif ARGV[14]~='__lm_marketing_missing__' then return '__campaign_conflict__' end local campaign=nil if campaignRaw then local campaignOk,decoded=pcall(cjson.decode,campaignRaw) if not campaignOk or type(decoded)~='table' or tostring(decoded.id or '')~=ARGV[7] then return '__campaign_corrupt__' end campaign=decoded end if ARGV[9]=='sending' then if not campaign then return '__campaign_missing__' end local campaignStatus=tostring(campaign.status or '') if campaignStatus~='scheduled' and campaignStatus~='sending' then return '__campaign_blocked__:'..campaignStatus end end local nextOk,nextDoc=pcall(cjson.decode,ARGV[2]) if not nextOk or type(nextDoc)~='table' or tostring(nextDoc.id or '')~=ARGV[8] or tostring(nextDoc.campaignId or '')~=ARGV[7] then return '__corrupt_next__' end local responseNextOk,responseNext=pcall(cjson.decode,ARGV[17]) local responseFinalOk,responseFinal=pcall(cjson.decode,ARGV[18]) if not responseNextOk or type(responseNext)~='table' or responseNext.ok~=true or not responseFinalOk or type(responseFinal)~='table' or responseFinal.ok~=true then return '__corrupt_next__' end if campaign then local campaignNextOk,campaignNext=pcall(cjson.decode,ARGV[15]) local campaignFinalOk,campaignFinal=pcall(cjson.decode,ARGV[16]) if not campaignNextOk or type(campaignNext)~='table' or tostring(campaignNext.id or '')~=ARGV[7] or not campaignFinalOk or type(campaignFinal)~='table' or tostring(campaignFinal.id or '')~=ARGV[7] then return '__corrupt_next__' end end redis.call('SET',KEYS[1],ARGV[2],'EX',ARGV[3]) redis.call('SADD',KEYS[5],ARGV[8]) redis.call('EXPIRE',KEYS[5],ARGV[4]) if ARGV[5]=='terminal' then redis.call('ZREM',KEYS[2],ARGV[8]) redis.call('SREM',KEYS[3],ARGV[8]) redis.call('DEL',KEYS[4]) elseif ARGV[5]=='schedule' then redis.call('ZADD',KEYS[2],ARGV[6],ARGV[8]) redis.call('SADD',KEYS[3],ARGV[8]) redis.call('EXPIRE',KEYS[3],ARGV[4]) redis.call('DEL',KEYS[4]) else redis.call('ZADD',KEYS[2],ARGV[6],ARGV[8]) redis.call('SADD',KEYS[3],ARGV[8]) redis.call('EXPIRE',KEYS[3],ARGV[4]) end if ARGV[11]=='1' then redis.call('INCR',KEYS[8]) redis.call('EXPIRE',KEYS[8],ARGV[12]) end if campaign then local campaignEncoded=ARGV[15] local responseEncoded=ARGV[17] if ARGV[5]=='terminal' and redis.call('SCARD',KEYS[3])==0 then campaignEncoded=ARGV[16] responseEncoded=ARGV[18] end redis.call('SET',KEYS[6],campaignEncoded,'EX',ARGV[4]) redis.call('ZADD',KEYS[7],'NX',ARGV[13],ARGV[7]) return responseEncoded end return ARGV[17]
 `;
 
 async function transitionJob(job, {
@@ -630,7 +703,7 @@ async function transitionJob(job, {
         ["GET", campaignKey(campaignId)], ["PING"],
       ]);
       const queueOk = mode === "terminal" ? recovery.rows[1] == null
-        : mode === "schedule" ? Number(recovery.rows[1]) === Number(score || job.queueScore || 0) : true;
+        : Number(recovery.rows[1]) === Number(score || job.queueScore || 0);
       const membershipOk = Number(recovery.rows[2]) === (mode === "terminal" ? 0 : 1);
       const claimOk = (mode !== "terminal" && mode !== "schedule") || recovery.rows[3] == null;
       const campaignStored = recovery.rows[4];
@@ -1049,6 +1122,7 @@ export async function enqueueMarketingCampaign({
 
 async function recordDispatch(job, campaign, result) {
   const reason = result?.ok === true ? "" : clean(result?.reason || result?.error || result?.code || "send_failed", 200);
+  const outcomeClass = providerOutcomeClass(result);
   const delivery = await registerEmailDelivery({
     args: {
       to: job.to,
@@ -1065,6 +1139,9 @@ async function recordDispatch(job, campaign, result) {
       providerMessageId: result?.messageId || "",
       scheduledAt: job.scheduledAt,
       status: result?.suppressed ? "suppressed" : (result?.ok === true ? "sent" : "failed"),
+      providerOutcomeClass: outcomeClass,
+      providerErrorCode: clean(result?.errorCode || "", 80),
+      providerUncertain: outcomeClass === "uncertain",
       forceStatus: true,
     },
   });
@@ -1122,6 +1199,85 @@ async function verifySendOwnership({ lockToken, job }) {
   ])) === 1;
 }
 
+const RESERVE_DAILY_ATTEMPT_SCRIPT = `
+-- MARKETING_DAILY_ATTEMPT_RESERVE_V1
+local function validtype(key,expected) local value=redis.call('TYPE',key); local actual=type(value)=='table' and value.ok or value; return actual=='none' or actual==expected end
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'string') then return '__storage_type__' end
+local dailyLimit=tonumber(ARGV[2]); local dailyTtl=tonumber(ARGV[3]); local attemptTtl=tonumber(ARGV[4])
+if not dailyLimit or dailyLimit~=math.floor(dailyLimit) or dailyLimit<1 or not dailyTtl or dailyTtl~=math.floor(dailyTtl) or dailyTtl<1 or not attemptTtl or attemptTtl~=math.floor(attemptTtl) or attemptTtl<1 then return '__invalid_args__' end
+local existing=redis.call('GET',KEYS[2])
+if existing then
+  if not string.match(existing,'^%d%d%d%d%d%d%d%d$') then return '__reservation_conflict__' end
+  if existing~=ARGV[1] then return '__reserved__:'..existing end
+  local duplicateRaw=redis.call('GET',KEYS[1]); local duplicateCount=duplicateRaw and tonumber(duplicateRaw) or nil
+  if not duplicateCount or duplicateCount~=math.floor(duplicateCount) or duplicateCount<1 or duplicateCount>dailyLimit then return '__invalid_daily_count__' end
+  redis.call('EXPIRE',KEYS[2],ARGV[4])
+  return '__reserved__:'..existing
+end
+local dailyRaw=redis.call('GET',KEYS[1]); local dailyCount=dailyRaw and tonumber(dailyRaw) or 0
+if not dailyCount or dailyCount~=math.floor(dailyCount) or dailyCount<0 or dailyCount>dailyLimit then return '__invalid_daily_count__' end
+if dailyCount>=dailyLimit then return '__daily_limit__' end
+redis.call('SET',KEYS[2],ARGV[1],'EX',ARGV[4])
+local nextCount=redis.call('INCR',KEYS[1])
+redis.call('EXPIRE',KEYS[1],ARGV[3])
+return tostring(nextCount)
+`;
+
+async function reserveDailyAttempt(attemptKey, logicalNow) {
+  const day = beijingDayKey(logicalNow);
+  const countKey = DAILY_COUNT_PREFIX + day;
+  if (!attemptKey || !/^\d{8}$/.test(day)) return { ok: false, error: "invalid_attempt" };
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await redisCmd([
+      "EVAL", RESERVE_DAILY_ATTEMPT_SCRIPT, "2",
+      countKey, attemptKey,
+      day, String(DAILY_LIMIT), String(3 * 24 * 60 * 60), String(RECORD_TTL_SECONDS),
+    ]);
+    if (result === "__daily_limit__") return { ok: false, dailyLimit: true, day, dailyKey: countKey };
+    if (String(result || "").startsWith("__reserved__:")) {
+      const reservedDay = String(result).slice("__reserved__:".length);
+      if (!/^\d{8}$/.test(reservedDay)) return { ok: false, error: "quota_storage_invalid" };
+      return {
+        ok: true,
+        duplicate: true,
+        day: reservedDay,
+        dailyKey: DAILY_COUNT_PREFIX + reservedDay,
+      };
+    }
+    const count = Number(result);
+    if (Number.isSafeInteger(count) && count >= 1 && count <= DAILY_LIMIT) {
+      return { ok: true, duplicate: false, count, day, dailyKey: countKey };
+    }
+    if (result != null) return { ok: false, error: "quota_storage_invalid" };
+
+    // Upstash can commit a Lua script while its HTTP response is lost. Reading the
+    // per-attempt marker makes retrying this exact provider attempt idempotent.
+    const recovery = await readRedis([["GET", attemptKey]]);
+    if (recovery.ok && recovery.rows[0] === day) {
+      const countRead = await readRedis([["GET", countKey]]);
+      const recoveredCount = Number(countRead.rows[0]);
+      if (countRead.ok && Number.isSafeInteger(recoveredCount) && recoveredCount >= 1 && recoveredCount <= DAILY_LIMIT) {
+        return { ok: true, duplicate: true, recovered: true, count: recoveredCount, day, dailyKey: countKey };
+      }
+    }
+  }
+  return { ok: false, error: "quota_storage_unavailable" };
+}
+
+async function reserveDailyProviderAttempt(job, logicalNow) {
+  return reserveDailyAttempt(dailyAttemptKey(job), logicalNow);
+}
+
+// All Resend marketing paths share this budget. `reservationId` identifies one
+// logical provider attempt; replaying the same attempt after a lost Redis
+// response does not increment the Beijing-day counter twice.
+export async function reserveMarketingSendBudget({ reservationId = "", now = Date.now() } = {}) {
+  const stableId = clean(reservationId, 300);
+  if (!stableId) return { ok: false, error: "invalid_attempt" };
+  const digest = createHash("sha256").update(stableId).digest("hex");
+  return reserveDailyAttempt(`${DAILY_ATTEMPT_PREFIX}external:${digest}`, now);
+}
+
 export async function dispatchDueMarketingCampaigns({
   now = Date.now(),
   limit = DAILY_LIMIT,
@@ -1132,15 +1288,21 @@ export async function dispatchDueMarketingCampaigns({
   interJobDelayMs = 550,
   _testHooks = null,
 } = {}) {
+  const logicalStart = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+  const wallClockStart = Date.now();
+  const logicalNow = () => logicalStart + Math.max(0, Date.now() - wallClockStart);
   const canContinue = () => {
     if (Number(deadlineAt) > 0 && Date.now() >= Number(deadlineAt)) return false;
     try { return typeof shouldContinue !== "function" || shouldContinue() !== false; } catch { return false; }
   };
-  const requeueSendingForStop = async (job, sendingJob, id) => {
+  const requeueSendingForStop = async (job, _sendingJob, id) => {
     const originalScore = Number(job?.queueScore || now);
     const resumeScore = Number.isFinite(originalScore) ? originalScore : Date.now();
     const resumed = await transitionJob({
-      ...sendingJob,
+      // `job` is the last queued record. Reusing it preserves an inherited
+      // uncertain-provider deadline, but removes the fresh deadline/attempt
+      // created by this worker when it definitively stopped before the provider.
+      ...job,
       status: "queued",
       queueScore: resumeScore,
       nextAttemptAt: new Date(resumeScore).toISOString(),
@@ -1191,11 +1353,18 @@ export async function dispatchDueMarketingCampaigns({
   }, heartbeatMs);
   heartbeat.unref?.();
   try {
-    const dailyKey = DAILY_COUNT_PREFIX + beijingDayKey(now);
-    const dailyRead = await readRedis([["GET", dailyKey]]);
+    const initialDayKey = DAILY_COUNT_PREFIX + beijingDayKey(logicalNow());
+    const dailyRead = await readRedis([["GET", initialDayKey]]);
     if (!dailyRead.ok) return { ok: false, reason: "storage_unavailable", submitted: 0, failed: 0 };
-    const alreadySubmitted = Number(dailyRead.rows[0] || 0);
-    const capacity = Math.max(0, Math.min(DAILY_LIMIT, Number(limit) || DAILY_LIMIT) - alreadySubmitted);
+    const alreadyReserved = Number(dailyRead.rows[0] || 0);
+    if (!Number.isSafeInteger(alreadyReserved) || alreadyReserved < 0 || alreadyReserved > DAILY_LIMIT) {
+      return { ok: false, reason: "storage_unavailable", submitted: 0, failed: 0 };
+    }
+    const requestedLimit = Number(limit);
+    const perRunLimit = Number.isFinite(requestedLimit)
+      ? Math.max(0, Math.min(DAILY_LIMIT, Math.trunc(requestedLimit)))
+      : DAILY_LIMIT;
+    const capacity = Math.max(0, Math.min(perRunLimit, DAILY_LIMIT - alreadyReserved));
     if (!capacity) return { ok: true, skipped: true, reason: "daily_limit", submitted: 0, failed: 0 };
 
     const dueIds = await redisCmd([
@@ -1266,6 +1435,9 @@ export async function dispatchDueMarketingCampaigns({
           }
           continue;
         }
+        // Read an existing durable provider outcome before touching today's
+        // quota. Terminal/known failures need no new provider call and must not
+        // consume one of the 50 slots for the current Beijing day.
         const deliveryRead = await readEmailDeliveryByMessageId(job.deliveryMessageId);
         if (!deliveryRead.ok) {
           await redisCmd(["DEL", claimKey(id)]);
@@ -1274,13 +1446,19 @@ export async function dispatchDueMarketingCampaigns({
           continue;
         }
         const delivery = deliveryRead.record;
-        if (delivery && ["sent", "delivered", "recovered"].includes(delivery.status) && delivery.category === "marketing" && delivery.relatedType === "scheduled_campaign" && delivery.relatedId === job.campaignId && normalizeRecipients(delivery.recipients?.length ? delivery.recipients : delivery.to).includes(normalizeEmail(job.to))) {
+        const deliveryMatches = Boolean(delivery
+          && delivery.category === "marketing"
+          && delivery.relatedType === "scheduled_campaign"
+          && delivery.relatedId === job.campaignId
+          && normalizeRecipients(delivery.recipients?.length ? delivery.recipients : delivery.to).includes(normalizeEmail(job.to)));
+        const trustedDelivery = deliveryMatches ? delivery : null;
+        if (trustedDelivery && ["sent", "delivered", "recovered"].includes(trustedDelivery.status)) {
           const recoveredJob = {
             ...job,
             status: "submitted",
-            provider: clean(delivery.provider || "resend", 30),
-            providerMessageId: clean(delivery.providerMessageId, 180),
-            submittedAt: delivery.updatedAt || new Date(now).toISOString(),
+            provider: clean(trustedDelivery.provider || "resend", 30),
+            providerMessageId: clean(trustedDelivery.providerMessageId, 180),
+            submittedAt: trustedDelivery.updatedAt || new Date(now).toISOString(),
             recoveredAt: new Date(now).toISOString(),
             lastError: "",
             updatedAt: new Date(now).toISOString(),
@@ -1295,8 +1473,6 @@ export async function dispatchDueMarketingCampaigns({
           const recovered = await transitionJob(recoveredJob, {
             expectedStatuses: ["sending"],
             mode: "terminal",
-            dailyKey,
-            incrementDaily: true,
           });
           if (!recovered.ok) {
             await redisCmd(["DEL", claimKey(id)]);
@@ -1309,13 +1485,136 @@ export async function dispatchDueMarketingCampaigns({
           results.push({ id, to: job.to, ok: true, recovered: true, messageId: recoveredJob.providerMessageId });
           continue;
         }
-        if (delivery?.status === "failed") {
-          const nextAttemptMs = now + RETRY_DELAY_MS;
-          const retryJob = { ...job, status: "queued", queueScore: nextAttemptMs, nextAttemptAt: new Date(nextAttemptMs).toISOString(), updatedAt: new Date(now).toISOString() };
-          const recoveredFailure = await transitionJob(retryJob, { expectedStatuses: ["sending"], mode: "schedule", score: nextAttemptMs });
-          if (!recoveredFailure.ok) failed += 1;
-          results.push({ id, to: job.to, ok: false, retryable: true, reason: recoveredFailure.ok ? "provider_failed_requeued" : "delivery_commit_pending" });
+        if (trustedDelivery?.status === "suppressed") {
+          const suppressedJob = {
+            ...job,
+            status: "suppressed",
+            lastError: clean(trustedDelivery.reason || "recipient_suppressed", 200),
+            suppressedAt: trustedDelivery.updatedAt || new Date(now).toISOString(),
+            updatedAt: new Date(now).toISOString(),
+          };
+          const metric = await recordMarketingCampaignMetric(job.campaignId, "suppressed", `dispatch:${id}`);
+          const recovered = metric.ok ? await transitionJob(suppressedJob, {
+            expectedStatuses: ["sending"],
+            mode: "terminal",
+          }) : { ok: false };
+          if (!recovered.ok) {
+            await redisCmd(["DEL", claimKey(id)]);
+            failed += 1;
+            results.push({ id, to: job.to, ok: false, retryable: true, reason: metric.ok ? "delivery_commit_pending" : "metric_commit_pending" });
+          } else {
+            await updateRecipientStatusStrict(job, "suppressed", { reason: suppressedJob.lastError });
+            results.push({ id, to: job.to, ok: true, suppressed: true, recovered: true, reason: suppressedJob.lastError });
+          }
           continue;
+        }
+
+        const recoveryDeadlineMs = Date.parse(job.resendIdempotencyDeadlineAt || "");
+        const providerStartedMs = Date.parse(job.providerAttemptStartedAt || "");
+        const recoveryNow = logicalNow();
+        const outcomeClass = clean(trustedDelivery?.providerOutcomeClass || "", 40);
+        const outcomeReason = clean(trustedDelivery?.reason || outcomeClass || "provider_failed", 200);
+
+        if (trustedDelivery?.status === "failed"
+            && ["quota", "policy_retry", "definite_failure", "idempotency_conflict"].includes(outcomeClass)) {
+          const quotaFailure = outcomeClass === "quota";
+          const policyRetry = outcomeClass === "policy_retry";
+          const idempotencyConflict = outcomeClass === "idempotency_conflict";
+          const failedAttempts = Number(job.failedAttempts || 0) + (quotaFailure || policyRetry ? 0 : 1);
+          const retryBase = withoutProviderAttemptState(job);
+          if (idempotencyConflict || (!quotaFailure && !policyRetry && failedAttempts >= MAX_SEND_ATTEMPTS)) {
+            const deadJob = {
+              ...retryBase,
+              status: "failed",
+              failedAttempts,
+              lastError: idempotencyConflict ? "idempotency_payload_conflict" : outcomeReason,
+              failedAt: new Date(recoveryNow).toISOString(),
+              updatedAt: new Date(recoveryNow).toISOString(),
+            };
+            const metric = await recordMarketingCampaignMetric(job.campaignId, "failed", `dispatch:${id}`);
+            const stored = metric.ok ? await transitionJob(deadJob, { expectedStatuses: ["sending"], mode: "terminal" }) : { ok: false };
+            if (stored.ok) await updateRecipientStatusStrict(job, "failed", { reason: deadJob.lastError });
+            else await redisCmd(["DEL", claimKey(id)]);
+            failed += 1;
+            results.push({ id, to: job.to, ok: false, permanent: stored.ok, reason: stored.ok ? deadJob.lastError : "delivery_commit_pending" });
+          } else {
+            const nextAttemptMs = quotaFailure ? nextBeijingEvening(recoveryNow) : recoveryNow + RETRY_DELAY_MS;
+            const retryJob = {
+              ...retryBase,
+              status: "queued",
+              queueScore: nextAttemptMs,
+              failedAttempts,
+              lastError: outcomeReason,
+              nextAttemptAt: new Date(nextAttemptMs).toISOString(),
+              updatedAt: new Date(recoveryNow).toISOString(),
+            };
+            const stored = await transitionJob(retryJob, { expectedStatuses: ["sending"], mode: "schedule", score: nextAttemptMs });
+            if (!stored.ok) failed += 1;
+            results.push({ id, to: job.to, ok: false, retryable: true, reason: stored.ok ? outcomeReason : "delivery_commit_pending" });
+          }
+          continue;
+        }
+
+        if (Number(job.providerProtocolVersion) === 2
+            && !Number.isFinite(providerStartedMs)
+            && (!trustedDelivery || trustedDelivery.status === "scheduled")) {
+          // This worker persisted `sending` but never persisted the marker that
+          // immediately precedes the provider call. It is therefore known that
+          // no Resend request started; restore the original attempt without an
+          // uncertainty deadline or a fresh quota charge.
+          const originalScore = Number(job.resumeQueueScore ?? job.queueScore);
+          const resumeScore = Number.isFinite(originalScore) ? Math.min(originalScore, recoveryNow) : recoveryNow;
+          const retryJob = {
+            ...withoutProviderAttemptState(job),
+            status: "queued",
+            attempts: Math.max(0, Number(job.attempts || 1) - 1),
+            queueScore: resumeScore,
+            nextAttemptAt: new Date(recoveryNow).toISOString(),
+            updatedAt: new Date(recoveryNow).toISOString(),
+          };
+          const recovered = await transitionJob(retryJob, { expectedStatuses: ["sending"], mode: "schedule", score: resumeScore });
+          if (!recovered.ok) failed += 1;
+          results.push({ id, to: job.to, ok: recovered.ok, skipped: recovered.ok, retryable: true, reason: recovered.ok ? "provider_not_started_requeued" : "delivery_commit_pending" });
+          continue;
+        }
+
+        if ((!trustedDelivery || trustedDelivery.status === "scheduled" || outcomeClass === "uncertain")
+            && Number.isFinite(providerStartedMs)
+            && Number.isFinite(recoveryDeadlineMs) && recoveryNow < recoveryDeadlineMs) {
+          const attemptMarker = dailyAttemptKey(job);
+          const markerRead = attemptMarker ? await readRedis([["GET", attemptMarker]]) : { ok: false, rows: [] };
+          if (!markerRead.ok) {
+            await redisCmd(["DEL", claimKey(id)]);
+            failed += 1;
+            results.push({ id, to: job.to, ok: false, retryable: true, reason: "quota_storage_unavailable" });
+            continue;
+          }
+          if (/^\d{8}$/.test(String(markerRead.rows[0] || ""))) {
+          // The process may have stopped immediately before or after the Resend
+          // request. Requeue a new locally-counted attempt while retaining the
+          // same provider idempotency key (job.id). This can waste quota but can
+          // neither exceed today's 50-attempt ceiling nor duplicate the email.
+          const recoveryScore = ambiguousRecoveryScore(recoveryDeadlineMs);
+          const retryJob = {
+            ...job,
+            status: "queued",
+            // All ambiguous retries sort ahead of ordinary campaigns, ordered
+            // by the earliest provider-idempotency deadline first.
+            queueScore: recoveryScore,
+            nextAttemptAt: new Date(recoveryNow).toISOString(),
+            updatedAt: new Date(recoveryNow).toISOString(),
+          };
+          const recovered = await transitionJob(retryJob, {
+            expectedStatuses: ["sending"], mode: "schedule", score: recoveryScore,
+          });
+          if (!recovered.ok) {
+            failed += 1;
+            results.push({ id, to: job.to, ok: false, retryable: true, reason: "delivery_commit_pending" });
+          } else {
+            results.push({ id, to: job.to, ok: true, skipped: true, retryable: true, reason: "idempotent_provider_retry_scheduled" });
+          }
+          continue;
+          }
         }
         const unknownJob = {
           ...job,
@@ -1413,15 +1712,49 @@ export async function dispatchDueMarketingCampaigns({
         continue;
       }
 
+      const inheritedIdempotencyDeadlineMs = Date.parse(job.resendIdempotencyDeadlineAt || "");
+      const providerPreparationNow = logicalNow();
+      if (job.resendIdempotencyDeadlineAt
+          && (!Number.isFinite(inheritedIdempotencyDeadlineMs) || providerPreparationNow >= inheritedIdempotencyDeadlineMs)) {
+        const expiredJob = {
+          ...job,
+          status: "failed",
+          lastError: "delivery_outcome_unknown",
+          failedAt: new Date(providerPreparationNow).toISOString(),
+          updatedAt: new Date(providerPreparationNow).toISOString(),
+        };
+        const metric = await recordMarketingCampaignMetric(job.campaignId, "failed", `dispatch:${id}:unknown`);
+        const stored = metric.ok ? await transitionJob(expiredJob, {
+          expectedStatuses: ["queued"], mode: "terminal",
+        }) : { ok: false };
+        if (stored.ok) await updateRecipientStatusStrict(job, "failed", { reason: expiredJob.lastError });
+        else await redisCmd(["DEL", claimKey(id)]);
+        failed += 1;
+        results.push({ id, to: job.to, ok: false, permanent: stored.ok, reason: stored.ok ? expiredJob.lastError : "delivery_commit_pending" });
+        continue;
+      }
+
       const sendingJob = {
         ...job,
         status: "sending",
         attempts: Number(job.attempts || 0) + 1,
+        resumeQueueScore: Number.isFinite(Number(job.queueScore)) ? Number(job.queueScore) : providerPreparationNow,
+        queueScore: inflightRecoveryScore(providerPreparationNow),
+        providerProtocolVersion: 2,
+        marketingTokenIssuedAt: Number.isSafeInteger(Number(job.marketingTokenIssuedAt)) && Number(job.marketingTokenIssuedAt) > 0
+          ? Number(job.marketingTokenIssuedAt)
+          : Math.floor(providerPreparationNow / 1000),
+        marketingTokenNonce: /^[a-f0-9]{24}$/i.test(String(job.marketingTokenNonce || ""))
+          ? String(job.marketingTokenNonce).toLowerCase()
+          : randomBytes(12).toString("hex"),
+        resendFromAddress: validEmail(job.resendFromAddress) ? normalizeEmail(job.resendFromAddress) : normalizeEmail(mailFromAddress()),
+        resendSiteUrl: clean(job.resendSiteUrl || process.env.SITE_URL || "https://www.liumeiti.vip", 300),
         updatedAt: new Date(now).toISOString(),
       };
       const sendingSaved = await transitionJob(sendingJob, {
         expectedStatuses: ["queued"],
         mode: "keep",
+        score: sendingJob.queueScore,
       });
       if (!sendingSaved.ok) {
         await redisCmd(["DEL", claimKey(id)]);
@@ -1431,7 +1764,7 @@ export async function dispatchDueMarketingCampaigns({
       }
       if (leaseLost) {
         const nextAttemptMs = now + RETRY_DELAY_MS;
-        await transitionJob({ ...sendingJob, status: "queued", queueScore: nextAttemptMs, nextAttemptAt: new Date(nextAttemptMs).toISOString(), updatedAt: new Date(now).toISOString() }, {
+        await transitionJob({ ...job, status: "queued", queueScore: nextAttemptMs, nextAttemptAt: new Date(nextAttemptMs).toISOString(), updatedAt: new Date(now).toISOString() }, {
           expectedStatuses: ["sending"], mode: "schedule", score: nextAttemptMs,
         });
         break;
@@ -1455,7 +1788,7 @@ export async function dispatchDueMarketingCampaigns({
         const currentJob = validJob(candidateJob, id, job.campaignId) ? candidateJob : null;
         if (currentJob?.status === "sending" && currentCampaign?.status === "paused") {
           const nextAttemptMs = now + RETRY_DELAY_MS;
-          await transitionJob({ ...currentJob, status: "queued", queueScore: nextAttemptMs, nextAttemptAt: new Date(nextAttemptMs).toISOString(), updatedAt: new Date(now).toISOString() }, {
+          await transitionJob({ ...job, status: "queued", queueScore: nextAttemptMs, nextAttemptAt: new Date(nextAttemptMs).toISOString(), updatedAt: new Date(now).toISOString() }, {
             expectedStatuses: ["sending"], mode: "schedule", score: nextAttemptMs,
           });
         } else if (currentJob?.status === "sending" && currentCampaign?.status === "cancelled") {
@@ -1490,6 +1823,60 @@ export async function dispatchDueMarketingCampaigns({
         }
         break;
       }
+      const providerLogicalNow = logicalNow();
+      const quotaReservation = await reserveDailyProviderAttempt(sendingJob, providerLogicalNow);
+      if (!quotaReservation.ok) {
+        const nextAttemptMs = quotaReservation.dailyLimit
+          ? nextBeijingDayStart(providerLogicalNow)
+          : providerLogicalNow + RETRY_DELAY_MS;
+        const requeued = await transitionJob({
+          ...job,
+          status: "queued",
+          queueScore: nextAttemptMs,
+          nextAttemptAt: new Date(nextAttemptMs).toISOString(),
+          updatedAt: new Date(providerLogicalNow).toISOString(),
+        }, {
+          expectedStatuses: ["sending"], mode: "schedule", score: nextAttemptMs,
+        });
+        if (!requeued.ok) {
+          await redisCmd(["DEL", claimKey(id)]);
+          failed += 1;
+          results.push({ id, to: job.to, ok: false, retryable: true, reason: "quota_reservation_commit_pending" });
+        } else {
+          results.push({
+            id,
+            to: job.to,
+            ok: true,
+            skipped: true,
+            reason: quotaReservation.dailyLimit ? "daily_limit" : "quota_storage_unavailable",
+          });
+        }
+        break;
+      }
+      const providerDailyKey = quotaReservation.dailyKey;
+      const providerTimestamp = new Date(providerLogicalNow).toISOString();
+      const startedJob = {
+        ...sendingJob,
+        providerAttemptStartedAt: sendingJob.providerAttemptStartedAt || providerTimestamp,
+        resendIdempotencyDeadlineAt: Number.isFinite(inheritedIdempotencyDeadlineMs)
+          ? new Date(inheritedIdempotencyDeadlineMs).toISOString()
+          : new Date(providerLogicalNow + RESEND_IDEMPOTENCY_RECOVERY_MS).toISOString(),
+        updatedAt: providerTimestamp,
+      };
+      const startedSaved = await transitionJob(startedJob, {
+        expectedStatuses: ["sending"],
+        mode: "keep",
+        score: startedJob.queueScore,
+      });
+      if (!startedSaved.ok) {
+        await redisCmd(["DEL", claimKey(id)]);
+        failed += 1;
+        results.push({ id, to: job.to, ok: false, retryable: true, reason: "provider_start_marker_pending" });
+        continue;
+      }
+      if (typeof _testHooks?.afterQuotaReservation === "function") {
+        await _testHooks.afterQuotaReservation({ campaignId: job.campaignId, campaignJobId: id });
+      }
       const result = await sendSimpleEmail({
         to: job.to,
         subject: campaign.subject,
@@ -1504,19 +1891,34 @@ export async function dispatchDueMarketingCampaigns({
         idempotencyKey: job.id,
         support: campaign.support,
         locale: campaign.locale || "zh",
-        siteUrl: process.env.SITE_URL || "https://www.liumeiti.vip",
+        siteUrl: startedJob.resendSiteUrl,
+        fromAddress: startedJob.resendFromAddress,
+        marketingTokenIssuedAt: startedJob.marketingTokenIssuedAt,
+        marketingTokenNonce: startedJob.marketingTokenNonce,
         skipDeliveryTracking: true,
+        forceProvider: "resend",
       });
+      if (typeof _testHooks?.afterProviderBeforeRecord === "function") {
+        await _testHooks.afterProviderBeforeRecord({ campaignId: job.campaignId, campaignJobId: id, result });
+      }
       let deliveryRecord = null;
-      try { deliveryRecord = await recordDispatch(job, campaign, result); } catch {}
+      try { deliveryRecord = await recordDispatch(startedJob, campaign, result); } catch {}
+      if (typeof _testHooks?.afterRecordBeforeState === "function") {
+        await _testHooks.afterRecordBeforeState({
+          campaignId: job.campaignId,
+          campaignJobId: id,
+          result,
+          deliveryRecord,
+        });
+      }
 
       if (result?.suppressed) {
         const suppressedJob = {
-          ...sendingJob,
+          ...startedJob,
           status: "suppressed",
           lastError: clean(result.reason || "recipient_suppressed", 200),
-          suppressedAt: new Date(now).toISOString(),
-          updatedAt: new Date(now).toISOString(),
+          suppressedAt: providerTimestamp,
+          updatedAt: providerTimestamp,
         };
         const metric = await recordMarketingCampaignMetric(job.campaignId, "suppressed", `dispatch:${id}`);
         if (!metric.ok) {
@@ -1535,14 +1937,14 @@ export async function dispatchDueMarketingCampaigns({
         results.push({ id, to: job.to, ok: false, suppressed: true, reason: suppressedJob.lastError });
       } else if (result?.ok) {
         const completedJob = {
-          ...sendingJob,
+          ...startedJob,
           status: "submitted",
           provider: clean(result.provider || "resend", 30),
           providerMessageId: clean(result.messageId, 180),
-          submittedAt: new Date(now).toISOString(),
-          submittedAtBeijing: formatBeijingTime(now),
+          submittedAt: providerTimestamp,
+          submittedAtBeijing: formatBeijingTime(providerLogicalNow),
           lastError: "",
-          updatedAt: new Date(now).toISOString(),
+          updatedAt: providerTimestamp,
         };
         const metric = await recordMarketingCampaignMetric(job.campaignId, "submitted", `dispatch:${id}`);
         if (!metric.ok) {
@@ -1554,8 +1956,6 @@ export async function dispatchDueMarketingCampaigns({
         const stored = await transitionJob(completedJob, {
           expectedStatuses: ["sending"],
           mode: "terminal",
-          dailyKey,
-          incrementDaily: true,
         });
         if (!stored.ok) {
           failed += 1;
@@ -1574,16 +1974,17 @@ export async function dispatchDueMarketingCampaigns({
         const policyRetry = Boolean(result?.retryable || result?.policyUnavailable);
         const lastError = clean(result?.reason || result?.error || result?.code || "send_failed", 200);
         // 配额失败是系统性原因(顺延到下个发送窗口),不计入永久失败次数。
-        const failedAttempts = Number(sendingJob.failedAttempts || 0) + (quotaFailure || policyRetry ? 0 : 1);
-        if (!quotaFailure && !policyRetry && failedAttempts >= MAX_SEND_ATTEMPTS) {
+        const idempotencyConflict = Boolean(result?.idempotencyConflict);
+        const failedAttempts = Number(startedJob.failedAttempts || 0) + (quotaFailure || policyRetry ? 0 : 1);
+        if (idempotencyConflict || (!quotaFailure && !policyRetry && failedAttempts >= MAX_SEND_ATTEMPTS)) {
           const deadJob = {
-            ...sendingJob,
+            ...startedJob,
             status: "failed",
             failedAttempts,
-            lastError,
-            failedAt: new Date(now).toISOString(),
-            failedAtBeijing: formatBeijingTime(now),
-            updatedAt: new Date(now).toISOString(),
+            lastError: idempotencyConflict ? "idempotency_payload_conflict" : lastError,
+            failedAt: providerTimestamp,
+            failedAtBeijing: formatBeijingTime(providerLogicalNow),
+            updatedAt: providerTimestamp,
           };
           const metric = await recordMarketingCampaignMetric(job.campaignId, "failed", `dispatch:${id}`);
           if (!metric.ok) {
@@ -1598,27 +1999,33 @@ export async function dispatchDueMarketingCampaigns({
             results.push({ id, to: job.to, ok: false, retryable: true, reason: "delivery_commit_pending" });
             continue;
           }
-          await updateRecipientStatusStrict(job, "failed", { reason: lastError });
+          await updateRecipientStatusStrict(job, "failed", { reason: deadJob.lastError });
           failed += 1;
-          results.push({ id, to: job.to, ok: false, reason: lastError, permanent: true });
+          results.push({ id, to: job.to, ok: false, reason: deadJob.lastError, permanent: true });
         } else {
-          const nextAttemptMs = retryTimestamp(result, now);
+          const nextAttemptMs = retryTimestamp(result, providerLogicalNow);
+          const retryBase = result?.uncertain
+            ? startedJob
+            : withoutProviderAttemptState(startedJob);
+          const retryScore = result?.uncertain
+            ? ambiguousRecoveryScore(Date.parse(startedJob.resendIdempotencyDeadlineAt || ""))
+            : nextAttemptMs;
           const retryJob = {
-            ...sendingJob,
+            ...retryBase,
             status: "queued",
-            queueScore: nextAttemptMs,
+            queueScore: retryScore,
             failedAttempts,
             lastError,
             nextAttemptAt: new Date(nextAttemptMs).toISOString(),
-            updatedAt: new Date(now).toISOString(),
+            updatedAt: providerTimestamp,
           };
           const stored = await transitionJob(retryJob, {
-            expectedStatuses: ["sending"], mode: "schedule", score: nextAttemptMs,
+            expectedStatuses: ["sending"], mode: "schedule", score: retryScore,
           });
           failed += 1;
-          results.push({ id, to: job.to, ok: false, retryable: !stored.ok, reason: stored.ok ? lastError : "delivery_commit_pending" });
+          results.push({ id, to: job.to, ok: false, retryable: true, reason: stored.ok ? lastError : "delivery_commit_pending" });
           if (quotaFailure) {
-            await redisCmd(["SET", dailyKey, String(DAILY_LIMIT), "EX", String(3 * 24 * 60 * 60)]);
+            await redisCmd(["SET", providerDailyKey, String(DAILY_LIMIT), "EX", String(3 * 24 * 60 * 60)]);
             break;
           }
         }

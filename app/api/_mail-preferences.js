@@ -692,10 +692,17 @@ function normalizedOrigin(value = "") {
   try { return new URL(value || fallback).origin; } catch { return "https://www.liumeiti.vip"; }
 }
 
-export async function createMailPreferenceToken(email, { campaignId = "" } = {}) {
+function stableTokenTime(value) {
+  const numeric = Number(value);
+  return Number.isSafeInteger(numeric) && numeric > 0
+    ? numeric
+    : Math.floor(Date.now() / 1000);
+}
+
+export async function createMailPreferenceToken(email, { campaignId = "", issuedAt = 0 } = {}) {
   const contact = await ensureMailContact(email, { source: "mail" });
   if (!contact) return "";
-  const now = Math.floor(Date.now() / 1000);
+  const now = stableTokenTime(issuedAt);
   return signToken({
     k: "preferences",
     cid: contact.contactId,
@@ -705,8 +712,8 @@ export async function createMailPreferenceToken(email, { campaignId = "" } = {})
   });
 }
 
-export async function mailPreferenceLinks(email, { campaignId = "", siteUrl = "" } = {}) {
-  const token = await createMailPreferenceToken(email, { campaignId });
+export async function mailPreferenceLinks(email, { campaignId = "", siteUrl = "", issuedAt = 0 } = {}) {
+  const token = await createMailPreferenceToken(email, { campaignId, issuedAt });
   const origin = normalizedOrigin(siteUrl);
   if (!token) return { token: "", preferencesUrl: "", unsubscribeUrl: "", oneClickUrl: "" };
   const encoded = encodeURIComponent(token);
@@ -820,29 +827,32 @@ function targetPath(raw, origin, campaignId) {
   } catch { return ""; }
 }
 
-export function createMarketingClickToken({ campaignId, contactId, target } = {}) {
+export function createMarketingClickToken({ campaignId, contactId, target, issuedAt = 0, nonceSeed = "" } = {}) {
   const safeCampaignId = clean(campaignId, 80).replace(/[^A-Za-z0-9_-]/g, "");
   const safeContactId = clean(contactId, 64).replace(/[^a-f0-9]/gi, "").toLowerCase();
   const safeTarget = clean(target, 800);
   if (!safeCampaignId || !safeContactId || !safeTarget.startsWith("/")) return "";
-  const now = Math.floor(Date.now() / 1000);
+  const now = stableTokenTime(issuedAt);
+  const stableSeed = clean(nonceSeed, 128);
   return signToken({
     k: "click",
     cmp: safeCampaignId,
     cid: safeContactId,
-    clk: randomBytes(12).toString("hex"),
+    clk: stableSeed
+      ? createHash("sha256").update(`${stableSeed}\u0000${safeTarget}`).digest("hex").slice(0, 24)
+      : randomBytes(12).toString("hex"),
     dst: safeTarget,
     iat: now,
     exp: now + CLICK_TOKEN_TTL_SECONDS,
   });
 }
 
-function rewriteMarketingLinks(html, { campaignId, contactId, siteUrl }) {
+function rewriteMarketingLinks(html, { campaignId, contactId, siteUrl, issuedAt = 0, nonceSeed = "" }) {
   const origin = normalizedOrigin(siteUrl);
   return String(html || "").replace(/href\s*=\s*(["'])([^"']+)\1/gi, (full, quote, href) => {
     const path = targetPath(href, origin, campaignId);
     if (!path) return full;
-    const token = createMarketingClickToken({ campaignId, contactId, target: path });
+    const token = createMarketingClickToken({ campaignId, contactId, target: path, issuedAt, nonceSeed });
     if (!token) return full;
     return `href=${quote}${origin}/api/marketing/click?token=${encodeURIComponent(token)}${quote}`;
   });
@@ -863,13 +873,21 @@ export async function prepareMarketingEmail(args = {}) {
   };
   const campaignId = clean(args.campaignId || args.relatedId || "adhoc", 80).replace(/[^A-Za-z0-9_-]/g, "") || "adhoc";
   const siteUrl = normalizedOrigin(args.siteUrl);
+  const tokenIssuedAt = stableTokenTime(args.marketingTokenIssuedAt);
+  const tokenNonce = clean(args.marketingTokenNonce, 128);
   const contact = await ensureMailContact(email, { source: "marketing", locale: args.locale });
   if (!contact?.contactId) throw new Error("mail_policy_unavailable");
-  const links = await mailPreferenceLinks(email, { campaignId, siteUrl });
+  const links = await mailPreferenceLinks(email, { campaignId, siteUrl, issuedAt: tokenIssuedAt });
   if (!links.token || !links.oneClickUrl || !links.preferencesUrl) throw new Error("mail_policy_unavailable");
-  let html = rewriteMarketingLinks(args.html, { campaignId, contactId: contact?.contactId || "", siteUrl });
+  let html = rewriteMarketingLinks(args.html, {
+    campaignId,
+    contactId: contact?.contactId || "",
+    siteUrl,
+    issuedAt: tokenIssuedAt,
+    nonceSeed: tokenNonce,
+  });
   if (html && links.preferencesUrl && !html.includes(MARKETING_FOOTER_MARKER)) {
-    const footer = `<!-- ${MARKETING_FOOTER_MARKER} --><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;"><tr><td align="center" style="padding:13px 4px 4px;color:#7b8799;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',Arial,sans-serif;font-size:11px;line-height:1.7;"><a href="${escapeHtml(links.preferencesUrl)}" style="color:#53647f;text-decoration:underline;">${footerCopy.preferences}</a><span style="padding:0 8px;color:#cbd5e1;">|</span><a href="${escapeHtml(links.unsubscribeUrl)}" style="color:#53647f;text-decoration:underline;">${footerCopy.unsubscribe}</a><br />${footerCopy.notice}</td></tr></table>`;
+    const footer = `<!-- ${MARKETING_FOOTER_MARKER} --><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;border-collapse:collapse;"><tr><td align="center" style="padding:13px 4px 4px;color:#5f6b78;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',Arial,sans-serif;font-size:11px;line-height:1.7;"><a href="${escapeHtml(links.preferencesUrl)}" style="color:#45566f;text-decoration:underline;">${footerCopy.preferences}</a><span style="padding:0 8px;color:#9ba8b8;">|</span><a href="${escapeHtml(links.unsubscribeUrl)}" style="color:#45566f;text-decoration:underline;">${footerCopy.unsubscribe}</a><br />${footerCopy.notice}</td></tr></table>`;
     if (html.includes(MARKETING_FOOTER_SLOT)) {
       html = html.replace(MARKETING_FOOTER_SLOT, footer);
     } else {

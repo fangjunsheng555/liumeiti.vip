@@ -6,11 +6,11 @@ import {
   pushAdminActionLog,
   validEmail,
 } from "../../../_utils.js";
-import { enqueueMarketingCampaign } from "../../../_marketing-campaign-queue.js";
+import { enqueueMarketingCampaign, MARKETING_DAILY_LIMIT } from "../../../_marketing-campaign-queue.js";
 import { JOB_POLICIES, MAINTENANCE_SCHEDULER } from "../../../_job-runner.js";
 import { getSettings } from "../../../_settings.js";
 import { withApiTelemetry } from "../../../_observability.js";
-import { buildMarketingArgs } from "../marketing-data.js";
+import { buildMarketingArgs, marketingContentHash, marketingOfferSnapshotHash } from "../marketing-data.js";
 import { buildMailAudience } from "../audience-data.js";
 import {
   MARKETING_MAIL_PREVIEW,
@@ -30,9 +30,11 @@ import {
 } from "../marketing-template-v7.js";
 
 const MAX_RECIPIENTS_PER_REQUEST = 5;
-const MAX_SEGMENT_RECIPIENTS = 500;
+const MAX_SEGMENT_RECIPIENTS = 2000;
 const MIN_SCHEDULE_AHEAD_MS = 5 * 60 * 1000;
 const MAX_SCHEDULE_AHEAD_MS = 30 * 24 * 60 * 60 * 1000;
+
+export const maxDuration = 60;
 
 function recipientsFrom(value) {
   const source = Array.isArray(value) ? value : String(value || "").split(/[,，;\n\r]+/);
@@ -45,6 +47,11 @@ function safeCampaignId(value) {
 
 function cleanHtml(value) {
   return sanitizeMarketingMailHtml(value);
+}
+
+function cleanSnapshotHash(value) {
+  const hash = String(value || "").trim().toLowerCase();
+  return /^[a-f0-9]{64}$/.test(hash) ? hash : "";
 }
 
 function htmlToText(value) {
@@ -74,7 +81,15 @@ async function handler(request) {
 
   let body = {};
   try { body = await request.json(); } catch (e) {}
-  const hasSegment = Object.prototype.hasOwnProperty.call(body, "segment") && body.segment && typeof body.segment === "object";
+  const isV7 = body.template === MARKETING_MAIL_V7_TEMPLATE_ID;
+  const segmentProvided = Object.prototype.hasOwnProperty.call(body, "segment") && body.segment != null;
+  const hasSegment = segmentProvided && typeof body.segment === "object" && !Array.isArray(body.segment);
+  if (segmentProvided && !hasSegment) {
+    return Response.json({ ok: false, error: "invalid_segment" }, { status: 400 });
+  }
+  if (isV7 && !hasSegment) {
+    return Response.json({ ok: false, error: "audience_preview_required" }, { status: 400 });
+  }
   let audience = null;
   let recipients = recipientsFrom(body.recipients);
   if (hasSegment) {
@@ -85,11 +100,26 @@ async function handler(request) {
     try {
       audience = await buildMailAudience({
         definition: body.segment,
+        manualEmails: body.manualRecipients,
         includeEmails: true,
         maxRecipients: requestedLimit,
       });
     } catch (error) {
       return Response.json({ ok: false, error: error?.message || "audience_unavailable" }, { status: error?.status === 400 ? 400 : 503 });
+    }
+    if (audience?.snapshot?.truncated || audience?.snapshot?.manualTruncated || audience?.snapshot?.sourceTruncated) {
+      return Response.json({
+        ok: false,
+        error: "audience_truncated",
+        audience: { snapshot: audience.snapshot },
+      }, { status: 409 });
+    }
+    if (isV7 && cleanSnapshotHash(body.audienceSnapshotHash) !== audience.snapshotHash) {
+      return Response.json({
+        ok: false,
+        error: "audience_changed",
+        audience: { snapshot: audience.snapshot, snapshotHash: audience.snapshotHash },
+      }, { status: 409 });
     }
     recipients = audience.emails || [];
   }
@@ -116,8 +146,15 @@ async function handler(request) {
   const brandName = settings.brand.name || process.env.BRAND_NAME || "冒央会社";
   const siteDomain = process.env.SITE_DOMAIN || "www.liumeiti.vip";
   const siteUrl = process.env.SITE_URL || "https://www.liumeiti.vip";
-  const marketingArgs = await buildMarketingArgs(brandName, siteDomain, siteUrl);
-  const isV7 = body.template === MARKETING_MAIL_V7_TEMPLATE_ID;
+  let marketingArgs;
+  try {
+    marketingArgs = await buildMarketingArgs(brandName, siteDomain, siteUrl, { requireLiveCatalog: isV7 });
+  } catch (error) {
+    return Response.json({
+      ok: false,
+      error: error?.message === "marketing_catalog_empty" ? "marketing_catalog_empty" : "marketing_catalog_unavailable",
+    }, { status: 503 });
+  }
   const templateId = isV7 ? MARKETING_MAIL_V7_TEMPLATE_ID : MARKETING_MAIL_TEMPLATE_ID;
   const offerValidation = isV7 ? validateMarketingOffer(body.offer || {}) : { ok: true, offer: null };
   if (!offerValidation.ok) return Response.json({ ok: false, error: offerValidation.error }, { status: 400 });
@@ -129,12 +166,22 @@ async function handler(request) {
   const defaultSubject = isV7 ? MARKETING_MAIL_V7_SUBJECT : MARKETING_MAIL_SUBJECT;
   const subjectBase = clean(body.subject || defaultSubject, 120) || defaultSubject;
   const subject = subjectBase.includes(brandName) ? subjectBase : `${brandName} · ${subjectBase}`;
-  const customHtml = cleanHtml(body.html);
+  // V7 must always be generated from the live server catalog. Legacy campaign
+  // templates retain their existing custom-HTML compatibility.
+  const customHtml = isV7 ? "" : cleanHtml(body.html);
   const templateArgs = { ...marketingArgs, offer: offerValidation.offer };
   const builtHtml = isV7 ? buildMarketingMailV7Html(templateArgs) : buildMarketingMailHtml(templateArgs);
   const builtText = isV7 ? buildMarketingMailV7Text(templateArgs) : buildMarketingMailText(templateArgs);
   const html = customHtml || builtHtml;
   const text = customHtml ? (htmlToText(customHtml) || builtText) : builtText;
+  const contentHash = marketingContentHash({ templateId, subject, html, text });
+  if (isV7 && cleanSnapshotHash(body.mailContentHash) !== contentHash) {
+    return Response.json({ ok: false, error: "mail_preview_changed", contentHash }, { status: 409 });
+  }
+  const offerSnapshotHash = marketingOfferSnapshotHash(offerValidation.offer);
+  if (isV7 && cleanSnapshotHash(body.offerSnapshotHash) !== offerSnapshotHash) {
+    return Response.json({ ok: false, error: "offer_snapshot_changed", offerSnapshotHash }, { status: 409 });
+  }
   const actor = adminActorFromSession(session);
   const queued = await enqueueMarketingCampaign({
     campaignId,
@@ -193,6 +240,9 @@ async function handler(request) {
       cadenceMs: JOB_POLICIES.marketing_dispatch.cadenceMs,
       dispatchRule: "next_scheduler_sweep",
       maxExpectedDelayMs: JOB_POLICIES.marketing_dispatch.cadenceMs,
+      provider: "resend",
+      dailyLimit: MARKETING_DAILY_LIMIT,
+      estimatedDays: Math.max(1, Math.ceil(scheduledCount / MARKETING_DAILY_LIMIT)),
     },
     results: queued.results || [],
   }, { status: scheduledCount || suppressedCount ? 200 : 502 });

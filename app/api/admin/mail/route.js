@@ -116,6 +116,16 @@ export async function POST(request) {
     ? body.template
     : "customer";
   const isMarketingMail = template !== "customer";
+  if (isMarketingMail) {
+    // Marketing must use the durable campaign queue. Direct sends bypass its
+    // shared Beijing-day Resend budget and cannot be recovered safely after a
+    // lost HTTP response.
+    return Response.json({
+      ok: false,
+      error: "marketing_campaign_required",
+      campaignPath: "/api/admin/mail/campaign",
+    }, { status: 409 });
+  }
   const isMarketingV7 = template === MARKETING_MAIL_V7_TEMPLATE_ID;
   const offerValidation = isMarketingV7 ? validateMarketingOffer(body.offer || {}) : { ok: true, offer: null };
   if (!offerValidation.ok) return Response.json({ ok: false, error: offerValidation.error }, { status: 400 });

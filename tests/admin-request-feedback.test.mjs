@@ -327,17 +327,20 @@ test("user detail, mail uncertainty and template mutations expose safe finite ou
   );
 });
 
-test("bulk marketing sends lock after an uncertain response instead of restarting the batch", async () => {
+test("marketing mail is exposed only through the durable campaign scheduler", async () => {
   const source = await readFile(new URL("../app/admin/page.jsx", import.meta.url), "utf8");
-  for (const name of ["sendMarketingMailToRegisteredUsers", "scheduleMarketingMailForEvenings"]) {
-    const body = declarationBody(source, name);
-    assert.match(body, /mailSendUncertain\) return/);
-    assert.match(body, /uncertainResult/);
-    assert.match(body, /unsafeToRepeat[\s\S]*?setMailSendUncertain\(true\)/);
-    assert.match(body, /catch \(e\) \{[\s\S]*?setMailSendUncertain\(true\)/);
-    assert.match(body, /已暂停再次提交/);
-  }
-  assert.match(source, /onClick=\{sendMarketingMailToRegisteredUsers\}[\s\S]*?disabled=\{[^}]*mailSendUncertain/);
+  const route = await readFile(new URL("../app/api/admin/mail/route.js", import.meta.url), "utf8");
+  const body = declarationBody(source, "scheduleMarketingMailForEvenings");
+  assert.match(body, /mailSendUncertain\) return/);
+  assert.match(body, /uncertainResult/);
+  assert.match(body, /unsafeToRepeat[\s\S]*?setMailSendUncertain\(true\)/);
+  assert.match(body, /catch \(e\) \{[\s\S]*?setMailSendUncertain\(true\)/);
+  assert.match(body, /已暂停再次提交/);
+  assert.doesNotMatch(source, /onClick=\{sendMarketingMailToRegisteredUsers\}/);
+  assert.doesNotMatch(source, />立即批量发送</);
+  assert.match(source, /批量营销请关闭此窗口并进入“营销活动”/);
+  assert.match(source, /mailMode === "customer" && <button type="submit"/);
+  assert.match(route, /error: "marketing_campaign_required"/);
   assert.match(source, /onClick=\{scheduleMarketingMailForEvenings\}[\s\S]*?disabled=\{[^}]*mailSendUncertain/);
   assert.match(source, /mailResult\.message/);
 });

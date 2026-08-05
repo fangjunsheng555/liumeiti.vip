@@ -19,9 +19,9 @@ export function validateMarketingCampaignDates({ scheduledAt = "", endsAt = "" }
   if (scheduledMs > Number(now) + MAX_SCHEDULE_AHEAD_MS) {
     return { ok: false, error: "计划发送时间不能超过 30 天", scheduledIso, endsAtIso };
   }
-  if (endsAt && !endsAtIso) return { ok: false, error: "优惠截止时间格式无效", scheduledIso, endsAtIso: "" };
-  if (endsAtMs && endsAtMs <= Number(now)) return { ok: false, error: "优惠截止时间必须晚于当前时间", scheduledIso, endsAtIso };
-  if (endsAtMs && endsAtMs <= scheduledMs) return { ok: false, error: "优惠截止时间必须晚于计划发送时间", scheduledIso, endsAtIso };
+  if (endsAt && !endsAtIso) return { ok: false, error: "最晚派发时间格式无效", scheduledIso, endsAtIso: "" };
+  if (endsAtMs && endsAtMs <= Number(now)) return { ok: false, error: "最晚派发时间必须晚于当前时间", scheduledIso, endsAtIso };
+  if (endsAtMs && endsAtMs <= scheduledMs) return { ok: false, error: "最晚派发时间必须晚于开始排期时间", scheduledIso, endsAtIso };
   return { ok: true, error: "", scheduledIso, endsAtIso };
 }
 

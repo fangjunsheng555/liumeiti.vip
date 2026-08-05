@@ -5565,7 +5565,7 @@ export default function AdminPage() {
               <div className="admin-mail-entry-strip">
                 <div className="admin-mail-entry-copy">
                   <strong><Mail size={15} />客服发信</strong>
-                  <span>右上角可发客服或批量营销邮件；分群、预览和排期请进入“营销活动”</span>
+                  <span>右上角用于发送客服邮件；批量营销请进入“营销活动”核对名单、预览并排期</span>
                 </div>
                 <div className="admin-mail-entry-actions">
                   <button
@@ -6765,19 +6765,9 @@ export default function AdminPage() {
               <button type="button" className="admin-modal-close" onClick={() => setMailComposeOpen(false)} disabled={mailBusy || mailRecipientBusy}><X size={16} /></button>
             </div>
             <div className="admin-modal-body">
-              <div className="admin-mail-mode-row">
-                <button
-                  type="button"
-                  className={mailMode === "customer" ? "active" : ""}
-                  onClick={() => applyMailComposerMode("customer")}
-                  disabled={mailBusy || mailRecipientBusy || mailSendUncertain}
-                >客服邮件</button>
-                <button
-                  type="button"
-                  className={mailMode === "marketing" ? "active" : ""}
-                  onClick={() => { applyMailComposerMode("marketing"); loadMarketingMailTemplate(); }}
-                  disabled={mailBusy || mailRecipientBusy || mailSendUncertain}
-                >营销邮件</button>
+              <div className="admin-mail-mode-row" role="note">
+                <strong>客服邮件</strong>
+                <span>批量营销请关闭此窗口并进入“营销活动”，统一核对名单、预览和排期。</span>
               </div>
               {mailResult && (
                 <div className={`admin-alert ${mailResult.type}`} role={mailResult.type === "error" ? "alert" : "status"}>
@@ -6848,17 +6838,13 @@ export default function AdminPage() {
                       {mailRecipientBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Users size={12} />}
                       读取全部来源
                     </button>
-                    <button type="button" onClick={sendMarketingMailToRegisteredUsers} disabled={mailRecipientBusy || mailBusy || mailSendUncertain || (mailRecipientPool.emails || []).length === 0}>
-                      {mailBusy && !mailScheduleBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Megaphone size={12} />}
-                      立即批量发送
-                    </button>
                     <button type="button" className="primary" onClick={scheduleMarketingMailForEvenings} disabled={mailRecipientBusy || mailBusy || mailSendUncertain || (!mailForm.to.trim() && (mailRecipientPool.emails || []).length === 0)}>
                       {mailScheduleBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Clock size={12} />}
                       傍晚排期
                     </button>
                     <span>
                       {mailRecipientPool.emails.length
-                        ? `已读取 ${mailRecipientPool.emails.length} 个去重邮箱（注册 ${mailRecipientPool.registered} / 订单 ${mailRecipientPool.orders}）。傍晚排期每天 40 封，保留 60 封事务邮件额度。`
+                        ? `已读取 ${mailRecipientPool.emails.length} 个去重邮箱（注册 ${mailRecipientPool.registered} / 订单 ${mailRecipientPool.orders}）。营销邮件统一排期，每个北京时间自然日最多 50 封。`
                         : canViewUsers ? "可粘贴邮箱，或读取现有用户与历史订单邮箱；傍晚排期为北京时间 18:30。" : "可粘贴邮箱或读取历史订单邮箱；傍晚排期为北京时间 18:30。"}
                     </span>
                   </div>
@@ -6913,10 +6899,10 @@ export default function AdminPage() {
                     已处理 {mailBatchProgress.batch}/{mailBatchProgress.batches} 批 · 成功 {mailBatchProgress.sent}/{mailBatchProgress.total} · 失败 {mailBatchProgress.failed}
                   </div>
                 )}
-                <button type="submit" disabled={mailBusy || mailSendUncertain}>
+                {mailMode === "customer" && <button type="submit" disabled={mailBusy || mailSendUncertain}>
                   {mailBusy ? <LoaderCircle size={12} className="spin-icon" /> : <Mail size={12} />}
-                  {mailBusy ? "发送中" : mailSendUncertain ? "结果待核对" : (mailMode === "marketing" ? "发送营销邮件" : "发送邮件")}
-                </button>
+                  {mailBusy ? "发送中" : mailSendUncertain ? "结果待核对" : "发送邮件"}
+                </button>}
               </form>
             </div>
           </div>

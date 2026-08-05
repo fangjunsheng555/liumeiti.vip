@@ -36,6 +36,7 @@ export function installMarketingRedisMock(origin) {
     const failureIndex = commandFailures.findIndex((failure) => (
       failure.name === name
       && (!failure.keyPrefix || String(args[failure.argumentIndex] || "").startsWith(failure.keyPrefix))
+      && (!failure.contains || String(args[failure.argumentIndex] || "").includes(failure.contains))
     ));
     if (failureIndex >= 0) {
       const [failure] = commandFailures.splice(failureIndex, 1);
@@ -187,6 +188,40 @@ export function installMarketingRedisMock(origin) {
       const keyCount = Number(args[1] || 0);
       const keys = args.slice(2, 2 + keyCount);
       const argv = args.slice(2 + keyCount);
+      if (script.includes("DELIVERY_STALE_SENDING_RECOVERY_V1")) {
+        const raw = values.get(keys[0]);
+        if (!raw) return "missing";
+        let state = null;
+        try { state = JSON.parse(raw); } catch { return "invalid"; }
+        if (String(state?.status || "") !== "sending") return "not_sending";
+        if (String(state?.storageKey || "") !== String(keys[0])
+            || String(state?.recoveryTag || "") !== String(argv[0])) return "tag_mismatch";
+        if (!Number.isSafeInteger(Number(state.score)) || Number(state.score) > Number(argv[1])) return "too_fresh";
+        values.delete(keys[0]);
+        for (const key of keys.slice(1, 4)) zsetFor(key).delete(String(argv[2]));
+        return "recovered";
+      }
+      if (script.includes("ABANDONED_MAIL_ATTEMPT_START_V1")) {
+        if (values.get(keys[0]) !== String(argv[0])) return 0;
+        values.set(keys[0], String(argv[1]));
+        return 1;
+      }
+      if (script.includes("MARKETING_DAILY_ATTEMPT_RESERVE_V1")) {
+        const existing = values.get(keys[1]);
+        if (existing) {
+          if (!/^\d{8}$/.test(existing)) return "__reservation_conflict__";
+          if (existing !== String(argv[0])) return `__reserved__:${existing}`;
+          const count = Number(values.get(keys[0]));
+          if (!Number.isSafeInteger(count) || count < 1 || count > Number(argv[1])) return "__invalid_daily_count__";
+          return `__reserved__:${existing}`;
+        }
+        const count = Number(values.get(keys[0]) || 0);
+        if (!Number.isSafeInteger(count) || count < 0 || count > Number(argv[1])) return "__invalid_daily_count__";
+        if (count >= Number(argv[1])) return "__daily_limit__";
+        values.set(keys[1], String(argv[0]));
+        values.set(keys[0], String(count + 1));
+        return String(count + 1);
+      }
       if (script.includes("doc.requestHash") && script.includes("return -1")) {
         const existing = values.get(keys[0]);
         if (existing) {
@@ -340,6 +375,7 @@ export function installMarketingRedisMock(origin) {
           setFor(keys[2]).add(String(argv[7]));
           values.delete(keys[3]);
         } else {
+          zsetFor(keys[1]).set(String(argv[7]), Number(argv[5]));
           setFor(keys[2]).add(String(argv[7]));
         }
         if (argv[10] === "1") {
@@ -486,6 +522,15 @@ export function installMarketingRedisMock(origin) {
         keyPrefix: String(keyPrefix || ""),
         result,
         argumentIndex: Math.max(0, Number(argumentIndex) || 0),
+      });
+    },
+    failNextEvalContaining(fragment, result = null) {
+      commandFailures.push({
+        name: "EVAL",
+        keyPrefix: "",
+        contains: String(fragment || ""),
+        result,
+        argumentIndex: 0,
       });
     },
     execute,

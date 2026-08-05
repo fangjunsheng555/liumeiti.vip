@@ -21,6 +21,7 @@ export async function POST(request) {
   try {
     const audience = await buildMailAudience({
       definition,
+      manualEmails: body.manualRecipients,
       maxRecipients: requestedLimit,
     });
     const visibleAudience = permissions.canViewOrders ? audience : { ...audience, sample: [], excluded: [] };

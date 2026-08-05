@@ -10,15 +10,23 @@ process.env.CRON_SECRET = "marketing-cron-test-secret";
 
 const store = new Map();
 const resendRequests = [];
+const resendAttempts = [];
+const resendAttemptMeta = [];
+const resendIdempotencyRecords = new Map();
 const resendFailureRecipients = new Set();
-let resendBehavior = "ok"; // "ok" | "fail"(400 硬失败) | "quota"(429 配额)
+let resendBehavior = "ok"; // "ok" | "fail" | "quota" | "concurrent" | "conflict"
+let resendBehaviorSequence = [];
 let resendDelayMs = 0;
 let redisDelayMs = 0;
 let failNextJobWrite = false;
 let failNextTerminalTransition = false;
 let failNextDispatchLockWrite = false;
 let loseNextSaveJobResponse = false;
+let loseNextCreateCampaignResponse = false;
+const createCampaignProtocolFailures = [];
+const saveJobProtocolFailures = [];
 let loseNextTransitionResponse = false;
+let loseNextQuotaReservationResponse = false;
 let failNextPipelineCommand = "";
 let activeRedisRequests = 0;
 let maxActiveRedisRequests = 0;
@@ -91,7 +99,28 @@ function execute(command) {
       store.set(keys[0], { type: "string", value: String(argv[1]) });
       return 1;
     }
+    if (script.includes("MARKETING_DAILY_ATTEMPT_RESERVE_V1")) {
+      const existing = currentEntry(keys[1])?.value;
+      if (existing) {
+        if (!/^\d{8}$/.test(existing)) return "__reservation_conflict__";
+        if (existing !== String(argv[0])) return `__reserved__:${existing}`;
+        const count = Number(currentEntry(keys[0])?.value);
+        if (!Number.isSafeInteger(count) || count < 1 || count > Number(argv[1])) return "__invalid_daily_count__";
+        return `__reserved__:${existing}`;
+      }
+      const count = Number(currentEntry(keys[0])?.value || 0);
+      if (!Number.isSafeInteger(count) || count < 0 || count > Number(argv[1])) return "__invalid_daily_count__";
+      if (count >= Number(argv[1])) return "__daily_limit__";
+      store.set(keys[1], { type: "string", value: String(argv[0]) });
+      store.set(keys[0], { type: "string", value: String(count + 1) });
+      if (loseNextQuotaReservationResponse) {
+        loseNextQuotaReservationResponse = false;
+        return null;
+      }
+      return String(count + 1);
+    }
     if (script.includes("doc.requestHash") && script.includes("return -1")) {
+      if (createCampaignProtocolFailures.length) return createCampaignProtocolFailures.shift();
       const existing = currentEntry(keys[0])?.value;
       if (existing) {
         const doc = JSON.parse(existing);
@@ -101,6 +130,7 @@ function execute(command) {
       }
       store.set(keys[0], { type: "string", value: String(argv[4]) });
       if (!ensureZset(keys[1]).has(String(argv[2]))) ensureZset(keys[1]).set(String(argv[2]), Number(argv[1]));
+      if (loseNextCreateCampaignResponse) { loseNextCreateCampaignResponse = false; return null; }
       return 1;
     }
     if (script.includes("__in_flight__") && script.includes("SMEMBERS")) {
@@ -144,6 +174,7 @@ function execute(command) {
       return String(argv[3]);
     }
     if (script.includes("local queueScore=tonumber(doc.queueScore or ARGV[1])")) {
+      if (saveJobProtocolFailures.length) return saveJobProtocolFailures.shift();
       const existing = currentEntry(keys[0])?.value;
       ensureSet(keys[2]).add(String(argv[1]));
       if (existing) {
@@ -191,6 +222,7 @@ function execute(command) {
         ensureSet(keys[2]).add(String(argv[7]));
         store.delete(keys[3]);
       } else {
+        ensureZset(keys[1]).set(String(argv[7]), Number(argv[5]));
         ensureSet(keys[2]).add(String(argv[7]));
       }
       if (argv[10] === "1") {
@@ -360,14 +392,47 @@ globalThis.fetch = async (input, options = {}) => {
   }
   if (url.origin === "https://api.resend.com") {
     if (resendDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, resendDelayMs));
-    const body = JSON.parse(options.body || "{}");
+    const payloadJson = String(options.body || "{}");
+    const body = JSON.parse(payloadJson);
+    const idempotencyKey = new Headers(options.headers || {}).get("idempotency-key") || "";
+    resendAttempts.push(body);
+    resendAttemptMeta.push({ body, payloadJson, idempotencyKey });
     if ((Array.isArray(body.to) ? body.to : [body.to]).some((email) => resendFailureRecipients.has(String(email)))) {
       return Response.json({ message: "invalid_recipient" }, { status: 400 });
     }
-    if (resendBehavior === "fail") return Response.json({ message: "invalid_recipient" }, { status: 400 });
-    if (resendBehavior === "quota") return Response.json({ message: "daily_quota_exceeded" }, { status: 429 });
+    const currentResendBehavior = resendBehaviorSequence.length
+      ? resendBehaviorSequence.shift()
+      : resendBehavior;
+    if (currentResendBehavior === "fail") return Response.json({ message: "invalid_recipient" }, { status: 400 });
+    if (currentResendBehavior === "quota") return Response.json({ message: "daily_quota_exceeded" }, { status: 429 });
+    if (currentResendBehavior === "server") return Response.json({ message: "upstream_unavailable" }, { status: 503 });
+    if (currentResendBehavior === "network") throw new Error("simulated_network_timeout");
+    if (currentResendBehavior === "concurrent") {
+      return Response.json({
+        name: "concurrent_idempotent_requests",
+        message: "an identical request is still processing",
+      }, { status: 409 });
+    }
+    if (currentResendBehavior === "conflict") {
+      return Response.json({
+        name: "invalid_idempotent_request",
+        message: "same idempotency key used with a different payload",
+      }, { status: 409 });
+    }
+    const existing = idempotencyKey ? resendIdempotencyRecords.get(idempotencyKey) : null;
+    if (existing) {
+      if (existing.payloadJson !== payloadJson) {
+        return Response.json({
+          name: "invalid_idempotent_request",
+          message: "same idempotency key used with a different payload",
+        }, { status: 409 });
+      }
+      return Response.json({ id: existing.id }, { status: 200 });
+    }
     resendRequests.push(body);
-    return Response.json({ id: `resend-${resendRequests.length}` }, { status: 200 });
+    const id = `resend-${resendRequests.length}`;
+    if (idempotencyKey) resendIdempotencyRecords.set(idempotencyKey, { payloadJson, id });
+    return Response.json({ id }, { status: 200 });
   }
   return originalFetch(input, options);
 };
@@ -555,6 +620,166 @@ test("a committed enqueue job write with a lost response is reported as queued, 
   assert.equal(result.ok, true);
   assert.equal(result.queuedCount, 1);
   assert.equal(result.failedCount, 0);
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(
+    "campaign-save-response-loss",
+    "save-loss@example.com",
+    scheduledAt,
+  );
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`)?.value || "null").status, "queued");
+  assert.equal(ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).has(jobId), true);
+  assert.equal(ensureSet("lm:mail:marketing:jobs:campaign-save-response-loss").has(jobId), true);
+  assert.equal(ensureSet("lm:mail:marketing:pending:campaign-save-response-loss").has(jobId), true);
+});
+
+test("an unexecuted null SAVE_JOB response fails instead of claiming a duplicate", async () => {
+  ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+  const campaignId = "campaign-save-null-not-executed";
+  const email = "save-null-not-executed@example.com";
+  const scheduledAt = "2026-09-11T11:40:00.000Z";
+  saveJobProtocolFailures.push(null);
+  const result = await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "save null",
+    html: "<p>save null</p>",
+    text: "save null",
+    preview: "save null",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  assert.equal(result.ok, false);
+  assert.equal(result.queuedCount, 0);
+  assert.equal(result.failedCount, 1);
+  assert.equal(currentEntry(`lm:mail:marketing:job:${jobId}`), null);
+  assert.equal(ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).has(jobId), false);
+  assert.equal(ensureSet(`lm:mail:marketing:jobs:${campaignId}`).has(jobId), false);
+  assert.equal(ensureSet(`lm:mail:marketing:pending:${campaignId}`).has(jobId), false);
+});
+
+test("SAVE_JOB rejects empty, error-object, and unknown string protocol responses", async () => {
+  const malformed = ["", { error: "ERR simulated single-row error" }, "__unexpected_save_reply__"];
+  for (let index = 0; index < malformed.length; index += 1) {
+    ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+    const campaignId = `campaign-save-malformed-${index}`;
+    const email = `save-malformed-${index}@example.com`;
+    const scheduledAt = `2026-09-11T11:4${index + 1}:00.000Z`;
+    saveJobProtocolFailures.push(malformed[index]);
+    const result = await queue.enqueueMarketingCampaign({
+      campaignId,
+      recipients: [email],
+      scheduledAt,
+      subject: "malformed save",
+      html: "<p>malformed save</p>",
+      text: "malformed save",
+      preview: "malformed save",
+      brandName: "test",
+      support: {},
+      actor: { staffId: 1, staffUsername: "admin" },
+    });
+    const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+    assert.equal(result.ok, false);
+    assert.equal(result.failedCount, 1);
+    assert.equal(currentEntry(`lm:mail:marketing:job:${jobId}`), null);
+  }
+});
+
+test("retrying a partially enqueued campaign fills only the missing job and metric", async () => {
+  ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+  const campaignId = "campaign-partial-enqueue-retry";
+  const scheduledAt = "2026-09-11T11:50:00.000Z";
+  const input = {
+    campaignId,
+    recipients: ["partial-enqueue-a@example.com", "partial-enqueue-b@example.com"],
+    scheduledAt,
+    subject: "partial enqueue",
+    html: "<p>partial enqueue</p>",
+    text: "partial enqueue",
+    preview: "partial enqueue",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  };
+  saveJobProtocolFailures.push(null);
+  const first = await queue.enqueueMarketingCampaign(input);
+  assert.equal(first.ok, false);
+  assert.equal(first.queuedCount, 1);
+  assert.equal(first.failedCount, 1);
+  assert.equal(ensureSet(`lm:mail:marketing:jobs:${campaignId}`).size, 1);
+
+  const retry = await queue.enqueueMarketingCampaign(input);
+  assert.equal(retry.ok, true);
+  assert.equal(retry.queuedCount, 2);
+  assert.equal(retry.failedCount, 0);
+  assert.equal(ensureSet(`lm:mail:marketing:jobs:${campaignId}`).size, 2);
+  assert.equal(ensureSet(`lm:mail:marketing:pending:${campaignId}`).size, 2);
+  assert.equal(ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).size, 2);
+  assert.equal((await queue.getMarketingCampaignCounters(campaignId)).queued, 2);
+
+  const repeated = await queue.enqueueMarketingCampaign(input);
+  assert.equal(repeated.ok, true);
+  assert.equal(ensureSet(`lm:mail:marketing:jobs:${campaignId}`).size, 2);
+  assert.equal(ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).size, 2);
+  assert.equal((await queue.getMarketingCampaignCounters(campaignId)).queued, 2);
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:campaign:${campaignId}`).value).enqueueFailedCount, 0);
+});
+
+test("CREATE_CAMPAIGN distinguishes an unexecuted null from a committed lost response", async () => {
+  ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+  const input = (campaignId, email) => ({
+    campaignId,
+    recipients: [email],
+    scheduledAt: "2026-09-11T11:55:00.000Z",
+    subject: "create response",
+    html: "<p>create response</p>",
+    text: "create response",
+    preview: "create response",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+
+  createCampaignProtocolFailures.push(null);
+  const missingId = "campaign-create-null-not-executed";
+  const missing = await queue.enqueueMarketingCampaign(input(missingId, "create-null@example.com"));
+  assert.equal(missing.ok, false);
+  assert.equal(missing.error, "storage_failed");
+  assert.equal(currentEntry(`lm:mail:marketing:campaign:${missingId}`), null);
+  assert.equal(ensureZset("lm:mail:marketing:campaign:index").has(missingId), false);
+
+  loseNextCreateCampaignResponse = true;
+  const committedId = "campaign-create-response-loss";
+  const committed = await queue.enqueueMarketingCampaign(input(committedId, "create-loss@example.com"));
+  assert.equal(committed.ok, true);
+  assert.equal(committed.queuedCount, 1);
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:campaign:${committedId}`).value).id, committedId);
+  assert.equal(ensureZset("lm:mail:marketing:campaign:index").has(committedId), true);
+  assert.equal(ensureSet(`lm:mail:marketing:jobs:${committedId}`).size, 1);
+});
+
+test("CREATE_CAMPAIGN rejects empty, error-object, and unknown string protocol responses", async () => {
+  const malformed = ["", { error: "ERR simulated single-row error" }, "__unexpected_create_reply__"];
+  for (let index = 0; index < malformed.length; index += 1) {
+    const campaignId = `campaign-create-malformed-${index}`;
+    createCampaignProtocolFailures.push(malformed[index]);
+    const result = await queue.enqueueMarketingCampaign({
+      campaignId,
+      recipients: [`create-malformed-${index}@example.com`],
+      scheduledAt: `2026-09-11T11:5${index + 6}:00.000Z`,
+      subject: "malformed create",
+      html: "<p>malformed create</p>",
+      text: "malformed create",
+      preview: "malformed create",
+      brandName: "test",
+      support: {},
+      actor: { staffId: 1, staffUsername: "admin" },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, "storage_failed");
+    assert.equal(currentEntry(`lm:mail:marketing:campaign:${campaignId}`), null);
+  }
 });
 
 test("a committed sending transition with a lost response still sends exactly once", async () => {
@@ -652,14 +877,55 @@ test("provider success followed by terminal commit failure is recovered without 
   const first = await queue.dispatchDueMarketingCampaigns({ now: Date.parse(scheduledAt), interJobDelayMs: 0 });
   assert.equal(first.ok, false);
   assert.equal(first.results[0].reason, "delivery_commit_pending");
+  const dailyKey = `lm:mail:marketing:daily:${queue.marketingCampaignQueueInternals.beijingDayKey(Date.parse(scheduledAt))}`;
+  assert.equal(currentEntry(dailyKey)?.value, "1", "the provider attempt is reserved before the terminal commit");
   assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "sending");
   store.delete(`lm:mail:marketing:claim:${jobId}`);
 
-  const recovered = await queue.dispatchDueMarketingCampaigns({ now: Date.parse(scheduledAt) + 60_000, interJobDelayMs: 0 });
+  const recoveredAt = Date.parse(scheduledAt) + 24 * 60 * 60 * 1000;
+  const recovered = await queue.dispatchDueMarketingCampaigns({ now: recoveredAt, interJobDelayMs: 0 });
   assert.equal(recovered.submitted, 1);
   assert.equal(recovered.results[0].recovered, true);
   assert.equal(resendRequests.length, sendsBefore + 1, "recovery must only commit the durable delivery record");
+  assert.equal(currentEntry(dailyKey)?.value, "1", "recovering a new reserved sending job must not reserve again");
+  assert.equal(currentEntry(`lm:mail:marketing:daily:${queue.marketingCampaignQueueInternals.beijingDayKey(recoveredAt)}`), null, "an old-day marker remains authoritative for its attempt");
   assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "submitted");
+});
+
+test("a legacy sending job with a durable success recovers without consuming today's quota", async () => {
+  ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+  const scheduledAt = "2026-09-13T12:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-legacy-sending-reservation";
+  const email = "legacy-sending@example.com";
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "legacy recovery",
+    html: "<p>legacy recovery</p>",
+    text: "legacy recovery",
+    preview: "legacy recovery",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  const sendsBefore = resendRequests.length;
+  failNextTerminalTransition = true;
+  const first = await queue.dispatchDueMarketingCampaigns({ now, interJobDelayMs: 0 });
+  assert.equal(first.results[0].reason, "delivery_commit_pending");
+
+  const day = queue.marketingCampaignQueueInternals.beijingDayKey(now);
+  store.delete(`lm:mail:marketing:claim:${jobId}`);
+  store.delete(`lm:mail:marketing:daily-attempt:${jobId}:1`);
+  store.delete(`lm:mail:marketing:daily:${day}`);
+  const recovered = await queue.dispatchDueMarketingCampaigns({ now: now + 60_000, interJobDelayMs: 0 });
+  assert.equal(recovered.submitted, 1);
+  assert.equal(recovered.results[0].recovered, true);
+  assert.equal(resendRequests.length, sendsBefore + 1);
+  assert.equal(currentEntry(`lm:mail:marketing:daily:${day}`), null);
+  assert.equal(currentEntry(`lm:mail:marketing:daily-attempt:${jobId}:1`), null);
 });
 
 test("cancelling a campaign immediately removes pending jobs and completed campaigns reject illegal transitions", async () => {
@@ -1092,7 +1358,9 @@ test("dispatch deadline cancellation before the provider requeues a claimed job 
   assert.equal(result.error, "maintenance_deadline_exceeded");
   assert.equal(resendRequests.length, beforeProviderRequests);
   const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
-  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "queued");
+  const storedJob = JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value);
+  assert.equal(storedJob.status, "queued");
+  assert.equal(Object.hasOwn(storedJob, "resendIdempotencyDeadlineAt"), false, "a controlled stop before the provider must not create an uncertain outcome deadline");
   assert.equal(ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).has(jobId), true);
 });
 
@@ -1274,4 +1542,675 @@ test("a marketing job key cannot cancel, dispatch, or rewrite a recipient when i
     store.set(jobAKey, { type: "string", value: jobARaw });
     ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
   }
+});
+
+test("scheduled marketing is forced through Resend, runs 40 then 10, and resumes the remainder next Beijing day", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2027-02-01T10:30:00.000Z";
+  const firstDay = Date.parse(scheduledAt);
+  const secondDay = firstDay + 24 * 60 * 60 * 1000;
+  const campaignId = "campaign-resend-daily-fifty";
+  const recipients = Array.from({ length: 51 }, (_, index) => `daily-limit-${String(index + 1).padStart(2, "0")}@example.com`);
+  const enqueued = await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients,
+    scheduledAt,
+    subject: "daily limit",
+    html: "<p>daily limit</p>",
+    text: "daily limit",
+    preview: "daily limit",
+    brandName: "冒央会社",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+  assert.equal(enqueued.ok, true);
+  assert.equal(enqueued.queuedCount, 51);
+
+  const configuredProvider = process.env.EMAIL_PROVIDER;
+  const sendsBefore = resendRequests.length;
+  resendBehavior = "ok";
+  process.env.EMAIL_PROVIDER = "smtp";
+  try {
+    const first = await queue.dispatchDueMarketingCampaigns({ now: firstDay, limit: 40, interJobDelayMs: 0 });
+    assert.equal(queue.MARKETING_DAILY_LIMIT, 50);
+    assert.equal(first.ok, true);
+    assert.equal(first.submitted, 40);
+    assert.equal(first.failed, 0);
+    assert.equal(resendRequests.length - sendsBefore, 40, "configured SMTP must not receive scheduled marketing");
+    assert.equal(ensureZset(queueKey).size, 11);
+    assert.equal(currentEntry(`lm:mail:marketing:daily:${queue.marketingCampaignQueueInternals.beijingDayKey(firstDay)}`)?.value, "40");
+
+    const sameDay = await queue.dispatchDueMarketingCampaigns({ now: firstDay + 60_000, limit: 40, interJobDelayMs: 0 });
+    assert.equal(sameDay.ok, true);
+    assert.equal(sameDay.submitted, 10);
+    assert.equal(resendRequests.length - sendsBefore, 50);
+    assert.equal(ensureZset(queueKey).size, 1);
+    assert.equal(currentEntry(`lm:mail:marketing:daily:${queue.marketingCampaignQueueInternals.beijingDayKey(firstDay)}`)?.value, "50");
+
+    const exhausted = await queue.dispatchDueMarketingCampaigns({ now: firstDay + 120_000, limit: 40, interJobDelayMs: 0 });
+    assert.equal(exhausted.reason, "daily_limit");
+    assert.equal(exhausted.submitted, 0);
+    assert.equal(resendRequests.length - sendsBefore, 50);
+
+    const nextDay = await queue.dispatchDueMarketingCampaigns({ now: secondDay, limit: 40, interJobDelayMs: 0 });
+    assert.equal(nextDay.ok, true);
+    assert.equal(nextDay.submitted, 1);
+    assert.equal(nextDay.failed, 0);
+    assert.equal(resendRequests.length - sendsBefore, 51);
+    assert.equal(ensureZset(queueKey).size, 0);
+    assert.equal(currentEntry(`lm:mail:marketing:daily:${queue.marketingCampaignQueueInternals.beijingDayKey(secondDay)}`)?.value, "1");
+  } finally {
+    if (configuredProvider == null) delete process.env.EMAIL_PROVIDER;
+    else process.env.EMAIL_PROVIDER = configuredProvider;
+    ensureZset(queueKey).clear();
+    store.delete("lm:mail:marketing:dispatch-lock");
+    store.delete(`lm:mail:marketing:daily:${queue.marketingCampaignQueueInternals.beijingDayKey(firstDay)}`);
+    store.delete(`lm:mail:marketing:daily:${queue.marketingCampaignQueueInternals.beijingDayKey(secondDay)}`);
+  }
+});
+
+test("failed Resend jobs consume the same strict 50-attempt Beijing-day budget", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2027-02-03T10:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const dayKey = `lm:mail:marketing:daily:${queue.marketingCampaignQueueInternals.beijingDayKey(now)}`;
+  const recipients = Array.from({ length: 3 }, (_, index) => `failed-attempt-${index}@example.com`);
+  const enqueued = await queue.enqueueMarketingCampaign({
+    campaignId: "campaign-failed-attempt-budget",
+    recipients,
+    scheduledAt,
+    subject: "attempt budget",
+    html: "<p>attempt budget</p>",
+    text: "attempt budget",
+    preview: "attempt budget",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+  assert.equal(enqueued.ok, true);
+
+  store.set(dayKey, { type: "string", value: "48" });
+  const attemptsBefore = resendAttempts.length;
+  resendBehavior = "fail";
+  try {
+    const first = await queue.dispatchDueMarketingCampaigns({ now, limit: 40, interJobDelayMs: 0 });
+    assert.equal(first.failed, 2);
+    assert.equal(new Set(resendAttempts.slice(attemptsBefore).flatMap((body) => body.to || [])).size, 2);
+    assert.equal(resendAttempts.length - attemptsBefore, 4, "transport retries reuse the same job idempotency key");
+    assert.equal(currentEntry(dayKey)?.value, "50");
+
+    const exhausted = await queue.dispatchDueMarketingCampaigns({ now: now + 60_000, limit: 40, interJobDelayMs: 0 });
+    assert.equal(exhausted.reason, "daily_limit");
+    assert.equal(new Set(resendAttempts.slice(attemptsBefore).flatMap((body) => body.to || [])).size, 2, "no 51st logical provider job may start on the same Beijing day");
+  } finally {
+    resendBehavior = "ok";
+    ensureZset(queueKey).clear();
+    store.delete("lm:mail:marketing:dispatch-lock");
+    store.delete(dayKey);
+  }
+});
+
+test("a lost atomic reservation response is recovered without double counting or double sending", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2027-02-04T10:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-reservation-response-loss";
+  const email = "reservation-loss@example.com";
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "reservation loss",
+    html: "<p>reservation loss</p>",
+    text: "reservation loss",
+    preview: "reservation loss",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+
+  const sendsBefore = resendRequests.length;
+  loseNextQuotaReservationResponse = true;
+  const dispatched = await queue.dispatchDueMarketingCampaigns({ now, limit: 40, interJobDelayMs: 0 });
+  assert.equal(dispatched.submitted, 1);
+  assert.equal(resendRequests.length - sendsBefore, 1);
+  assert.equal(currentEntry(`lm:mail:marketing:daily:${queue.marketingCampaignQueueInternals.beijingDayKey(now)}`)?.value, "1");
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  assert.equal(currentEntry(`lm:mail:marketing:daily-attempt:${jobId}:1`)?.value, queue.marketingCampaignQueueInternals.beijingDayKey(now));
+  const replay = await queue.dispatchDueMarketingCampaigns({ now: now + 60_000, limit: 40, interJobDelayMs: 0 });
+  assert.equal(replay.submitted, 0);
+  assert.equal(resendRequests.length - sendsBefore, 1);
+});
+
+test("a crash after quota reservation but before Resend is retried safely without losing the recipient", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2027-02-05T15:59:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-crash-after-quota-reservation";
+  const email = "crash-after-reservation@example.com";
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "crash recovery",
+    html: "<p>crash recovery</p>",
+    text: "crash recovery",
+    preview: "crash recovery",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  const sendsBefore = resendRequests.length;
+  await assert.rejects(
+    queue.dispatchDueMarketingCampaigns({
+      now,
+      limit: 40,
+      interJobDelayMs: 0,
+      _testHooks: { afterQuotaReservation() { throw new Error("simulated_process_exit"); } },
+    }),
+    /simulated_process_exit/,
+  );
+  assert.equal(resendRequests.length, sendsBefore, "the simulated crash happens before the provider call");
+  const firstDayKey = `lm:mail:marketing:daily:${queue.marketingCampaignQueueInternals.beijingDayKey(now)}`;
+  assert.equal(currentEntry(firstDayKey)?.value, "1");
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "sending");
+
+  store.delete(`lm:mail:marketing:claim:${jobId}`);
+  const recoveredAt = now + 2 * 60_000;
+  const recovered = await queue.dispatchDueMarketingCampaigns({ now: recoveredAt, limit: 40, interJobDelayMs: 0 });
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.results[0].reason, "idempotent_provider_retry_scheduled");
+  assert.equal(resendRequests.length, sendsBefore);
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "queued");
+
+  const retriedAt = now + 3 * 60_000;
+  const retried = await queue.dispatchDueMarketingCampaigns({ now: retriedAt, limit: 40, interJobDelayMs: 0 });
+  assert.equal(retried.submitted, 1);
+  assert.equal(resendRequests.length, sendsBefore + 1);
+  const secondDayKey = `lm:mail:marketing:daily:${queue.marketingCampaignQueueInternals.beijingDayKey(retriedAt)}`;
+  assert.notEqual(firstDayKey, secondDayKey);
+  assert.equal(currentEntry(firstDayKey)?.value, "1", "the abandoned pre-midnight reservation remains charged to its day");
+  assert.equal(currentEntry(secondDayKey)?.value, "1", "the recovered provider call is charged to its actual Beijing day");
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "submitted");
+});
+
+test("provider acceptance before local recording retries with byte-identical payload and sends only once", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2027-02-06T10:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-provider-accepted-before-record";
+  const email = "provider-accepted-before-record@example.com";
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "accepted before record",
+    html: '<p><a href="https://www.liumeiti.vip/shop">open shop</a></p>',
+    text: "open shop",
+    preview: "accepted before record",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  const deliveriesBefore = resendRequests.length;
+  const attemptsBefore = resendAttemptMeta.length;
+  await assert.rejects(queue.dispatchDueMarketingCampaigns({
+    now,
+    limit: 40,
+    interJobDelayMs: 0,
+    _testHooks: { afterProviderBeforeRecord() { throw new Error("simulated_crash_before_local_record"); } },
+  }), /simulated_crash_before_local_record/);
+  assert.equal(resendRequests.length, deliveriesBefore + 1, "Resend accepted exactly one physical email");
+  store.delete(`lm:mail:marketing:claim:${jobId}`);
+
+  const recovered = await queue.dispatchDueMarketingCampaigns({ now: now + 60_000, limit: 40, interJobDelayMs: 0 });
+  assert.equal(recovered.results[0].reason, "idempotent_provider_retry_scheduled");
+  const retried = await queue.dispatchDueMarketingCampaigns({ now: now + 120_000, limit: 40, interJobDelayMs: 0 });
+  assert.equal(retried.submitted, 1);
+  assert.equal(resendRequests.length, deliveriesBefore + 1, "the repeated POST must resolve to the original provider delivery");
+
+  const attempts = resendAttemptMeta.slice(attemptsBefore).filter((item) => item.body.to?.includes(email));
+  assert.equal(attempts.length, 2);
+  assert.ok(attempts[0].idempotencyKey);
+  assert.equal(attempts[1].idempotencyKey, attempts[0].idempotencyKey);
+  assert.equal(attempts[1].payloadJson, attempts[0].payloadJson, "same key retries must be byte-identical, including click and unsubscribe tokens");
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "submitted");
+});
+
+test("Resend concurrent idempotency responses stay recoverable with the same payload", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2027-02-06T12:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-concurrent-idempotency";
+  const email = "concurrent-idempotency@example.com";
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "concurrent idempotency",
+    html: '<p><a href="https://www.liumeiti.vip/shop">open shop</a></p>',
+    text: "open shop",
+    preview: "concurrent idempotency",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  const attemptsBefore = resendAttemptMeta.length;
+  const sendsBefore = resendRequests.length;
+  resendBehavior = "concurrent";
+  try {
+    const first = await queue.dispatchDueMarketingCampaigns({ now, limit: 40, interJobDelayMs: 0 });
+    assert.equal(first.failed, 1);
+    assert.equal(resendRequests.length, sendsBefore);
+    const queued = JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value);
+    assert.equal(queued.status, "queued");
+    assert.ok(queued.resendIdempotencyDeadlineAt);
+    assert.ok(queued.providerAttemptStartedAt);
+    assert.ok(queued.queueScore < 0, "uncertain work must outrank every ordinary campaign globally");
+
+    resendBehavior = "ok";
+    const recovered = await queue.dispatchDueMarketingCampaigns({ now: now + 60_000, limit: 40, interJobDelayMs: 0 });
+    assert.equal(recovered.submitted, 1);
+    assert.equal(resendRequests.length, sendsBefore + 1);
+    const attempts = resendAttemptMeta.slice(attemptsBefore).filter((item) => item.body.to?.includes(email));
+    assert.equal(attempts.length, 3, "the first logical send retries once inside the transport, then the queue recovers once");
+    assert.equal(new Set(attempts.map((item) => item.idempotencyKey)).size, 1);
+    assert.equal(new Set(attempts.map((item) => item.payloadJson)).size, 1);
+    assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "submitted");
+  } finally {
+    resendBehavior = "ok";
+  }
+});
+
+test("Resend invalid idempotency payload conflicts are quarantined without retries", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2027-02-06T13:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-invalid-idempotency";
+  const email = "invalid-idempotency@example.com";
+  const enqueued = await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "invalid idempotency",
+    html: "<p>invalid idempotency</p>",
+    text: "invalid idempotency",
+    preview: "invalid idempotency",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+  assert.equal(enqueued.ok, true);
+
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  const attemptsBefore = resendAttemptMeta.length;
+  resendBehavior = "conflict";
+  try {
+    const result = await queue.dispatchDueMarketingCampaigns({ now, limit: 40, interJobDelayMs: 0 });
+    assert.equal(result.failed, 1);
+    assert.equal(result.results[0].reason, "idempotency_payload_conflict");
+    assert.equal(result.results[0].permanent, true);
+    assert.equal(resendAttemptMeta.length - attemptsBefore, 1, "a payload conflict must not be transport-retried");
+    assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "failed");
+
+    const deliveryLookup = currentEntry(`lm:mail:delivery:message:${enqueued.results[0].messageId}`)?.value;
+    const delivery = JSON.parse(currentEntry(`lm:mail:delivery:record:${deliveryLookup}`)?.value || "null");
+    assert.equal(delivery.providerOutcomeClass, "idempotency_conflict");
+    assert.equal(delivery.providerErrorCode, "invalid_idempotent_request");
+  } finally {
+    resendBehavior = "ok";
+  }
+});
+
+test("a durable quota outcome recovers correctly after the queue state write is interrupted", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2027-02-06T14:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-durable-quota-outcome";
+  const email = "durable-quota-outcome@example.com";
+  const enqueued = await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "durable quota outcome",
+    html: "<p>durable quota outcome</p>",
+    text: "durable quota outcome",
+    preview: "durable quota outcome",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+  assert.equal(enqueued.ok, true);
+
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  const attemptsBefore = resendAttemptMeta.length;
+  resendBehavior = "quota";
+  try {
+    await assert.rejects(queue.dispatchDueMarketingCampaigns({
+      now,
+      limit: 40,
+      interJobDelayMs: 0,
+      _testHooks: {
+        afterRecordBeforeState({ deliveryRecord }) {
+          assert.equal(deliveryRecord?.ok, true);
+          throw new Error("simulated_crash_after_outcome_record");
+        },
+      },
+    }), /simulated_crash_after_outcome_record/);
+    const interrupted = JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value);
+    assert.equal(interrupted.status, "sending");
+    store.delete(`lm:mail:marketing:claim:${jobId}`);
+
+    const deliveryLookup = currentEntry(`lm:mail:delivery:message:${enqueued.results[0].messageId}`)?.value;
+    const delivery = JSON.parse(currentEntry(`lm:mail:delivery:record:${deliveryLookup}`)?.value || "null");
+    assert.equal(delivery.status, "failed");
+    assert.equal(delivery.providerOutcomeClass, "quota");
+
+    resendBehavior = "ok";
+    const recovered = await queue.dispatchDueMarketingCampaigns({ now: now + 60_000, limit: 40, interJobDelayMs: 0 });
+    assert.equal(recovered.results[0].reason, "daily_quota_exceeded");
+    assert.equal(resendAttemptMeta.length - attemptsBefore, 2, "recovery reads the durable outcome and does not call Resend again");
+    const queued = JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value);
+    assert.equal(queued.status, "queued");
+    assert.equal(queued.failedAttempts, 0);
+    assert.equal(Object.hasOwn(queued, "providerAttemptStartedAt"), false);
+    assert.equal(Object.hasOwn(queued, "resendIdempotencyDeadlineAt"), false);
+    assert.ok(Date.parse(queued.nextAttemptAt) > now + 60_000);
+  } finally {
+    resendBehavior = "ok";
+  }
+});
+
+test("an uncertain first provider response cannot be downgraded by a later quota response", async () => {
+  const scenarios = [
+    { label: "concurrent", first: "concurrent", scheduledAt: "2027-02-06T15:00:00.000Z" },
+    { label: "server", first: "server", scheduledAt: "2027-02-07T15:00:00.000Z" },
+  ];
+
+  for (const scenario of scenarios) {
+    const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+    ensureZset(queueKey).clear();
+    const now = Date.parse(scenario.scheduledAt);
+    const campaignId = `campaign-mixed-uncertain-${scenario.label}`;
+    const email = `mixed-uncertain-${scenario.label}@example.com`;
+    const enqueued = await queue.enqueueMarketingCampaign({
+      campaignId,
+      recipients: [email],
+      scheduledAt: scenario.scheduledAt,
+      subject: `mixed uncertain ${scenario.label}`,
+      html: '<p><a href="https://www.liumeiti.vip/shop">open shop</a></p>',
+      text: "open shop",
+      preview: `mixed uncertain ${scenario.label}`,
+      brandName: "test",
+      support: {},
+      actor: { staffId: 1, staffUsername: "admin" },
+    });
+    assert.equal(enqueued.ok, true);
+
+    const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scenario.scheduledAt);
+    const attemptsBefore = resendAttemptMeta.length;
+    const sendsBefore = resendRequests.length;
+    resendBehaviorSequence = [scenario.first, "quota"];
+    try {
+      await assert.rejects(queue.dispatchDueMarketingCampaigns({
+        now,
+        limit: 40,
+        interJobDelayMs: 0,
+        _testHooks: {
+          afterRecordBeforeState({ result, deliveryRecord }) {
+            assert.equal(result.uncertain, true);
+            assert.equal(result.code, 429);
+            assert.equal(deliveryRecord?.ok, true);
+            throw new Error(`simulated_${scenario.label}_then_quota_crash`);
+          },
+        },
+      }), new RegExp(`simulated_${scenario.label}_then_quota_crash`));
+
+      const deliveryLookup = currentEntry(`lm:mail:delivery:message:${enqueued.results[0].messageId}`)?.value;
+      const delivery = JSON.parse(currentEntry(`lm:mail:delivery:record:${deliveryLookup}`)?.value || "null");
+      assert.equal(delivery.status, "failed");
+      assert.equal(delivery.providerOutcomeClass, "uncertain");
+      assert.equal(delivery.providerUncertain, true);
+
+      const interrupted = JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value);
+      assert.equal(interrupted.status, "sending");
+      assert.ok(interrupted.providerAttemptStartedAt);
+      assert.ok(interrupted.resendIdempotencyDeadlineAt);
+      store.delete(`lm:mail:marketing:claim:${jobId}`);
+      resendBehaviorSequence = [];
+      resendBehavior = "ok";
+
+      const recovery = await queue.dispatchDueMarketingCampaigns({ now: now + 60_000, limit: 40, interJobDelayMs: 0 });
+      assert.equal(recovery.results[0].reason, "idempotent_provider_retry_scheduled");
+      assert.equal(resendRequests.length, sendsBefore);
+      const submitted = await queue.dispatchDueMarketingCampaigns({ now: now + 120_000, limit: 40, interJobDelayMs: 0 });
+      assert.equal(submitted.submitted, 1);
+      assert.equal(resendRequests.length, sendsBefore + 1);
+
+      const attempts = resendAttemptMeta.slice(attemptsBefore).filter((item) => item.body.to?.includes(email));
+      assert.equal(attempts.length, 3);
+      assert.equal(new Set(attempts.map((item) => item.idempotencyKey)).size, 1);
+      assert.equal(new Set(attempts.map((item) => item.payloadJson)).size, 1);
+    } finally {
+      resendBehaviorSequence = [];
+      resendBehavior = "ok";
+    }
+  }
+});
+
+test("an unresolved provider outcome older than Resend's safe retry window is never resent", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2027-02-07T10:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-expired-idempotency-recovery";
+  const email = "expired-idempotency-recovery@example.com";
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "expired recovery",
+    html: "<p>expired recovery</p>",
+    text: "expired recovery",
+    preview: "expired recovery",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  const sendsBefore = resendRequests.length;
+  await assert.rejects(queue.dispatchDueMarketingCampaigns({
+    now,
+    limit: 40,
+    interJobDelayMs: 0,
+    _testHooks: { afterQuotaReservation() { throw new Error("simulated_old_process_exit"); } },
+  }), /simulated_old_process_exit/);
+  store.delete(`lm:mail:marketing:claim:${jobId}`);
+
+  const tooLate = await queue.dispatchDueMarketingCampaigns({
+    now: now + 23 * 60 * 60 * 1000,
+    limit: 40,
+    interJobDelayMs: 0,
+  });
+  assert.equal(tooLate.failed, 1);
+  assert.equal(tooLate.results[0].reason, "delivery_outcome_unknown");
+  assert.equal(resendRequests.length, sendsBefore, "safety wins after provider idempotency can no longer be guaranteed");
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "failed");
+});
+
+test("a crash before the durable provider-start marker stays safely recoverable after 22 hours", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2027-02-08T10:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-crash-before-provider-start";
+  const email = "crash-before-provider-start@example.com";
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "known unsent recovery",
+    html: "<p>known unsent recovery</p>",
+    text: "known unsent recovery",
+    preview: "known unsent recovery",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  const sendsBefore = resendRequests.length;
+  await assert.rejects(queue.dispatchDueMarketingCampaigns({
+    now,
+    limit: 40,
+    interJobDelayMs: 0,
+    _testHooks: { beforeProvider() { throw new Error("simulated_crash_before_provider_marker"); } },
+  }), /simulated_crash_before_provider_marker/);
+  const interrupted = JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value);
+  assert.equal(interrupted.status, "sending");
+  assert.equal(interrupted.providerProtocolVersion, 2);
+  assert.equal(Object.hasOwn(interrupted, "providerAttemptStartedAt"), false);
+  assert.equal(Object.hasOwn(interrupted, "resendIdempotencyDeadlineAt"), false);
+  store.delete(`lm:mail:marketing:claim:${jobId}`);
+
+  const recoveredAt = now + 23 * 60 * 60 * 1000;
+  const recovered = await queue.dispatchDueMarketingCampaigns({ now: recoveredAt, limit: 40, interJobDelayMs: 0 });
+  assert.equal(recovered.results[0].reason, "provider_not_started_requeued");
+  assert.equal(resendRequests.length, sendsBefore);
+  const queued = JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value);
+  assert.equal(queued.status, "queued");
+  assert.equal(queued.attempts, 0);
+
+  const sent = await queue.dispatchDueMarketingCampaigns({ now: recoveredAt + 60_000, limit: 40, interJobDelayMs: 0 });
+  assert.equal(sent.submitted, 1);
+  assert.equal(resendRequests.length, sendsBefore + 1);
+});
+
+test("an ambiguous recovered recipient is prioritized ahead of a 100-address backlog", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2027-02-09T15:59:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-recovery-priority-backlog";
+  const recipients = Array.from({ length: 101 }, (_, index) => `recovery-backlog-${String(index).padStart(3, "0")}@example.com`);
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients,
+    scheduledAt,
+    subject: "recovery priority",
+    html: "<p>recovery priority</p>",
+    text: "recovery priority",
+    preview: "recovery priority",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+
+  let crashedJobId = "";
+  await assert.rejects(queue.dispatchDueMarketingCampaigns({
+    now,
+    limit: 40,
+    interJobDelayMs: 0,
+    _testHooks: {
+      afterQuotaReservation({ campaignJobId }) {
+        crashedJobId = campaignJobId;
+        throw new Error("simulated_backlog_process_exit");
+      },
+    },
+  }), /simulated_backlog_process_exit/);
+  const crashedJob = JSON.parse(currentEntry(`lm:mail:marketing:job:${crashedJobId}`).value);
+  const crashedEmail = crashedJob.to;
+  const originalScore = crashedJob.resumeQueueScore;
+  const olderScheduledAt = new Date(now - 60 * 60 * 1000).toISOString();
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId: "campaign-older-cross-campaign-backlog",
+    recipients: Array.from({ length: 50 }, (_, index) => `older-backlog-${String(index).padStart(2, "0")}@example.com`),
+    scheduledAt: olderScheduledAt,
+    subject: "older backlog",
+    html: "<p>older backlog</p>",
+    text: "older backlog",
+    preview: "older backlog",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+  store.delete(`lm:mail:marketing:claim:${crashedJobId}`);
+
+  const nextDay = now + 2 * 60_000;
+  const recovered = await queue.dispatchDueMarketingCampaigns({ now: nextDay, limit: 40, interJobDelayMs: 0 });
+  assert.equal(recovered.results.some((item) => item.id === crashedJobId && item.reason === "idempotent_provider_retry_scheduled"), true);
+  const prioritized = JSON.parse(currentEntry(`lm:mail:marketing:job:${crashedJobId}`).value);
+  assert.equal(prioritized.status, "queued");
+  assert.ok(prioritized.queueScore < Date.parse(olderScheduledAt), "the recovery must sort ahead of ordinary work from every campaign");
+  assert.ok(originalScore > prioritized.queueScore);
+
+  const attemptsBefore = resendRequests.length;
+  const retried = await queue.dispatchDueMarketingCampaigns({ now: nextDay + 60_000, limit: 40, interJobDelayMs: 0 });
+  assert.equal(retried.submitted, 11, "39 sends in the recovery sweep leave exactly 11 slots in the new Beijing day");
+  assert.equal(resendRequests.slice(attemptsBefore).some((body) => (body.to || []).includes(crashedEmail)), true, "the ambiguous address must consume the first available retry slot");
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${crashedJobId}`).value).status, "submitted");
+  assert.equal(currentEntry(`lm:mail:marketing:daily:${queue.marketingCampaignQueueInternals.beijingDayKey(nextDay)}`)?.value, "50");
+});
+
+test("each provider attempt selects its Beijing day at the actual logical send time", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const beforeMidnight = Date.parse("2026-08-05T15:59:59.000Z");
+  const afterMidnight = beforeMidnight + 2_000;
+  const scheduledAt = new Date(beforeMidnight).toISOString();
+  const firstDay = queue.marketingCampaignQueueInternals.beijingDayKey(beforeMidnight);
+  const secondDay = queue.marketingCampaignQueueInternals.beijingDayKey(afterMidnight);
+  store.delete(`lm:mail:marketing:daily:${firstDay}`);
+  store.delete(`lm:mail:marketing:daily:${secondDay}`);
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId: "campaign-midnight-attempt-keys",
+    recipients: ["midnight-a@example.com", "midnight-b@example.com"],
+    scheduledAt,
+    subject: "midnight",
+    html: "<p>midnight</p>",
+    text: "midnight",
+    preview: "midnight",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+
+  const originalNow = Date.now;
+  let wallNow = beforeMidnight;
+  let providerOrdinal = 0;
+  try {
+    Date.now = () => wallNow;
+    const result = await queue.dispatchDueMarketingCampaigns({
+      now: beforeMidnight,
+      limit: 2,
+      interJobDelayMs: 0,
+      _testHooks: {
+        beforeProvider() {
+          providerOrdinal += 1;
+          if (providerOrdinal === 2) wallNow = afterMidnight;
+        },
+      },
+    });
+    assert.equal(result.submitted, 2);
+  } finally {
+    Date.now = originalNow;
+  }
+  assert.notEqual(firstDay, secondDay);
+  assert.equal(currentEntry(`lm:mail:marketing:daily:${firstDay}`)?.value, "1");
+  assert.equal(currentEntry(`lm:mail:marketing:daily:${secondDay}`)?.value, "1");
 });
