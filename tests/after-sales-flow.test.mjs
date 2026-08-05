@@ -2901,9 +2901,17 @@ test("legacy-cased Netflix self-service projections hide retained passwords and 
     body: JSON.stringify({ query: order.orderId }),
   }));
   assert.equal(challenge.status, 200, await challenge.text());
+  assert.equal(challenge.headers.get("set-cookie"), null, "requesting a code must not grant browser authorization");
   const verificationMail = resendRequests.slice(mailStart).find((entry) => entry.email === email);
   const code = verificationMail?.text?.match(/\b(\d{6})\b/)?.[1];
   assert.match(code || "", /^\d{6}$/);
+  const wrongCodeResponse = await orderQueryRoute.POST(new Request("https://www.liumeiti.vip/api/order-query", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: "locale=en" },
+    body: JSON.stringify({ query: order.orderId, code: code === "000000" ? "111111" : "000000" }),
+  }));
+  assert.equal(wrongCodeResponse.status, 400);
+  assert.equal(wrongCodeResponse.headers.get("set-cookie"), null, "an incorrect code must not grant browser authorization");
   const queryResponse = await orderQueryRoute.POST(new Request("https://www.liumeiti.vip/api/order-query", {
     method: "POST",
     headers: { "content-type": "application/json", cookie: "locale=en" },
@@ -2915,6 +2923,155 @@ test("legacy-cased Netflix self-service projections hide retained passwords and 
   assert.equal(queried.orders[0].items[0].account, "legacy-shaped-login@example.com");
   assert.equal(queried.orders[0].items[0].password, "");
   assert.equal(queried.orders[0].staffNotes, "");
+
+  const verificationSetCookie = queryResponse.headers.get("set-cookie") || "";
+  assert.match(verificationSetCookie, /^lm_netflix_order_verify=/);
+  assert.match(verificationSetCookie, /Path=\/api\/netflix-code/i);
+  assert.match(verificationSetCookie, /HttpOnly/i);
+  assert.match(verificationSetCookie, /SameSite=Lax/i);
+  assert.match(verificationSetCookie, /Max-Age=900/i);
+  assert.match(verificationSetCookie, /Secure/i);
+  assert.doesNotMatch(verificationSetCookie, /Domain=/i);
+  const verificationCookie = verificationSetCookie.split(";", 1)[0];
+  const verificationToken = decodeURIComponent(verificationCookie.split("=").slice(1).join("="));
+  const verificationClaim = authSession.verifyNetflixOrderVerification(verificationToken);
+  assert.equal(verificationClaim.email, email);
+  assert.deepEqual(verificationClaim.orderIds, [order.orderId]);
+
+  const repeatedCodeResponse = await orderQueryRoute.POST(new Request("https://www.liumeiti.vip/api/order-query", {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: "locale=en" },
+    body: JSON.stringify({ query: order.orderId, code }),
+  }));
+  assert.equal(repeatedCodeResponse.status, 400);
+  assert.equal(repeatedCodeResponse.headers.get("set-cookie"), null);
+
+  const previousEncryptionKey = process.env.NETFLIX_CODE_ENCRYPTION_KEY;
+  process.env.NETFLIX_CODE_ENCRYPTION_KEY = "after-sales-netflix-cookie-test-key-2026";
+  try {
+    const mailCountBeforeResume = resendRequests.length;
+    const authorizeResponse = await netflixCodeRoute.POST(new Request("https://www.liumeiti.vip/api/netflix-code", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: verificationCookie },
+      body: JSON.stringify({ action: "authorize", orderId: order.orderId }),
+    }));
+    const authorized = await authorizeResponse.json();
+    assert.equal(authorizeResponse.status, 200, JSON.stringify(authorized));
+    assert.equal(authorized.ok, true);
+    assert.equal(authorized.orderId, order.orderId);
+    assert.match(authorized.sessionToken || "", /\./);
+    assert.equal(resendRequests.length, mailCountBeforeResume, "cross-tab authorization must not send another verification email");
+
+    const malformedUserCookieResponse = await netflixCodeRoute.POST(new Request("https://www.liumeiti.vip/api/netflix-code", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: `lm_user=%; ${verificationCookie}` },
+      body: JSON.stringify({ action: "authorize", orderId: order.orderId }),
+    }));
+    assert.equal(
+      malformedUserCookieResponse.status,
+      200,
+      "an unrelated malformed legacy Cookie must not suppress a valid order capability",
+    );
+
+    const expiredToken = authSession.signNetflixOrderVerification(
+      { email, orderIds: [order.orderId] },
+      1,
+      Date.now() - 5_000,
+    );
+    const expiredResponse = await netflixCodeRoute.POST(new Request("https://www.liumeiti.vip/api/netflix-code", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: `lm_netflix_order_verify=${encodeURIComponent(expiredToken)}`,
+      },
+      body: JSON.stringify({ action: "authorize", orderId: order.orderId }),
+    }));
+    assert.equal(expiredResponse.status, 401, "an expired browser capability must require fresh verification");
+
+    const now = Date.now();
+    const wrongAudienceToken = utils.signSession({
+      v: 2,
+      typ: "netflix-order-verification",
+      iss: "liumeiti-auth",
+      aud: "after-sales",
+      email,
+      orderIds: [order.orderId],
+      iat: now,
+      exp: now + 60_000,
+      jti: "wrong-route-audience-token",
+    });
+    const wrongAudienceResponse = await netflixCodeRoute.POST(new Request("https://www.liumeiti.vip/api/netflix-code", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: `lm_netflix_order_verify=${encodeURIComponent(wrongAudienceToken)}`,
+      },
+      body: JSON.stringify({ action: "authorize", orderId: order.orderId }),
+    }));
+    assert.equal(wrongAudienceResponse.status, 401, "a capability for another audience must not authorize Netflix access");
+
+    const noCookieResponse = await netflixCodeRoute.POST(new Request("https://www.liumeiti.vip/api/netflix-code", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "authorize", orderId: order.orderId }),
+    }));
+    assert.equal(noCookieResponse.status, 401);
+    assert.equal(resendRequests.length, mailCountBeforeResume);
+
+    const sameEmailOtherOrder = {
+      ...order,
+      orderId: "LMNETFLIXNOTINCOOKIE",
+      items: order.items.map((item) => ({ ...item })),
+    };
+    values.set(`liumeiti:orders:record:${sameEmailOtherOrder.orderId}`, JSON.stringify(sameEmailOtherOrder));
+    const otherOrderResponse = await netflixCodeRoute.POST(new Request("https://www.liumeiti.vip/api/netflix-code", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: verificationCookie },
+      body: JSON.stringify({ action: "authorize", orderId: sameEmailOtherOrder.orderId }),
+    }));
+    assert.equal(otherOrderResponse.status, 401, "a verified email must not expand beyond the exact returned order IDs");
+
+    const changedEmailOrder = { ...order, email: "changed-delivery@example.com" };
+    values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(changedEmailOrder));
+    const changedEmailResponse = await netflixCodeRoute.POST(new Request("https://www.liumeiti.vip/api/netflix-code", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: verificationCookie },
+      body: JSON.stringify({ action: "authorize", orderId: order.orderId }),
+    }));
+    assert.equal(changedEmailResponse.status, 401, "changing the delivery email must invalidate the old browser capability");
+    values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+
+    const disabledOrder = { ...order, netflixDeliveryMode: "password" };
+    values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(disabledOrder));
+    const disabledResponse = await netflixCodeRoute.POST(new Request("https://www.liumeiti.vip/api/netflix-code", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: verificationCookie },
+      body: JSON.stringify({ action: "authorize", orderId: order.orderId }),
+    }));
+    const disabledPayload = await disabledResponse.json();
+    assert.equal(disabledResponse.status, 409);
+    assert.equal(disabledPayload.error, "self_service_disabled", "the cookie may skip identity only, never live eligibility checks");
+    values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+
+    const tamperedCookie = `${verificationCookie.slice(0, -1)}${verificationCookie.endsWith("a") ? "b" : "a"}`;
+    const tamperedResponse = await netflixCodeRoute.POST(new Request("https://www.liumeiti.vip/api/netflix-code", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: tamperedCookie },
+      body: JSON.stringify({ action: "authorize", orderId: order.orderId }),
+    }));
+    assert.equal(tamperedResponse.status, 401);
+
+    const malformedResponse = await netflixCodeRoute.POST(new Request("https://www.liumeiti.vip/api/netflix-code", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "lm_netflix_order_verify=%" },
+      body: JSON.stringify({ action: "authorize", orderId: order.orderId }),
+    }));
+    assert.equal(malformedResponse.status, 401, "malformed percent encoding must never become a 500");
+    assert.equal(resendRequests.length, mailCountBeforeResume);
+  } finally {
+    if (previousEncryptionKey === undefined) delete process.env.NETFLIX_CODE_ENCRYPTION_KEY;
+    else process.env.NETFLIX_CODE_ENCRYPTION_KEY = previousEncryptionKey;
+  }
 });
 
 test("non-Spotify ticket snapshots cannot roll back newer order credentials", async () => {

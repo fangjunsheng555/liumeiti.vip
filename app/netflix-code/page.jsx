@@ -30,6 +30,15 @@ function compactOrderId(value) {
   return id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
 }
 
+function entryOrderIdFromLocation() {
+  if (typeof window === "undefined") return "";
+  const value = String(new URLSearchParams(window.location.search).get("orderId") || "")
+    .trim()
+    .replace(/\s+/g, "")
+    .toUpperCase();
+  return /^[A-Z0-9_-]{1,80}$/.test(value) ? value : "";
+}
+
 export default function NetflixCodePage() {
   const { locale } = useLocale();
   const en = locale === "en";
@@ -40,6 +49,8 @@ export default function NetflixCodePage() {
   const sessionRef = useRef("");
   const resultPanelRef = useRef(null);
   const retrieveButtonRef = useRef(null);
+  const authorizingRef = useRef("");
+  const resumedEntryRef = useRef("");
   // Rejected mail events already shown to the user. Sending them back lets the
   // server wait for a fresh email instead of replaying the same failure.
   const seenRejectedRef = useRef([]);
@@ -47,6 +58,9 @@ export default function NetflixCodePage() {
   const [loadingAccount, setLoadingAccount] = useState(true);
   const [accountLoadError, setAccountLoadError] = useState("");
   const [accountLoadAttempt, setAccountLoadAttempt] = useState(0);
+  const [entryOrderId, setEntryOrderId] = useState("");
+  const [entryResumeAttempt, setEntryResumeAttempt] = useState(0);
+  const [entryNeedsVerification, setEntryNeedsVerification] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
   const [orders, setOrders] = useState([]);
   const [query, setQuery] = useState("");
@@ -105,13 +119,19 @@ export default function NetflixCodePage() {
   }, []);
 
   useEffect(() => {
+    const orderId = entryOrderIdFromLocation();
+    if (!orderId) return;
+    setEntryOrderId(orderId);
+    setQuery(orderId);
+  }, []);
+
+  useEffect(() => {
     if (!result) return undefined;
     const frame = window.requestAnimationFrame(() => resultPanelRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
   }, [result]);
 
-  function errorCopy(error) {
-    return ({
+  const errorCopy = useCallback((error) => ({
       verification_required: L("请先核验订单身份", "Verify the order first"),
       order_not_found: L("未找到该订单", "Order not found"),
       order_not_eligible: L("仅已收到或已完成的 Netflix 订单可使用", "Only received or completed Netflix orders are eligible"),
@@ -124,8 +144,7 @@ export default function NetflixCodePage() {
       temporarily_locked: L("操作较频繁，请 15 分钟后再试", "Too many attempts; try again in 15 minutes"),
       service_not_configured: L("登录码服务暂时不可用，请稍后再试", "The sign-in code service is temporarily unavailable; try again later"),
       mail_unrecognized: L("已收到邮件，但未识别到可用的登录码或确认链接。请在 Netflix 重新发送后，再点击一次读取", "The email arrived, but no usable sign-in code or confirmation link was found. Request a new email from Netflix, then tap retrieve again"),
-    })[error] || L("暂时无法完成，请稍后再试", "Unable to complete this request right now");
-  }
+    })[error] || L("暂时无法完成，请稍后再试", "Unable to complete this request right now"), [L]);
 
   async function submitQuery(event) {
     event.preventDefault();
@@ -153,6 +172,7 @@ export default function NetflixCodePage() {
       }
       const matched = (Array.isArray(data.orders) ? data.orders : []).filter(eligibleNetflixCodeOrder);
       setOrders(matched);
+      setEntryNeedsVerification(false);
       setVerification(null);
       setCode("");
       setStatus(matched.length
@@ -165,20 +185,37 @@ export default function NetflixCodePage() {
     }
   }
 
-  async function authorize(order) {
-    if (!order?.orderId || authorizing) return;
+  const authorize = useCallback(async (order, { fromVerifiedLink = false } = {}) => {
+    const orderId = String(order?.orderId || "").trim().replace(/\s+/g, "").toUpperCase();
+    if (!orderId || authorizingRef.current) return;
+    authorizingRef.current = orderId;
     stopPolling();
-    setAuthorizing(order.orderId);
+    if (fromVerifiedLink) setEntryNeedsVerification(true);
+    setAuthorizing(orderId);
     setResult(null);
-    setStatus(null);
+    setStatus(fromVerifiedLink
+      ? { type: "info", text: L("正在沿用刚才的订单核验…", "Reusing your recent order verification…") }
+      : null);
+    let responseStatus = 0;
     try {
       const { response, data } = await fetchNetflixJson("/api/netflix-code", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "authorize", orderId: order.orderId, token: order.afterSalesToken || "" }),
+        body: JSON.stringify({ action: "authorize", orderId, token: order.afterSalesToken || "" }),
       });
-      if (!response.ok || !data?.ok) throw new Error(errorCopy(data?.error));
+      responseStatus = response.status;
+      if (!response.ok || !data?.ok) {
+        if (fromVerifiedLink && data?.error === "verification_required") {
+          setQuery(orderId);
+          setStatus({
+            type: "info",
+            text: L("刚才的身份核验已过期。点击“继续”后再接收一次验证码。", "Your recent verification has expired. Select Continue to receive a new code."),
+          });
+          return;
+        }
+        throw new Error(errorCopy(data?.error));
+      }
       sessionRef.current = data.sessionToken;
       setSession({
         token: data.sessionToken,
@@ -186,12 +223,27 @@ export default function NetflixCodePage() {
         account: data.netflixAccount,
         accountHint: data.accountHint,
       });
+      setEntryNeedsVerification(false);
+      setStatus(null);
     } catch (error) {
-      setStatus({ type: "error", text: error?.message || L("无法核验该订单", "Unable to verify this order") });
+      setStatus({
+        type: "error",
+        text: error?.message || L("无法核验该订单", "Unable to verify this order"),
+        retryEntry: fromVerifiedLink && (responseStatus === 0 || responseStatus === 429 || responseStatus >= 500),
+      });
     } finally {
+      authorizingRef.current = "";
       setAuthorizing("");
     }
-  }
+  }, [L, errorCopy, stopPolling]);
+
+  useEffect(() => {
+    if (!entryOrderId || session) return;
+    const attemptKey = `${entryOrderId}:${entryResumeAttempt}`;
+    if (resumedEntryRef.current === attemptKey) return;
+    resumedEntryRef.current = attemptKey;
+    void authorize({ orderId: entryOrderId }, { fromVerifiedLink: true });
+  }, [authorize, entryOrderId, entryResumeAttempt, session]);
 
   const retrieveResult = useCallback(async () => {
     const token = sessionRef.current;
@@ -315,40 +367,45 @@ export default function NetflixCodePage() {
 
             {loadingAccount ? (
               <div className={styles.loading}><LoaderCircle className="spin-icon" size={18} />{L("正在读取订单…", "Loading orders…")}</div>
-            ) : accountLoadError ? (
-              <div className={styles.accountLoadError} role="alert">
-                <p>{accountLoadError}</p>
-                <button type="button" onClick={() => setAccountLoadAttempt((value) => value + 1)}>
-                  <RefreshCw size={15} />{L("重试", "Retry")}
-                </button>
-              </div>
-            ) : availableOrders.length ? (
-              <div className={styles.orderList}>
-                {availableOrders.map((order) => (
-                  <button type="button" key={order.orderId} onClick={() => authorize(order)} disabled={Boolean(authorizing)}>
-                    <span><b>{order.serviceLabel || "Netflix"}</b><small>{compactOrderId(order.orderId)} · {order.createdAtBeijing || ""}</small></span>
-                    <em>{authorizing === order.orderId ? <LoaderCircle className="spin-icon" size={16} /> : L("选择", "Select")}</em>
-                  </button>
-                ))}
-              </div>
             ) : (
-              <form className={styles.queryForm} onSubmit={submitQuery}>
-                <label>
-                  <span>{L("订单号或下单邮箱", "Order number or order email")}</span>
-                  <div><Search size={16} /><input value={query} onChange={(event) => { setQuery(event.target.value); if (verification && event.target.value.trim() !== verification.query) { setVerification(null); setCode(""); } }} placeholder={L("输入订单号或邮箱", "Enter order number or email")} autoComplete="off" /></div>
-                </label>
-                {verification && (
-                  <label>
-                    <span>{L(`输入 ${verification.emailHint} 收到的 6 位订单验证码`, `Enter the 6-digit order code sent to ${verification.emailHint}`)}</span>
-                    <div><LockKeyhole size={16} /><input value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></div>
-                  </label>
+              <>
+                {accountLoadError && (
+                  <div className={styles.accountLoadError} role="alert">
+                    <p>{accountLoadError}</p>
+                    <button type="button" onClick={() => setAccountLoadAttempt((value) => value + 1)}>
+                      <RefreshCw size={15} />{L("重试读取账号", "Retry account loading")}
+                    </button>
+                  </div>
                 )}
-                <button type="submit" disabled={queryBusy || !query.trim() || (verification && code.length !== 6)}>
-                  {queryBusy ? <LoaderCircle className="spin-icon" size={16} /> : <MailCheck size={16} />}
-                  {verification ? L("确认订单", "Verify order") : L("继续", "Continue")}
-                </button>
-                {!loggedIn && <p className={styles.loginHint}>{L("已有账号？", "Have an account?")} <Link href="/account?auth=login&returnTo=%2Fnetflix-code">{L("登录后直接选择订单", "Sign in to select your order")}</Link></p>}
-              </form>
+                {availableOrders.length && !entryNeedsVerification ? (
+                  <div className={styles.orderList}>
+                    {availableOrders.map((order) => (
+                      <button type="button" key={order.orderId} onClick={() => authorize(order)} disabled={Boolean(authorizing)}>
+                        <span><b>{order.serviceLabel || "Netflix"}</b><small>{compactOrderId(order.orderId)} · {order.createdAtBeijing || ""}</small></span>
+                        <em>{authorizing === order.orderId ? <LoaderCircle className="spin-icon" size={16} /> : L("选择", "Select")}</em>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <form className={styles.queryForm} onSubmit={submitQuery}>
+                    <label>
+                      <span>{L("订单号或下单邮箱", "Order number or order email")}</span>
+                      <div><Search size={16} /><input value={query} onChange={(event) => { setQuery(event.target.value); if (verification && event.target.value.trim() !== verification.query) { setVerification(null); setCode(""); } }} placeholder={L("输入订单号或邮箱", "Enter order number or email")} autoComplete="off" /></div>
+                    </label>
+                    {verification && (
+                      <label>
+                        <span>{L(`输入 ${verification.emailHint} 收到的 6 位订单验证码`, `Enter the 6-digit order code sent to ${verification.emailHint}`)}</span>
+                        <div><LockKeyhole size={16} /><input value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" placeholder="000000" /></div>
+                      </label>
+                    )}
+                    <button type="submit" disabled={queryBusy || Boolean(authorizing) || !query.trim() || (verification && code.length !== 6)}>
+                      {queryBusy || authorizing ? <LoaderCircle className="spin-icon" size={16} /> : <MailCheck size={16} />}
+                      {authorizing ? L("正在确认…", "Verifying…") : verification ? L("确认订单", "Verify order") : L("继续", "Continue")}
+                    </button>
+                    {!loggedIn && <p className={styles.loginHint}>{L("已有账号？", "Have an account?")} <Link href="/account?auth=login&returnTo=%2Fnetflix-code">{L("登录后直接选择订单", "Sign in to select your order")}</Link></p>}
+                  </form>
+                )}
+              </>
             )}
           </section>
         ) : (
@@ -453,7 +510,15 @@ export default function NetflixCodePage() {
             <span className={styles.statusIcon} aria-hidden="true">
               {status.type === "success" ? <Check size={15} /> : status.type === "info" && retrieving ? <LoaderCircle className="spin-icon" size={15} /> : "!"}
             </span>
-            <div><b>{status.type === "success" ? L("已完成", "Done") : status.type === "error" ? L("暂未完成", "Not completed") : retrieving ? L("正在读取邮件", "Retrieving email") : L("提示", "Notice")}</b><p>{status.text}</p></div>
+            <div>
+              <b>{status.type === "success" ? L("已完成", "Done") : status.type === "error" ? L("暂未完成", "Not completed") : retrieving ? L("正在读取邮件", "Retrieving email") : L("提示", "Notice")}</b>
+              <p>{status.text}</p>
+              {status.retryEntry && (
+                <button type="button" className={styles.statusRetry} onClick={() => setEntryResumeAttempt((value) => value + 1)}>
+                  <RefreshCw size={13} />{L("重试确认", "Retry verification")}
+                </button>
+              )}
+            </div>
           </div>
         )}
 

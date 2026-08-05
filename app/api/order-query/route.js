@@ -12,7 +12,13 @@ import {
   redisConfig,
   getCookieFromRequest,
 } from "../_utils.js";
-import { readUserAuthState, signAfterSalesToken } from "../_auth-session.js";
+import {
+  NETFLIX_ORDER_VERIFICATION_COOKIE,
+  NETFLIX_ORDER_VERIFICATION_TTL_SECONDS,
+  readUserAuthState,
+  signAfterSalesToken,
+  signNetflixOrderVerification,
+} from "../_auth-session.js";
 import { netflixOrderIdentity } from "../netflix-code/_ownership.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { buildEmailBrandHeader } from "../email-brand.js";
@@ -246,6 +252,14 @@ function maskEmail(email) {
   return `${head}${"*".repeat(Math.max(2, Math.min(6, name.length - head.length - tail.length)))}${tail}@${domain}`;
 }
 
+function netflixOrderVerificationCookie(request, token) {
+  const production = process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production";
+  let https = false;
+  try { https = new URL(request.url).protocol === "https:"; } catch {}
+  const secure = production || https ? "; Secure" : "";
+  return `${NETFLIX_ORDER_VERIFICATION_COOKIE}=${encodeURIComponent(token)}; Path=/api/netflix-code; HttpOnly; SameSite=Lax; Max-Age=${NETFLIX_ORDER_VERIFICATION_TTL_SECONDS}${secure}`;
+}
+
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -342,7 +356,7 @@ async function handle(request) {
   const query = clean(body.query || body.q || "", 160);
   const code = clean(body.code || body.verificationCode || "", 20).replace(/\s+/g, "");
   const locale = getCookieFromRequest(request, "locale") === "en" ? "en" : "zh";
-  const headers = { "Cache-Control": "no-store, max-age=0" };
+  const headers = new Headers({ "Cache-Control": "no-store, max-age=0" });
 
   if (!query) {
     return Response.json({ ok: false, error: "query_required" }, { status: 400, headers });
@@ -424,6 +438,14 @@ async function handle(request) {
       afterSalesTicket: publicAfterSalesSummary(activeTicket),
     };
   });
+
+  const netflixVerification = signNetflixOrderVerification({
+    email: recipient,
+    orderIds: verifiedOrders.map((order) => normalizeOrderId(order.orderId)),
+  });
+  if (netflixVerification) {
+    headers.set("Set-Cookie", netflixOrderVerificationCookie(request, netflixVerification));
+  }
 
   return Response.json({
     ok: true,

@@ -138,6 +138,7 @@
 .statusIcon { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 50%; background: #e2e8f0; color: #475569; font-size: 12px; font-weight: 900; }
 .status b { display: block; margin-bottom: 2px; font-size: 11px; }
 .status p { margin: 0; font-size: 11px; line-height: 1.55; }
+.statusRetry { display: inline-flex; align-items: center; gap: 5px; margin-top: 8px; padding: 6px 9px; border: 1px solid currentColor; border-radius: 7px; background: transparent; color: inherit; font-size: 10px; font-weight: 800; cursor: pointer; }
 .status.success { border-color: #a7f3d0; background: #f0fdf7; color: #047857; }
 .status.success .statusIcon { background: #d1fae5; color: #047857; }
 .status.error { border-color: #fed7aa; background: #fffaf5; color: #9a3412; }

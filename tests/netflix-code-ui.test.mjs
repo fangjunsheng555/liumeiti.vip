@@ -38,3 +38,16 @@ test("result copy explains validity and limits its security claim to official Ne
   assert.match(page, /链接仅用于本次登录，请勿转发/);
   assert.match(page, /链接约 15 分钟内有效，请勿转发/);
 });
+
+test("a verified service-center order resumes in a new tab without putting credentials in the URL", async () => {
+  const serviceCenter = await readFile(new URL("../app/service-center/page.jsx", import.meta.url), "utf8");
+  assert.match(serviceCenter, /href=\{`\/netflix-code\?orderId=\$\{encodeURIComponent\(queryDetailOrder\.orderId\)\}`\} target="_blank" rel="noopener noreferrer"/);
+  assert.doesNotMatch(serviceCenter, /netflix-code\?[^"`]*(?:afterSalesToken|email|token)=/i);
+  assert.match(page, /new URLSearchParams\(window\.location\.search\)\.get\("orderId"\)/);
+  assert.match(page, /authorize\(\{ orderId: entryOrderId \}, \{ fromVerifiedLink: true \}\)/);
+  assert.match(page, /刚才的身份核验已过期。点击“继续”后再接收一次验证码/);
+  assert.match(page, /retryEntry: fromVerifiedLink/);
+  assert.match(page, /setEntryNeedsVerification\(true\)/);
+  assert.match(page, /availableOrders\.length && !entryNeedsVerification/);
+  assert.doesNotMatch(page, /localStorage|sessionStorage/);
+});

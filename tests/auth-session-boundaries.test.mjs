@@ -869,6 +869,64 @@ test("admin deletion atomically advances the tombstone and old tokens stay revok
   assert.equal((await authSessions.authenticateUserRequest(requestWithToken(replacement.token), { now })).ok, true);
 });
 
+test("guest Netflix verification is a short-lived order-scoped capability with no session confusion", async () => {
+  const now = Date.now();
+  const token = authSessions.signNetflixOrderVerification({
+    email: " Guest@Example.com ",
+    orderIds: ["lmnetflixguest01", "LMNETFLIXGUEST02"],
+  }, undefined, now);
+  const claim = authSessions.verifyNetflixOrderVerification(token, now);
+  assert.equal(claim.typ, "netflix-order-verification");
+  assert.equal(claim.aud, "netflix-code-authorize");
+  assert.equal(claim.email, "guest@example.com");
+  assert.deepEqual(claim.orderIds, ["LMNETFLIXGUEST01", "LMNETFLIXGUEST02"]);
+
+  assert.equal(authSessions.verifyUserSessionCapability(token, now), null);
+  assert.equal(authSessions.verifyAfterSalesToken(token, now), null);
+  assert.equal(authSessions.verifyNetflixCodeSession(token, now), null);
+  assert.equal((await authSessions.authenticateUserRequest(requestWithToken(token), { now })).status, 401);
+  assert.equal(authSessions.verifyNetflixOrderVerification(token, now + 15 * 60 * 1000), null);
+
+  const tampered = `${token.slice(0, -1)}${token.endsWith("a") ? "b" : "a"}`;
+  assert.equal(authSessions.verifyNetflixOrderVerification(tampered, now), null);
+  assert.equal(authSessions.signNetflixOrderVerification({ email: "guest@example.com", orderIds: [] }, undefined, now), "");
+  assert.equal(authSessions.signNetflixOrderVerification({ email: "guest@example.com", orderIds: Array.from({ length: 11 }, (_, index) => `LMNETFLIX${index}VALUE`) }, undefined, now), "");
+  assert.equal(authSessions.signNetflixOrderVerification({ email: "guest@example.com", orderIds: ["LMNETFLIXGUEST01", "LMNETFLIXGUEST01"] }, undefined, now), "");
+  assert.equal(authSessions.signNetflixOrderVerification({ email: "", orderIds: ["LMNETFLIXGUEST01"] }, undefined, now), "");
+
+  const malformedCookie = new Request("https://www.liumeiti.vip/api/netflix-code", {
+    headers: { cookie: `${authSessions.NETFLIX_ORDER_VERIFICATION_COOKIE}=%` },
+  });
+  assert.equal(authSessions.netflixOrderVerificationFromRequest(malformedCookie, now), null);
+
+  const wrongAudience = utils.signSession({
+    v: 2,
+    typ: "netflix-order-verification",
+    iss: "liumeiti-auth",
+    aud: "after-sales",
+    email: "guest@example.com",
+    orderIds: ["LMNETFLIXGUEST01"],
+    iat: now,
+    exp: now + 60_000,
+    jti: "wrong-netflix-audience",
+  });
+  assert.equal(authSessions.verifyNetflixOrderVerification(wrongAudience, now), null);
+
+  const legacyPurposeToken = utils.signSession({
+    type: "netflix-order-verification",
+    email: "guest@example.com",
+    orderIds: ["LMNETFLIXGUEST01"],
+    exp: now + 60_000,
+  });
+  assert.equal(authSessions.verifyNetflixOrderVerification(legacyPurposeToken, now), null);
+
+  const malformedUnrelatedCookie = new Request("https://www.liumeiti.vip/api/netflix-code", {
+    headers: { cookie: "lm_user=%; locale=en" },
+  });
+  assert.equal(utils.getCookieFromRequest(malformedUnrelatedCookie, "lm_user"), null);
+  assert.equal(utils.getCookieFromRequest(malformedUnrelatedCookie, "locale"), "en");
+});
+
 test("admin deletion repairs an invalid legacy auth version and ignores corrupt derived quota data", async (t) => {
   const quotaKey = "lm:tool:quota";
   const corruptQuota = "{not-json";

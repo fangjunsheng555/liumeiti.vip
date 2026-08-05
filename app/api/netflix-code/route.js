@@ -9,6 +9,7 @@ import {
 } from "../_utils.js";
 import {
   authenticateUserRequest,
+  netflixOrderVerificationFromRequest,
   readUserAuthState,
   signNetflixCodeSession,
   verifyAfterSalesToken,
@@ -77,6 +78,12 @@ async function accessForOrder(request, order, providedToken = "") {
   if (claim
     && normalizeOrderId(claim.orderId) === normalizeOrderId(order?.orderId)
     && normalizeEmail(claim.email) === orderEmail) {
+    return { ok: true, actorType: "guest", email: orderEmail };
+  }
+  const verifiedOrder = netflixOrderVerificationFromRequest(request);
+  if (verifiedOrder
+    && verifiedOrder.orderIds.includes(normalizeOrderId(order?.orderId))
+    && verifiedOrder.email === orderEmail) {
     return { ok: true, actorType: "guest", email: orderEmail };
   }
   return { ok: false };

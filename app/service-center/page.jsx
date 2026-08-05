@@ -554,6 +554,7 @@ export default function ServiceCenterPage() {
     try {
       const response = await fetch("/api/order-query", {
         method: "POST",
+        credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: value, code }),
       });
@@ -1200,7 +1201,7 @@ export default function ServiceCenterPage() {
                 && queryDetailOrder.netflixSelfServiceEnabled !== false
                 && !queryDetailOrder.expiry?.expired
                 && queryItems.some((item) => item.service === "netflix") && (
-                <Link href="/netflix-code" className="account-netflix-code-link">
+                <Link href={`/netflix-code?orderId=${encodeURIComponent(queryDetailOrder.orderId)}`} target="_blank" rel="noopener noreferrer" className="account-netflix-code-link">
                   <span>
                     <strong>{L("在线获取 Netflix 登录码", "Get Netflix sign-in code")}</strong>
                     <small>{L("需要登录码或身份确认时，可使用订单中的 Netflix 登录邮箱在线获取", "Use the Netflix sign-in email in this order when a code or confirmation is required")}</small>

@@ -38,6 +38,15 @@ const NETFLIX_CODE_SPEC = {
   ttlMs: 15 * 60 * 1000,
 };
 
+export const NETFLIX_ORDER_VERIFICATION_COOKIE = "lm_netflix_order_verify";
+export const NETFLIX_ORDER_VERIFICATION_TTL_SECONDS = 15 * 60;
+
+const NETFLIX_ORDER_VERIFICATION_SPEC = {
+  type: "netflix-order-verification",
+  audience: "netflix-code-authorize",
+  ttlMs: NETFLIX_ORDER_VERIFICATION_TTL_SECONDS * 1000,
+};
+
 function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -50,6 +59,19 @@ function positiveInteger(value) {
 function finiteTimestamp(value) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function normalizedNetflixVerificationOrderIds(values, requireCanonical = false) {
+  if (!Array.isArray(values) || values.length < 1 || values.length > 10) return null;
+  const normalized = [];
+  for (const value of values) {
+    if (typeof value !== "string") return null;
+    const orderId = value.trim().replace(/\s+/g, "").toUpperCase();
+    if (!/^[A-Z0-9_-]{1,80}$/.test(orderId)) return null;
+    if (requireCanonical && value !== orderId) return null;
+    if (!normalized.includes(orderId)) normalized.push(orderId);
+  }
+  return normalized.length === values.length ? normalized : null;
 }
 
 export function validAccountLifecycleId(value) {
@@ -250,6 +272,36 @@ export function signNetflixCodeSession(payload, ttlMs = NETFLIX_CODE_SPEC.ttlMs,
 
 export function verifyNetflixCodeSession(token, now = Date.now()) {
   return verifyCapability(token, NETFLIX_CODE_SPEC, now);
+}
+
+export function signNetflixOrderVerification(payload, ttlMs = NETFLIX_ORDER_VERIFICATION_SPEC.ttlMs, now = Date.now()) {
+  const email = normalizeEmail(payload?.email);
+  const orderIds = normalizedNetflixVerificationOrderIds(payload?.orderIds);
+  if (!validEmail(email) || !orderIds) return "";
+  return signCapability(NETFLIX_ORDER_VERIFICATION_SPEC, { email, orderIds }, ttlMs, now);
+}
+
+export function verifyNetflixOrderVerification(token, now = Date.now()) {
+  const claim = verifyCapability(token, NETFLIX_ORDER_VERIFICATION_SPEC, now);
+  // This capability is new and has no rolling-deploy legacy tokens to honor.
+  // Requiring the v2 envelope prevents a same-secret legacy purpose token from
+  // being accepted without its issuer/audience checks.
+  if (!claim || claim.v !== 2 || claim.typ !== NETFLIX_ORDER_VERIFICATION_SPEC.type) return null;
+  const email = normalizeEmail(claim.email);
+  const orderIds = normalizedNetflixVerificationOrderIds(claim.orderIds, true);
+  if (!validEmail(email) || claim.email !== email || !orderIds) return null;
+  return { ...claim, email, orderIds };
+}
+
+export function netflixOrderVerificationFromRequest(request, now = Date.now()) {
+  try {
+    const token = getCookieFromRequest(request, NETFLIX_ORDER_VERIFICATION_COOKIE);
+    return verifyNetflixOrderVerification(token, now);
+  } catch {
+    // A malformed percent-encoded Cookie must behave like a missing capability,
+    // never turn a public authorization request into a 500 response.
+    return null;
+  }
 }
 
 export function signUserSessionForVersion(emailValue, authVersion, now = Date.now()) {

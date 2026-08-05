@@ -75,6 +75,8 @@ test("Netflix account and order lookup always leave their loading states", () =>
   assert.match(netflix, /setAccountLoadError\(/);
   assert.match(netflix, /setAccountLoadAttempt\(\(value\) => value \+ 1\)/);
   assert.match(netflix, /className=\{styles\.accountLoadError\} role="alert"/);
+  assert.match(netflix, /accountLoadError && \([\s\S]*className=\{styles\.queryForm\}/);
+  assert.match(netflix, /status\.retryEntry[\s\S]*setEntryResumeAttempt\(\(value\) => value \+ 1\)/);
   assert.match(netflix, /finally \{\s*setQueryBusy\(false\);/);
   const accountEffectStart = netflix.indexOf("useEffect(() => {");
   const nextEffectStart = netflix.indexOf("useEffect(() =>", accountEffectStart + 1);

@@ -1398,7 +1398,14 @@ export function verifyRegisterCaptcha(token, answer) {
 export function getCookieFromRequest(request, name) {
   const cookieHeader = request.headers.get("cookie") || "";
   const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
-  return match ? decodeURIComponent(match[1]) : null;
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    // One invalid percent-encoded Cookie must not turn an otherwise valid
+    // request into a 500 or prevent an independent Cookie from working.
+    return null;
+  }
 }
 
 export function setCookieValue(name, value, maxAgeSec = 60 * 60 * 24 * 14) {
