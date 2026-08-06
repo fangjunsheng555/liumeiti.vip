@@ -23,6 +23,8 @@ let failNextCompletionCommit = false;
 let failNextTimelineWrite = false;
 let failNextAdminActionWrite = false;
 let dropNextDurableCompletionResponse = false;
+let failDurableClaimRequestsRemaining = 0;
+let failDurableCompleteRequestsRemaining = 0;
 
 function sortedSet(key) {
   if (!sortedSets.has(key)) sortedSets.set(key, new Map());
@@ -452,6 +454,16 @@ globalThis.fetch = async (input, options = {}) => {
   if (url.origin !== "http://redis.test") return originalFetch(input, options);
   if (url.pathname === "/pipeline") {
     const commands = JSON.parse(options.body || "[]");
+    if (failDurableClaimRequestsRemaining > 0
+      && commands.some((command) => String(command?.[1] || "").includes("durable_claim_v2_lossless"))) {
+      failDurableClaimRequestsRemaining -= 1;
+      return Response.json({ error: "simulated durable claim outage" }, { status: 503 });
+    }
+    if (failDurableCompleteRequestsRemaining > 0
+      && commands.some((command) => String(command?.[1] || "").includes("durable_complete_v2_lossless"))) {
+      failDurableCompleteRequestsRemaining -= 1;
+      return Response.json({ error: "simulated durable completion outage" }, { status: 503 });
+    }
     const rows = commands.map((command) => ({ result: execute(command) }));
     if (dropNextDurableCompletionResponse
       && commands.some((command) => String(command?.[1] || "").includes("durable_complete_v2_lossless"))) {
@@ -483,6 +495,7 @@ const afterSalesEmail = await import("../app/api/after-sales/_email.js");
 const orderQueryRoute = await import("../app/api/order-query/route.js");
 const authMeRoute = await import("../app/api/auth/me/route.js");
 const authSession = await import("../app/api/_auth-session.js");
+const money = await import("../app/api/_money.js");
 const completionEmail = await import("../app/api/order/completion-email.js");
 const orderAttention = await import("../app/lib/order-attention.js");
 const settingsDefaults = await import("../app/lib/settings-defaults.js");
@@ -537,6 +550,95 @@ test("completed and unpaid-invalid order saves stay successful when audit effect
       assert.equal(stored.pendingTransition, undefined);
     }
   }
+});
+
+test("an exact top-level mutation marker recovers even when the durable journal is unavailable", async () => {
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  for (const failure of ["claim", "complete"]) {
+    const suffix = failure.toUpperCase();
+    const orderId = `LMORDERDOMAINRECOVERY${suffix}1`;
+    const idempotencyKey = `order-domain-recovery-${failure}-0001`;
+    const body = { expectedRevision: 0, status: "invalid", items: [] };
+    const order = {
+      ...orderRecord(orderId, `domain-recovery-${failure}@example.com`),
+      status: "invalid",
+      revision: 3,
+      invalidAt: new Date().toISOString(),
+      processedMutations: [{
+        id: idempotencyKey,
+        hash: money.idempotencyPayloadHash(body),
+        principal: orderId,
+        revision: 3,
+        createdAt: new Date().toISOString(),
+        effects: { statusChanged: true, adminAction: "order_update", adminDetail: { status: "invalid" } },
+      }],
+    };
+    values.set(`liumeiti:orders:record:${orderId}`, JSON.stringify(order));
+    if (failure === "claim") failDurableClaimRequestsRemaining = 1;
+    else failDurableCompleteRequestsRemaining = 1;
+
+    const response = await adminOrderRoute.PATCH(
+      new Request(`https://www.liumeiti.vip/api/admin/orders/${orderId}`, {
+        method: "PATCH",
+        headers: {
+          cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey,
+        },
+        body: JSON.stringify(body),
+      }),
+      { params: Promise.resolve({ orderId }) },
+    );
+    assert.equal(response.status, 200, `${failure} outage must recover from the exact domain marker`);
+    const result = await response.json();
+    assert.equal(result.ok, true);
+    assert.equal(result.idempotent, true);
+    assert.ok(result.effectWarnings.includes("durable_operation_journal_unavailable"));
+    assert.equal(result.order.status, "invalid");
+    assert.equal((await utils.getOrderById(orderId)).processedMutations[0].id, idempotencyKey);
+  }
+  assert.equal(failDurableClaimRequestsRemaining, 0);
+  assert.equal(failDurableCompleteRequestsRemaining, 0);
+});
+
+test("a marker inside a pending transition never unlocks the unresolved order operation", async () => {
+  const orderId = "LMORDERPENDINGMARKER1";
+  const idempotencyKey = "order-pending-marker-0001";
+  const order = {
+    ...orderRecord(orderId, "pending-marker@example.com"),
+    status: "received",
+    revision: 0,
+    userEmail: "pending-marker@example.com",
+    paidByBalance: true,
+    finalAmount: 50,
+    accountLifecycleId: "",
+  };
+  values.set(`liumeiti:orders:record:${orderId}`, JSON.stringify(order));
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const request = () => new Request(`https://www.liumeiti.vip/api/admin/orders/${orderId}`, {
+    method: "PATCH",
+    headers: {
+      cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({ expectedRevision: 0, status: "invalid", items: [] }),
+  });
+
+  const first = await adminOrderRoute.PATCH(request(), { params: Promise.resolve({ orderId }) });
+  assert.equal(first.status, 503);
+  assert.equal((await first.json()).error, "account_lifecycle_required");
+  const pending = await utils.getOrderById(orderId);
+  assert.ok(pending.pendingTransition);
+  assert.equal(Boolean(pending.processedMutations?.some((entry) => entry.id === idempotencyKey)), false);
+  assert.equal(Boolean(pending.pendingTransition.targetOrder?.processedMutations?.some((entry) => entry.id === idempotencyKey)), true);
+
+  const replay = await adminOrderRoute.PATCH(request(), { params: Promise.resolve({ orderId }) });
+  assert.equal(replay.status, 503, "a target marker is not proof that the transition committed");
+  assert.equal((await replay.json()).error, "account_lifecycle_required");
+  const stillPending = await utils.getOrderById(orderId);
+  assert.equal(stillPending.status, "received");
+  assert.ok(stillPending.pendingTransition);
 });
 
 function customerRequest(order, token, issue = "账号当前无法正常登录") {

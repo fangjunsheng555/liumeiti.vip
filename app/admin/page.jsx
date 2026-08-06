@@ -1699,7 +1699,14 @@ export default function AdminPage() {
     if (typeof window === "undefined" || !String(orderId || "").trim()) return null;
     const pending = readAdminMutationJournals(window.localStorage, "order", orderId);
     if (!pending.ok || pending.records.length > 1) {
-      return { blocked: true, message: "检测到无法安全确认的旧订单操作，请勿重复提交；请刷新后核对订单状态。" };
+      const code = !pending.ok
+        ? String(pending.errors?.[0]?.error || "admin_mutation_journal_unavailable")
+        : "admin_mutation_multiple_unresolved_operations";
+      return {
+        blocked: true,
+        code,
+        message: `检测到无法安全确认的旧订单操作，请勿重复提交；请刷新后核对订单状态。（错误码：${code}）`,
+      };
     }
     if (pending.records.length !== 1) return null;
     return {
@@ -4156,6 +4163,16 @@ export default function AdminPage() {
 
   async function handleOrderMutationConflict(pending, response, data, fallback) {
     if (!["stale_revision", "order_update_busy"].includes(String(data?.error || ""))) return false;
+    if (data?.error === "order_update_busy") {
+      // The lock holder may be another tab executing this exact same key. Busy
+      // proves only that this replay did not enter the critical section; it
+      // does not prove the original request cannot still commit.
+      setSaveResult({
+        type: "error",
+        message: "该订单仍在处理中，请稍后再次点击“确认上次操作”。原操作记录已保留，不会生成新的重复请求。（错误码：order_update_busy）",
+      });
+      return true;
+    }
     if (!isSafeOrderMutationRetry(data)) {
       setSaveResult({ type: "error", message: orderMutationErrorMessage(data, fallback) });
       return true;
@@ -4225,6 +4242,14 @@ export default function AdminPage() {
           loadOverview({ silent: true });
           return;
         }
+        if (data?.error === "order_update_busy") {
+          setOrderRecovery(readPendingOrderRecovery(activeOrder.orderId));
+          setSaveResult({
+            type: "error",
+            message: "该订单仍在处理中，请稍后再次点击“确认上次操作”。原操作记录已保留，不会生成新的重复请求。（错误码：order_update_busy）",
+          });
+          return;
+        }
         if (await handleOrderMutationConflict(pending, response, data, "上次订单操作确认失败")) {
           setOrderRecovery(readPendingOrderRecovery(activeOrder.orderId));
           return;
@@ -4234,16 +4259,21 @@ export default function AdminPage() {
         const nextRecovery = readPendingOrderRecovery(activeOrder.orderId);
         setOrderRecovery(nextRecovery);
         if (terminal) await openOrder({ orderId: activeOrder.orderId });
+        const recoveryCode = String(data?.error || `HTTP_${Number(response?.status || 0) || "unknown"}`);
         setSaveResult({
           type: "error",
           message: terminal
             ? orderMutationErrorMessage(data, "上次操作未执行，已载入最新订单，请重新操作")
-            : "上次订单操作暂时仍无法确认，请稍后再次点击“确认上次操作”；系统不会重复退款或发信。",
+            : `上次订单操作暂时仍无法确认，请稍后再次点击“确认上次操作”；系统不会重复退款或发信。（错误码：${recoveryCode}）`,
         });
       });
     } catch (error) {
       setOrderRecovery(readPendingOrderRecovery(activeOrder.orderId));
-      setSaveResult({ type: "error", message: adminMutationFailureMessage(error, "上次订单操作确认失败，请稍后重试") });
+      const recoveryCode = String(error?.code || error?.message || "request_failed");
+      setSaveResult({
+        type: "error",
+        message: `${adminMutationFailureMessage(error, "上次订单操作确认失败，请稍后重试")}（错误码：${recoveryCode}）`,
+      });
     } finally {
       setSaving(false);
     }

@@ -19,7 +19,7 @@ import { beginOrderTransition, resumePendingOrderTransition } from "../../../_or
 import { getOrderSla } from "../../../../lib/order-sla.js";
 import { deliverOnce } from "../../../_delivery-once.js";
 import { idempotencyPayloadHash, requiredIdempotencyKey } from "../../../_money.js";
-import { claimDurableOperation, completeDurableOperation } from "../../../_durable-operation.js";
+import { claimDurableOperation, completeDurableOperation, durableOperationId } from "../../../_durable-operation.js";
 import { enqueueOrderPushEvent } from "../../../_push.js";
 import { appendBusinessTraceEvent, withApiTelemetry } from "../../../_observability.js";
 import { readUserAuthState } from "../../../_auth-session.js";
@@ -646,16 +646,46 @@ async function updateOrderHandler(request, { params }) {
       }, { status: 400 });
     }
   }
-  const operation = await claimDurableOperation({
+  const processedMutations = Array.isArray(order.processedMutations) ? order.processedMutations : [];
+  const priorMutation = processedMutations.find((item) => (
+    item?.id === mutationId && (!item.principal || item.principal === operationPrincipal)
+  ));
+  if (priorMutation && priorMutation.hash !== mutationHash) {
+    return Response.json({ ok: false, error: "idempotency_conflict" }, { status: 409 });
+  }
+
+  let operation = await claimDurableOperation({
     scope: "admin-order-patch",
     principal: operationPrincipal,
     idempotencyKey: mutationId,
     requestHash: mutationHash,
   });
+  let durableJournalUnavailable = false;
   if (!operation.ok) {
-    return Response.json({ ok: false, error: operation.error }, {
-      status: operation.error === "idempotency_conflict" ? 409 : 503,
+    // The top-level processed mutation only appears after every stock/money
+    // transition and the order CAS have completed. It is therefore a stronger
+    // recovery proof than a missing/corrupt auxiliary durable-operation row.
+    // Never use a marker inside pendingTransition.targetOrder here.
+    if (!priorMutation || operation.error === "idempotency_conflict") {
+      return Response.json({ ok: false, error: operation.error }, {
+        status: operation.error === "idempotency_conflict" ? 409 : 503,
+      });
+    }
+    const recoveredOperationId = durableOperationId({
+      scope: "admin-order-patch",
+      principal: operationPrincipal,
+      idempotencyKey: mutationId,
     });
+    if (!recoveredOperationId) {
+      return Response.json({ ok: false, error: operation.error || "invalid_operation" }, { status: 503 });
+    }
+    durableJournalUnavailable = true;
+    operation = {
+      ok: true,
+      state: "started",
+      operationId: recoveredOperationId,
+      record: { requestHash: mutationHash },
+    };
   }
   if (operation.state === "done") {
     return Response.json({
@@ -664,14 +694,7 @@ async function updateOrderHandler(request, { params }) {
       idempotent: true,
     });
   }
-  const processedMutations = Array.isArray(order.processedMutations) ? order.processedMutations : [];
-  const priorMutation = processedMutations.find((item) => (
-    item?.id === mutationId && (!item.principal || item.principal === operationPrincipal)
-  ));
   if (priorMutation) {
-    if (priorMutation.hash !== mutationHash) {
-      return Response.json({ ok: false, error: "idempotency_conflict" }, { status: 409 });
-    }
     const replayedDeliveries = {};
     if (body.action === "spotify_password_error") {
       const itemIndex = Number(body.itemIndex);
@@ -787,14 +810,37 @@ async function updateOrderHandler(request, { params }) {
     const effectWarnings = [
       ...(!internalEffectsOk ? ["order_timeline_unavailable"] : []),
       ...(!logOk ? ["admin_action_log_unavailable"] : []),
+      ...(durableJournalUnavailable ? ["durable_operation_journal_unavailable"] : []),
     ];
     if (effectWarnings.length) {
       console.warn(`[admin-order] recovered ${canonicalOrderId} with non-critical effect warnings: ${effectWarnings.join(",")}`);
     }
-    const replayPayload = { ok: true, order: orderForAdminResponse(order), replayedDeliveries, effectWarnings };
-    const completed = await completeDurableOperation(operation, replayPayload);
-    if (!completed.ok) return Response.json({ ok: false, error: completed.error }, { status: 503 });
-    return Response.json({ ...replayPayload, idempotent: true });
+    const replayPayload = {
+      ok: true,
+      order: orderForAdminResponse(order),
+      replayedDeliveries,
+      effectWarnings,
+      idempotent: true,
+      recoveredFromOrder: true,
+    };
+    if (!durableJournalUnavailable) {
+      const completed = await completeDurableOperation(operation, replayPayload);
+      if (!completed.ok) {
+        if ([
+          "storage_unavailable",
+          "operation_record_missing",
+          "operation_record_corrupt",
+          "invalid_storage_response",
+          "operation_concurrent_update",
+        ].includes(completed.error)) {
+          effectWarnings.push("durable_operation_journal_unavailable");
+          console.warn(`[admin-order] recovered ${canonicalOrderId} although durable completion failed: ${completed.error}`);
+        } else {
+          return Response.json({ ok: false, error: completed.error }, { status: 503 });
+        }
+      }
+    }
+    return Response.json(replayPayload);
   }
   // A lost response is retried with the revision from the original request.
   // Check the durable mutation record first; only new operations participate

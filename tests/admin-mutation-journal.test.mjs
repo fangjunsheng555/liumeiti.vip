@@ -143,6 +143,26 @@ test("admin callers send the persisted exact body and compare-clear only the pro
   assert.match(source, /pending\.operation\.key/);
   assert.match(source, /body: JSON\.stringify\(pending\.payload\)/);
   assert.match(source, /确认上次操作/);
+  const recoveryStart = source.indexOf("async function resumePendingOrderMutation");
+  const recoveryEnd = source.indexOf("async function updateOrderAssignment", recoveryStart);
+  assert.ok(recoveryStart >= 0 && recoveryEnd > recoveryStart);
+  const recoverySource = source.slice(recoveryStart, recoveryEnd);
+  assert.match(recoverySource, /handleOrderMutationConflict\(pending, response, data,/);
+  const conflictStart = source.indexOf("async function handleOrderMutationConflict");
+  const conflictEnd = source.indexOf("async function replayAppliedOrderMutationOnce", conflictStart);
+  assert.ok(conflictStart >= 0 && conflictEnd > conflictStart);
+  const conflictSource = source.slice(conflictStart, conflictEnd);
+  const busyStart = conflictSource.indexOf('if (data?.error === "order_update_busy")');
+  const busyEnd = conflictSource.indexOf("if (!isSafeOrderMutationRetry", busyStart);
+  assert.ok(busyStart >= 0 && busyEnd > busyStart);
+  const busySource = conflictSource.slice(busyStart, busyEnd);
+  assert.match(busySource, /原操作记录已保留/);
+  assert.match(busySource, /return true;/);
+  assert.doesNotMatch(
+    busySource,
+    /completeAdminMutation/,
+    "an exact recovery replay must retain its journal while the original request may still hold the order lock",
+  );
   assert.match(source, /clearAdminMutationJournal\(window\.localStorage, storageKey, operation\.key\)/);
   // Nine UI mutations, one explicit unresolved-order replay and one exact
   // replay used to resume a mutation whose primary write already committed.
