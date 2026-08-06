@@ -1,16 +1,81 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import net from "node:net";
 
 const runRealRedis = process.env.RUN_REAL_REDIS_TESTS === "1";
-const redisUrl = String(process.env.KV_REST_API_URL || "http://127.0.0.1:8079").replace(/\/$/, "");
 const redisToken = process.env.KV_REST_API_TOKEN || "local-test-token";
-
-process.env.KV_REST_API_URL = redisUrl;
-process.env.KV_REST_API_TOKEN = redisToken;
 process.env.AUTH_SECRET ||= "spotify-real-test-secret-at-least-32-characters";
 delete process.env.TELEGRAM_BOT_TOKEN;
 delete process.env.TELEGRAM_CHAT_ID;
+
+let redisUrl = "";
+
+function docker(args) {
+  return spawnSync("docker", args, { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+}
+
+async function availablePort() {
+  const server = net.createServer();
+  await new Promise((resolve, reject) => server.listen(0, "127.0.0.1", resolve).once("error", reject));
+  const port = server.address().port;
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
+
+async function startRedisRestFixture() {
+  const suffix = `${process.pid}-${Date.now()}`;
+  const container = `lm-spotify-route-${suffix}`;
+  const started = docker(["run", "--rm", "-d", "--name", container, "redis:7-alpine"]);
+  assert.equal(started.status, 0, started.stderr || started.stdout);
+  try {
+    let ready = false;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const ping = docker(["exec", container, "redis-cli", "PING"]);
+      if (ping.status === 0 && ping.stdout.trim() === "PONG") { ready = true; break; }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(ready, true, "Redis container did not become ready");
+    const port = await availablePort();
+    const proxy = spawn(process.execPath, [fileURLToPath(new URL("./helpers/upstash-rest-server.mjs", import.meta.url))], {
+      env: {
+        ...process.env,
+        TEST_REDIS_CONTAINER: container,
+        TEST_REDIS_HTTP_PORT: String(port),
+        TEST_REDIS_TOKEN: redisToken,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    proxy.stderr.setEncoding("utf8");
+    proxy.stderr.on("data", (chunk) => { stderr += chunk; });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Redis REST proxy start timeout: ${stderr}`)), 10_000);
+      proxy.once("error", reject);
+      proxy.stdout.setEncoding("utf8");
+      proxy.stdout.on("data", (chunk) => {
+        if (String(chunk).includes("local_upstash_rest=")) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    });
+    return {
+      container,
+      proxy,
+      url: `http://127.0.0.1:${port}`,
+      close() {
+        proxy.kill();
+        docker(["rm", "-f", container]);
+      },
+    };
+  } catch (error) {
+    docker(["rm", "-f", container]);
+    throw error;
+  }
+}
 
 async function redis(...command) {
   const response = await fetch(`${redisUrl}/${command.map((part) => encodeURIComponent(String(part))).join("/")}`, {
@@ -27,6 +92,10 @@ function sha(value) {
 test("Spotify correction is recoverable and a used-link 410 creates no Redis operation", {
   skip: runRealRedis ? false : "set RUN_REAL_REDIS_TESTS=1 for Docker-backed Lua verification",
 }, async () => {
+  const fixture = await startRedisRestFixture();
+  redisUrl = fixture.url;
+  process.env.KV_REST_API_URL = redisUrl;
+  process.env.KV_REST_API_TOKEN = redisToken;
   const suffix = `${Date.now().toString(36)}${randomBytes(4).toString("hex")}`.toUpperCase();
   const orderId = `LMREALSPOTIFY${suffix}`;
   const token = `spotify-real-token-${suffix}`;
@@ -143,5 +212,6 @@ test("Spotify correction is recoverable and a used-link 410 creates no Redis ope
     await redis("ZREM", "liumeiti:orders:summary-created", orderId);
     await redis("LREM", "liumeiti:orders:email:before-real-test@example.com", "0", orderId);
     await redis("LREM", "liumeiti:orders:email:buyer-real@example.com", "0", orderId);
+    fixture.close();
   }
 });

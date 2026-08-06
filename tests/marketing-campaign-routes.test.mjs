@@ -141,6 +141,47 @@ test("legacy customer orders use top-level service or plan and explicit contact 
   assert.deepEqual(planAudience.sample[0].services, ["netflix-legacy-plan"]);
 });
 
+test("service purchase segments exclude unpaid order contacts", async () => {
+  const unpaidOrderId = "ORDER-MARKETING-UNPAID-SERVICE";
+  const paidOrderId = "ORDER-MARKETING-PAID-SERVICE";
+  redis.execute(["SET", "liumeiti:orders:index:legacy-ready", "1"]);
+  redis.execute(["SET", "liumeiti:orders:index:record-ready:v1", "1"]);
+  redis.execute(["RPUSH", "liumeiti:orders:index", unpaidOrderId, paidOrderId]);
+  redis.execute(["SET", `liumeiti:orders:record:${unpaidOrderId}`, JSON.stringify({
+    orderId: unpaidOrderId,
+    email: "marketing-unpaid-service@example.com",
+    status: "received",
+    paymentMethod: "alipay",
+    paidCurrency: "CNY",
+    finalAmount: 188,
+    service: "spotify",
+    createdAt: "2026-08-06T00:00:00.000Z",
+  })]);
+  redis.execute(["SET", `liumeiti:orders:record:${paidOrderId}`, JSON.stringify({
+    orderId: paidOrderId,
+    email: "marketing-paid-service@example.com",
+    status: "received",
+    paymentMethod: "balance",
+    paidCurrency: "CNY",
+    finalAmount: 88,
+    service: "spotify",
+    createdAt: "2026-08-06T00:01:00.000Z",
+  })]);
+
+  const audience = await audienceData.buildMailAudience({
+    definition: {
+      sources: ["order_contact"],
+      serviceKeys: ["spotify"],
+      requireMarketingAllowed: false,
+    },
+    includeEmails: true,
+    maxRecipients: 2000,
+  });
+
+  assert.equal(audience.emails.includes("marketing-unpaid-service@example.com"), false);
+  assert.equal(audience.emails.includes("marketing-paid-service@example.com"), true);
+});
+
 test("manual, registered and every historical order contact merge once before suppression", async () => {
   const pendingOrderId = "ORDER-MARKETING-MERGE-PENDING";
   const duplicateOrderId = "ORDER-MARKETING-MERGE-DUPLICATE";

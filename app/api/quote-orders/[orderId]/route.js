@@ -106,6 +106,7 @@ async function sendTelegram(text) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+    signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined,
   });
   if (response.ok) return true;
   return response.status >= 500 || response.status === 408 || response.status === 425
@@ -119,6 +120,7 @@ async function sendWebhook(order, idempotencyKey = "") {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}) },
     body: JSON.stringify(order),
+    signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined,
   });
   if (response.ok) return true;
   return response.status >= 500 || response.status === 408 || response.status === 425

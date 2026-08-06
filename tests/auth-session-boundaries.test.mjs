@@ -210,8 +210,37 @@ function installFakeRedis(initial = {}) {
           return { result: JSON.stringify({ ok: true, authVersion: currentVersion, accountLifecycleId: lifecycle }) };
         }
         if (script.includes("redis.call('SREM',KEYS[4],ARGV[1])")) {
-          const user = store.has(keys[0]) ? JSON.parse(store.get(keys[0])) : null;
-          if (!user) return { result: JSON.stringify({ ok: false, error: "user_not_found" }) };
+          if (!store.has(keys[0])) return { result: JSON.stringify({ ok: false, error: "user_not_found" }) };
+          const userRaw = store.get(keys[0]);
+          let user;
+          try { user = typeof userRaw === "string" ? JSON.parse(userRaw) : null; } catch { user = null; }
+          if (!user || typeof user !== "object" || Array.isArray(user)) {
+            return { result: JSON.stringify({ ok: false, error: "financial_record_invalid" }) };
+          }
+          const balanceRaw = store.get(keys[1]);
+          if (balanceRaw != null) {
+            if (typeof balanceRaw !== "string" || !/^-?\d+$/.test(balanceRaw)
+              || !Number.isSafeInteger(Number(balanceRaw))) {
+              return { result: JSON.stringify({ ok: false, error: "financial_record_invalid" }) };
+            }
+            if (Number(balanceRaw) !== 0) {
+              return { result: JSON.stringify({ ok: false, error: "user_has_balance" }) };
+            }
+          } else {
+            if (typeof user.balance !== "number" || !Number.isFinite(user.balance)) {
+              return { result: JSON.stringify({ ok: false, error: "financial_record_invalid" }) };
+            }
+            if (user.balance !== 0) {
+              return { result: JSON.stringify({ ok: false, error: "user_has_balance" }) };
+            }
+          }
+          const transactions = store.get(keys[2]);
+          if (transactions != null && !Array.isArray(transactions)) {
+            return { result: JSON.stringify({ ok: false, error: "financial_record_invalid" }) };
+          }
+          if (Array.isArray(transactions) && transactions.length > 0) {
+            return { result: JSON.stringify({ ok: false, error: "user_has_financial_history" }) };
+          }
           const versionRaw = store.get(keys[4]);
           const currentVersion = typeof versionRaw === "string" && /^\d+$/.test(versionRaw)
             && Number.isSafeInteger(Number(versionRaw)) && Number(versionRaw) > 0
@@ -799,19 +828,138 @@ test("malformed profile JSON is reported as a data conflict, not service unavail
   assert.equal((await reset.json()).error, "account_record_invalid");
 });
 
-test("admin deletion atomically advances the tombstone and old tokens stay revoked after re-registration", async (t) => {
+test("admin deletion rejects a nonzero authoritative balance with 409 and preserves every record", async (t) => {
+  const userRaw = JSON.stringify({
+    email: "test@example.com",
+    username: "funded-user",
+    passwordHash: utils.hashPassword("old-password"),
+    balance: 0,
+    banned: false,
+  });
+  const redis = installFakeRedis({
+    [USER_KEY]: userRaw,
+    [VERSION_KEY]: "7",
+    [LIFECYCLE_KEY]: "0123456789abcdef0123456789abcdef",
+    [BALANCE_KEY]: "125",
+  });
+  t.after(() => redis.restore());
+
+  const adminToken = utils.signSession({
+    role: "admin",
+    staffId: 1,
+    staffUsername: "root",
+    exp: Date.now() + 60_000,
+  });
+  const response = await adminUserRoute.DELETE(new Request("https://www.liumeiti.vip/api/admin/users/test%40example.com", {
+    method: "DELETE",
+    headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}` },
+  }), { params: Promise.resolve({ email: "test%40example.com" }) });
+
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { ok: false, error: "user_has_balance" });
+  assert.equal(redis.store.get(USER_KEY), userRaw);
+  assert.equal(redis.store.get(BALANCE_KEY), "125");
+  assert.equal(redis.store.get(VERSION_KEY), "7");
+  assert.equal(redis.store.get(LIFECYCLE_KEY), "0123456789abcdef0123456789abcdef");
+
+  const legacyRaw = JSON.stringify({
+    email: "test@example.com",
+    username: "legacy-funded-user",
+    balance: 12.5,
+  });
+  redis.store.set(USER_KEY, legacyRaw);
+  redis.store.delete(BALANCE_KEY);
+  const legacyResponse = await adminUserRoute.DELETE(new Request("https://www.liumeiti.vip/api/admin/users/test%40example.com", {
+    method: "DELETE",
+    headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}` },
+  }), { params: Promise.resolve({ email: "test%40example.com" }) });
+  assert.equal(legacyResponse.status, 409);
+  assert.deepEqual(await legacyResponse.json(), { ok: false, error: "user_has_balance" });
+  assert.equal(redis.store.get(USER_KEY), legacyRaw);
+  assert.equal(redis.store.has(BALANCE_KEY), false);
+  assert.equal(redis.store.get(VERSION_KEY), "7");
+  assert.equal(redis.store.get(LIFECYCLE_KEY), "0123456789abcdef0123456789abcdef");
+});
+
+test("admin deletion rejects any financial history with 409 and preserves every record", async (t) => {
+  const userRaw = JSON.stringify({
+    email: "test@example.com",
+    username: "history-user",
+    passwordHash: utils.hashPassword("old-password"),
+    balance: 0,
+    banned: false,
+  });
+  const transactions = [JSON.stringify({ id: "TX-OLD", amount: 0 })];
+  const redis = installFakeRedis({
+    [USER_KEY]: userRaw,
+    [VERSION_KEY]: "4",
+    [LIFECYCLE_KEY]: "fedcba9876543210fedcba9876543210",
+    [BALANCE_KEY]: "0",
+    [`${USER_KEY}:tx`]: transactions,
+  });
+  t.after(() => redis.restore());
+
+  const adminToken = utils.signSession({
+    role: "admin",
+    staffId: 1,
+    staffUsername: "root",
+    exp: Date.now() + 60_000,
+  });
+  const response = await adminUserRoute.DELETE(new Request("https://www.liumeiti.vip/api/admin/users/test%40example.com", {
+    method: "DELETE",
+    headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}` },
+  }), { params: Promise.resolve({ email: "test%40example.com" }) });
+
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { ok: false, error: "user_has_financial_history" });
+  assert.equal(redis.store.get(USER_KEY), userRaw);
+  assert.equal(redis.store.get(BALANCE_KEY), "0");
+  assert.deepEqual(redis.store.get(`${USER_KEY}:tx`), transactions);
+  assert.equal(redis.store.get(VERSION_KEY), "4");
+  assert.equal(redis.store.get(LIFECYCLE_KEY), "fedcba9876543210fedcba9876543210");
+});
+
+test("admin deletion rejects malformed financial records without deleting account data", async (t) => {
+  const userRaw = JSON.stringify({ email: "test@example.com", username: "invalid-finance", balance: 0 });
+  const redis = installFakeRedis({
+    [USER_KEY]: userRaw,
+    [VERSION_KEY]: "3",
+    [BALANCE_KEY]: [],
+  });
+  t.after(() => redis.restore());
+
+  assert.deepEqual(
+    await utils.deleteUser("test@example.com"),
+    { ok: false, error: "financial_record_invalid" },
+  );
+  assert.equal(redis.store.get(USER_KEY), userRaw);
+  assert.deepEqual(redis.store.get(BALANCE_KEY), []);
+  assert.equal(redis.store.get(VERSION_KEY), "3");
+
+  redis.store.set(BALANCE_KEY, "0");
+  redis.store.set(`${USER_KEY}:tx`, "not-a-list");
+  assert.deepEqual(
+    await utils.deleteUser("test@example.com"),
+    { ok: false, error: "financial_record_invalid" },
+  );
+  assert.equal(redis.store.get(USER_KEY), userRaw);
+  assert.equal(redis.store.get(BALANCE_KEY), "0");
+  assert.equal(redis.store.get(`${USER_KEY}:tx`), "not-a-list");
+  assert.equal(redis.store.get(VERSION_KEY), "3");
+});
+
+test("admin deletion atomically removes a zero-balance user without financial history and keeps old tokens revoked", async (t) => {
   const now = Date.now();
   const redis = installFakeRedis({
     [USER_KEY]: JSON.stringify({
       email: "test@example.com",
       username: "old-lifecycle",
       passwordHash: utils.hashPassword("old-password"),
-      balance: 12,
+      balance: 0,
       banned: false,
     }),
     [VERSION_KEY]: "1",
-    [BALANCE_KEY]: "1200",
-    [`${USER_KEY}:tx`]: [JSON.stringify({ id: "TX-OLD" })],
+    [BALANCE_KEY]: "0",
   });
   t.after(() => redis.restore());
 
@@ -1484,7 +1632,7 @@ test("logout keeps the browser session retryable when durable revocation is unav
   assert.equal(response.headers.get("retry-after"), "5");
 });
 
-test("real Redis keeps delete, tombstone advancement, re-registration, and issuance in one lifecycle order", {
+test("real Redis rejects funded and historical users before deleting an empty account in lifecycle order", {
   skip: process.env.RUN_REAL_REDIS_TESTS !== "1" ? "set RUN_REAL_REDIS_TESTS=1 for Docker integration" : false,
   timeout: 120_000,
 }, async () => {
@@ -1521,6 +1669,24 @@ test("real Redis keeps delete, tombstone advancement, re-registration, and issua
       assert.match(oldLifecycle.accountLifecycleId, /^[a-f0-9]{32}$/);
       assert.equal(redis.run(["GET", LIFECYCLE_KEY]), oldLifecycle.accountLifecycleId);
 
+      const funded = await utils.deleteUser("test@example.com");
+      assert.deepEqual(funded, { ok: false, error: "user_has_balance" });
+      assert.notEqual(redis.run(["GET", USER_KEY]), null);
+      assert.equal(redis.run(["GET", BALANCE_KEY]), "2500");
+      assert.equal(redis.run(["GET", VERSION_KEY]), "2");
+      assert.equal(redis.run(["GET", LIFECYCLE_KEY]), oldLifecycle.accountLifecycleId);
+      assert.equal(redis.run(["LLEN", `${USER_KEY}:tx`]), 1);
+
+      redis.run(["SET", BALANCE_KEY, "0"]);
+      const historical = await utils.deleteUser("test@example.com");
+      assert.deepEqual(historical, { ok: false, error: "user_has_financial_history" });
+      assert.notEqual(redis.run(["GET", USER_KEY]), null);
+      assert.equal(redis.run(["GET", BALANCE_KEY]), "0");
+      assert.equal(redis.run(["GET", VERSION_KEY]), "2");
+      assert.equal(redis.run(["GET", LIFECYCLE_KEY]), oldLifecycle.accountLifecycleId);
+      assert.equal(redis.run(["LLEN", `${USER_KEY}:tx`]), 1);
+
+      redis.run(["DEL", `${USER_KEY}:tx`]);
       const deleted = await utils.deleteUser("test@example.com");
       assert.equal(deleted.ok, true);
       assert.equal(deleted.authVersion, 3);

@@ -144,7 +144,7 @@ test("quote and USDT-rate bootstrap failures are localized, finite, and retryabl
   assert.match(proxyQuote, /error\.invalidatesQuote = \[[\s\S]*?quote_expired[\s\S]*?payment_method_conflict/);
   assert.match(proxyQuote, /if \(error\?\.invalidatesQuote\) \{[\s\S]*?setOrder\(null\)/);
   assert.match(proxyQuote, /const \[paymentUncertain, setPaymentUncertain\] = useState\(false\)/);
-  assert.match(proxyQuote, /paymentUiReady = rateReady && !paymentUncertain/);
+  assert.match(proxyQuote, /paymentUiReady = settingsState\.ready && rateReady && !paymentUncertain/);
   assert.match(proxyQuote, /付款提交结果尚未确认[\s\S]*?收款码和付款方式已锁定/);
   assert.match(proxyQuote, /onClick=\{paymentUncertain \? \(\) => setQuoteAttempt/);
 });
@@ -181,7 +181,7 @@ test("account, checkout, service center and redeem auth failures never masquerad
   const accountRefresh = checkout.slice(checkout.indexOf("async function refreshAccountState"), checkout.indexOf("// Pre-fill email"));
   assert.ok(accountRefresh.indexOf("requestId !== accountLoadRequestRef.current") < accountRefresh.indexOf("if (meRes.status === 401)"), "a stale 401 must not overwrite a newer signed-in response");
   assert.match(accountRefresh, /catch \(e\) \{\s*if \(isCancelled\(\) \|\| requestId !== accountLoadRequestRef\.current\) return/);
-  assert.match(checkout, /disabled=\{cartCount === 0 \|\| submitting \|\| !accountReady\}/);
+  assert.match(checkout, /disabled=\{cartCount === 0 \|\| submitting \|\| !accountReady \|\| !checkoutPaymentReady\}/);
   assert.match(checkout, /accountError[\s\S]*onClick=\{\(\) => refreshAccountState\(\)\}/);
   assert.match(checkout, /const \[authSessionPending, setAuthSessionPending\] = useState\(false\)/);
   assert.match(checkout, /if \(authSessionPending\) \{[\s\S]*?await refreshAccountState\([^)]*[\s\S]*?return;/);

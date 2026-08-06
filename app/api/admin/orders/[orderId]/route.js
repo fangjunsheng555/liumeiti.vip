@@ -318,6 +318,7 @@ async function sendTelegramNotice(text) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+    signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined,
   });
   if (res.ok) return true;
   return res.status >= 500 || res.status === 408 || res.status === 425

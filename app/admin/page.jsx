@@ -532,7 +532,7 @@ function exportRedeemHistoryPdfLegacy(record) {
           <header class="topbar">
             <div class="brand">
               <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
-              <div class="name">${getSiteSettings().footer.brand}</div>
+              <div class="name">${escapeHtml(getSiteSettings().footer.brand)}</div>
               <div class="site">网址:https://www.liumeiti.vip</div>
             </div>
             <div class="doc-meta">
@@ -603,7 +603,7 @@ function exportRedeemHistoryPdfLegacy(record) {
             <table>${inputs}</table>
           </section>
 
-          <div class="foot">${getSiteSettings().footer.copyright}</div>
+          <div class="foot">${escapeHtml(getSiteSettings().footer.copyright)}</div>
         </div>
       </main>
       <script>
@@ -631,6 +631,7 @@ function exportRedeemHistoryPdfLegacy(record) {
   </html>`;
   const win = window.open("", "_blank", "width=820,height=900");
   if (!win) return;
+  win.opener = null;
   win.document.open();
   win.document.write(html);
   win.document.close();
@@ -999,7 +1000,7 @@ function openVoucherPdf({
           <header class="topbar">
             <div class="brand">
               <img src="${logoUrl}" alt="Maoyang Taiwan Inc" />
-              <div class="name">${getSiteSettings().footer.brand}</div>
+              <div class="name">${escapeHtml(getSiteSettings().footer.brand)}</div>
               <div class="site">网址:https://www.liumeiti.vip</div>
             </div>
             <div class="doc-meta">
@@ -1037,7 +1038,7 @@ function openVoucherPdf({
             ${noteHtml}
           </section>
 
-          <div class="foot">${getSiteSettings().footer.copyright}</div>
+          <div class="foot">${escapeHtml(getSiteSettings().footer.copyright)}</div>
         </div>
       </main>
       <script>
@@ -1065,6 +1066,7 @@ function openVoucherPdf({
   </html>`;
   const win = window.open("", "_blank", "width=820,height=900");
   if (!win) return;
+  win.opener = null;
   win.document.open();
   win.document.write(html);
   win.document.close();
@@ -2278,7 +2280,11 @@ export default function AdminPage() {
         setUserModalOpen(false);
       }
     } catch (e) {
-      const message = adminRequestErrorMessage(e, "用户账号更新");
+      const message = {
+        user_has_balance: "该用户仍有余额，请先妥善处理余额后再删除。",
+        user_has_financial_history: "该用户存在资金流水，为保护账目记录不能删除。",
+        financial_record_invalid: "该用户的资金记录异常，请先核查后再删除。",
+      }[e?.code] || adminRequestErrorMessage(e, "用户账号更新");
       if (Number(e?.responseStatus || 0) === 401) {
         enterAdminSignedOutState(message);
       } else {
@@ -3160,7 +3166,7 @@ export default function AdminPage() {
         clearTerminalAdminMutation(pending, res, data);
         const msg = {
           missing_services: "请选择至少一个服务",
-          invalid_custom_code: "自定义代码需为4-40位字母或数字",
+          invalid_custom_code: "自定义代码需为12-40位字母或数字",
           custom_code_exists: "该自定义兑换码已存在,请换一个",
         }[data.error] || "生成失败,请检查金额或服务";
         setCodeResult({ type: "error", message: msg });
@@ -4252,13 +4258,11 @@ export default function AdminPage() {
   }
 
   function toggleBatchMode() {
-    setBatchMode((v) => {
-      const next = !v;
-      if (!next) setSelectedIds(new Set());
-      setBatchConfirm(null);
-      setBatchResult(null);
-      return next;
-    });
+    const next = !batchMode;
+    setBatchMode(next);
+    if (!next) setSelectedIds(new Set());
+    setBatchConfirm(null);
+    setBatchResult(null);
   }
 
   function toggleSelect(orderId) {
@@ -5525,6 +5529,7 @@ export default function AdminPage() {
                   }}
                   placeholder="可选,留空随机生成;填写后仅生成1个"
                   autoComplete="off"
+                  minLength={12}
                   maxLength={40}
                 />
               </label>
@@ -7559,7 +7564,7 @@ export default function AdminPage() {
             </h3>
             <p className="admin-confirm-email">{confirmUserAction.email}</p>
             <p className="admin-confirm-text">
-              {confirmUserAction.action === "delete" && "用户记录、余额明细将被永久删除,无法恢复。订单数据保留"}
+              {confirmUserAction.action === "delete" && "仅可删除余额为零且没有资金流水的用户。用户记录将被永久删除，订单数据保留"}
               {confirmUserAction.action === "ban" && "封禁后用户无法登录现有账户。可随时解除"}
               {confirmUserAction.action === "unban" && "解除后用户可正常登录使用账户"}
             </p>

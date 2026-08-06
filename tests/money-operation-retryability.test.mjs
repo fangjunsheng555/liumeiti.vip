@@ -37,7 +37,15 @@ class MoneyFailureRedis {
   fetch = async (input, init = {}) => {
     const url = new URL(String(input));
     if (url.pathname === "/pipeline") {
-      const command = JSON.parse(String(init.body || "[]"))[0];
+      const commands = JSON.parse(String(init.body || "[]"));
+      const command = commands[0];
+      if (String(command?.[1] || "").startsWith("liumeiti:redeem-guard:")) {
+        return Response.json(commands.map(([name]) => ({
+          result: String(name).toUpperCase() === "GET" ? "0"
+            : String(name).toUpperCase() === "TTL" ? -2
+              : String(name).toUpperCase() === "PING" ? "PONG" : null,
+        })));
+      }
       const script = String(command?.[1] || "");
       if (script.includes("balanceCents=balanceRaw")) {
         return Response.json([{ result: JSON.stringify({

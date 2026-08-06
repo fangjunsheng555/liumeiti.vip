@@ -9,6 +9,7 @@ import { hasPendingSpotifyPasswordCorrection } from "../../../lib/order-attentio
 import { orderExpirySummary } from "../../../lib/order-expiry.js";
 import { getOrderSla } from "../../../lib/order-sla.js";
 import { effectiveQuoteStatus } from "../../_quote-expiry.js";
+import { isRecognizedSale, orderValueBreakdown } from "../insights/metrics.js";
 
 function beijingDateKey(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
@@ -31,12 +32,16 @@ function orderServiceAmount(order) {
   return Number(order.subtotal || itemsTotal || order.originalAmount || order.bundleFinalAmount || 0);
 }
 
-function orderRevenueAmount(order) {
-  if (!["received", "completed"].includes(order.status || "received")) return 0;
-  if (order.paymentMethod === "redeem" || order.paidCurrency === "CODE") {
-    return orderServiceAmount(order);
-  }
-  return Number(order.finalAmount || (order.paidCurrency === "CNY" ? order.paidAmount : 0) || 0);
+export function overviewSaleBreakdown(order) {
+  const recognizedSale = isRecognizedSale(order);
+  const value = recognizedSale
+    ? orderValueBreakdown(order)
+    : { direct: 0, codeEquivalent: 0 };
+  return {
+    recognizedSale,
+    revenueAmount: Number(value.direct || 0),
+    codeEquivalentAmount: Number(value.codeEquivalent || 0),
+  };
 }
 
 function isAbnormalOrder(order) {
@@ -63,6 +68,7 @@ export async function GET(request) {
   const orders = ordersRaw
     .map((order) => {
       const status = effectiveQuoteStatus(order);
+      const sale = overviewSaleBreakdown({ ...order, status });
       return ({
       orderId: order.orderId || "",
       status,
@@ -82,12 +88,12 @@ export async function GET(request) {
       displayAmount: order.paymentMethod === "redeem"
         ? orderServiceAmount(order)
         : Number(order.finalAmount || order.paidAmount || orderServiceAmount(order) || 0),
-      revenueAmount: orderRevenueAmount(order),
+      ...sale,
     }); })
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
   const latestOrder = orders[0] || null;
   const todayKey = beijingDateKey();
-  const revenueOrders = orders.filter((order) => ["received", "completed"].includes(order.status));
+  const revenueOrders = orders.filter((order) => order.recognizedSale);
   const totalRevenue = revenueOrders.reduce((sum, order) => sum + Number(order.revenueAmount || 0), 0);
   const todayRevenue = revenueOrders
     .filter((order) => orderBeijingDateKey(order) === todayKey)
@@ -142,14 +148,14 @@ export async function GET(request) {
     const i = trendIdx[orderBeijingDateKey(order)];
     if (i == null) continue;
     trend[i].orders += 1;
-    if (["received", "completed"].includes(order.status)) trend[i].revenue = Math.round((trend[i].revenue + Number(order.revenueAmount || 0)) * 100) / 100;
+    if (order.recognizedSale) trend[i].revenue = Math.round((trend[i].revenue + Number(order.revenueAmount || 0)) * 100) / 100;
   }
   overview.trend = trend;
   const yesterday = trend[trend.length - 2] || { orders: 0, revenue: 0 };
   overview.yesterdayOrders = yesterday.orders;
   overview.yesterdayRevenue = yesterday.revenue;
 
-  // 周期营收 + 客单价(全部从已加载订单算,零额外 IO)。营收口径与总营收一致:仅 received/completed。
+  // 周期营收与总营收共用成交判定；兑换码只保留等价价值，不进入现金营收。
   const dayKeyN = (n) => beijingDateKey(new Date(Date.now() - n * 86400000));
   const monthPrefix = todayKey.slice(0, 7); // YYYY-MM
   const key7 = dayKeyN(6), key30 = dayKeyN(29);

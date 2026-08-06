@@ -1,6 +1,7 @@
 import {
   getCookieFromRequest, clean, redeemCodeForUser, clientIpFromRequest, clientUserAgentFromRequest,
   checkRedeemRateLimit, recordRedeemRateFailure, clearRedeemRateLimit, redeemRateLimitMessage,
+  rateLimitResponse,
 } from "../../_utils.js";
 import {
   authenticateUserRequest,
@@ -39,6 +40,7 @@ export async function POST(request) {
 
   const guard = await checkRedeemRateLimit(request);
   if (!guard.ok) {
+    if (guard.unavailable) return rateLimitResponse(guard);
     return Response.json({
       ok: false,
       error: "too_many_attempts",
@@ -67,7 +69,8 @@ export async function POST(request) {
         ...retryableMoneyOperationFields(result),
       }, { status: 503 });
     }
-    await recordRedeemRateFailure(guard);
+    const recorded = await recordRedeemRateFailure(guard);
+    if (!recorded.ok) return rateLimitResponse(recorded);
     if (code === "idempotency_conflict") {
       return Response.json({ ok: false, error: code, message: en ? "This request key was already used" : "该请求标识已被使用" }, { status: 409 });
     }

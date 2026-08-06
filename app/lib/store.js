@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { SETTINGS_DEFAULTS, discountLabel } from "./settings-defaults.js";
 import { getCatalogDisplayPrice, getCatalogStartingPlan, localizeCatalogDisplayPrice } from "./catalog-price.js";
+import { clientFetch } from "./client-fetch.js";
 
 export const USDT_ADDRESS = "TDoUMF4nF244o5GZvBBwX5t9axvnSoP1Cm";
 export const USDT_DISCOUNT = 0.9;
@@ -14,17 +15,74 @@ export const USDT_RATE = 6.85;
 let SITE_SETTINGS = SETTINGS_DEFAULTS;
 export function applySiteSettings(s) { if (s && typeof s === "object") SITE_SETTINGS = s; }
 export function getSiteSettings() { return SITE_SETTINGS; }
-export function useSiteSettings() {
-  const [settings, setSettings] = useState(SITE_SETTINGS);
+
+function validCheckoutSettings(settings) {
+  return Boolean(
+    settings && typeof settings === "object" && !Array.isArray(settings)
+    && settings.payment && typeof settings.payment === "object"
+    && typeof settings.payment.alipayQr === "string" && settings.payment.alipayQr.trim()
+    && typeof settings.payment.usdtQr === "string" && settings.payment.usdtQr.trim()
+    && settings.usdt && typeof settings.usdt === "object"
+    && typeof settings.usdt.address === "string" && settings.usdt.address.trim()
+    && Number.isFinite(Number(settings.usdt.discount)) && Number(settings.usdt.discount) > 0
+    && settings.bundle && typeof settings.bundle === "object"
+    && Number.isFinite(Number(settings.bundle.tier2Rate))
+    && Number.isFinite(Number(settings.bundle.tier3Rate))
+  );
+}
+
+function snapshotError(kind, code, status = 0, cause = null) {
+  const error = new Error(`${kind}_${code}`);
+  error.code = `${kind}_${code}`;
+  error.status = Number(status || 0);
+  if (cause) error.cause = cause;
+  return error;
+}
+
+function snapshotErrorCode(kind, error) {
+  if (String(error?.code || "").startsWith(`${kind}_`)) return error.code;
+  if (error?.name === "TimeoutError" || error?.code === "request_timeout") return `${kind}_timeout`;
+  return `${kind}_network_error`;
+}
+
+export async function loadSiteSettingsSnapshot() {
+  const response = await clientFetch("/api/settings", { cache: "no-store", credentials: "same-origin" });
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (error) {
+    if (error?.name === "TimeoutError" || error?.code === "request_timeout" || error?.code === "response_body_timeout") throw error;
+    throw snapshotError("settings", "invalid_response", response.status, error);
+  }
+  if (!response.ok) throw snapshotError("settings", `http_${response.status}`, response.status);
+  if (!payload?.ok || !validCheckoutSettings(payload.settings)) {
+    throw snapshotError("settings", "invalid_response", response.status);
+  }
+  applySiteSettings(payload.settings);
+  return payload.settings;
+}
+
+export function useSiteSettingsState() {
+  const [attempt, setAttempt] = useState(0);
+  const [state, setState] = useState({ data: SITE_SETTINGS, ready: false, loading: true, error: "" });
+  const retry = useCallback(() => setAttempt((value) => value + 1), []);
   useEffect(() => {
     let on = true;
-    fetch("/api/settings", { cache: "no-store", credentials: "same-origin" })
-      .then((r) => r.json())
-      .then((j) => { if (on && j && j.ok && j.settings) { applySiteSettings(j.settings); setSettings(j.settings); } })
-      .catch(() => {});
+    setState((current) => ({ ...current, ready: false, loading: true, error: "" }));
+    loadSiteSettingsSnapshot()
+      .then((settings) => {
+        if (on) setState({ data: settings, ready: true, loading: false, error: "" });
+      })
+      .catch((error) => {
+        if (on) setState((current) => ({ ...current, ready: false, loading: false, error: snapshotErrorCode("settings", error) }));
+      });
     return () => { on = false; };
-  }, []);
-  return settings;
+  }, [attempt]);
+  return { ...state, settings: state.data, retry };
+}
+
+export function useSiteSettings() {
+  return useSiteSettingsState().data;
 }
 
 export const PRODUCTS = [
@@ -273,17 +331,44 @@ export function getCatalogProduct(key) {
 
 // 拉取并应用后台覆盖;返回版本号(变化即触发组件重渲染,显示最新价格/上下架)。
 // 任何展示价格的客户端页面在顶部调用一次即可。
-export function useCatalogSync() {
-  const [version, setVersion] = useState(0);
+export async function loadCatalogSnapshot() {
+  const response = await clientFetch("/api/catalog", { cache: "no-store", credentials: "same-origin" });
+  let payload;
+  try {
+    payload = await response.json();
+  } catch (error) {
+    if (error?.name === "TimeoutError" || error?.code === "request_timeout" || error?.code === "response_body_timeout") throw error;
+    throw snapshotError("catalog", "invalid_response", response.status, error);
+  }
+  if (!response.ok) throw snapshotError("catalog", `http_${response.status}`, response.status);
+  if (!payload?.ok || !Array.isArray(payload.products)) {
+    throw snapshotError("catalog", "invalid_response", response.status);
+  }
+  applyCatalogOverride(payload.products);
+  return payload.products;
+}
+
+export function useCatalogSyncState() {
+  const [attempt, setAttempt] = useState(0);
+  const [state, setState] = useState({ version: 0, ready: false, loading: true, error: "" });
+  const retry = useCallback(() => setAttempt((value) => value + 1), []);
   useEffect(() => {
     let on = true;
-    fetch("/api/catalog", { cache: "no-store", credentials: "same-origin" })
-      .then((r) => r.json())
-      .then((j) => { if (on && j && j.ok) { applyCatalogOverride(j.products); setVersion((v) => v + 1); } })
-      .catch(() => {});
+    setState((current) => ({ ...current, ready: false, loading: true, error: "" }));
+    loadCatalogSnapshot()
+      .then(() => {
+        if (on) setState((current) => ({ version: current.version + 1, ready: true, loading: false, error: "" }));
+      })
+      .catch((error) => {
+        if (on) setState((current) => ({ ...current, ready: false, loading: false, error: snapshotErrorCode("catalog", error) }));
+      });
     return () => { on = false; };
-  }, []);
-  return version;
+  }, [attempt]);
+  return { ...state, retry };
+}
+
+export function useCatalogSync() {
+  return useCatalogSyncState().version;
 }
 
 // --- English localization (display only; ids/amounts unchanged) ---

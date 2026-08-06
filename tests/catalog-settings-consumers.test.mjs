@@ -102,3 +102,12 @@ test("USDT without a discount has complete customer-facing copy and no empty bad
   assert.match(serviceCenter, /usdtPresentation\.faqQualifier/);
   assert.match(proxy, /usdtPresentation\.discount && <em>/);
 });
+
+test("shop cards do not expose an interactive role around their real action buttons", async () => {
+  const source = await readFile(new URL("../app/shop/page.jsx", import.meta.url), "utf8");
+  const start = source.indexOf("<article");
+  const card = source.slice(start, source.indexOf("</article>", start) + 10);
+  assert.match(card, /className=\{`glass-card product-card/);
+  assert.doesNotMatch(card, /role="button"|tabIndex=\{0\}/);
+  assert.equal((card.match(/<button/g) || []).length, 2);
+});

@@ -63,7 +63,9 @@ export async function DELETE(request, { params }) {
   }
   const deleted = await deleteUser(email);
   if (!deleted.ok) {
-    const status = deleted.error === "user_not_found" ? 404 : 503;
+    const status = deleted.error === "user_not_found" ? 404
+      : ["user_has_balance", "user_has_financial_history", "financial_record_invalid"].includes(deleted.error) ? 409
+        : 503;
     return Response.json({ ok: false, error: deleted.error || "delete_failed" }, { status });
   }
   await pushAdminActionLog({

@@ -1563,6 +1563,10 @@ test("stock alert preflights once on mount and enters permission flow before net
   assert.match(component, /const buttonDisabled\s*=\s*busy \|\| \["checking", "unavailable", "available"\]\.includes\(status\)/);
   assert.match(component, /cursor:\s*busy \? "wait" : buttonDisabled \? "not-allowed" : "pointer"/);
   assert.match(component, /const wasWatching = watching[\s\S]*setStatus\(wasWatching \? "watching" : "error"\)/);
+  assert.match(component, /async function retryAccountState\(\)[\s\S]*fetchPushAccountStateCached\(\{ refresh: true \}\)/);
+  assert.match(component, /onClick=\{status === "error" \? retryAccountState : toggle\}/);
+  assert.match(component, /status === "error"[\s\S]*Retry restock alert[\s\S]*重试到货提醒/);
+  assert.match(component, /\.catch\(\(error\) => \{[\s\S]*setStatus\("error"\);[\s\S]*setMessage\(messageForError\(error, en\)\)/);
 });
 
 test("remote Push device detection prefers valid subscriptions and handles a single remote device", () => {

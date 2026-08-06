@@ -61,12 +61,34 @@ export default function StockAlertButton({ service, plan, locale = "zh" }) {
         if (["unauthorized", "not_logged_in", "session_missing", "session_invalid"].some((item) => code.includes(item))) {
           setStatus("auth_required");
         } else {
-          setStatus("unavailable");
+          setStatus("error");
           setMessage(messageForError(error, en));
         }
       });
     return () => { cancelled = true; };
   }, [en, productKey]);
+
+  async function retryAccountState() {
+    if (busy) return;
+    setStatus("checking");
+    setMessage("");
+    try {
+      const state = await fetchPushAccountStateCached({ refresh: true });
+      if (!state.enabled || !state.configured) {
+        setStatus("unavailable");
+        return;
+      }
+      setStatus((state.stockWatches || []).includes(productKey) ? "watching" : "idle");
+    } catch (error) {
+      const code = String(error?.message || "");
+      if (["unauthorized", "not_logged_in", "session_missing", "session_invalid"].some((item) => code.includes(item))) {
+        setStatus("auth_required");
+      } else {
+        setStatus("error");
+        setMessage(messageForError(error, en));
+      }
+    }
+  }
 
   async function toggle() {
     if (busy) return;
@@ -108,7 +130,7 @@ export default function StockAlertButton({ service, plan, locale = "zh" }) {
     <div style={{ display: "grid", gap: 5, marginTop: -2, marginBottom: 4 }}>
       <button
         type="button"
-        onClick={toggle}
+        onClick={status === "error" ? retryAccountState : toggle}
         disabled={buttonDisabled}
         aria-pressed={watching}
         style={{
@@ -135,6 +157,8 @@ export default function StockAlertButton({ service, plan, locale = "zh" }) {
             ? (en ? "Sign in to set alert" : "登录后设置")
             : status === "unavailable"
               ? (en ? "Restock alerts unavailable" : "到货提醒暂不可用")
+              : status === "error"
+                ? (en ? "Retry restock alert" : "重试到货提醒")
               : busy
           ? (en ? "Enabling…" : "正在开启…")
           : watching ? (en ? "Remove restock alert" : "取消到货提醒") : (en ? "Notify me when available" : "到货提醒")}

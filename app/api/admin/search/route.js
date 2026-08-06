@@ -16,16 +16,17 @@ export async function GET(request) {
   const statusLabel = { awaiting_quote: "待报价", pending_payment: "待付款", quote_expired: "报价已失效", received: "未完成", completed: "已完成", invalid: "无效" };
 
   // 订单(所有可看订单的角色)
-  const allOrders = await getAllOrders();
-  const orders = allOrders
-    .filter((o) => [o.orderId, o.internalReference, o.email, o.contact, o.serviceLabel, o.platformUrl, o.productPrice].join(" ").toLowerCase().includes(q))
-    .slice(0, 6)
-    .map((o) => ({
-      orderId: o.orderId || "", email: o.email || "",
-      serviceLabel: o.serviceLabel || (Array.isArray(o.items) ? o.items.map((i) => i.label).join(" + ") : ""),
-      status: o.status || "received", statusLabel: statusLabel[o.status] || o.status || "",
-      createdAtBeijing: o.createdAtBeijing || "", internalReference: o.internalReference || "",
-    }));
+  const orders = perms.canViewOrders
+    ? (await getAllOrders())
+      .filter((o) => [o.orderId, o.internalReference, o.email, o.contact, o.serviceLabel, o.platformUrl, o.productPrice].join(" ").toLowerCase().includes(q))
+      .slice(0, 6)
+      .map((o) => ({
+        orderId: o.orderId || "", email: o.email || "",
+        serviceLabel: o.serviceLabel || (Array.isArray(o.items) ? o.items.map((i) => i.label).join(" + ") : ""),
+        status: o.status || "received", statusLabel: statusLabel[o.status] || o.status || "",
+        createdAtBeijing: o.createdAtBeijing || "", internalReference: o.internalReference || "",
+      }))
+    : [];
 
   // 用户(需 canViewUsers)
   let users = [];

@@ -329,16 +329,9 @@ export default function ShopPage() {
                 <article
                   key={item.key}
                   className={`glass-card product-card product-card-mini product-card-clickable svc-${item.key}${added ? " product-card-selected" : ""}`}
-                  role="button"
-                  tabIndex={0}
                   onClick={(event) => {
                     if (event.target instanceof Element && event.target.closest("button, a, input, textarea")) return;
                     setSelectedKey(item.key);
-                  }}
-                  onKeyDown={(event) => {
-                    if ((event.key === "Enter" || event.key === " ") && event.currentTarget === event.target) {
-                      setSelectedKey(item.key);
-                    }
                   }}
                 >
                   {promo.badge && (

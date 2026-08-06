@@ -23,10 +23,8 @@ import {
 import {
   PRODUCTS,
   getCatalogProducts,
-  useCatalogSync,
-  useSiteSettings,
-  USDT_ADDRESS,
-  USDT_RATE,
+  useCatalogSyncState,
+  useSiteSettingsState,
   useCart,
   copyText,
   bundleDiscountRate,
@@ -189,8 +187,13 @@ export default function CheckoutPage() {
   const router = useRouter();
   const { locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
-  const catalogVersion = useCatalogSync(); // 拉后台商品/价格覆盖,变化即重渲染
-  const siteSettings = useSiteSettings();   // 拉站点设置(USDT地址/折扣、组合优惠、收款码),应用到价格与展示
+  const catalogState = useCatalogSyncState(); // 只有权威目录读取成功后才允许新订单进入付款
+  const settingsState = useSiteSettingsState(); // 收款地址/二维码读取失败时禁止付款并提供重试
+  const catalogVersion = catalogState.version;
+  const siteSettings = settingsState.settings;
+  const checkoutConfigReady = catalogState.ready && settingsState.ready;
+  const checkoutConfigLoading = !checkoutConfigReady && !catalogState.error && !settingsState.error;
+  const checkoutConfigError = catalogState.error || settingsState.error;
   const usdtPresentation = usdtPaymentPresentation(locale);
   const products = getCatalogProducts(); // 合并后的上架商品(价格/规格/上下架与结账实收价一致)
   const { cart, cartPlans, hydrated, removeFromCart, replaceCart, clearCart, setCartPlan } = useCart();
@@ -221,7 +224,8 @@ export default function CheckoutPage() {
   const [redeemMode, setRedeemMode] = useState({ loading: true, code: "", info: null });
   const [urlPlans, setUrlPlans] = useState({});
   const [draftReady, setDraftReady] = useState(false);
-  const [usdtRate, setUsdtRate] = useState(USDT_RATE);
+  const [usdtRateState, setUsdtRateState] = useState({ rate: 0, ready: false, loading: false, error: "" });
+  const [usdtRateAttempt, setUsdtRateAttempt] = useState(0);
   const [proxySubmitted, setProxySubmitted] = useState(false);
   const [pendingJournalVersion, setPendingJournalVersion] = useState(0);
   const orderRequestRef = useRef(null);
@@ -317,15 +321,48 @@ export default function CheckoutPage() {
     return () => { cancelled = true; accountLoadRequestRef.current += 1; };
   }, []);
 
-  // 当日 USDT 汇率（与服务端一致，每日自动更新）
+  // 固定正数覆盖可直接使用；否则必须成功读取服务端汇率，绝不回退到编译时常量。
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/usdt-rate", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((d) => { if (!cancelled && d && d.ok && Number(d.rate) > 0) setUsdtRate(Number(d.rate)); })
-      .catch(() => {});
+    if (!settingsState.ready) {
+      setUsdtRateState({ rate: 0, ready: false, loading: false, error: "" });
+      return () => { cancelled = true; };
+    }
+    const override = Number(siteSettings.usdt.rateOverride);
+    if (Number.isFinite(override) && override > 0) {
+      setUsdtRateState({ rate: override, ready: true, loading: false, error: "" });
+      return () => { cancelled = true; };
+    }
+    setUsdtRateState({ rate: 0, ready: false, loading: true, error: "" });
+    (async () => {
+      try {
+        const response = await fetch("/api/usdt-rate", { cache: "no-store" });
+        let data = null;
+        try {
+          data = await response.json();
+        } catch (error) {
+          if (isClientRequestTimeout(error)) throw error;
+          const invalid = new Error("usdt_rate_invalid_response");
+          invalid.code = "usdt_rate_invalid_response";
+          throw invalid;
+        }
+        const rate = Number(data?.rate);
+        if (!response.ok || !data?.ok || !Number.isFinite(rate) || rate <= 0) {
+          const invalid = new Error(response.ok ? "usdt_rate_invalid_response" : `usdt_rate_http_${response.status}`);
+          invalid.code = response.ok ? "usdt_rate_invalid_response" : `usdt_rate_http_${response.status}`;
+          throw invalid;
+        }
+        if (!cancelled) setUsdtRateState({ rate, ready: true, loading: false, error: "" });
+      } catch (error) {
+        if (cancelled) return;
+        const code = isClientRequestTimeout(error)
+          ? "usdt_rate_timeout"
+          : String(error?.code || "usdt_rate_network_error");
+        setUsdtRateState({ rate: 0, ready: false, loading: false, error: code });
+      }
+    })();
     return () => { cancelled = true; };
-  }, []);
+  }, [settingsState.ready, siteSettings.usdt.rateOverride, usdtRateAttempt]);
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -716,10 +753,13 @@ export default function CheckoutPage() {
   const alipayPayableCny = Math.max(0.01, Math.round((finalCny + paymentAdjustment) * 100) / 100);
   // USDT 折扣/汇率以站点设置为准(与服务端实收一致)
   const usdtDiscount = Number(siteSettings.usdt.discount) || 0.9;
-  const effectiveUsdtRate = siteSettings.usdt.rateOverride ? Number(siteSettings.usdt.rateOverride) : usdtRate;
-  const finalUsdt = Math.round((finalCny * usdtDiscount / effectiveUsdtRate) * 100) / 100;
+  const usdtRateReady = usdtRateState.ready && Number.isFinite(usdtRateState.rate) && usdtRateState.rate > 0;
+  const effectiveUsdtRate = usdtRateReady ? usdtRateState.rate : 0;
+  const finalUsdt = usdtRateReady ? Math.round((finalCny * usdtDiscount / effectiveUsdtRate) * 100) / 100 : 0;
   const usdtScale = 10 ** usdtPrecision;
   const usdtPayable = (Math.round((finalUsdt + Number(usdtNonce || 0)) * usdtScale) / usdtScale).toFixed(usdtPrecision);
+  const requiresUsdtRate = !serviceRedeemActive && paymentMethod === "usdt" && finalCny > 0;
+  const checkoutPaymentReady = checkoutConfigReady && (!requiresUsdtRate || usdtRateReady);
   const savings = subtotal - bundleFinalCny;
 
   // 余额付款变得不足时（加购/优惠变化抬高总价）自动切回支付宝，避免停留在会被服务端拒绝的余额选项。
@@ -1149,6 +1189,24 @@ export default function CheckoutPage() {
       await replayPendingOrder(pending);
       return;
     }
+    if (!checkoutConfigReady) {
+      setStatus({
+        type: "error",
+        message: checkoutConfigLoading
+          ? L("正在读取最新商品价格与收款信息，请稍候", "Loading the latest prices and payment details. Please wait.")
+          : L("暂时无法读取最新商品价格与收款信息。为避免金额或收款信息错误，请重试后再付款", "The latest prices and payment details could not be loaded. Retry before paying."),
+      });
+      return;
+    }
+    if (requiresUsdtRate && !usdtRateReady) {
+      setStatus({
+        type: "error",
+        message: usdtRateState.loading
+          ? L("正在读取当前 USDT 汇率，请稍候", "Loading the current USDT rate. Please wait.")
+          : L("暂时无法读取当前 USDT 汇率。为避免金额错误，请重试或改用其他付款方式", "The current USDT rate could not be loaded. Retry or choose another payment method."),
+      });
+      return;
+    }
     const error = validateForm();
     if (error) {
       setStatus({ type: "error", message: error });
@@ -1210,6 +1268,24 @@ export default function CheckoutPage() {
       if (!pendingIdentityMatches(unresolved)) return;
       pendingReplayStartedRef.current = true;
       await replayPendingOrder(unresolved);
+      return;
+    }
+    if (!checkoutConfigReady) {
+      setStatus({
+        type: "error",
+        message: checkoutConfigLoading
+          ? L("正在读取最新商品价格与收款信息，请稍候", "Loading the latest prices and payment details. Please wait.")
+          : L("暂时无法读取最新商品价格与收款信息。为避免金额或收款信息错误，请重试后再提交", "The latest prices and payment details could not be loaded. Retry before submitting."),
+      });
+      return;
+    }
+    if (requiresUsdtRate && !usdtRateReady) {
+      setStatus({
+        type: "error",
+        message: usdtRateState.loading
+          ? L("正在读取当前 USDT 汇率，请稍候", "Loading the current USDT rate. Please wait.")
+          : L("暂时无法读取当前 USDT 汇率。为避免金额错误，请重试或改用其他付款方式", "The current USDT rate could not be loaded. Retry or choose another payment method."),
+      });
       return;
     }
     if (cartCount === 0) return;
@@ -1380,7 +1456,7 @@ export default function CheckoutPage() {
     );
   }
 
-  if (checkoutReady && !pendingOrderRef.current && (proxyQuoteCart || proxySubmitted)) {
+  if (checkoutReady && catalogState.ready && !pendingOrderRef.current && (proxyQuoteCart || proxySubmitted)) {
     return (
       <ProxyPaymentCheckout
         initialEmail={form.email || authedUser?.email || ""}
@@ -1464,6 +1540,36 @@ export default function CheckoutPage() {
             {status.action === "logout-guest" && (
               <button type="button" className="checkout-alert-action" onClick={signOutAndRecoverGuestOrder}>
                 {L("退出并恢复访客订单", "Sign out and recover guest order")}
+              </button>
+            )}
+          </div>
+        )}
+
+        {!checkoutConfigReady && !proxySubmitted && (
+          <div className={`checkout-alert ${checkoutConfigError ? "error" : "info"}`} role={checkoutConfigError ? "alert" : "status"}>
+            <span>{checkoutConfigError
+              ? L("暂时无法读取最新商品价格与收款信息。为避免金额或收款信息错误，当前无法付款", "The latest prices and payment details could not be loaded, so payment is temporarily unavailable.")
+              : L("正在读取最新商品价格与收款信息…", "Loading the latest prices and payment details…")}</span>
+            {checkoutConfigError && (
+              <button
+                type="button"
+                className="checkout-alert-action"
+                onClick={() => { catalogState.retry(); settingsState.retry(); }}
+              >
+                {L("重试", "Retry")}
+              </button>
+            )}
+          </div>
+        )}
+
+        {checkoutConfigReady && requiresUsdtRate && !usdtRateReady && (
+          <div className={`checkout-alert ${usdtRateState.error ? "error" : "info"}`} role={usdtRateState.error ? "alert" : "status"}>
+            <span>{usdtRateState.error
+              ? L("暂时无法读取当前 USDT 汇率。为避免金额错误，USDT 支付已暂停；请重试或改用其他付款方式", "The current USDT rate could not be loaded. USDT payment is paused; retry or choose another payment method.")
+              : L("正在读取当前 USDT 汇率…", "Loading the current USDT rate…")}</span>
+            {usdtRateState.error && (
+              <button type="button" className="checkout-alert-action" onClick={() => setUsdtRateAttempt((value) => value + 1)}>
+                {L("重试", "Retry")}
               </button>
             )}
           </div>
@@ -1717,7 +1823,11 @@ export default function CheckoutPage() {
                       />
                       <div className="payment-method-icon usdt"><UsdtIcon /></div>
                       <div className="payment-method-detail">
-                        <strong>{finalUsdt} USDT</strong>
+                        <strong>{usdtRateReady
+                          ? `${finalUsdt} USDT`
+                          : usdtRateState.error
+                            ? L("汇率暂不可用", "Rate unavailable")
+                            : L("汇率确认中", "Checking rate")}</strong>
                         <small>{usdtPresentation.methodNote}</small>
                       </div>
                       {usdtPresentation.discount && <div className="payment-method-badge">{usdtPresentation.discount}</div>}
@@ -1758,8 +1868,14 @@ export default function CheckoutPage() {
                   </div>
                 </div>}
 
-                <button type="submit" className="primary-btn primary-btn-lg checkout-submit-btn" disabled={cartCount === 0 || submitting || !accountReady}>
-                  {serviceRedeemActive ? L("确认兑换并提交订单", "Confirm & submit order") : `${L("前往支付", "Pay")} · ${paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}`}
+                <button type="submit" className="primary-btn primary-btn-lg checkout-submit-btn" disabled={cartCount === 0 || submitting || !accountReady || !checkoutPaymentReady}>
+                  {!checkoutConfigReady
+                    ? L("正在确认最新价格", "Checking latest prices")
+                    : requiresUsdtRate && !usdtRateReady
+                      ? usdtRateState.error ? L("USDT 汇率不可用", "USDT rate unavailable") : L("正在确认 USDT 汇率", "Checking USDT rate")
+                    : serviceRedeemActive
+                      ? L("确认兑换并提交订单", "Confirm & submit order")
+                      : `${L("前往支付", "Pay")} · ${paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}`}
                   <ArrowRight size={15} />
                 </button>
               </section>
@@ -1769,10 +1885,18 @@ export default function CheckoutPage() {
             <div className="checkout-mobile-cta">
               <div className="checkout-mobile-cta-info">
                 <small>{serviceRedeemActive ? L("服务兑换码", "Service code") : paymentMethod === "usdt" ? "USDT-TRC20" : paymentMethod === "balance" ? L("账户余额", "Account balance") : L("支付宝", "Alipay")}</small>
-                <b>{serviceRedeemActive ? L("免支付", "No pay") : paymentMethod === "usdt" ? `${finalUsdt} USDT` : `¥${finalCny}`}</b>
+                <b>{serviceRedeemActive
+                  ? L("免支付", "No pay")
+                  : paymentMethod === "usdt"
+                    ? usdtRateReady ? `${finalUsdt} USDT` : L("汇率确认中", "Checking rate")
+                    : `¥${finalCny}`}</b>
               </div>
-              <button type="submit" className="primary-btn checkout-mobile-cta-btn" disabled={cartCount === 0 || submitting || !accountReady}>
-                {serviceRedeemActive ? L("提交兑换", "Submit") : L("前往支付", "Pay")}
+              <button type="submit" className="primary-btn checkout-mobile-cta-btn" disabled={cartCount === 0 || submitting || !accountReady || !checkoutPaymentReady}>
+                {!checkoutConfigReady
+                  ? L("正在确认价格", "Checking prices")
+                  : requiresUsdtRate && !usdtRateReady
+                    ? L("等待 USDT 汇率", "Waiting for USDT rate")
+                    : serviceRedeemActive ? L("提交兑换", "Submit") : L("前往支付", "Pay")}
                 <ArrowRight size={15} />
               </button>
             </div>
@@ -1801,10 +1925,10 @@ export default function CheckoutPage() {
               <div className="pay-amount-prominent">
                 <span>{paymentMethod === "balance" ? L("余额扣款", "Charged from balance") : L("应付金额", "Amount due")}</span>
                 {paymentMethod === "usdt" ? (
-                  <>
+                  usdtRateReady ? <>
                     <b>{usdtPayable} <em>USDT</em></b>
                     <small>¥{finalCny}{L("(支付宝应付)", " (Alipay due)")} × {usdtDiscount} ÷ {effectiveUsdtRate}</small>
-                  </>
+                  </> : <b>{usdtRateState.error ? L("USDT 汇率暂不可用", "USDT rate unavailable") : L("正在确认 USDT 汇率", "Checking USDT rate")}</b>
                 ) : paymentMethod === "alipay" ? (
                   <>
                     <b>¥{alipayPayableCny.toFixed(2)}</b>
@@ -1818,17 +1942,19 @@ export default function CheckoutPage() {
               {/* 重要提示 */}
               <div className="pay-tip">
                 {paymentMethod === "usdt"
-                  ? L(`请使用 TRON (TRC20) 网络转账精确金额 ${usdtPayable} USDT 到下方地址,付款完成后请记得返回本页面点击「付款完成」按钮提交订单`, `Send exactly ${usdtPayable} USDT over the TRON (TRC20) network to the address below. After paying, return here and tap "I've paid" to submit your order.`)
+                  ? usdtRateReady
+                    ? L(`请使用 TRON (TRC20) 网络转账精确金额 ${usdtPayable} USDT 到下方地址,付款完成后请记得返回本页面点击「付款完成」按钮提交订单`, `Send exactly ${usdtPayable} USDT over the TRON (TRC20) network to the address below. After paying, return here and tap "I've paid" to submit your order.`)
+                    : L("汇率确认成功后才会显示转账金额和收款信息，请勿提前转账", "The amount and payment details appear only after the rate is verified. Do not transfer yet.")
                   : paymentMethod === "balance"
                   ? L(`点击下方「确认扣款并提交订单」后，将从您的账户余额(¥${authedUser?.balance.toFixed(2) || "0.00"})扣除 ¥${finalCny},随后提交订单`, `Tapping "Confirm & submit order" below will deduct ¥${finalCny} from your balance (¥${authedUser?.balance.toFixed(2) || "0.00"}) and place the order.`)
                   : L("请按上方精确金额完成支付宝付款，尾差用于快速核对订单；付款完成后返回本页面点击「付款完成」提交订单", "Pay the exact amount above via Alipay — the small diff helps us verify your order quickly. After paying, return here and tap \"I've paid\" to submit.")}
               </div>
 
               {/* QR 二维码 — 只对支付宝/USDT 显示,余额支付不需要 */}
-              {paymentMethod !== "balance" && (
+              {checkoutPaymentReady && paymentMethod !== "balance" && (
                 <div className="qr-display compact">
                   <img
-                    src={paymentMethod === "usdt" ? (siteSettings.payment.usdtQr || "/payment/usdt.png") : (siteSettings.payment.alipayQr || cartItems[0]?.qrImage || "/payment/alipay.jpg")}
+                    src={paymentMethod === "usdt" ? siteSettings.payment.usdtQr : siteSettings.payment.alipayQr}
                     alt={paymentMethod === "usdt" ? L("USDT 收款码", "USDT QR code") : L("支付宝收款码", "Alipay QR code")}
                   />
                   <div className="qr-display-label">
@@ -1838,15 +1964,15 @@ export default function CheckoutPage() {
               )}
 
               {/* USDT 地址 */}
-              {paymentMethod === "usdt" && (
+              {checkoutPaymentReady && paymentMethod === "usdt" && (
                 <div className="usdt-address-box">
                   <span className="usdt-address-label">{L("TRON / TRC20 收款地址", "TRON / TRC20 address")}</span>
                   <div className="usdt-address-field">
-                    <code className="usdt-address-value">{siteSettings.usdt.address || USDT_ADDRESS}</code>
+                    <code className="usdt-address-value">{siteSettings.usdt.address}</code>
                     <button
                       type="button"
                       className={`usdt-address-copy${copiedKey === "usdt-addr" ? " copied" : ""}`}
-                      onClick={() => handleCopy(siteSettings.usdt.address || USDT_ADDRESS, "usdt-addr")}
+                      onClick={() => handleCopy(siteSettings.usdt.address, "usdt-addr")}
                       aria-label={copiedKey === "usdt-addr" ? L("已复制", "Copied") : L("复制地址", "Copy address")}
                       title={copiedKey === "usdt-addr" ? L("已复制", "Copied") : L("复制地址", "Copy address")}
                     >
@@ -1897,7 +2023,7 @@ export default function CheckoutPage() {
                 type="button"
                 className="primary-btn primary-btn-lg pay-submit-btn"
                 onClick={submitOrders}
-                disabled={submitting || !accountReady}
+                disabled={submitting || !accountReady || !checkoutPaymentReady}
               >
                 {submitting ? (
                   <>

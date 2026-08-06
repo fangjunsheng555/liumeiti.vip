@@ -170,6 +170,8 @@ test("customer order projections expose effective online-code availability and b
   assert.match(queryRoute, /publicNetflixStaffNotes/);
   assert.match(accountPage, /activeOrder\.netflixSelfServiceEnabled !== false/);
   assert.match(accountPage, /activeOrder\.items\.some\(\(item\) => item\.service === "netflix"\)/);
+  assert.match(accountPage, /href=\{`\/netflix-code\?orderId=\$\{encodeURIComponent\(activeOrder\.orderId\)\}`\}/);
+  assert.match(accountPage, /target="_blank"\s+rel="noopener noreferrer"\s+className="account-netflix-code-link"/);
   assert.match(serviceCenterPage, /queryDetailOrder\.netflixSelfServiceEnabled !== false/);
   assert.match(serviceCenterPage, /queryItems\.some\(\(item\) => item\.service === "netflix"\)/);
   assert.match(codeRoute, /hasStoredDeliveryMode && storedDeliveryMode !== "self_service"/);

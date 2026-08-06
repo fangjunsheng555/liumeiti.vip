@@ -248,8 +248,8 @@ export async function buildMailAudience({ definition = {}, manualEmails = [], in
         profile.locales.add(locale);
         profile.orderLocaleMs = orderMs;
       }
-      services.forEach((service) => profile.services.add(service));
       if (!recognizedSale) continue;
+      services.forEach((service) => profile.services.add(service));
       profile.sources.add("customer");
       profile.orderCount += 1;
       profile.lifetimeSpend = round2(profile.lifetimeSpend + gross);

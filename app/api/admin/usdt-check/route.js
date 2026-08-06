@@ -7,8 +7,11 @@ export const maxDuration = 30;
 
 function authorize(request) {
   const session = adminSessionFromRequest(request);
-  if (session && adminPermissionProfile(session).canViewOrders) {
-    return { ok: true, actor: { staffId: session.staffId, staffUsername: session.staffUsername } };
+  if (session) {
+    if (adminPermissionProfile(session).canEditOrders) {
+      return { ok: true, actor: { staffId: session.staffId, staffUsername: session.staffUsername } };
+    }
+    return { ok: false, forbidden: true };
   }
   const secret = process.env.CRON_SECRET;
   const authorization = request.headers.get("authorization");
@@ -21,7 +24,12 @@ function authorize(request) {
 
 async function run(request) {
   const auth = authorize(request);
-  if (!auth.ok) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!auth.ok) {
+    return Response.json(
+      { ok: false, error: auth.forbidden ? "forbidden" : "unauthorized" },
+      { status: auth.forbidden ? 403 : 401 },
+    );
+  }
   const settings = await getSettings();
   const result = await confirmPendingUsdtPayments({ settings, actor: auth.actor });
   return Response.json(result, {
@@ -31,9 +39,5 @@ async function run(request) {
 }
 
 export async function POST(request) {
-  return run(request);
-}
-
-export async function GET(request) {
   return run(request);
 }

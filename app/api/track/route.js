@@ -11,7 +11,7 @@ import { after } from "next/server";
 import { runMaintenanceTick } from "../_keeper.js";
 import {
   clientIpFromRequest, clientUserAgentFromRequest,
-  validEmail, redisCmd, redisPipeline,
+  checkCriticalRateLimit, validEmail, redisCmd, redisPipeline,
 } from "../_utils.js";
 import { authenticateUserRequest } from "../_auth-session.js";
 
@@ -29,6 +29,8 @@ const MAX_PAGES = 300;
 const MAX_EVENTS = 120;
 const DEDUP_SEC = 12;
 const ANALYTICS_UNIQUE_TTL = 180 * 24 * 60 * 60;
+const VISITOR_TTL_SECONDS = 180 * 24 * 60 * 60;
+const VISITOR_TTL_MS = VISITOR_TTL_SECONDS * 1000;
 const VISITOR_DAY_PREFIX = "lm:visit:day:";
 const EVENT_UNIQUE_DAY_PREFIX = "lm:ev:uniq:";
 const MAX_PATH = 300;
@@ -85,13 +87,24 @@ export async function POST(request) {
   try {
     const ua = clientUserAgentFromRequest(request);
     if (!ua || BOT_RE.test(ua)) return noContent();
+    const ip = clientIpFromRequest(request);
+    const id = vid(ip, ua);
+    // Analytics is optional. A strict IP-only bucket prevents rotating the
+    // User-Agent from creating unbounded visitor records. If Redis is down,
+    // skip the beacon without affecting the page the visitor is using.
+    const guard = await checkCriticalRateLimit(request, {
+      namespace: "track",
+      identity: id,
+      identityLimit: 240,
+      ipLimit: 600,
+      windowSec: 10 * 60,
+    });
+    if (!guard.ok) return noContent();
     // 流量搭车维护 tick(响应后异步执行,节流锁保证窗口内至多跑一次,绝不拖慢信标)。
     try { after(() => runMaintenanceTick()); } catch (e) {}
-    const ip = clientIpFromRequest(request);
     let body = {};
     try { body = await request.json(); } catch (e) {}
     const now = Date.now();
-    const id = vid(ip, ua);
     const vkey = PREFIX + "v:" + id;
     const email = await authedEmail(request);
     const attr = safeAttr(body.attr);
@@ -116,8 +129,10 @@ export async function POST(request) {
       const evJson = JSON.stringify({ name, slug: slug || undefined, label: label || undefined, ts: now });
       const cmds = [
         ["ZADD", INDEX, String(now), id],
+        ["ZREMRANGEBYSCORE", INDEX, "-inf", String(now - VISITOR_TTL_MS)],
         ["HSET", vkey, "ip", ip, "ua", ua, "lastSeen", String(now)],
         ["HSETNX", vkey, "firstSeen", String(now)],
+        ["EXPIRE", vkey, String(VISITOR_TTL_SECONDS)],
         ["SADD", VISITOR_DAY_PREFIX + day, id],
         ["EXPIRE", VISITOR_DAY_PREFIX + day, String(ANALYTICS_UNIQUE_TTL)],
       ];
@@ -126,12 +141,17 @@ export async function POST(request) {
         ["EXPIRE", EVENT_UNIQUE_DAY_PREFIX + day + ":" + name, String(ANALYTICS_UNIQUE_TTL)],
         ["LPUSH", vkey + ":events", evJson],
         ["LTRIM", vkey + ":events", "0", String(MAX_EVENTS - 1)],
+        ["EXPIRE", vkey + ":events", String(VISITOR_TTL_SECONDS)],
         ["HINCRBY", "lm:ev:day:" + day, name, "1"],
         ["EXPIRE", "lm:ev:day:" + day, "7776000"], // 按日事件桶保留 90 天，避免孤儿 key 无界增长
         ["HINCRBY", "lm:ev:total", name, "1"], // 全局累计
       );
       if (email) {
-        cmds.push(["HSET", vkey, "email", email], ["SADD", "lm:visit:email:" + email, id]);
+        cmds.push(
+          ["HSET", vkey, "email", email],
+          ["SADD", "lm:visit:email:" + email, id],
+          ["EXPIRE", "lm:visit:email:" + email, String(VISITOR_TTL_SECONDS)],
+        );
         // 账号级活动流(用户360 来源)
         if (!duplicateEvent) cmds.push(
             ["LPUSH", UACT + email + ":events", evJson],
@@ -148,13 +168,19 @@ export async function POST(request) {
       // 弃单：到结算页即记一条「待召回」（下单成功后由 /api/order 清除）
       if (name === "checkout_started") {
         const ckey = "lm:cart:v:" + id;
-        const cemail = email || (validEmail(meta.email) ? String(meta.email).toLowerCase() : "");
+        // Anonymous beacons must not enroll an arbitrary third party in recall.
+        const cemail = email;
         const chash = ["HSET", ckey, "ip", ip, "ua", ua, "ts", String(now),
           "services", cleanStr(meta.services, 200), "amount", cleanStr(String(meta.amount == null ? "" : meta.amount), 20), "status", "open"];
         if (cemail) chash.push("email", cemail);
         if (meta.locale === "en") chash.push("locale", "en"); // 召回邮件按下单时语言本地化
         if (attr) chash.push("attr", JSON.stringify(attr));
-        cmds.push(chash, ["EXPIRE", ckey, "3888000"], ["ZADD", CART_INDEX, String(now), id]); // 弃单 hash 45 天自动过期，避免无界增长
+        cmds.push(
+          chash,
+          ["EXPIRE", ckey, "3888000"],
+          ["ZADD", CART_INDEX, String(now), id],
+          ["ZREMRANGEBYSCORE", CART_INDEX, "-inf", String(now - 3888000 * 1000)],
+        ); // 弃单 hash 和索引均保留 45 天
       }
       await redisPipeline(cmds);
       return noContent();
@@ -173,16 +199,22 @@ export async function POST(request) {
     if (email) hset.push("email", email);
     const cmds = [
       ["ZADD", INDEX, String(now), id],
+      ["ZREMRANGEBYSCORE", INDEX, "-inf", String(now - VISITOR_TTL_MS)],
       hset,
       ["HSETNX", vkey, "firstSeen", String(now)],
       ["HINCRBY", vkey, "count", "1"],
+      ["EXPIRE", vkey, String(VISITOR_TTL_SECONDS)],
       ["LPUSH", vkey + ":pages", pageEntry],
       ["LTRIM", vkey + ":pages", "0", String(MAX_PAGES - 1)],
+      ["EXPIRE", vkey + ":pages", String(VISITOR_TTL_SECONDS)],
       ["SADD", VISITOR_DAY_PREFIX + day, id],
       ["EXPIRE", VISITOR_DAY_PREFIX + day, String(ANALYTICS_UNIQUE_TTL)],
     ];
     if (email) {
-      cmds.push(["SADD", "lm:visit:email:" + email, id]); // 邮箱→访客 反向索引(历史访客用)
+      cmds.push(
+        ["SADD", "lm:visit:email:" + email, id],
+        ["EXPIRE", "lm:visit:email:" + email, String(VISITOR_TTL_SECONDS)],
+      ); // 邮箱→访客 反向索引(历史访客用)
       // 账号级活动流(用户360 来源):只记本人已登录态下的真实浏览,带当时 IP。
       cmds.push(
         ["LPUSH", UACT + email + ":pages", JSON.stringify({ site, path, ts: now, ip })],

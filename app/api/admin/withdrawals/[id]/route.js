@@ -66,6 +66,7 @@ async function sendWithdrawalResultEmail(withdrawal) {
 export async function GET(request, { params }) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!adminPermissionProfile(session).canReviewWithdrawals) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const { id } = await params;
   const detail = await getWithdrawalDetail(id);
   if (!detail) return Response.json({ ok: false, error: "withdrawal_not_found" }, { status: 404 });

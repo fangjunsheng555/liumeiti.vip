@@ -3,7 +3,7 @@
 // 纯加性：复用现有 helpers，不改任何文件。CORS 由 root proxy 覆盖 /api/tool/*。
 
 import {
-  clean, validEmail, checkRateLimit, rateLimitResponse,
+  clean, validEmail, checkCriticalRateLimit, rateLimitResponse,
   clientIpFromRequest, clientUserAgentFromRequest, formatBeijingTime, sendSimpleEmail,
 } from "../../_utils.js";
 
@@ -24,7 +24,13 @@ export async function POST(request) {
   if (!content || content.length < 2) return Response.json({ ok: false, error: "empty" }, { status: 400 });
   if (email && !validEmail(email)) return Response.json({ ok: false, error: "invalid_email" }, { status: 400 });
 
-  const guard = await checkRateLimit(request, { namespace: "tool:feedback", limit: 5, windowSec: 3600 });
+  const guard = await checkCriticalRateLimit(request, {
+    namespace: "tool:feedback",
+    identity: email || clientIpFromRequest(request),
+    identityLimit: 5,
+    ipLimit: 5,
+    windowSec: 3600,
+  });
   if (!guard.ok) return rateLimitResponse(guard, "提交过于频繁，请稍后再试");
 
   const now = new Date();

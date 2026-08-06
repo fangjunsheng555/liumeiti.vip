@@ -1586,7 +1586,12 @@ export default function AccountPage() {
                 && activeOrder.netflixSelfServiceEnabled !== false
                 && !activeOrder.expiry?.expired
                 && activeOrder.items.some((item) => item.service === "netflix") && (
-                <Link href="/netflix-code" className="account-netflix-code-link">
+                <Link
+                  href={`/netflix-code?orderId=${encodeURIComponent(activeOrder.orderId)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="account-netflix-code-link"
+                >
                   <span>
                     <strong>{L("在线获取 Netflix 登录码", "Get Netflix sign-in code")}</strong>
                     <small>{L("需要登录码或身份确认时，可使用订单中的 Netflix 登录邮箱在线获取", "Use the Netflix sign-in email in this order when a code or confirmation is required")}</small>

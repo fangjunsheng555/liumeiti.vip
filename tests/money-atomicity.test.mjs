@@ -199,7 +199,9 @@ class AtomicRedisMock {
     }
 
     let guardError = null;
-    if (script.includes("recipientBalanceCents")) {
+    if (script.includes("RECOVER_AUTHENTICATED_ORDER_OPERATION_V1")) {
+      guardError = this.verifyPrincipal(keys[1], keys[2], keys[3], args[1], args[2]);
+    } else if (script.includes("recipientBalanceCents")) {
       guardError = this.verifyPrincipal(keys[1], keys[5], keys[6], args[6], args[7]);
     } else if (script.includes("service_code_checkout_required")) {
       guardError = this.verifyPrincipal(keys[1], keys[4], keys[5], args[5], args[6]);
@@ -215,7 +217,13 @@ class AtomicRedisMock {
     }
     if (guardError) return guardError;
     const prior = this.existing(keys[0], args[0]);
-    if (prior) return prior;
+    if (prior) return script.includes("RECOVER_AUTHENTICATED_ORDER_OPERATION_V1")
+      ? { ...prior, recovered: true }
+      : prior;
+
+    if (script.includes("RECOVER_AUTHENTICATED_ORDER_OPERATION_V1")) {
+      return { ok: true, found: false };
+    }
 
     if (script.includes("recipientBalanceCents")) {
       const from = this.json(keys[1]);

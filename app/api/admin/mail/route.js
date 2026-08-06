@@ -80,10 +80,10 @@ function currentStaffPayload(session) {
 export async function GET(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  if (!adminPermissionProfile(session).canSendMail) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const url = new URL(request.url);
   const requestedTemplate = url.searchParams.get("template");
   if ([MARKETING_MAIL_TEMPLATE_ID, MARKETING_MAIL_V7_TEMPLATE_ID].includes(requestedTemplate)) {
-    if (!adminPermissionProfile(session).canSendMail) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
     const { getSettings } = await import("../../_settings.js");
     const settings = await getSettings();
     const brandName = settings.brand.name || process.env.BRAND_NAME || "冒央会社";

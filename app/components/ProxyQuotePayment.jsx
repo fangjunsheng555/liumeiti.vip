@@ -15,7 +15,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import FloatingSupport from "./FloatingSupport";
-import { copyText, useSiteSettings, usdtPaymentPresentation } from "../lib/store";
+import { copyText, useSiteSettingsState, usdtPaymentPresentation } from "../lib/store";
 import { useLocale } from "./LocaleProvider";
 import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
 import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
@@ -63,7 +63,8 @@ function loadFailureMessage(locale, error, subject) {
 export default function ProxyQuotePayment({ orderId }) {
   const { locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
-  const settings = useSiteSettings();
+  const settingsState = useSiteSettingsState();
+  const settings = settingsState.settings;
   const usdtPresentation = usdtPaymentPresentation(locale);
   const [token, setToken] = useState("");
   const [order, setOrder] = useState(null);
@@ -81,8 +82,8 @@ export default function ProxyQuotePayment({ orderId }) {
   const [qrReloadKey, setQrReloadKey] = useState(0);
   const paymentRequestRef = useRef(null);
   const rateRequestRef = useRef(0);
-  const alipayQrSrc = settings.payment.alipayQr || "/payment/alipay.jpg";
-  const usdtQrSrc = settings.payment.usdtQr || "/payment/usdt.png";
+  const alipayQrSrc = settingsState.ready ? settings.payment.alipayQr : "";
+  const usdtQrSrc = settingsState.ready ? settings.payment.usdtQr : "";
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -196,23 +197,27 @@ export default function ProxyQuotePayment({ orderId }) {
   }, [loadUsdtRate]);
 
   useEffect(() => {
+    setQrReady(false);
+    setQrError(false);
+    setPaymentReadyAt(0);
+    if (!settingsState.ready) return;
     if (typeof window === "undefined") return;
     [alipayQrSrc, usdtQrSrc].forEach((src) => {
       const image = new Image();
       image.src = src;
     });
-  }, [alipayQrSrc, usdtQrSrc]);
+  }, [settingsState.ready, alipayQrSrc, usdtQrSrc]);
 
   const quoteCny = Number(order?.quoteAmount || 0);
-  const usdtDiscount = Number(settings.usdt.discount) || 0.9;
+  const usdtDiscount = Number(settings.usdt.discount);
   const usdtAmount = usdtRate > 0 ? Math.round((quoteCny * usdtDiscount / usdtRate) * 100) / 100 : 0;
   const isUsdt = payMethod === "usdt";
   const rateReady = !isUsdt || (!rateState.loading && !rateState.error && usdtAmount > 0);
-  const paymentUiReady = rateReady && !paymentUncertain;
+  const paymentUiReady = settingsState.ready && rateReady && !paymentUncertain;
   const paymentQrSrc = isUsdt ? usdtQrSrc : alipayQrSrc;
 
   function selectPaymentMethod(method) {
-    if (method === payMethod || submitting || paymentUncertain) return;
+    if (!settingsState.ready || method === payMethod || submitting || paymentUncertain) return;
     setPayMethod(method);
     setQrReady(false);
     setQrError(false);
@@ -221,7 +226,7 @@ export default function ProxyQuotePayment({ orderId }) {
   }
 
   async function confirmPayment() {
-    if (submitting || !token || !order) return;
+    if (submitting || !token || !order || !settingsState.ready) return;
     if (!paymentReadyAt || Date.now() - paymentReadyAt < 5000) {
       setState((current) => ({ ...current, notice: L("请扫码完成付款，付款完成后再点击「付款完成」提交订单", "Please scan to pay first, then tap \"I've paid\" to submit the order") }));
       return;
@@ -362,9 +367,17 @@ export default function ProxyQuotePayment({ orderId }) {
             </section>
 
             <section className="checkout-card proxy-payment-qr-card">
+              {!settingsState.ready && (
+                <div className={`checkout-alert ${settingsState.error ? "error" : "info"}`} role={settingsState.error ? "alert" : "status"}>
+                  <span>{settingsState.error
+                    ? L("暂时无法读取最新收款信息。为避免转错账户，收款码和提交功能已暂停", "The latest payment details could not be loaded. The QR code and submission are paused to prevent a transfer to the wrong account.")
+                    : L("正在读取最新收款信息…", "Loading the latest payment details…")}</span>
+                  {settingsState.error && <button type="button" onClick={settingsState.retry}>{L("重试", "Retry")}</button>}
+                </div>
+              )}
               <div className="proxy-pay-method-seg">
-                <button type="button" className={payMethod === "alipay" ? "active" : ""} onClick={() => selectPaymentMethod("alipay")} aria-pressed={payMethod === "alipay"} disabled={submitting || paymentUncertain}>{L("支付宝", "Alipay")}</button>
-                <button type="button" className={payMethod === "usdt" ? "active" : ""} onClick={() => selectPaymentMethod("usdt")} aria-pressed={payMethod === "usdt"} disabled={submitting || paymentUncertain}>USDT {usdtPresentation.discount && <em>{usdtPresentation.discount}</em>}</button>
+                <button type="button" className={payMethod === "alipay" ? "active" : ""} onClick={() => selectPaymentMethod("alipay")} aria-pressed={payMethod === "alipay"} disabled={submitting || paymentUncertain || !settingsState.ready}>{L("支付宝", "Alipay")}</button>
+                <button type="button" className={payMethod === "usdt" ? "active" : ""} onClick={() => selectPaymentMethod("usdt")} aria-pressed={payMethod === "usdt"} disabled={submitting || paymentUncertain || !settingsState.ready}>USDT {settingsState.ready && usdtPresentation.discount && <em>{usdtPresentation.discount}</em>}</button>
               </div>
               <div className="proxy-payment-qr-head"><span><ShieldCheck size={17} />{isUsdt ? L("USDT 付款", "USDT payment") : L("支付宝付款", "Alipay payment")}</span><em>{isUsdt ? "TRC20" : L("安全结算", "Secure")}</em></div>
               {paymentUiReady && <div className={`proxy-payment-method-amount ${payMethod}`} aria-live="polite">
@@ -404,7 +417,7 @@ export default function ProxyQuotePayment({ orderId }) {
               {paymentUncertain && <div className="checkout-alert error" role="alert">{L("付款提交结果尚未确认。为避免重复付款，收款码和付款方式已锁定；请先查询最新订单状态，仍未更新请联系客服核对。", "The payment submission result is uncertain. To prevent duplicate payment, the payment details are locked. Check the latest order status, then contact support if it still hasn't updated.")}</div>}
               {state.notice && <div className="checkout-alert info">{state.notice}</div>}
               {state.error && <div className="checkout-alert error">{state.error}</div>}
-              <button type="button" className="primary-btn primary-btn-lg proxy-payment-submit" onClick={paymentUncertain ? () => setQuoteAttempt((current) => current + 1) : confirmPayment} disabled={submitting || (!paymentUncertain && !rateReady)}>{submitting ? <><LoaderCircle size={16} className="spin-icon" />{L("提交中", "Submitting")}</> : paymentUncertain ? <><RefreshCw size={16} />{L("查询最新订单状态", "Check latest order status")}</> : <><CheckCircle2 size={16} />{L("付款完成，提交订单", "I've paid — submit")}</>}</button>
+              <button type="button" className="primary-btn primary-btn-lg proxy-payment-submit" onClick={paymentUncertain ? () => setQuoteAttempt((current) => current + 1) : confirmPayment} disabled={submitting || (!paymentUncertain && (!settingsState.ready || !rateReady))}>{submitting ? <><LoaderCircle size={16} className="spin-icon" />{L("提交中", "Submitting")}</> : paymentUncertain ? <><RefreshCw size={16} />{L("查询最新订单状态", "Check latest order status")}</> : !settingsState.ready ? <><LoaderCircle size={16} className="spin-icon" />{L("正在确认收款信息", "Checking payment details")}</> : <><CheckCircle2 size={16} />{L("付款完成，提交订单", "I've paid — submit")}</>}</button>
               <small><Clock3 size={12} />{L("提交后由工作人员核对款项", "Payment is verified by our team")}</small>
             </section>
           </div>

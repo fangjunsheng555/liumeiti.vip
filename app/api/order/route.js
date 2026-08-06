@@ -157,6 +157,7 @@ async function sendTelegram(text) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+    signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined,
   });
   if (response.ok) return true;
   return response.status >= 500 || response.status === 408 || response.status === 425
@@ -171,6 +172,7 @@ async function sendWebhook(order, idempotencyKey = "") {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}) },
     body: JSON.stringify(order),
+    signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined,
   });
   if (response.ok) return true;
   return response.status >= 500 || response.status === 408 || response.status === 425
@@ -484,6 +486,7 @@ async function handler(request) {
   if (paymentMethod === "redeem") {
     redeemGuard = await checkRedeemRateLimit(request);
     if (!redeemGuard.ok) {
+      if (redeemGuard.unavailable) return rateLimitResponse(redeemGuard);
       return Response.json({
         ok: false,
         error: "too_many_attempts",
@@ -496,7 +499,8 @@ async function handler(request) {
       items.map((item) => ({ key: item.service, plan: item.plan || item.rocketPlan || "" })),
     );
     if (!checked.ok) {
-      await recordRedeemRateFailure(redeemGuard);
+      const recorded = await recordRedeemRateFailure(redeemGuard);
+      if (!recorded.ok) return rateLimitResponse(recorded);
       return Response.json({ ok: false, error: checked.error || "invalid_redeem_code" }, { status: 400 });
     }
     serviceRedeem = checked.item;
@@ -689,7 +693,8 @@ async function handler(request) {
       "account_lifecycle_changed",
       "account_banned",
     ].includes(committed.error)) {
-      await recordRedeemRateFailure(redeemGuard);
+      const recorded = await recordRedeemRateFailure(redeemGuard);
+      if (!recorded.ok) return rateLimitResponse(recorded);
     }
     const conflictErrors = new Set(["idempotency_conflict", "order_exists", "payment_quote_used", "coupon_changed", "coupon_unavailable", "out_of_stock", "account_lifecycle_changed"]);
     return Response.json({

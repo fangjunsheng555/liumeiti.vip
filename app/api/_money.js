@@ -565,6 +565,57 @@ local function pushtrim(key, value, stop)
 end
 `;
 
+// Idempotent order retries must still belong to the same authenticated
+// account lifecycle.  Reading the operation record first in Node would let a
+// deleted-and-recreated account recover the previous account's result.  Keep
+// the principal check and operation read in one Redis transaction.
+const RECOVER_AUTHENTICATED_ORDER_OPERATION_SCRIPT = LUA_COMMON + `
+-- RECOVER_AUTHENTICATED_ORDER_OPERATION_V1
+if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'string')
+  or not validtype(KEYS[3],'string') or not validtype(KEYS[4],'string') then
+  return encode({ok=false,error='storage_type_error'})
+end
+local principalRaw=redis.call('GET',KEYS[2])
+local versionRaw=redis.call('GET',KEYS[3])
+local lifecycle=redis.call('GET',KEYS[4])
+if not principalRaw then return encode({ok=false,error='session_state_changed'}) end
+local principal=decode(principalRaw)
+if not principal then return encode({ok=false,error='invalid_user_record'}) end
+if principal.banned then return encode({ok=false,error='account_banned'}) end
+if not versionRaw or not string.match(versionRaw,'^%d+$') then
+  return encode({ok=false,error='session_state_changed'})
+end
+local currentVersion=tonumber(versionRaw)
+local expectedVersion=tonumber(ARGV[2])
+if not currentVersion or currentVersion<1 or currentVersion~=math.floor(currentVersion)
+  or currentVersion>9007199254740990 or not expectedVersion or expectedVersion<1
+  or expectedVersion~=math.floor(expectedVersion) or currentVersion~=expectedVersion then
+  return encode({ok=false,error='session_state_changed'})
+end
+if not lifecycle or #lifecycle~=32 or string.match(lifecycle,'[^a-f0-9]')
+  or lifecycle~=ARGV[3] then
+  return encode({ok=false,error='account_lifecycle_changed'})
+end
+local prior=existingop(KEYS[1],ARGV[1])
+if not prior then return encode({ok=true,found=false}) end
+local recovered=decode(prior)
+if not recovered then return encode({ok=false,error='invalid_operation_record'}) end
+recovered.recovered=true
+return encode(recovered)
+`;
+
+async function recoverAuthenticatedOrderOperation({
+  opKey, requestHash, userKey: principalKey, authVersionKey, lifecycleKey,
+  expectedAuthVersion, expectedAccountLifecycleId,
+}) {
+  const executed = await redisEvalMoneyAtomic(
+    RECOVER_AUTHENTICATED_ORDER_OPERATION_SCRIPT,
+    [opKey, principalKey, authVersionKey, lifecycleKey],
+    [requestHash, String(expectedAuthVersion), expectedAccountLifecycleId],
+  );
+  return executed.ok ? executed.value : executed;
+}
+
 const SAVE_USER_PROFILE_SCRIPT = LUA_COMMON + `
 if not validtype(KEYS[1],'string') or not validtype(KEYS[2],'string') or not validtype(KEYS[3],'string') or not validtype(KEYS[4],'set') or not validtype(KEYS[5],'string') then return encode({ok=false,error='storage_type_error'}) end
 local next=decode(ARGV[10]); if not next then return encode({ok=false,error='invalid_user_record'}) end
@@ -1721,8 +1772,18 @@ export async function commitOrderCreationAtomic({
     ? Math.min(604800, Math.max(300, Math.floor(rawQuoteTtl)))
     : 4 * 24 * 60 * 60;
   const createdScoreArg = String(Number.isFinite(createdScore) && createdScore > 0 ? Math.floor(createdScore) : Date.now());
-  const recovered = await recoverOperation(opKey, payloadHash);
-  if (recovered) return recovered;
+  const recovered = authenticatedPrincipal
+    ? await recoverAuthenticatedOrderOperation({
+      opKey,
+      requestHash: payloadHash,
+      userKey: keys[8],
+      authVersionKey: keys[17],
+      lifecycleKey: keys[18],
+      expectedAuthVersion: principalAuthVersion,
+      expectedAccountLifecycleId: principalLifecycleId,
+    })
+    : await recoverOperation(opKey, payloadHash);
+  if (recovered && recovered.found !== false) return recovered;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     let expectedUserRaw = ""; let nextUserRaw = ""; let expectedCodeRaw = ""; let nextCodeRaw = "";
     const attemptOrder = {

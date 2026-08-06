@@ -1,11 +1,13 @@
 import {
   clean, getRedeemCodePublic,
   checkRedeemRateLimit, recordRedeemRateFailure, clearRedeemRateLimit, redeemRateLimitMessage,
+  rateLimitResponse,
 } from "../_utils.js";
 
 export async function GET(request) {
   const guard = await checkRedeemRateLimit(request);
   if (!guard.ok) {
+    if (guard.unavailable) return rateLimitResponse(guard);
     return Response.json({
       ok: false,
       error: "too_many_attempts",
@@ -16,7 +18,8 @@ export async function GET(request) {
   const url = new URL(request.url);
   const result = await getRedeemCodePublic(url.searchParams.get("code") || "");
   if (!result.ok || result.status !== "active") {
-    await recordRedeemRateFailure(guard);
+    const recorded = await recordRedeemRateFailure(guard);
+    if (!recorded.ok) return rateLimitResponse(recorded);
     return Response.json({ ok: false, error: clean(result.error || "code_unavailable", 80), message: "兑换码不存在" }, { status: 404 });
   }
   await clearRedeemRateLimit(guard);

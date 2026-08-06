@@ -296,6 +296,8 @@ function ordersToCsv(orders) {
 async function listOrdersHandler(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const permissions = adminPermissionProfile(session);
+  if (!permissions.canViewOrders) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const url = new URL(request.url);
   const mode = String(url.searchParams.get("mode") || "").trim();
   const q = String(url.searchParams.get("q") || "").trim().toLowerCase();
@@ -305,8 +307,6 @@ async function listOrdersHandler(request) {
   const format = String(url.searchParams.get("format") || "").trim();
   const offset = Math.max(0, Number(url.searchParams.get("offset") || 0));
   const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") || 50)));
-  const permissions = adminPermissionProfile(session);
-
   if (mode === "revision") {
     const revision = await getOrderListRevision();
     if (!revision) return Response.json({ ok: false, error: "order_revision_unavailable" }, { status: 503 });

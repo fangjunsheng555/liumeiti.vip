@@ -2049,14 +2049,39 @@ local userType=keytype(KEYS[1])
 if userType=='none' then return cjson.encode({ok=false,error='user_not_found'}) end
 local emailSetType=keytype(KEYS[4])
 if emailSetType~='none' and emailSetType~='set' then return cjson.encode({ok=false,error='storage_unavailable'}) end
-local profileCorrupt=false
-local user={}
-if userType=='string' then
-  local raw=redis.call('GET',KEYS[1])
-  local decoded,value=pcall(cjson.decode,raw)
-  if decoded and type(value)=='table' then user=value else profileCorrupt=true end
+if userType~='string' then return cjson.encode({ok=false,error='financial_record_invalid'}) end
+local raw=redis.call('GET',KEYS[1])
+local decoded,user=pcall(cjson.decode,raw)
+if not decoded or type(user)~='table' or not string.match(raw or '','^%s*{') or not string.match(raw or '','}%s*$') then
+  return cjson.encode({ok=false,error='financial_record_invalid'})
+end
+local balanceType=keytype(KEYS[2])
+if balanceType~='none' and balanceType~='string' then
+  return cjson.encode({ok=false,error='financial_record_invalid'})
+end
+if balanceType=='string' then
+  local balanceRaw=redis.call('GET',KEYS[2])
+  if not string.match(balanceRaw or '','^-?%d+$') then
+    return cjson.encode({ok=false,error='financial_record_invalid'})
+  end
+  local balanceCents=tonumber(balanceRaw)
+  if not balanceCents or balanceCents~=math.floor(balanceCents) or math.abs(balanceCents)>9007199254740991 then
+    return cjson.encode({ok=false,error='financial_record_invalid'})
+  end
+  if balanceCents~=0 then return cjson.encode({ok=false,error='user_has_balance'}) end
 else
-  profileCorrupt=true
+  local profileBalance=user.balance
+  if type(profileBalance)~='number' or profileBalance~=profileBalance or math.abs(profileBalance)==math.huge then
+    return cjson.encode({ok=false,error='financial_record_invalid'})
+  end
+  if profileBalance~=0 then return cjson.encode({ok=false,error='user_has_balance'}) end
+end
+local transactionsType=keytype(KEYS[3])
+if transactionsType~='none' and transactionsType~='list' then
+  return cjson.encode({ok=false,error='financial_record_invalid'})
+end
+if transactionsType=='list' and redis.call('LLEN',KEYS[3])>0 then
+  return cjson.encode({ok=false,error='user_has_financial_history'})
 end
 local inviteCode=string.upper(tostring(user.inviteCode or ''))
 inviteCode=string.gsub(inviteCode,'[^A-Z0-9]','')
@@ -2095,7 +2120,6 @@ local nextVersion=current+1
 local responseOk,response=pcall(cjson.encode,{
   ok=true,
   authVersion=nextVersion,
-  profileCorrupt=profileCorrupt,
   quotaCleanupSkipped=quotaCleanupSkipped,
   user={
     email=ARGV[1],
@@ -3232,9 +3256,8 @@ export function clientUserAgentFromRequest(request) {
 
 function clientGuardFingerprint(request) {
   const ip = clientIpFromRequest(request);
-  const ua = clean(request?.headers?.get("user-agent") || "unknown", 160);
   const secret = process.env.AUTH_SECRET || process.env.ADMIN_PASSWORD || "liumeiti-rate-limit-local";
-  return createHmac("sha256", secret).update(`${ip}|${ua}`).digest("hex").slice(0, 32);
+  return createHmac("sha256", secret).update(`ip|${ip}`).digest("hex").slice(0, 32);
 }
 
 function rateLimitFingerprint(request, identity = "") {
@@ -3388,13 +3411,62 @@ export function generateNumericCode(length = 6) {
   return String(randomInt(min, max));
 }
 
+function redeemGuardUnavailable(key = "") {
+  return {
+    ok: false,
+    unavailable: true,
+    status: 503,
+    error: "rate_limit_unavailable",
+    key,
+    retryAfter: 5,
+  };
+}
+
+function redeemGuardPipelineRows(value, expectedLength) {
+  const rows = pipelineResults(value);
+  if (rows.length !== expectedLength || rows.some((row) => row && typeof row === "object"
+    && Object.prototype.hasOwnProperty.call(row, "error") && row.error != null)) return null;
+  return rows.map(pipelineResultValue);
+}
+
+async function repairRedeemGuardExpiry(key) {
+  const rows = redeemGuardPipelineRows(await redisPipeline([
+    ["EXPIRE", key, String(REDEEM_GUARD_WINDOW_SECONDS)],
+    ["TTL", key],
+    ["PING"],
+  ]), 3);
+  if (!rows || Number(rows[0]) !== 1 || !Number.isSafeInteger(Number(rows[1]))
+    || Number(rows[1]) < 0 || rows[2] !== "PONG") return redeemGuardUnavailable(key);
+  return { ok: true, retryAfter: Number(rows[1]) };
+}
+
 export async function checkRedeemRateLimit(request) {
   const r = redisConfig();
-  if (!r) return { ok: true, key: "" };
+  if (!r) return redeemGuardUnavailable();
   const key = "liumeiti:redeem-guard:" + clientGuardFingerprint(request);
-  const current = Number(await redisCmd(["GET", key]) || 0);
+  const rows = redeemGuardPipelineRows(await redisPipeline([
+    ["GET", key],
+    ["TTL", key],
+    ["PING"],
+  ]), 3);
+  if (!rows || rows[2] !== "PONG") return redeemGuardUnavailable(key);
+  const rawCount = rows[0];
+  let current = rawCount == null ? 0 : Number(rawCount);
+  let ttl = Number(rows[1]);
+  if (!Number.isSafeInteger(current) || current < 0 || !Number.isSafeInteger(ttl)) {
+    return redeemGuardUnavailable(key);
+  }
+  if (rawCount == null) {
+    if (ttl !== -2) return redeemGuardUnavailable(key);
+    current = 0;
+  } else if (ttl === -2) {
+    current = 0;
+  } else if (ttl < 0) {
+    const repaired = await repairRedeemGuardExpiry(key);
+    if (!repaired.ok) return repaired;
+    ttl = repaired.retryAfter;
+  }
   if (current >= REDEEM_GUARD_LIMIT) {
-    const ttl = Number(await redisCmd(["TTL", key]) || REDEEM_GUARD_WINDOW_SECONDS);
     return {
       ok: false,
       key,
@@ -3402,14 +3474,29 @@ export async function checkRedeemRateLimit(request) {
       limit: REDEEM_GUARD_LIMIT,
     };
   }
-  return { ok: true, key };
+  return { ok: true, key, count: current, limit: REDEEM_GUARD_LIMIT };
 }
 
 export async function recordRedeemRateFailure(guard) {
-  if (!guard?.key) return 0;
-  const count = Number(await redisCmd(["INCR", guard.key]) || 0);
-  if (count === 1) await redisCmd(["EXPIRE", guard.key, String(REDEEM_GUARD_WINDOW_SECONDS)]);
-  return count;
+  const key = clean(guard?.key, 160);
+  if (!key) return redeemGuardUnavailable();
+  const rows = redeemGuardPipelineRows(await redisPipeline([
+    ["INCR", key],
+    ["TTL", key],
+    ["PING"],
+  ]), 3);
+  if (!rows || rows[2] !== "PONG") return redeemGuardUnavailable(key);
+  const count = Number(rows[0]);
+  let ttl = Number(rows[1]);
+  if (!Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(ttl)) {
+    return redeemGuardUnavailable(key);
+  }
+  if (ttl < 0) {
+    const repaired = await repairRedeemGuardExpiry(key);
+    if (!repaired.ok) return repaired;
+    ttl = repaired.retryAfter;
+  }
+  return { ok: true, key, count, limit: REDEEM_GUARD_LIMIT, retryAfter: ttl };
 }
 
 export async function clearRedeemRateLimit(guard) {
@@ -4756,7 +4843,7 @@ function normalizeRedeemInput(input) {
   const type = clean(body.type || body.kind || "balance", 20) === "service" ? "service" : "balance";
   const customCodeRaw = clean(body.customCode || body.code || body.redeemCode, 80);
   const customCode = customCodeRaw ? normalizeRedeemCode(customCodeRaw) : "";
-  if (customCodeRaw && (customCode.length < 4 || customCode.length > 40)) return { ok: false, error: "invalid_custom_code" };
+  if (customCodeRaw && (customCode.length < 12 || customCode.length > 40)) return { ok: false, error: "invalid_custom_code" };
   let value = roundMoney(body.amount);
   let services = [];
   if (type === "service") {
