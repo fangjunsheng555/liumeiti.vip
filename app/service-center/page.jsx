@@ -24,7 +24,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { copyText, useSiteSettings, usdtDiscountLabel } from "../lib/store";
+import { copyText, useSiteSettings, usdtPaymentPresentation } from "../lib/store";
 import MobileNav from "../components/MobileNav";
 import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
 import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
@@ -217,15 +217,20 @@ export default function ServiceCenterPage() {
   const L = (zh, en) => (locale === "en" ? en : zh);
   const redeemRequestRef = useRef(null);
   const authLoadRequestRef = useRef(0);
-  const support = useSiteSettings().support; // 客服联系方式以后台设置为准
+  const siteSettings = useSiteSettings();
+  const support = siteSettings.support; // 客服联系方式以后台设置为准
+  const footerCfg = siteSettings.footer;
   const supportChannels = [
     { label: "QQ", value: support.qq.value, copyValue: support.qq.value },
     { label: "WhatsApp", value: support.whatsapp.value, copyValue: support.whatsapp.value },
     { label: "Telegram", value: support.telegram.value, copyValue: support.telegram.value },
   ];
   const assuranceCards = ASSURANCE_CARDS.map((c, i) => (locale === "en" ? { ...c, ...ASSURANCE_CARDS_EN[i] } : c));
-  const usdtOff = usdtDiscountLabel(locale); // USDT 折扣文案,随设置变
-  const faqList = (locale === "en" ? FAQ_EN : FAQ).map((f) => ({ ...f, a: String(f.a).replace(/\{\{usdtOff\}\}/g, usdtOff) }));
+  const usdtPresentation = usdtPaymentPresentation(locale); // USDT 折扣文案随设置变；无折扣时不留下空括号
+  const faqList = (locale === "en" ? FAQ_EN : FAQ).map((f) => ({
+    ...f,
+    a: String(f.a).replace(/\s*\(\{\{usdtOff\}\}\)|（\{\{usdtOff\}\}）/g, usdtPresentation.faqQualifier),
+  }));
   const statusLabel = locale === "en" ? STATUS_LABEL_EN : STATUS_LABEL;
 
   async function loadAuthState() {
@@ -970,7 +975,7 @@ export default function ServiceCenterPage() {
       <footer className="site-footer service-footer">
         <div className="container footer-inner">
           <div className="footer-company">
-            <div className="footer-brand">{L("冒央会社 · Maoyang Taiwan Inc", "Maoyang Taiwan Inc")}</div>
+            <div className="footer-brand">{locale === "en" ? footerCfg.brandEn : footerCfg.brand}</div>
             <div className="footer-links">
               <Link href="/legal">{L("企业资质与服务保障", "Credentials & service assurance")}</Link>
               <Link href="/services/spotify">Spotify</Link>
@@ -981,8 +986,8 @@ export default function ServiceCenterPage() {
             </div>
           </div>
           <div className="footer-legal">
-            <div className="footer-pill">{L("地址：台湾新北市板桥区远东路1号3-218", "Addr: 3-218, No.1 Yuandong Rd, Banqiao, New Taipei, Taiwan")}</div>
-            <div className="footer-pill">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
+            <div className="footer-pill">{locale === "en" ? footerCfg.addressEn : footerCfg.address}</div>
+            <div className="footer-pill">{footerCfg.copyright}</div>
           </div>
         </div>
       </footer>

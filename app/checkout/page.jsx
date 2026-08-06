@@ -32,7 +32,7 @@ import {
   bundleDiscountRate,
   bundleDiscountLabel,
   bundleTierLabel,
-  usdtDiscountLabel,
+  usdtPaymentPresentation,
   localizeProduct,
   localizePlan,
   cartSubtotalCny,
@@ -191,6 +191,7 @@ export default function CheckoutPage() {
   const L = (zh, en) => (locale === "en" ? en : zh);
   const catalogVersion = useCatalogSync(); // 拉后台商品/价格覆盖,变化即重渲染
   const siteSettings = useSiteSettings();   // 拉站点设置(USDT地址/折扣、组合优惠、收款码),应用到价格与展示
+  const usdtPresentation = usdtPaymentPresentation(locale);
   const products = getCatalogProducts(); // 合并后的上架商品(价格/规格/上下架与结账实收价一致)
   const { cart, cartPlans, hydrated, removeFromCart, replaceCart, clearCart, setCartPlan } = useCart();
   const [step, setStep] = useState("form");
@@ -1717,9 +1718,9 @@ export default function CheckoutPage() {
                       <div className="payment-method-icon usdt"><UsdtIcon /></div>
                       <div className="payment-method-detail">
                         <strong>{finalUsdt} USDT</strong>
-                        <small>{L(`${usdtDiscountLabel("zh")}优惠 · TRC20`, `${usdtDiscountLabel("en")} · TRC20`)}</small>
+                        <small>{usdtPresentation.methodNote}</small>
                       </div>
-                      <div className="payment-method-badge">{L(usdtDiscountLabel("zh"), usdtDiscountLabel("en"))}</div>
+                      {usdtPresentation.discount && <div className="payment-method-badge">{usdtPresentation.discount}</div>}
                     </label>
                     {authedUser && (
                       <label className={`payment-method-option${paymentMethod === "balance" ? " selected" : ""}${authedUser.balance < finalCny ? " low-balance" : ""}`}>

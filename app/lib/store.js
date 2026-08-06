@@ -225,7 +225,7 @@ export function applyCatalogOverride(apiProducts) {
     (p.plans || []).forEach((pl) => { plans[pl.id] = { id: pl.id, amount: Number(pl.amount), label: pl.label, desc: pl.desc, cycle: pl.cycle, unit: pl.cycle, soldOut: !!pl.soldOut }; });
     byKey[p.key] = {
       active: true,
-      title: p.title, subtitle: p.subtitle, price: getCatalogDisplayPrice(p), cycle: p.cycle,
+      title: p.title, subtitle: p.subtitle, image: p.image, price: getCatalogDisplayPrice(p), cycle: p.cycle,
       shortIntro: p.shortIntro, highlights: p.highlights,
       detailTitle: p.detailTitle, detailBody: p.detailBody, defaultPlan: p.defaultPlan,
       quoteOnly: !!p.quoteOnly,
@@ -251,13 +251,14 @@ export function getCatalogProducts() {
       const startingPlan = getCatalogStartingPlan({ plans: Object.values(ov.plans || {}) });
       return {
         ...base,
+        image: ov.image || base.image,
         title: ov.title || base.title,
         subtitle: ov.subtitle || base.subtitle,
         price: ov.price || base.price,
         amount: Number.isFinite(Number(startingPlan?.amount)) ? Number(startingPlan.amount) : base.amount,
         cycle: ov.cycle || base.cycle,
         shortIntro: ov.shortIntro || base.shortIntro,
-        highlights: Array.isArray(ov.highlights) && ov.highlights.length ? ov.highlights : base.highlights,
+        highlights: Array.isArray(ov.highlights) ? ov.highlights : base.highlights,
         detailTitle: ov.detailTitle || base.detailTitle,
         detailBody: ov.detailBody || base.detailBody,
         quoteOnly: ov.quoteOnly || base.quoteOnly || false,
@@ -590,6 +591,22 @@ export function bundleTierLabel(itemCount, locale) {
 // 注:usdt.discount 是「实付倍率」(0.9=付9成),换算成 amount-off = 1-0.9 才是折扣额。
 export function usdtDiscountLabel(locale) {
   return discountLabel(1 - siteUsdtDiscount(), locale);
+}
+
+export function usdtPaymentPresentation(locale) {
+  const discount = usdtDiscountLabel(locale);
+  return {
+    discount,
+    methodNote: discount
+      ? (locale === "en" ? `${discount} · TRC20` : `${discount}优惠 · TRC20`)
+      : "TRC20",
+    shopHint: discount
+      ? (locale === "en" ? `${discount} with USDT` : `USDT 支付 ${discount}`)
+      : (locale === "en" ? "Pay with USDT" : "USDT 支付"),
+    faqQualifier: discount
+      ? (locale === "en" ? ` (${discount})` : `（${discount}）`)
+      : "",
+  };
 }
 
 export function cartSubtotalCny(items, planMap = {}) {

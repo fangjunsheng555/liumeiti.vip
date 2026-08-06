@@ -21,7 +21,7 @@ test("mobile admin sidebar owns vertical touch scrolling without chaining to the
 test("narrow admin header keeps the context tag and logout action horizontal", () => {
   assert.match(globalStyles, /@media \(max-width: 480px\)\s*\{[\s\S]*?\.admin-header\s*\{[\s\S]*?flex-wrap: nowrap;[\s\S]*?padding-inline: 12px;/);
   assert.match(globalStyles, /\.admin-logo\s*\{\s*max-width: 92px;\s*\}/);
-  assert.match(adminPageSource, /<Link href="\/" className="admin-logo-link" aria-label="返回首页">/);
+  assert.match(adminPageSource, /<Link href="\/" className="admin-logo-link" aria-label=[^>]+onClick=\{\(event\) => \{ if \(!confirmEditorLeave\(\)\) event\.preventDefault\(\); \}\}>/);
   assert.match(globalStyles, /@media \(max-width: 360px\)\s*\{\s*\.admin-logo-link\s*\{\s*display: none;\s*\}/);
   assert.match(globalStyles, /\.admin-tag,\s*\.admin-logout\s*\{[\s\S]*?flex-shrink: 0;[\s\S]*?white-space: nowrap;/);
   assert.match(globalStyles, /\.admin-logout\s*\{\s*margin-left: auto;\s*\}/);

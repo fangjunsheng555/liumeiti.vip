@@ -4,13 +4,12 @@ import { ArrowRight, BadgeCheck, CheckCircle2, ShieldCheck } from "lucide-react"
 import FloatingSupport from "../../components/FloatingSupport";
 import MobileNav from "../../components/MobileNav";
 import {
-  getLocalizedServicePlanCopy,
   getServiceBySlug,
   localizeService,
-  localizeServicePlanCycle,
   SERVICE_ALIASES,
   SERVICE_PAGES,
 } from "../service-data";
+import { applyCatalogToService, serviceCatalogLowPrice, serviceJsonLdImage } from "../catalog-service.js";
 import ServiceOrderActions from "../ServiceOrderActions";
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../../social-meta";
 import { getServerLocale } from "../../lib/i18n-server";
@@ -18,34 +17,6 @@ import { getT } from "../../lib/i18n";
 import { getCatalogSoldOutMap } from "../../api/_utils.js";
 import { getMergedCatalog } from "../../api/_catalog.js";
 import { getSettings } from "../../api/_settings.js";
-import { localizeCatalogDisplayPrice } from "../../lib/catalog-price.js";
-
-// 把后台合并目录的价格/规格覆盖到服务页(与首页/选购/结账完全一致)。
-// 名称/说明保持本地化(中英),价格取目录权威 amount;商品下架则 404。
-function applyCatalogToService(service, catProd, locale, soldOutMap = {}) {
-  if (!catProd) return service;
-  const activePlans = (catProd.plans || []).filter((pl) => pl.active !== false);
-  const next = { ...service };
-  if (catProd.priceText) {
-    next.price = locale === "en"
-      ? localizeCatalogDisplayPrice(catProd.priceText, "en", next.price)
-      : catProd.priceText;
-  }
-  if (catProd.quoteOnly || catProd.key === "proxy-pay") return next;
-  if (Array.isArray(service.plans) && activePlans.length) {
-    // 第4位 = 该规格是否售罄(库存0),供下方规格卡用
-    next.plans = activePlans.map((pl) => {
-      const copy = getLocalizedServicePlanCopy(service.slug, pl.id, locale, {
-        label: pl.label,
-        description: pl.desc,
-      });
-      const cycle = localizeServicePlanCycle(pl.cycle, locale);
-      return [copy.name, `¥${pl.amount}/${cycle}`, copy.description, !!soldOutMap[catProd.key + ":" + pl.id]];
-    });
-    next.planIds = activePlans.map((pl) => pl.id);
-  }
-  return next;
-}
 
 export const dynamic = "force-dynamic"; // 始终读最新商品覆盖(价格/上下架),不静态缓存
 
@@ -112,7 +83,7 @@ export default async function ServiceLandingPage({ params }) {
     "@context": "https://schema.org",
     "@type": "Product",
     name: service.title,
-    image: `https://www.liumeiti.vip${service.image}`,
+    image: serviceJsonLdImage(service.image),
     description: service.description,
     brand: { "@type": "Brand", name: "冒央会社 Maoyang Taiwan Inc" },
   };
@@ -120,7 +91,7 @@ export default async function ServiceLandingPage({ params }) {
     productJsonLd.offers = {
         "@type": "AggregateOffer",
         priceCurrency: "CNY",
-        lowPrice: String(service.plans[0]?.[1] || service.price).replace(/[^\d.]/g, "") || "0",
+        lowPrice: serviceCatalogLowPrice(service, catProd),
         availability: allSoldOut ? "https://schema.org/OutOfStock" : "https://schema.org/InStock",
         url: `https://www.liumeiti.vip/services/${service.slug}`,
     };

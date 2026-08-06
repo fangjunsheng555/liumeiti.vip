@@ -15,7 +15,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import FloatingSupport from "./FloatingSupport";
-import { copyText, useSiteSettings } from "../lib/store";
+import { copyText, useSiteSettings, usdtPaymentPresentation } from "../lib/store";
 import { useLocale } from "./LocaleProvider";
 import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
 import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
@@ -64,6 +64,7 @@ export default function ProxyQuotePayment({ orderId }) {
   const { locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
   const settings = useSiteSettings();
+  const usdtPresentation = usdtPaymentPresentation(locale);
   const [token, setToken] = useState("");
   const [order, setOrder] = useState(null);
   const [state, setState] = useState({ loading: true, error: "", errorCode: "", notice: "" });
@@ -363,7 +364,7 @@ export default function ProxyQuotePayment({ orderId }) {
             <section className="checkout-card proxy-payment-qr-card">
               <div className="proxy-pay-method-seg">
                 <button type="button" className={payMethod === "alipay" ? "active" : ""} onClick={() => selectPaymentMethod("alipay")} aria-pressed={payMethod === "alipay"} disabled={submitting || paymentUncertain}>{L("支付宝", "Alipay")}</button>
-                <button type="button" className={payMethod === "usdt" ? "active" : ""} onClick={() => selectPaymentMethod("usdt")} aria-pressed={payMethod === "usdt"} disabled={submitting || paymentUncertain}>USDT <em>{L("9 折", "10% off")}</em></button>
+                <button type="button" className={payMethod === "usdt" ? "active" : ""} onClick={() => selectPaymentMethod("usdt")} aria-pressed={payMethod === "usdt"} disabled={submitting || paymentUncertain}>USDT {usdtPresentation.discount && <em>{usdtPresentation.discount}</em>}</button>
               </div>
               <div className="proxy-payment-qr-head"><span><ShieldCheck size={17} />{isUsdt ? L("USDT 付款", "USDT payment") : L("支付宝付款", "Alipay payment")}</span><em>{isUsdt ? "TRC20" : L("安全结算", "Secure")}</em></div>
               {paymentUiReady && <div className={`proxy-payment-method-amount ${payMethod}`} aria-live="polite">

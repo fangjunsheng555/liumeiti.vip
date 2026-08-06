@@ -35,7 +35,7 @@ import {
   cartSubtotalCny,
   cartFinalCny,
   bundleDiscountLabel,
-  usdtDiscountLabel,
+  usdtPaymentPresentation,
   productItemAmount,
 } from "../lib/store";
 import MobileNav from "../components/MobileNav";
@@ -156,6 +156,7 @@ const BADGE_EN = {
 export default function ShopPage() {
   const { locale } = useLocale();
   const L = (zh, en) => (locale === "en" ? en : zh);
+  const usdtPresentation = usdtPaymentPresentation(locale);
   const catalogVersion = useCatalogSync(); // 后台商品/价格覆盖
   useSiteSettings(); // 站点设置(组合优惠档位等),应用到价格显示
   const products = getCatalogProducts();
@@ -366,7 +367,7 @@ export default function ShopPage() {
                         </div>
                         <div className="price-meta">
                           {saved > 0 && <span className="price-save">{L("立省", "Save")} ¥{saved}</span>}
-                          <span className="price-usdt-hint">{L("USDT支付 " + usdtDiscountLabel("zh"), usdtDiscountLabel("en") + " with USDT")}</span>
+                          <span className="price-usdt-hint">{usdtPresentation.shopHint}</span>
                         </div>
                       </>
                     )}

@@ -15,6 +15,7 @@ import { SERVICE_PAGES, localizeService } from "../services/service-data";
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../social-meta";
 import { getServerLocale } from "../lib/i18n-server";
 import { getMergedCatalog } from "../api/_catalog.js";
+import { getSettings } from "../api/_settings.js";
 import { localizeCatalogDisplayPrice } from "../lib/catalog-price.js";
 
 export async function generateMetadata() {
@@ -235,8 +236,9 @@ const POLICY_SECTIONS_EN = {
 };
 
 export default async function LegalPage() {
-  const [locale, catalog] = await Promise.all([getServerLocale(), getMergedCatalog()]);
+  const [locale, catalog, settings] = await Promise.all([getServerLocale(), getMergedCatalog(), getSettings()]);
   const en = locale === "en";
+  const footerCfg = settings.footer;
   const summaryItems = en ? SUMMARY_ITEMS_EN : SUMMARY_ITEMS;
   const policySections = POLICY_SECTIONS.map((s) => (en && POLICY_SECTIONS_EN[s.id] ? { ...s, ...POLICY_SECTIONS_EN[s.id] } : s));
   const catalogByKey = Object.fromEntries(catalog.map((product) => [product.key, product]));
@@ -383,15 +385,15 @@ export default async function LegalPage() {
       <footer className="site-footer home-footer">
         <div className="container footer-inner">
           <div className="footer-company">
-            <div className="footer-brand">{L("冒央会社 · Maoyang Taiwan Inc", "Maoyang Taiwan Inc")}</div>
+            <div className="footer-brand">{en ? footerCfg.brandEn : footerCfg.brand}</div>
             <div className="footer-links">
               <Link href="/legal">{L("企业资质与服务保障", "Credentials & service assurance")}</Link>
               <Link href="/service-center#contact">{L("联系我们", "Contact")}</Link>
             </div>
           </div>
           <div className="footer-legal">
-            <div className="footer-pill">{L("地址：台湾新北市板桥区远东路1号3-218", "Addr: 3-218, No.1 Yuandong Rd, Banqiao, New Taipei, Taiwan")}</div>
-            <div className="footer-pill">Copyright © 2020-2026 Maoyang Taiwan Inc. All rights reserved</div>
+            <div className="footer-pill">{en ? footerCfg.addressEn : footerCfg.address}</div>
+            <div className="footer-pill">{footerCfg.copyright}</div>
           </div>
         </div>
       </footer>

@@ -543,7 +543,15 @@ export default function Page() {
   const HOME_HIDDEN_KEYS = ["max"];
   const homeBase = SERVICE_PAGES.filter((s) => !HOME_HIDDEN_KEYS.includes(s.key));
   const homeServices = catalogOverrideLoaded()
-    ? getCatalogProducts().map((p) => homeBase.find((s) => s.key === p.key)).filter(Boolean) // 目录序+仅上架
+    ? getCatalogProducts().map((p) => {
+        const service = homeBase.find((item) => item.key === p.key);
+        return service ? {
+          ...service,
+          shortTitle: p.title || service.shortTitle,
+          subtitle: p.subtitle || service.subtitle,
+          image: p.image || service.image,
+        } : null;
+      }).filter(Boolean) // 目录序+仅上架，同时应用后台名称/副标题/商品图
     : homeBase;
 
   useEffect(() => {

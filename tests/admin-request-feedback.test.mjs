@@ -380,11 +380,14 @@ test("remaining editable admin panels reject stale reloads and never render fail
   assert.match(abandoned, /if \(loading \|\| busy\) return/);
   assert.match(abandoned, /disabled=\{loading \|\| Boolean\(busy\) \|\| !selected\.size\}/);
 
-  for (const file of ["CatalogPanel.jsx", "SettingsPanel.jsx"]) {
-    const source = await readFile(new URL(`../app/admin/${file}`, import.meta.url), "utf8");
-    assert.match(source, /onClick=\{load\} disabled=\{saving \|\| loading(?: \|\| historyLoading)?(?: \|\| Boolean\(rollbackBusy\))?\}/);
-    assert.match(source, /async function save\(\) \{\s*if \(saving \|\| loading(?: \|\| historyLoading)?(?: \|\| rollbackBusy)?\) return/);
-  }
+  const catalogPanel = await readFile(new URL("../app/admin/CatalogPanel.jsx", import.meta.url), "utf8");
+  assert.match(catalogPanel, /onClick=\{load\} disabled=\{saving \|\| loading \|\| historyLoading \|\| Boolean\(rollbackBusy\)\}/);
+  assert.match(catalogPanel, /async function save\(\) \{\s*if \(saving \|\| loading \|\| loadFailed \|\| historyLoading \|\| rollbackBusy\) return;\s*if \(!dirty\) return/);
+  assert.match(catalogPanel, /!Array\.isArray\(data\.catalog\) \|\| data\.catalog\.length === 0/);
+
+  const settingsPanel = await readFile(new URL("../app/admin/SettingsPanel.jsx", import.meta.url), "utf8");
+  assert.match(settingsPanel, /onClick=\{reload\} disabled=\{saving \|\| loading \|\| uploadBusy\}/);
+  assert.match(settingsPanel, /async function save\(\) \{\s*if \(saving \|\| loading \|\| loadFailed \|\| uploadBusyRef\.current \|\| !dirty\) return/);
 
   const announcements = await readFile(new URL("../app/admin/AnnouncePostsPanel.jsx", import.meta.url), "utf8");
   assert.match(announcements, /disabled=\{busy \|\| loading\}/);
@@ -399,12 +402,11 @@ test("remaining editable admin panels reject stale reloads and never render fail
 test("rollback and uncertain non-idempotent admin actions stay locked until verification", async () => {
   const catalog = await readFile(new URL("../app/admin/CatalogPanel.jsx", import.meta.url), "utf8");
   const rollback = declarationBody(catalog, "rollback");
-  assert.match(rollback, /historyLoading \|\| rollbackBusy/);
+  assert.match(rollback, /\|\| controlsBusy/);
   assert.match(catalog, /onMouseDown=\{\(event\) => event\.target === event\.currentTarget && !rollbackBusy && setHistoryOpen\(false\)\}/);
   assert.match(catalog, /onClick=\{\(\) => setHistoryOpen\(false\)\} disabled=\{Boolean\(rollbackBusy\)\}/);
-  for (const action of ["openHistory", "save"]) {
-    assert.match(declarationBody(catalog, action), /rollbackBusy\) return/);
-  }
+  assert.match(declarationBody(catalog, "openHistory"), /if \(controlsBusy\) return/);
+  assert.match(declarationBody(catalog, "save"), /historyLoading \|\| rollbackBusy\) return/);
 
   const announcements = await readFile(new URL("../app/admin/AnnouncePostsPanel.jsx", import.meta.url), "utf8");
   const saveAnnouncement = declarationBody(announcements, "save");

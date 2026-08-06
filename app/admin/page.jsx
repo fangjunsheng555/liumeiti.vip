@@ -1286,7 +1286,25 @@ export default function AdminPage() {
   const [batchConfirm, setBatchConfirm] = useState(null); // null | "delete" | "invalid"
 
   // User/balance management
-  const [tab, setTab] = useState("overview"); // overview | orders | abnormal | users | balance | staff
+  const [tab, setTabState] = useState("overview"); // overview | orders | abnormal | users | balance | staff
+  const editorDirtyRef = useRef({ catalog: false, settings: false });
+  const setEditorDirty = useCallback((editor, dirty) => {
+    editorDirtyRef.current[editor] = Boolean(dirty);
+  }, []);
+  const setCatalogDirty = useCallback((dirty) => setEditorDirty("catalog", dirty), [setEditorDirty]);
+  const setSettingsDirty = useCallback((dirty) => setEditorDirty("settings", dirty), [setEditorDirty]);
+  const confirmEditorLeave = useCallback(() => {
+    if (!editorDirtyRef.current[tab]) return true;
+    return window.confirm("当前页面有未保存的修改，确定离开并放弃这些修改吗？");
+  }, [tab]);
+  const setTab = useCallback((nextTab) => {
+    const target = typeof nextTab === "function" ? nextTab(tab) : nextTab;
+    if (target === tab) return true;
+    if (!confirmEditorLeave()) return false;
+    editorDirtyRef.current[tab] = false;
+    setTabState(target);
+    return true;
+  }, [confirmEditorLeave, tab]);
   const [navOpen, setNavOpen] = useState(false); // 移动端侧栏抽屉开关(纯 UI)
   const [confirmUserAction, setConfirmUserAction] = useState(null); // { email, action: "ban" | "unban" | "delete" }
   const [userActionBusy, setUserActionBusy] = useState(false);
@@ -4860,12 +4878,12 @@ export default function AdminPage() {
           >
             <Menu size={18} />
           </button>
-          <Link href="/" className="admin-logo-link" aria-label="返回首页">
+          <Link href="/" className="admin-logo-link" aria-label="返回首页" onClick={(event) => { if (!confirmEditorLeave()) event.preventDefault(); }}>
             <img src="/logo.png" alt="冒央会社" className="admin-logo" />
           </Link>
           <span className="admin-tag">工作后台{currentStaff?.id ? ` · #${currentStaff.id}` : ""}</span>
         </div>
-        <button type="button" className="admin-logout" onClick={doLogout} disabled={logoutBusy}>
+        <button type="button" className="admin-logout" onClick={() => { if (confirmEditorLeave()) doLogout(); }} disabled={logoutBusy}>
           {logoutBusy ? <LoaderCircle size={14} className="spin-icon" /> : <LogOut size={14} />}退出
         </button>
       </header>
@@ -4890,7 +4908,7 @@ export default function AdminPage() {
                         className={`admin-nav-item${tab === it.key ? " active" : ""}`}
                         aria-current={tab === it.key ? "page" : undefined}
                         onClick={() => {
-                          setTab(it.key);
+                          if (!setTab(it.key)) return;
                           if (it.key === "mail") setMailWorkspace("records");
                           setNavOpen(false);
                         }}
@@ -5820,9 +5838,9 @@ export default function AdminPage() {
         ) : tab === "announce-posts" && isRootStaff ? (
           <AnnouncePostsPanel />
         ) : tab === "catalog" && isRootStaff ? (
-          <CatalogPanel />
+          <CatalogPanel onDirtyChange={setCatalogDirty} />
         ) : tab === "settings" && isRootStaff ? (
-          <SettingsPanel />
+          <SettingsPanel onDirtyChange={setSettingsDirty} />
         ) : tab === "security" ? (
           <SecurityPanel isRoot={isRootStaff} />
         ) : tab === "ai-quota" && isRootStaff ? (
