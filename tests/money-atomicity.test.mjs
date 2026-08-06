@@ -787,6 +787,36 @@ test("legacy referral settlement records manual evidence without paying or block
   });
 });
 
+test("a malformed historical inviter record is deferred for review without blocking order completion", async () => {
+  const email = "malformed-inviter@example.com";
+  const lifecycle = "c".repeat(32);
+  const redis = new AtomicRedisMock([
+    [`liumeiti:users:${email}`, "{malformed-json"],
+    [money.balanceCentsKey(email), "0"],
+    [money.accountLifecycleKey(email), lifecycle],
+  ]);
+  await withRedis(redis, async () => {
+    const { settleOrderReferralCommission } = await import("../app/api/_utils.js");
+    const order = {
+      orderId: "LM-MALFORMED-REFERRAL-1",
+      finalAmount: 100,
+      referral: {
+        levelOneEmail: email,
+        levelOneAccountLifecycleId: lifecycle,
+        levelOneRate: 0.1,
+      },
+    };
+    const settled = await settleOrderReferralCommission(order);
+    assert.equal(settled.ok, true);
+    assert.equal(settled.manualReview, true);
+    assert.deepEqual(settled.entries, []);
+    assert.equal(settled.skippedEntries[0].reason, "invalid_user_record");
+    assert.equal(order.referralCommissionManualReview.reason, "referral_account_record_invalid");
+    assert.match(order.referralCommissionSettledAt, /^\d{4}-/);
+    assert.equal(redis.values.get(money.balanceCentsKey(email)), "0");
+  });
+});
+
 test("referral settlement never credits a re-registered inviter lifecycle", async () => {
   const email = "rebound-inviter@example.com";
   const oldLifecycle = "a".repeat(32);
