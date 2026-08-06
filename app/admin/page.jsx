@@ -7,6 +7,7 @@ import { getSpotifyPasswordAttention } from "../lib/order-attention";
 import {
   clearAdminMutationJournal,
   prepareAdminMutationJournal,
+  readAdminMutationJournals,
 } from "../lib/admin-mutation-journal";
 import { isExplicitTerminalIdempotencyResponse } from "../lib/idempotency";
 import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
@@ -1274,6 +1275,7 @@ export default function AdminPage() {
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [saveResult, setSaveResult] = useState(null);
+  const [orderRecovery, setOrderRecovery] = useState(null);
   const [showPwds, setShowPwds] = useState({});
   const [spotifyPasswordMail, setSpotifyPasswordMail] = useState(null);
   const [spotifyPasswordMailBusy, setSpotifyPasswordMailBusy] = useState(false);
@@ -1691,6 +1693,20 @@ export default function AdminPage() {
     if (isExplicitTerminalIdempotencyResponse(response?.status, data)) {
       completeAdminMutation(pending.storageKey, pending.operation);
     }
+  }
+
+  function readPendingOrderRecovery(orderId) {
+    if (typeof window === "undefined" || !String(orderId || "").trim()) return null;
+    const pending = readAdminMutationJournals(window.localStorage, "order", orderId);
+    if (!pending.ok || pending.records.length > 1) {
+      return { blocked: true, message: "检测到无法安全确认的旧订单操作，请勿重复提交；请刷新后核对订单状态。" };
+    }
+    if (pending.records.length !== 1) return null;
+    return {
+      blocked: false,
+      storageKey: pending.slotKey,
+      record: pending.records[0].record,
+    };
   }
 
   const isRootStaff = Boolean(currentStaff?.root || Number(currentStaff?.id || 0) === 1);
@@ -4062,6 +4078,8 @@ export default function AdminPage() {
         itemCount: Number(data.order.itemCount || items.length || 1),
         serviceLabel: data.order.serviceLabel || items.map((item) => item.label).filter(Boolean).join(" + "),
       };
+      const recovery = readPendingOrderRecovery(detail.orderId);
+      setOrderRecovery(recovery);
       setActiveOrder(detail);
       setEditForm({
         status: detail.status,
@@ -4109,7 +4127,14 @@ export default function AdminPage() {
           customerPasswordUpdateCount: Number(item.customerPasswordUpdateCount || 0),
         })),
       });
-      setSaveResult(null);
+      setSaveResult(recovery
+        ? {
+            type: recovery.blocked ? "error" : "warning",
+            message: recovery.blocked
+              ? recovery.message
+              : "检测到上次订单操作的结果尚未确认。请先点击“确认上次操作”，系统会原样续跑，不会重复退款或发信。",
+          }
+        : null);
       setConfirmDelete(false);
       setSpotifyPasswordMail(null);
       markPollSuccess("orderDetail");
@@ -4164,6 +4189,64 @@ export default function AdminPage() {
     let replayData = null;
     try { replayData = await replayResponse.json(); } catch {}
     return { response: replayResponse, data: replayData || { ok: false, error: `HTTP ${replayResponse.status}` } };
+  }
+
+  async function resumePendingOrderMutation(recovery) {
+    if (!activeOrder?.orderId || saving || !recovery) return;
+    if (recovery.blocked || !recovery.record?.idempotencyRequest?.key) {
+      setSaveResult({ type: "error", message: recovery.message || "旧订单操作无法安全恢复，请刷新后核对订单状态。" });
+      return;
+    }
+    const pending = {
+      operation: recovery.record.idempotencyRequest,
+      payload: recovery.record.payload,
+      storageKey: recovery.storageKey,
+    };
+    setSaving(true);
+    setSaveResult({ type: "warning", message: "正在确认上次订单操作，请勿关闭页面…" });
+    try {
+      await withAdminMutationCoordination(async () => {
+        let response = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
+          credentials: "same-origin",
+          body: JSON.stringify(pending.payload),
+        });
+        let data = null;
+        try { data = await response.json(); } catch {}
+        data ||= { ok: false, error: `HTTP ${response.status}` };
+        ({ response, data } = await replayAppliedOrderMutationOnce(pending, response, data));
+        if (data.ok) {
+          completeAdminMutation(pending.storageKey, pending.operation);
+          setOrderRecovery(null);
+          await openOrder({ orderId: activeOrder.orderId });
+          setSaveResult({ type: "success", message: "上次订单操作已安全确认，订单状态已刷新。" });
+          loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
+          loadOverview({ silent: true });
+          return;
+        }
+        if (await handleOrderMutationConflict(pending, response, data, "上次订单操作确认失败")) {
+          setOrderRecovery(readPendingOrderRecovery(activeOrder.orderId));
+          return;
+        }
+        const terminal = isExplicitTerminalIdempotencyResponse(response.status, data);
+        clearTerminalAdminMutation(pending, response, data);
+        const nextRecovery = readPendingOrderRecovery(activeOrder.orderId);
+        setOrderRecovery(nextRecovery);
+        if (terminal) await openOrder({ orderId: activeOrder.orderId });
+        setSaveResult({
+          type: "error",
+          message: terminal
+            ? orderMutationErrorMessage(data, "上次操作未执行，已载入最新订单，请重新操作")
+            : "上次订单操作暂时仍无法确认，请稍后再次点击“确认上次操作”；系统不会重复退款或发信。",
+        });
+      });
+    } catch (error) {
+      setOrderRecovery(readPendingOrderRecovery(activeOrder.orderId));
+      setSaveResult({ type: "error", message: adminMutationFailureMessage(error, "上次订单操作确认失败，请稍后重试") });
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function updateOrderAssignment(action, assignedStaffId = 0) {
@@ -4489,6 +4572,13 @@ export default function AdminPage() {
 
   async function saveOrder() {
     if (!activeOrder || saving) return;
+    const pendingRecovery = readPendingOrderRecovery(activeOrder.orderId);
+    if (pendingRecovery) {
+      setOrderRecovery(pendingRecovery);
+      await resumePendingOrderMutation(pendingRecovery);
+      return;
+    }
+    setOrderRecovery(null);
     // 作废二次确认(作废会自动退款/退券/恢复兑换码)
     if (editForm.status === "invalid" && activeOrder.status !== "invalid") {
       const willRefund = activeOrder.paidByBalance || activeOrder.couponId;
@@ -4538,9 +4628,11 @@ export default function AdminPage() {
       ({ response: res, data } = await replayAppliedOrderMutationOnce(pending, res, data));
       if (data.ok) {
         completeAdminMutation(pending.storageKey, pending.operation);
+        setOrderRecovery(null);
         const completionMessage = data.completion?.email?.ok ? " · 完成邮件已发送" : data.completion ? " · 完成邮件发送失败" : "";
         const invalidMessage = data.invalidNotice?.email?.ok ? " · 无效通知已发送" : data.invalidNotice ? " · 无效通知发送失败" : "";
-        setSaveResult({ type: "success", message: "已保存" + completionMessage + invalidMessage });
+        const effectMessage = data.effectWarnings?.length ? " · 状态已保存，部分后台日志稍后补录" : "";
+        setSaveResult({ type: "success", message: "已保存" + completionMessage + invalidMessage + effectMessage });
         loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
         loadOverview({ silent: true });
         setActiveOrder(data.order);
@@ -4590,10 +4682,12 @@ export default function AdminPage() {
           completion_netflix_account_conflict: "同一订单的 Netflix 商品使用了不同登录邮箱，请改为同一邮箱或使用手动账号密码交付",
         }[data.error] || data.error || "保存失败");
         setSaveResult({ type: "error", message });
+        setOrderRecovery(readPendingOrderRecovery(activeOrder.orderId));
       }
       });
     } catch (e) {
       setSaveResult({ type: "error", message: adminMutationFailureMessage(e) });
+      setOrderRecovery(readPendingOrderRecovery(activeOrder.orderId));
     } finally {
       setSaving(false);
     }
@@ -6766,7 +6860,7 @@ export default function AdminPage() {
                   className="admin-status-select"
                   value={editForm.status}
                   onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
-                  disabled={saving || deleting}
+                  disabled={saving || deleting || Boolean(orderRecovery)}
                 >
                   {activeOrder.orderType === "proxy_payment" ? (
                     <>
@@ -6791,7 +6885,9 @@ export default function AdminPage() {
                   onClick={saveOrder}
                   disabled={saving || deleting}
                 >
-                  {saving ? <><LoaderCircle size={14} className="spin-icon" />保存中</> : "保存修改"}
+                  {saving
+                    ? <><LoaderCircle size={14} className="spin-icon" />{orderRecovery ? "确认中" : "保存中"}</>
+                    : orderRecovery ? "确认上次操作" : "保存修改"}
                 </button>
               </div>
 

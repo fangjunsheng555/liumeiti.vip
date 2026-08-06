@@ -139,12 +139,16 @@ test("an exact journal read failure cannot fall through to a fresh operation", (
 test("admin callers send the persisted exact body and compare-clear only the proven key", async () => {
   const source = await readFile(new URL("../app/admin/page.jsx", import.meta.url), "utf8");
   assert.match(source, /prepareAdminMutationJournal\(window\.localStorage, scope, target, payload\)/);
+  assert.match(source, /readAdminMutationJournals\(window\.localStorage, "order", orderId\)/);
+  assert.match(source, /pending\.operation\.key/);
+  assert.match(source, /body: JSON\.stringify\(pending\.payload\)/);
+  assert.match(source, /确认上次操作/);
   assert.match(source, /clearAdminMutationJournal\(window\.localStorage, storageKey, operation\.key\)/);
-  // Nine UI mutations plus one exact replay used only to resume a mutation
-  // whose primary order write already committed before a CAS conflict.
-  assert.equal((source.match(/body: JSON\.stringify\(pending\.payload\)/g) || []).length, 10);
-  assert.equal((source.match(/clearTerminalAdminMutation\(pending, (?:res|response), data\)/g) || []).length, 11);
-  assert.equal((source.match(/await withAdminMutationCoordination\(async \(\) => \{/g) || []).length, 10);
+  // Nine UI mutations, one explicit unresolved-order replay and one exact
+  // replay used to resume a mutation whose primary write already committed.
+  assert.equal((source.match(/body: JSON\.stringify\(pending\.payload\)/g) || []).length, 11);
+  assert.equal((source.match(/clearTerminalAdminMutation\(pending, (?:res|response), data\)/g) || []).length, 12);
+  assert.equal((source.match(/await withAdminMutationCoordination\(async \(\) => \{/g) || []).length, 11);
   assert.match(source, /return withCheckoutSubmissionCoordination\(callback\)/);
   assert.doesNotMatch(source, /clearIdempotencyRequest\(window\.localStorage, storageKey\)/);
 });

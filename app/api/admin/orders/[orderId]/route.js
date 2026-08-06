@@ -784,10 +784,14 @@ async function updateOrderHandler(request, { params }) {
       detail: effects.adminDetail || { status: newStatus || order.status },
       operationId: `${operation.operationId}:admin-log`,
     });
-    if (!internalEffectsOk || !logOk) {
-      return Response.json({ ok: false, error: "operation_effect_journal_unavailable" }, { status: 503 });
+    const effectWarnings = [
+      ...(!internalEffectsOk ? ["order_timeline_unavailable"] : []),
+      ...(!logOk ? ["admin_action_log_unavailable"] : []),
+    ];
+    if (effectWarnings.length) {
+      console.warn(`[admin-order] recovered ${canonicalOrderId} with non-critical effect warnings: ${effectWarnings.join(",")}`);
     }
-    const replayPayload = { ok: true, order: orderForAdminResponse(order), replayedDeliveries };
+    const replayPayload = { ok: true, order: orderForAdminResponse(order), replayedDeliveries, effectWarnings };
     const completed = await completeDurableOperation(operation, replayPayload);
     if (!completed.ok) return Response.json({ ok: false, error: completed.error }, { status: 503 });
     return Response.json({ ...replayPayload, idempotent: true });
@@ -1071,7 +1075,7 @@ async function updateOrderHandler(request, { params }) {
           : []
       ));
       // 退款闭环:余额支付退回余额、还优惠券、恢复兑换码(幂等)。
-      transitionPlan.refund = true;
+      transitionPlan.refund = Boolean(order.paidByBalance || order.couponId);
     }
     if (newStatus !== "invalid") {
       order.invalidAt = null;
@@ -1084,7 +1088,7 @@ async function updateOrderHandler(request, { params }) {
           ? [{ index: itemIndex, service: it.service, plan: it.plan || it.rocketPlan }]
           : []
       ));
-      transitionPlan.reclaim = true;
+      transitionPlan.reclaim = Boolean(order.refundedAt);
     }
   }
 
@@ -1250,8 +1254,12 @@ async function updateOrderHandler(request, { params }) {
     detail: { status: newStatus || order.status },
     operationId: `${operation.operationId}:admin-log`,
   });
-  if (!internalEffectsOk || !logOk) {
-    return Response.json({ ok: false, error: "operation_effect_journal_unavailable" }, { status: 503 });
+  const effectWarnings = [
+    ...(!internalEffectsOk ? ["order_timeline_unavailable"] : []),
+    ...(!logOk ? ["admin_action_log_unavailable"] : []),
+  ];
+  if (effectWarnings.length) {
+    console.warn(`[admin-order] saved ${canonicalOrderId} with non-critical effect warnings: ${effectWarnings.join(",")}`);
   }
 
   // Send status emails only on a real transition, not on repeated saves.
@@ -1335,6 +1343,7 @@ async function updateOrderHandler(request, { params }) {
       expiresAtBeijing: order.quoteExpiresAtBeijing,
     } : null,
     statusChange: newStatus,
+    effectWarnings,
   };
   const completed = await completeDurableOperation(operation, responsePayload);
   if (!completed.ok) return Response.json({ ok: false, error: completed.error }, { status: 503 });

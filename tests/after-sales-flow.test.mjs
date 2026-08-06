@@ -507,6 +507,38 @@ function orderRecord(orderId, email = "buyer@example.com") {
   };
 }
 
+test("completed and unpaid-invalid order saves stay successful when audit effects fail", async () => {
+  const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  for (const [status, suffix] of [["completed", "COMPLETE"], ["invalid", "INVALID"]]) {
+    const order = { ...orderRecord(`LMORDERRECOVERY${suffix}1`, `recovery-${status}@example.com`), status: "received", revision: 0 };
+    values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+    failNextTimelineWrite = true;
+    failNextAdminActionWrite = true;
+    const response = await adminOrderRoute.PATCH(
+      new Request(`https://www.liumeiti.vip/api/admin/orders/${order.orderId}`, {
+        method: "PATCH",
+        headers: {
+          cookie: `lm_admin=${encodeURIComponent(adminToken)}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": `order-recovery-${status}-0001`,
+        },
+        body: JSON.stringify({ expectedRevision: 0, status, items: [] }),
+      }),
+      { params: Promise.resolve({ orderId: order.orderId }) },
+    );
+    assert.equal(response.status, 200, `${status} must not be reported as failed after its main write`);
+    const result = await response.json();
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.effectWarnings.sort(), ["admin_action_log_unavailable", "order_timeline_unavailable"]);
+    const stored = await utils.getOrderById(order.orderId);
+    assert.equal(stored.status, status);
+    if (status === "invalid") {
+      assert.equal(stored.refundedAt, undefined, "an unpaid order must not create a fake zero-value refund");
+      assert.equal(stored.pendingTransition, undefined);
+    }
+  }
+});
+
 function customerRequest(order, token, issue = "账号当前无法正常登录") {
   return new Request("https://www.liumeiti.vip/api/after-sales", {
     method: "POST",
