@@ -38,7 +38,7 @@ const INCIDENT_STATUS = {
 };
 
 const EMPTY_DATA = {
-  health: { components: [], counts: {}, history: {}, generatedAt: "" },
+  health: { components: [], counts: {}, history: {}, historyDiagnostics: [], generatedAt: "" },
   metrics: { points: [], summary: {}, coverage: null },
   jobs: { jobs: [], highFrequencyMode: false },
   queues: { queues: [] },
@@ -348,6 +348,8 @@ export default function SystemHealthPanel() {
   const schedulerMissedAfterMs = Number(data.jobs.schedulerMissedAfterMs
     || (externalHourlyScheduler ? 150 * 60_000 : 30 * 60 * 60_000));
   const healthLabels = new Map(health.components.map((item) => [item.component, item.label]));
+  const historyDiagnostics = Array.isArray(health.historyDiagnostics) ? health.historyDiagnostics : [];
+  const corruptHistoryRecords = historyDiagnostics.reduce((sum, item) => sum + Number(item?.corruptRecords || 0), 0);
   const recentHealthEvents = Object.entries(health.history || {})
     .flatMap(([component, events]) => (Array.isArray(events) ? events : []).map((event) => ({ ...event, component })))
     .sort((a, b) => Date.parse(b.checkedAt || "") - Date.parse(a.checkedAt || ""))
@@ -411,6 +413,15 @@ export default function SystemHealthPanel() {
 
       {tab === "overview" && (
         <section className="health-section">
+          {corruptHistoryRecords > 0 && (
+            <div className="health-note health-history-warning" role="status">
+              <AlertTriangle size={16} />
+              <span>
+                <strong>健康历史数据已降级</strong>
+                <small>检测到 {corruptHistoryRecords} 条无法解析的旧记录，已跳过；当前组件状态仍独立读取，请安排清理历史数据。</small>
+              </span>
+            </div>
+          )}
           <div className="health-note">
             <BellRing size={16} />
             <span>
@@ -640,6 +651,9 @@ export default function SystemHealthPanel() {
         .health-note span { display: grid; gap: 2px; }
         .health-note strong { color: #34466f; font-size: 11px; }
         .health-note small { color: #73809b; font-size: 9.5px; }
+        .health-history-warning { border-color: #f4c77b; background: #fff9ed; color: #b46d00; }
+        .health-history-warning strong { color: #8d5500; }
+        .health-history-warning small { color: #91641e; }
         .health-coverage-note { grid-column: 1 / -1; align-items: flex-start; }
         .health-coverage-note span { min-width: 0; }
         .health-coverage-note small { line-height: 1.55; overflow-wrap: anywhere; }

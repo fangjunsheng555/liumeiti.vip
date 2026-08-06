@@ -30,6 +30,14 @@ test("system health errors are announced and mobile trace rows stack instead of 
   assert.match(source, /\.health-trace-event > span:nth-of-type\(n\+2\), \.health-trace-event > code\s*\{\s*grid-column:\s*2/);
 });
 
+test("corrupt health history is visibly reported without hiding valid component status", () => {
+  assert.match(source, /historyDiagnostics:\s*\[\]/);
+  assert.match(source, /Array\.isArray\(health\.historyDiagnostics\)/);
+  assert.match(source, /className="health-note health-history-warning" role="status"/);
+  assert.match(source, /健康历史数据已降级/);
+  assert.match(source, /无法解析的旧记录，已跳过；当前组件状态仍独立读取/);
+});
+
 test("health navigation exposes its current section and full trace ids remain readable", () => {
   assert.match(source, /aria-current=\{tab === key \? "page" : undefined\}/);
   assert.match(source, /\.health-trace-ids code\s*\{[^}]*overflow-wrap:\s*anywhere;[^}]*white-space:\s*normal;/);

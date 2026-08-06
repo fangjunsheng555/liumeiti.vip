@@ -73,6 +73,16 @@ test("an invalid JSON /api/auth/me response exits account loading", async () => 
   assertRetryableFailure(result, /无法读取账户信息/);
 });
 
+test("a 503 response with invalid JSON still exits account loading as a service failure", async () => {
+  const result = await requestAccountLoad({
+    timeoutMs: 100,
+    fetchImpl: async (url) => url.endsWith("/me")
+      ? { status: 503, ok: false, async json() { throw new SyntaxError("truncated upstream response"); } }
+      : jsonResponse(200, { ok: true, balance: 0 }),
+  });
+  assertRetryableFailure(result, /账户服务暂时不可用/);
+});
+
 test("a rejected account request exits account loading", async () => {
   const result = await requestAccountLoad({
     timeoutMs: 100,
