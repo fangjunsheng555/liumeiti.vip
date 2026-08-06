@@ -12,14 +12,14 @@ test("single-order concurrency failures have explicit Chinese recovery guidance"
   assert.equal(isSafeOrderMutationRetry({ error: "stale_revision", mutationApplied: false }), true);
   assert.equal(isSafeOrderMutationRetry({ error: "stale_revision", mutationApplied: true }), false);
   assert.equal(isSafeOrderMutationRetry("stale_revision"), false);
-  assert.equal(isSafeOrderMutationRetry("order_update_busy"), true);
+  assert.equal(isSafeOrderMutationRetry("order_update_busy"), false);
   assert.equal(isSafeOrderMutationRetry("idempotency_conflict"), false);
   assert.match(orderMutationErrorMessage({ error: "stale_revision", mutationApplied: false }), /已被他人修改/);
   assert.match(orderMutationErrorMessage({ error: "stale_revision", mutationApplied: false }), /重新加载最新数据/);
   assert.match(orderMutationErrorMessage({ error: "stale_revision", mutationApplied: true }), /主数据已写入/);
   assert.match(orderMutationErrorMessage({ error: "stale_revision", mutationApplied: true }), /不会重复发送/);
-  assert.match(orderMutationErrorMessage("order_update_busy"), /正在被其他操作更新/);
-  assert.match(orderMutationErrorMessage("order_update_busy"), /稍后重试/);
+  assert.match(orderMutationErrorMessage("order_update_busy"), /保持当前内容/);
+  assert.match(orderMutationErrorMessage("order_update_busy"), /重试原操作/);
 });
 
 test("partial batch conflicts identify each reason and retain failed selections", () => {
@@ -47,4 +47,6 @@ test("admin panel retires only safe pre-commit conflicts and reloads latest orde
   assert.match(source, /handleOrderMutationConflict\(pending, res, data, "保存失败"\)/);
   assert.match(source, /data\?\.mutationApplied !== true/);
   assert.match(source, /replayAppliedOrderMutationOnce\(pending, res, data\)/);
+  assert.match(source, /resumeExisting: true/);
+  assert.match(source, /record\.payload/);
 });

@@ -86,19 +86,32 @@ function evalCoupon(keys, args) {
   if (prior) return prior;
   const raw = values.get(keys[1]);
   if (!raw) return { ok: false, error: "user_not_found" };
+  if (raw !== args[7]) return { ok: false, error: "storage_conflict" };
   const user = JSON.parse(raw);
   const coupon = (user.coupons || []).find((item) => String(item.id || "") === args[1]);
   if (!coupon) return { ok: false, error: "coupon_not_found" };
+  let changed = false;
   if (args[3] === "used") {
     if (coupon.status === "active") {
-      coupon.status = "used";
-      coupon.usedOrderId = args[2];
+      changed = true;
     } else if (coupon.status !== "used" || coupon.usedOrderId !== args[2]) {
       return { ok: false, error: "coupon_unavailable" };
     }
+  } else if (args[3] === "active") {
+    if (coupon.status === "used" && coupon.usedOrderId === args[2]) {
+      changed = true;
+    } else if (coupon.status !== "active") {
+      return { ok: false, error: "coupon_owner_mismatch" };
+    }
+  } else {
+    return { ok: false, error: "invalid_coupon_transition" };
   }
-  values.set(keys[1], JSON.stringify(user));
-  return saveOperation(keys[0], args[0], { ok: true, changed: true, coupon });
+  const nextUser = JSON.parse(args[8]);
+  const nextCoupon = (nextUser.coupons || []).find((item) => String(item.id || "") === args[1]);
+  const response = JSON.parse(args[9]);
+  if (!nextCoupon || response.changed !== changed) return { ok: false, error: "invalid_user_record" };
+  values.set(keys[1], args[8]);
+  return saveOperation(keys[0], args[0], response);
 }
 
 function execute(command) {
@@ -173,6 +186,7 @@ globalThis.fetch = async (input, options = {}) => {
 };
 
 const transitions = await import("../app/api/_order-transition.js");
+const money = await import("../app/api/_money.js");
 
 test.after(() => { globalThis.fetch = originalFetch; });
 
@@ -231,6 +245,64 @@ test("a transient effect failure is indexed and the keeper resume completes it o
   assert.equal(stored.pendingTransition, undefined);
   assert.equal(values.get("liumeiti:stock:svc:plan"), "0");
   assert.equal(sortedSet("liumeiti:orders:pending-transitions:v1").has(entry.order.orderId), false);
+});
+
+test("coupon refund removes adjacent tail metadata without rewriting a legacy user profile", async () => {
+  const accountLifecycleId = "f".repeat(32);
+  const orderId = "LMCOUPONTAILREFUND";
+  const entry = seed({
+    orderId,
+    revision: 8,
+    status: "received",
+    createdAt: new Date().toISOString(),
+    userEmail: "legacy-coupon@example.com",
+    accountLifecycleId,
+    paymentMethod: "alipay",
+    paidByBalance: false,
+    finalAmount: 159.11,
+    couponId: "CP-LEGACY-TAIL",
+    items: [{ service: "netflix", plan: "solo" }],
+  });
+  const userKey = "liumeiti:users:legacy-coupon@example.com";
+  const before = "{\n"
+    + "  \"email\": \"legacy-coupon@example.com\",\n"
+    + "  \"balance\": 0,\n"
+    + "  \"withdrawals\": [],\n"
+    + "  \"nullable\": null,\n"
+    + "  \"legacyCounter\": 900719925474099312345,\n"
+    + "  \"coupons\": [{\"id\":\"CP-LEGACY-TAIL\",\"status\":\"used\",\"usedOrderId\":\"LMCOUPONTAILREFUND\",\"discount\":9.89,\"usedAt\":\"2026-08-06T00:00:00.000Z\",\"usedAtBeijing\":\"2026-08-06 08:00:00\"}]\n"
+    + "}";
+  const expected = before
+    .replace("\"status\":\"used\",\"usedOrderId\":\"LMCOUPONTAILREFUND\",\"discount\":9.89,\"usedAt\":\"2026-08-06T00:00:00.000Z\",\"usedAtBeijing\":\"2026-08-06 08:00:00\"", "\"status\":\"active\"");
+  values.set(userKey, before);
+  values.set("lm:user:lifecycle:legacy-coupon@example.com", accountLifecycleId);
+
+  const result = await transitions.beginOrderTransition(entry, { ...entry.order, status: "invalid" }, {
+    refund: true,
+  }, { mutationId: "invalidate-coupon-tail", mutationHash: "hash" });
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(values.get(userKey), expected, "only the coupon status and used metadata may change");
+  assert.match(values.get(userKey), /900719925474099312345/);
+  assert.match(values.get(userKey), /\"withdrawals\": \[\]/);
+  assert.match(values.get(userKey), /\"nullable\": null/);
+  const stored = storedOrder(orderId);
+  assert.equal(stored.status, "invalid");
+  assert.equal(stored.pendingTransition, undefined);
+  assert.equal(stored.refund.coupon, true);
+  assert.equal(stored.refund.balance, 0);
+
+  const retry = await money.transitionOrderCouponAtomic(
+    "legacy-coupon@example.com",
+    "CP-LEGACY-TAIL",
+    orderId,
+    "active",
+    `coupon-refund:${orderId}:cycle:1`,
+    accountLifecycleId,
+  );
+  assert.equal(retry.ok, true);
+  assert.equal(retry.idempotent, true);
+  assert.equal(values.get(userKey), expected);
 });
 
 test("coupon conflict compensates reserved stock and never reclaims balance", async () => {

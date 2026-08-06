@@ -241,7 +241,7 @@ function parseLosslessJsonTree(raw) {
   return root;
 }
 
-function losslessJsonPatch(raw, operations) {
+function losslessJsonPatchBatch(raw, operations) {
   const root = parseLosslessJsonTree(raw);
   if (!root || !Array.isArray(operations)) return null;
   const edits = [];
@@ -300,6 +300,22 @@ function losslessJsonPatch(raw, operations) {
   let next = raw;
   for (const edit of edits) next = next.slice(0, edit.start) + edit.text + next.slice(edit.end);
   return parseLosslessJsonTree(next) ? next : null;
+}
+
+function losslessJsonPatch(raw, operations) {
+  if (!Array.isArray(operations)) return null;
+  if (operations.length === 0) return parseLosslessJsonTree(raw) ? raw : null;
+  // Apply one field at a time and reparse between edits. Adjacent removals at
+  // the end of an object otherwise calculate overlapping comma ranges from the
+  // same stale tree (for example a used coupon's four trailing audit fields).
+  // Re-parsing preserves every untouched byte while making each comma boundary
+  // reflect the document produced by the previous edit.
+  let next = raw;
+  for (const operation of operations) {
+    next = losslessJsonPatchBatch(next, [operation]);
+    if (!next) return null;
+  }
+  return next;
 }
 
 function losslessTopLevelPatch(raw, replacements, removals = []) {

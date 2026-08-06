@@ -62,6 +62,16 @@ test("editing the payload while an operation is unresolved fails closed and pres
   assert.deepEqual(JSON.parse(before).payload, payloadA);
 });
 
+test("an order retry can recover the original exact body after the visible form changes", () => {
+  const storage = new SharedStorage();
+  const pending = prepareAdminMutationJournal(storage, scope, target, payloadA);
+  const recovered = readAdminMutationJournals(storage, scope, target, payloadB);
+  assert.equal(recovered.ok, true);
+  assert.equal(recovered.records.length, 1);
+  assert.deepEqual(recovered.records[0].record.payload, payloadA);
+  assert.equal(recovered.records[0].record.idempotencyRequest.key, pending.record.idempotencyRequest.key);
+});
+
 test("tab A completion removes only A while tab B's lost-response journal remains recoverable", () => {
   const storage = new SharedStorage();
   const slotKey = adminMutationSlotKey(scope, target);
@@ -139,36 +149,12 @@ test("an exact journal read failure cannot fall through to a fresh operation", (
 test("admin callers send the persisted exact body and compare-clear only the proven key", async () => {
   const source = await readFile(new URL("../app/admin/page.jsx", import.meta.url), "utf8");
   assert.match(source, /prepareAdminMutationJournal\(window\.localStorage, scope, target, payload\)/);
-  assert.match(source, /readAdminMutationJournals\(window\.localStorage, "order", orderId\)/);
-  assert.match(source, /pending\.operation\.key/);
-  assert.match(source, /body: JSON\.stringify\(pending\.payload\)/);
-  assert.match(source, /确认上次操作/);
-  const recoveryStart = source.indexOf("async function resumePendingOrderMutation");
-  const recoveryEnd = source.indexOf("async function updateOrderAssignment", recoveryStart);
-  assert.ok(recoveryStart >= 0 && recoveryEnd > recoveryStart);
-  const recoverySource = source.slice(recoveryStart, recoveryEnd);
-  assert.match(recoverySource, /handleOrderMutationConflict\(pending, response, data,/);
-  const conflictStart = source.indexOf("async function handleOrderMutationConflict");
-  const conflictEnd = source.indexOf("async function replayAppliedOrderMutationOnce", conflictStart);
-  assert.ok(conflictStart >= 0 && conflictEnd > conflictStart);
-  const conflictSource = source.slice(conflictStart, conflictEnd);
-  const busyStart = conflictSource.indexOf('if (data?.error === "order_update_busy")');
-  const busyEnd = conflictSource.indexOf("if (!isSafeOrderMutationRetry", busyStart);
-  assert.ok(busyStart >= 0 && busyEnd > busyStart);
-  const busySource = conflictSource.slice(busyStart, busyEnd);
-  assert.match(busySource, /原操作记录已保留/);
-  assert.match(busySource, /return true;/);
-  assert.doesNotMatch(
-    busySource,
-    /completeAdminMutation/,
-    "an exact recovery replay must retain its journal while the original request may still hold the order lock",
-  );
   assert.match(source, /clearAdminMutationJournal\(window\.localStorage, storageKey, operation\.key\)/);
-  // Nine UI mutations, one explicit unresolved-order replay and one exact
-  // replay used to resume a mutation whose primary write already committed.
-  assert.equal((source.match(/body: JSON\.stringify\(pending\.payload\)/g) || []).length, 11);
-  assert.equal((source.match(/clearTerminalAdminMutation\(pending, (?:res|response), data\)/g) || []).length, 12);
-  assert.equal((source.match(/await withAdminMutationCoordination\(async \(\) => \{/g) || []).length, 11);
+  // Nine UI mutations plus one exact replay used only to resume a mutation
+  // whose primary order write already committed before a CAS conflict.
+  assert.equal((source.match(/body: JSON\.stringify\(pending\.payload\)/g) || []).length, 10);
+  assert.equal((source.match(/clearTerminalAdminMutation\(pending, (?:res|response), data\)/g) || []).length, 11);
+  assert.equal((source.match(/await withAdminMutationCoordination\(async \(\) => \{/g) || []).length, 10);
   assert.match(source, /return withCheckoutSubmissionCoordination\(callback\)/);
   assert.doesNotMatch(source, /clearIdempotencyRequest\(window\.localStorage, storageKey\)/);
 });

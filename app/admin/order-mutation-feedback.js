@@ -1,11 +1,6 @@
-const SAFE_RETRY_CONFLICTS = new Set(["stale_revision", "order_update_busy"]);
-
 export function isSafeOrderMutationRetry(input) {
   const data = typeof input === "object" && input ? input : { error: input };
-  const error = String(data.error || "");
-  if (!SAFE_RETRY_CONFLICTS.has(error)) return false;
-  if (error === "order_update_busy") return true;
-  return data.mutationApplied === false;
+  return data.error === "stale_revision" && data.mutationApplied === false;
 }
 
 export function orderMutationErrorMessage(input, fallback = "订单操作失败") {
@@ -18,7 +13,7 @@ export function orderMutationErrorMessage(input, fallback = "订单操作失败"
     stale_revision: data.mutationApplied === false
       ? "该订单已被他人修改，已重新加载最新数据，请核对后重试"
       : "检测到订单版本冲突；请保持当前内容并再次点击原操作，完成后系统会刷新最新数据",
-    order_update_busy: "该订单正在被其他操作更新，已刷新最新数据，请稍后重试",
+    order_update_busy: "该订单正在处理中，请保持当前内容，稍后重试原操作",
     idempotency_conflict: "本次操作与尚未确认的原请求不一致，请先核对订单状态，再重试原操作",
     batch_operation_in_progress: "相同的批量操作仍在处理中，请稍后查看最新订单列表",
   }[code] || fallback;

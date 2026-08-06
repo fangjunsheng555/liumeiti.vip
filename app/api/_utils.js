@@ -3887,14 +3887,7 @@ export async function settleOrderReferralCommission(order, actor = null) {
       expectedAccountLifecycleId: item.accountLifecycleId,
     });
     if (!effect.ok) {
-      const manualReviewError = [
-        "account_lifecycle_changed",
-        "account_lifecycle_required",
-        "invalid_user_record",
-        "invalid_balance_record",
-        "storage_type_error",
-      ].includes(effect.error);
-      if (manualReviewError) {
+      if (effect.error === "account_lifecycle_changed" || effect.error === "account_lifecycle_required") {
         skippedEntries.push({
           email,
           accountLifecycleId: item.accountLifecycleId,
@@ -3937,13 +3930,7 @@ export async function settleOrderReferralCommission(order, actor = null) {
   order.referralCommissionManualReview = skippedEntries.some((entry) => entry.manualReview)
     ? {
         required: true,
-        reason: skippedEntries.some((entry) => [
-          "invalid_user_record",
-          "invalid_balance_record",
-          "storage_type_error",
-        ].includes(entry.reason))
-          ? "referral_account_record_invalid"
-          : "referral_account_lifecycle_mismatch",
+        reason: "referral_account_lifecycle_mismatch",
         levels: skippedEntries.filter((entry) => entry.manualReview).map((entry) => entry.level),
         recordedAt: now.toISOString(),
       }
