@@ -49,7 +49,7 @@ async function withRedis(redis, callback) {
   try { return await callback(); } finally { globalThis.fetch = original; }
 }
 
-test("critical rate limits cannot be bypassed by rotating User-Agent and fail closed on Redis outage", async () => {
+test("critical rate limits cannot be bypassed by rotating User-Agent and degrade instead of locking users out", async () => {
   const redis = new GuardRedis();
   await withRedis(redis, async () => {
     const results = [];
@@ -67,14 +67,30 @@ test("critical rate limits cannot be bypassed by rotating User-Agent and fail cl
     assert.deepEqual(results.map((result) => result.ok), [true, true, false]);
     assert.equal(results[2].limit, 2);
 
+    // A configured store that stops answering must not lock customers out of
+    // signing in. The request proceeds under the in-process guard, which still
+    // throttles a burst from the same identity while the outage lasts.
     redis.unavailable = true;
+    utils.resetSoftRateLimitCounters();
     const outage = await utils.checkCriticalRateLimit(new Request("https://www.liumeiti.vip/api/auth/login"), {
       namespace: "test:outage",
       identity: "user@example.com",
+      identityLimit: 2,
     });
-    assert.equal(outage.ok, false);
-    assert.equal(outage.unavailable, true);
-    assert.equal(outage.status, 503);
+    assert.equal(outage.ok, true);
+    assert.equal(outage.degraded, true);
+    assert.notEqual(outage.unavailable, true);
+
+    const degradedBurst = [];
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      degradedBurst.push(await utils.checkCriticalRateLimit(new Request("https://www.liumeiti.vip/api/auth/login"), {
+        namespace: "test:outage",
+        identity: "user@example.com",
+        identityLimit: 2,
+      }));
+    }
+    assert.deepEqual(degradedBurst.map((result) => result.ok), [true, false, false]);
+    assert.equal(degradedBurst[1].degraded, true);
   });
 });
 

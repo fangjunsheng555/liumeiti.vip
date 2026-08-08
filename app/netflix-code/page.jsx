@@ -143,6 +143,9 @@ export default function NetflixCodePage() {
       session_expired: L("本次核验已过期，请重新选择订单", "This verification has expired; select the order again"),
       temporarily_locked: L("操作较频繁，请 15 分钟后再试", "Too many attempts; try again in 15 minutes"),
       service_not_configured: L("登录码服务暂时不可用，请稍后再试", "The sign-in code service is temporarily unavailable; try again later"),
+      account_changed: L("该订单的 Netflix 登录邮箱已变更，请返回重新选择订单", "The Netflix sign-in email for this order changed; go back and select the order again"),
+      storage_unavailable: L("邮件服务暂时不可用，请稍等片刻后再次点击读取", "The mail service is temporarily unavailable; wait a moment and tap retrieve again"),
+      auth_store_unavailable: L("账号服务暂时不可用，请稍等片刻后重试", "The account service is temporarily unavailable; please retry shortly"),
       mail_unrecognized: L("已收到邮件，但未识别到可用的登录码或确认链接。请在 Netflix 重新发送后，再点击一次读取", "The email arrived, but no usable sign-in code or confirmation link was found. Request a new email from Netflix, then tap retrieve again"),
     })[error] || L("暂时无法完成，请稍后再试", "Unable to complete this request right now"), [L]);
 

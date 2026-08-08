@@ -3278,9 +3278,52 @@ const STRICT_DUAL_RATE_LIMIT_SCRIPT = `
 local function kind(key) local value=redis.call('TYPE',key) if type(value)=='table' then return value.ok end return value end local window=tonumber(ARGV[1]) local identityLimit=tonumber(ARGV[2]) local ipLimit=tonumber(ARGV[3]) if not window or window~=math.floor(window) or window<1 or window>2147483647 or not identityLimit or identityLimit~=math.floor(identityLimit) or identityLimit<1 or identityLimit>9007199254740991 or not ipLimit or ipLimit~=math.floor(ipLimit) or ipLimit<1 or ipLimit>9007199254740991 then return cjson.encode({ok=false,error='rate_limit_config_invalid'}) end local function repaircount(key) local value=kind(key) if value=='none' then return 0 end if value~='string' then redis.call('DEL',key); return 1 end local raw=redis.call('GET',key) if not string.match(raw,'^%d+$') then redis.call('DEL',key); return 1 end local count=tonumber(raw) if not count or count~=math.floor(count) or count<0 or count>=9007199254740991 then redis.call('DEL',key); return 1 end return 0 end local repaired=repaircount(KEYS[1])+repaircount(KEYS[2]) local identityCount=redis.call('INCR',KEYS[1]) local ipCount=redis.call('INCR',KEYS[2]) if identityCount==1 then redis.call('EXPIRE',KEYS[1],tostring(window)) end if ipCount==1 then redis.call('EXPIRE',KEYS[2],tostring(window)) end local identityTtl=redis.call('TTL',KEYS[1]) local ipTtl=redis.call('TTL',KEYS[2]) if identityTtl<0 then redis.call('EXPIRE',KEYS[1],tostring(window)); identityTtl=window end if ipTtl<0 then redis.call('EXPIRE',KEYS[2],tostring(window)); ipTtl=window end return '{"ok":true,"identityCount":'..tostring(identityCount)..',"ipCount":'..tostring(ipCount)..',"identityTtl":'..tostring(identityTtl)..',"ipTtl":'..tostring(ipTtl)..',"repaired":'..tostring(repaired)..'}'
 `;
 
+// The Lua script returns a JSON string, but a REST provider may hand back an
+// already-decoded object. Accepting only strings once made every guarded
+// endpoint answer 503, so both shapes are decoded here.
+function parseRateLimitScriptResult(raw) {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
+  if (typeof raw !== "string") return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+// Degraded guard used only while the shared counter store is unreachable.
+// Serverless instances do not share it, so it cannot replace the Redis limiter;
+// it exists so an outage throttles abuse instead of locking every customer out.
+const SOFT_RATE_LIMIT_MAX_KEYS = 5000;
+const softRateLimitCounters = new Map();
+
+function softRateLimitHit(key, windowSec, limit, now = Date.now()) {
+  const windowMs = Math.max(1, Number(windowSec) || 600) * 1000;
+  const ceiling = Math.max(1, Number(limit) || 1);
+  for (const [existing, entry] of softRateLimitCounters) {
+    if (entry.resetAt <= now) softRateLimitCounters.delete(existing);
+  }
+  if (softRateLimitCounters.size >= SOFT_RATE_LIMIT_MAX_KEYS) {
+    const oldest = softRateLimitCounters.keys().next().value;
+    if (oldest !== undefined) softRateLimitCounters.delete(oldest);
+  }
+  const current = softRateLimitCounters.get(key);
+  const entry = current && current.resetAt > now
+    ? { count: current.count + 1, resetAt: current.resetAt }
+    : { count: 1, resetAt: now + windowMs };
+  softRateLimitCounters.set(key, entry);
+  return {
+    ok: entry.count <= ceiling,
+    count: entry.count,
+    limit: ceiling,
+    retryAfter: Math.max(1, Math.ceil((entry.resetAt - now) / 1000)),
+  };
+}
+
+export function resetSoftRateLimitCounters() {
+  softRateLimitCounters.clear();
+}
+
 // Authentication and verification endpoints use independent identity-only and
 // IP-only buckets. User-Agent is intentionally absent because clients can
-// rotate it on every guess. Both counters update in one script and fail closed.
+// rotate it on every guess. Both counters update in one script; a store outage
+// degrades to the in-process guard above rather than refusing every request.
 export async function checkCriticalRateLimit(request, {
   namespace,
   identity,
@@ -3305,15 +3348,56 @@ export async function checkCriticalRateLimit(request, {
     String(identityLimit),
     String(ipLimit),
   ]);
-  let result = null;
-  try { result = typeof raw === "string" ? JSON.parse(raw) : null; } catch {}
+  const result = parseRateLimitScriptResult(raw);
   if (!result?.ok) {
-    return {
-      ok: false,
-      unavailable: true,
-      status: 503,
+    // A configuration mistake is a real fault and must stay visible; an
+    // unreachable or malfunctioning store must not lock customers out of
+    // signing in, resetting a password or moving their own funds.
+    // A caller passing an invalid window or limit is a programming fault. It is
+    // logged at error level so it cannot hide, but it must not take sign-in
+    // down: the in-process guard below sanitizes both values before counting.
+    if (result?.error === "rate_limit_config_invalid") {
+      console.error("[rate-limit] invalid guard configuration; using in-process guard", {
+        namespace: safeNamespace,
+        identityLimit,
+        ipLimit,
+        windowSec,
+      });
+    }
+    // A completely unconfigured store is a deployment fault, not an outage:
+    // nothing else in the request would work either, so keep failing closed.
+    // Only a configured store that stops answering degrades to the guard below.
+    if (!redisConfig()) {
+      return {
+        ok: false,
+        unavailable: true,
+        status: 503,
+        error: "rate_limit_unavailable",
+        retryAfter: 5,
+      };
+    }
+    console.warn("[rate-limit] shared store unavailable, using in-process guard", {
+      namespace: safeNamespace,
       error: result?.error || "rate_limit_unavailable",
-      retryAfter: 5,
+    });
+    const identityGuard = softRateLimitHit(identityKey, windowSec, identityLimit);
+    const ipGuard = softRateLimitHit(ipKey, windowSec, ipLimit);
+    const blocked = !identityGuard.ok ? identityGuard : !ipGuard.ok ? ipGuard : null;
+    if (blocked) {
+      return {
+        ok: false,
+        degraded: true,
+        count: blocked.count,
+        limit: blocked.limit,
+        retryAfter: blocked.retryAfter,
+      };
+    }
+    return {
+      ok: true,
+      degraded: true,
+      identityCount: identityGuard.count,
+      ipCount: ipGuard.count,
+      retryAfter: 0,
     };
   }
   if (Number(result.repaired) > 0) console.warn("[rate-limit] repaired invalid ephemeral counters", { namespace: safeNamespace, repaired: Number(result.repaired) });

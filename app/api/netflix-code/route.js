@@ -162,8 +162,19 @@ async function logSuccessfulAccess(order, account, claim, outcome, eventId) {
   });
 }
 
+// The marker only stops an already-delivered event from being reused as a
+// fallback behind a newer unparsed mail. Losing it never turns the current
+// answer into the wrong one, so a failed write is logged and the customer
+// still receives the code they are waiting for.
 async function persistResultSafetyMarker(order, eventId) {
-  return markNetflixCodeResultReturned(order?.orderId, eventId);
+  const stored = await markNetflixCodeResultReturned(order?.orderId, eventId);
+  if (!stored) {
+    console.warn("[netflix-code] result safety marker unavailable; delivering result anyway", {
+      orderId: normalizeOrderId(order?.orderId),
+      eventId: clean(eventId, 80),
+    });
+  }
+  return stored;
 }
 
 export function netflixMailStateErrorResponse(mailState) {
@@ -271,9 +282,7 @@ async function postHandler(request) {
   const result = mailState.state === "result" ? mailState.result : null;
   if (!result) return Response.json({ ok: true, pending: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
   if (result.kind === "code" && /^\d{4}$/.test(result.value)) {
-    if (!await persistResultSafetyMarker(order, result.eventId)) {
-      return Response.json({ ok: false, error: "result_safety_marker_unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } });
-    }
+    await persistResultSafetyMarker(order, result.eventId);
     await redisCmd(["DEL", attemptsKey]);
     await logSuccessfulAccess(order, eligible.account, claim, "code_returned", result.eventId);
     return Response.json({ ok: true, kind: "code", code: result.value, expiresAt: result.expiresAt, receivedAtBeijing: result.receivedAtBeijing }, { headers: { "Cache-Control": "no-store" } });
@@ -281,9 +290,7 @@ async function postHandler(request) {
   if (result.kind === "link" || result.kind === "household") {
     const link = safeResultLink(result.kind, result.value);
     if (link) {
-      if (!await persistResultSafetyMarker(order, result.eventId)) {
-        return Response.json({ ok: false, error: "result_safety_marker_unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } });
-      }
+      await persistResultSafetyMarker(order, result.eventId);
       await redisCmd(["DEL", attemptsKey]);
       const outcome = result.kind === "household" ? "household_link_returned" : "travel_link_returned";
       await logSuccessfulAccess(order, eligible.account, claim, outcome, result.eventId);
