@@ -851,17 +851,33 @@ return 1`;
   return Boolean(recovered && pipelineValue(recovered[0]) === "1" && pipelineValue(recovered[1]) === "1");
 }
 
+// A single unreadable member must never blank the whole operational log. The
+// panel is what staff use to explain a delivery, so one malformed or legacy
+// row is skipped and reported, while every readable row is still returned.
+function reportSkippedRecords(indexKey, skipped) {
+  if (!skipped.length) return;
+  console.warn("[netflix-mail] skipped unreadable index members", {
+    indexKey,
+    skipped: skipped.length,
+    ids: skipped.slice(0, 10),
+  });
+}
+
 async function recordsFromIndex(indexKey, offset, limit, prefix, validator) {
   const ids = await redisCmd(["ZREVRANGE", indexKey, String(offset), String(offset + limit - 1)]);
   if (!Array.isArray(ids) || !ids.length) return [];
   const response = await redisPipeline(ids.map((id) => ["GET", prefix + id]));
   if (!pipelineSucceeded(response, ids.length)) return [];
   const rows = pipelineRows(response);
-  const records = rows.map((entry, index) => {
+  const records = [];
+  const skipped = [];
+  rows.forEach((entry, index) => {
     const record = parseJson(pipelineValue(entry));
-    return validator(record, ids[index]) ? record : null;
+    if (validator(record, ids[index])) records.push(record);
+    else skipped.push(String(ids[index] || ""));
   });
-  return records.every(Boolean) ? records : [];
+  reportSkippedRecords(indexKey, skipped);
+  return records;
 }
 
 async function allRecordsFromIndex(indexKey, prefix, validator, pageSize = 200) {
@@ -881,12 +897,13 @@ async function allRecordsFromIndex(indexKey, prefix, validator, pageSize = 200) 
     if (!Array.isArray(ids) || !ids.length) break;
     const response = await redisPipeline(ids.map((id) => ["GET", prefix + id]));
     if (!pipelineSucceeded(response, ids.length)) return [];
-    const page = pipelineRows(response).map((entry, index) => {
+    const skipped = [];
+    pipelineRows(response).forEach((entry, index) => {
       const record = parseJson(pipelineValue(entry));
-      return validator(record, ids[index]) ? record : null;
+      if (validator(record, ids[index])) records.push(record);
+      else skipped.push(String(ids[index] || ""));
     });
-    if (!page.every(Boolean)) return [];
-    records.push(...page);
+    reportSkippedRecords(indexKey, skipped);
     offset += ids.length;
     if (ids.length < safePageSize) break;
   }

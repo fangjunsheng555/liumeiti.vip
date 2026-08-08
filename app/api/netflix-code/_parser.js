@@ -732,7 +732,19 @@ export async function parseNetflixEmail(raw, envelope = {}) {
     ...envelopeFromAddresses,
     ...emailsIn(currentPlain.slice(0, 3000)),
   ]).find(isNetflixAddress) || "";
-  if (!netflixSender) return { accepted: false, reason: "untrusted_sender" };
+  // Carry enough context for the operational log. A delivery that is refused
+  // here still has to be explainable in the admin panel, otherwise "no mail
+  // arrived" and "mail arrived but was refused" look identical to staff.
+  const refusedReceivedAt = new Date(envelope.receivedAt || Date.now()).toISOString();
+  const refusedContext = {
+    receivedAt: refusedReceivedAt,
+    // A refused delivery carries no usable result, but the stored record still
+    // has to satisfy the same shape as every other event so one of them can
+    // never make the whole log unreadable.
+    expiresAt: new Date(new Date(refusedReceivedAt).getTime() + 15 * 60 * 1000).toISOString(),
+    subject: currentSubject.slice(0, 240),
+  };
+  if (!netflixSender) return { accepted: false, reason: "untrusted_sender", ...refusedContext };
 
   // The dedicated codes subdomain is only an inbound route. Never index one of
   // its aliases as a Netflix account when a forwarding provider omits the SMTP
@@ -749,7 +761,9 @@ export async function parseNetflixEmail(raw, envelope = {}) {
   if (!envelopeFromAddresses.some(isNetflixAddress) && forwardingAccount) {
     accountEmails = accountEmails.includes(forwardingAccount) ? [forwardingAccount] : [];
   }
-  if (!accountEmails.length) return { accepted: false, reason: "account_email_missing" };
+  if (!accountEmails.length) {
+    return { accepted: false, reason: "account_email_missing", ...refusedContext, sender: netflixSender };
+  }
 
   // Line-structured text for digit extraction. Sections are separated by a
   // blank line, which breaks digit-run merging across message parts.

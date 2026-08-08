@@ -32,7 +32,8 @@ const REASON_LABELS = {
   sensitive_six_digit: "敏感操作邮件已拒绝",
   ambiguous_code: "邮件中存在多个候选验证码",
   mime_parse_failed: "邮件格式无法解析",
-  account_email_missing: "未识别到账号邮箱",
+  account_email_missing: "未识别到账号邮箱（转发可能丢失了原始收件人）",
+  untrusted_sender: "非 Netflix 发件人（该邮件不是 Netflix 发出或转发时丢失了发件人）",
 };
 
 function time(value) {

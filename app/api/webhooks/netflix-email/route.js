@@ -160,19 +160,12 @@ async function postHandler(request) {
     inboxAddress: process.env.NETFLIX_INBOX_ADDRESS || "netflix@codes.liumeiti.vip",
     receivedAt: new Date(timestampNumber).toISOString(),
   });
-  // The catch-all address may receive unrelated mail. Ignore untrusted traffic
-  // instead of filling the operational log with encrypted spam records.
-  if (!parsed.accepted && ["untrusted_sender", "account_email_missing"].includes(parsed.reason)) {
-    const committed = await commitReplayMarker(replayKey, claim.processingRaw, {
-      version: 1,
-      state: "ignored",
-      digest,
-      reason: parsed.reason,
-      committedAt: new Date().toISOString(),
-    });
-    if (!committed) return Response.json({ ok: false, error: "storage_unavailable" }, { status: 503 });
-    return Response.json({ ok: true, ignored: true, reason: parsed.reason }, { status: 202 });
-  }
+  // A refused delivery used to vanish without a trace, which made "the mailbox
+  // never forwarded anything" indistinguishable from "the forward arrived but
+  // was not recognized as Netflix mail". Both now leave a record. It carries no
+  // code and no account address, only the time, reason and masked sender needed
+  // to diagnose a broken forwarding rule. Only signed Cloudflare deliveries to
+  // the dedicated inbox reach this point, so the log cannot be flooded.
   const messageId = request.headers.get("x-email-message-id") || "";
   const stored = await storeNetflixMailEvent(parsed, { messageId, digest });
   if (!stored.ok) {
