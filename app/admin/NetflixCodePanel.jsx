@@ -298,7 +298,7 @@ export default function NetflixCodePanel({ canEdit = false }) {
                 {canEdit && <button type="button" className={styles.deleteButton} onClick={() => removeRecords("delete_mail_records", [event.eventId], "收件记录")} disabled={Boolean(busyKey)} aria-label="删除收件记录" title="删除收件记录"><Trash2 size={13} /></button>}
               </div>
             </article>;
-          }) : <div className={styles.empty}>{query ? "没有符合条件的收件记录" : "暂无收件记录"}</div>}
+          }) : <div className={styles.empty}>{query ? "没有符合条件的收件记录" : "暂无收件记录。收件记录保留 30 天，期间没有 Netflix 邮件到达时此处为空；如需确认转发是否正常，请查看「账号状态」。"}</div>}
         </div>
       )}
 

@@ -21,7 +21,12 @@ const RETURNED_EVENT_GLOBAL_PREFIX = "liumeiti:netflix-code:returned-event-globa
 // v2 drops locks created by the former per-poll counter. Automatic polling
 // must never lock a customer who only clicked the retrieve button once.
 const LOCK_PREFIX = "liumeiti:netflix-code:lock:v2:";
-const EVENT_TTL_SECONDS = 7 * 24 * 60 * 60;
+// Mail records are the operational log staff use to explain a past retrieval,
+// so they must outlive a quiet week. Seven days silently emptied the panel
+// whenever no customer requested a code, which reads as data loss. The stored
+// payload is encrypted at rest and its code stops working after 15 minutes, so
+// a 30-day window costs nothing in exposure while keeping the log usable.
+const EVENT_TTL_SECONDS = 30 * 24 * 60 * 60;
 const ACCESS_TTL_SECONDS = 90 * 24 * 60 * 60;
 const SIBLING_EVENT_WINDOW_MS = 15 * 1000;
 const MAX_REQUEST_FINGERPRINTS = 32;
