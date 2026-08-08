@@ -16,9 +16,15 @@ function invalidOrder(overrides = {}) {
   };
 }
 
-test("only financially closed invalid orders can be archived", () => {
-  assert.equal(orderArchiveEligibility({ ...invalidOrder(), status: "received" }).error, "order_must_be_invalid_before_delete");
-  assert.equal(orderArchiveEligibility({ ...invalidOrder(), status: "completed" }).error, "order_must_be_invalid_before_delete");
+test("orders can be archived once their side effects are settled, whatever the status", () => {
+  // Status is not a gate: an operator must be able to remove a finished order
+  // without first voiding it, which would rewrite delivery history.
+  assert.equal(orderArchiveEligibility({ ...invalidOrder(), status: "received" }).ok, true);
+  assert.equal(orderArchiveEligibility({ ...invalidOrder(), status: "completed" }).ok, true);
+  assert.equal(orderArchiveEligibility({ ...invalidOrder(), status: "pending" }).ok, true);
+  // Every open side effect still blocks the archive with a precise reason.
+  assert.equal(orderArchiveEligibility({ ...invalidOrder(), status: "completed", paidByBalance: true, finalAmount: 20 }).error, "order_financial_effects_open");
+  assert.equal(orderArchiveEligibility({ ...invalidOrder(), status: "completed", items: [{ service: "spotify", stockReserved: true }] }).error, "order_stock_effect_open");
   assert.equal(orderArchiveEligibility(invalidOrder({ paidByBalance: true, finalAmount: 20 })).error, "order_financial_effects_open");
   assert.equal(orderArchiveEligibility(invalidOrder({ couponId: "COUPON1" })).error, "order_financial_effects_open");
   assert.equal(orderArchiveEligibility(invalidOrder({ referralCommissionSettledAt: new Date().toISOString() })).error, "order_commission_effect_open");

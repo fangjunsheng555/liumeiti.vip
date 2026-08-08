@@ -1121,12 +1121,15 @@ export async function setOrderAt(index, order, options = {}) {
   return saved;
 }
 
-// Archive only financially closed invalid orders. The complete record remains
-// available for audit while normal order queries exclude `deleted` entries.
+// Archive orders whose side effects are settled, whatever their status. The
+// complete record remains available for audit while normal order queries
+// exclude `deleted` entries. Status is deliberately not a gate: an operator
+// archiving a finished order must not be forced to void it first, which would
+// rewrite delivery history. The specific effect checks below are what protect
+// balances, coupons, commissions and stock from being orphaned.
 export function orderArchiveEligibility(order) {
   if (!order || typeof order !== "object" || order.deleted) return { ok: false, error: "order_not_found" };
   if (order.pendingTransition) return { ok: false, error: "order_transition_pending" };
-  if (order.status !== "invalid") return { ok: false, error: "order_must_be_invalid_before_delete" };
   if ((order.paidByBalance || order.couponId) && !order.refundedAt) {
     return { ok: false, error: "order_financial_effects_open" };
   }
