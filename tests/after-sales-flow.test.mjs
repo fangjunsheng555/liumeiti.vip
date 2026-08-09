@@ -23,6 +23,10 @@ let failNextCompletionCommit = false;
 let failNextTimelineWrite = false;
 let failNextAdminActionWrite = false;
 let dropNextDurableCompletionResponse = false;
+let failNextRedisPipelineCommand = null;
+let disconnectNextRedisPipelineCommand = null;
+let failNextRedisCommand = null;
+const nonArrayZrangeResponses = new Set();
 
 function sortedSet(key) {
   if (!sortedSets.has(key)) sortedSets.set(key, new Map());
@@ -356,6 +360,7 @@ function execute(command) {
       .map(([member]) => member);
   }
   if (name === "ZRANGE") {
+    if (nonArrayZrangeResponses.delete(String(args[0] || ""))) return { malformed: true };
     const start = Number(args[1]);
     const stop = Number(args[2]);
     return [...sortedSet(args[0]).entries()]
@@ -452,7 +457,26 @@ globalThis.fetch = async (input, options = {}) => {
   if (url.origin !== "http://redis.test") return originalFetch(input, options);
   if (url.pathname === "/pipeline") {
     const commands = JSON.parse(options.body || "[]");
-    const rows = commands.map((command) => ({ result: execute(command) }));
+    if (disconnectNextRedisPipelineCommand && commands.some((command) => {
+      const name = String(command?.[0] || "").toUpperCase();
+      const key = String(command?.[1] || "");
+      return name === disconnectNextRedisPipelineCommand.name
+        && (!disconnectNextRedisPipelineCommand.keyPrefix || key.startsWith(disconnectNextRedisPipelineCommand.keyPrefix));
+    })) {
+      disconnectNextRedisPipelineCommand = null;
+      throw new Error("simulated redis pipeline disconnect");
+    }
+    const rows = commands.map((command) => {
+      const name = String(command?.[0] || "").toUpperCase();
+      const key = String(command?.[1] || "");
+      if (failNextRedisPipelineCommand
+        && name === failNextRedisPipelineCommand.name
+        && (!failNextRedisPipelineCommand.keyPrefix || key.startsWith(failNextRedisPipelineCommand.keyPrefix))) {
+        failNextRedisPipelineCommand = null;
+        return { error: `simulated_${name.toLowerCase()}_command_failure` };
+      }
+      return { result: execute(command) };
+    });
     if (dropNextDurableCompletionResponse
       && commands.some((command) => String(command?.[1] || "").includes("durable_complete_v2_lossless"))) {
       dropNextDurableCompletionResponse = false;
@@ -463,6 +487,14 @@ globalThis.fetch = async (input, options = {}) => {
     return Response.json(rows);
   }
   const command = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  const name = String(command?.[0] || "").toUpperCase();
+  const key = String(command?.[1] || "");
+  if (failNextRedisCommand
+    && name === failNextRedisCommand.name
+    && (!failNextRedisCommand.keyPrefix || key.startsWith(failNextRedisCommand.keyPrefix))) {
+    failNextRedisCommand = null;
+    return Response.json({ error: `simulated_${name.toLowerCase()}_transport_failure` }, { status: 503 });
+  }
   return Response.json({ result: execute(command) });
 };
 
@@ -558,6 +590,138 @@ test("after-sales Redis double mirrors V3 auth repair under least-favorable key 
 test("orders without a ticket return an empty active-ticket map", async () => {
   const active = await store.getActiveAfterSalesTickets(["LMWITHOUTTICKET"]);
   assert.deepEqual(active, {});
+});
+
+test("active-ticket batch skips an object-shaped index value without inventing storagePending", async () => {
+  const badOrderId = "LMACTIVEOBJECT01";
+  const goodOrderId = "LMACTIVESTRING01";
+  const goodTicketId = "ASACTIVESTRING01";
+  const keys = [
+    `liumeiti:after-sales:active:${badOrderId}`,
+    `liumeiti:after-sales:active:${goodOrderId}`,
+    `liumeiti:after-sales:record:${goodTicketId}`,
+  ];
+  values.set(keys[0], { malformed: true });
+  values.set(keys[1], goodTicketId);
+  values.set(keys[2], JSON.stringify({
+    ticketId: goodTicketId,
+    orderId: goodOrderId,
+    status: "pending",
+    createdAt: "2026-08-09T01:00:00.000Z",
+  }));
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args);
+  try {
+    const active = await store.getActiveAfterSalesTickets([badOrderId, goodOrderId]);
+    assert.equal(Object.hasOwn(active, badOrderId), false);
+    assert.equal(active[goodOrderId]?.ticketId, goodTicketId);
+    assert.equal(warnings.some(([message, details]) => String(message).includes("invalid active-ticket") && details?.count === 1), true);
+  } finally {
+    console.warn = originalWarn;
+    keys.forEach(deleteMockKey);
+  }
+});
+
+test("auth/me skips malformed active after-sales records without hiding account data", async () => {
+  const email = "corrupt-after-sales@example.com";
+  const lifecycleId = "abcdef0123456789abcdef0123456789";
+  const orderIds = [
+    "LMAFTERSALESVALID1",
+    "LMAFTERSALESGONE1",
+    "LMAFTERSALESMISSING1",
+    "LMAFTERSALESTYPE1",
+    "LMAFTERSALESTIME1",
+  ];
+  const ticketIds = [
+    "ASVALIDRECORD1",
+    "ASDELETEDRECORD1",
+    "ASMISSINGFIELD1",
+    "ASWRONGTYPE1",
+    "ASBADTIME1",
+  ];
+  const cleanupKeys = [
+    `liumeiti:users:${email}`,
+    `lm:user:authver:${email}`,
+    `lm:user:lifecycle:${email}`,
+    `liumeiti:users:${email}:balance:cents`,
+    `liumeiti:orders:email:${email}`,
+    "liumeiti:invite-code:CORRUPTAS1",
+    ...orderIds.map((orderId) => `liumeiti:orders:record:${orderId}`),
+    ...orderIds.map((orderId) => `liumeiti:after-sales:active:${orderId}`),
+    ...ticketIds.map((ticketId) => `liumeiti:after-sales:record:${ticketId}`),
+  ];
+  const profile = {
+    email,
+    username: "corrupt-after-sales-user",
+    avatarId: "avatar-01",
+    inviteCode: "CORRUPTAS1",
+    balance: 37.5,
+    coupons: [{ id: "CPAFTERSALE1", title: "Account coupon", amount: 8, status: "active" }],
+  };
+  values.set(`liumeiti:users:${email}`, JSON.stringify(profile));
+  values.set(`lm:user:authver:${email}`, "1");
+  values.set(`lm:user:lifecycle:${email}`, lifecycleId);
+  values.set(`liumeiti:users:${email}:balance:cents`, "3750");
+  lists.set(`liumeiti:orders:email:${email}`, [...orderIds]);
+  orderIds.forEach((orderId, index) => {
+    values.set(`liumeiti:orders:record:${orderId}`, JSON.stringify({
+      ...orderRecord(orderId, email),
+      revision: 0,
+      createdAt: new Date(Date.UTC(2026, 7, 1, 0, index)).toISOString(),
+    }));
+    values.set(`liumeiti:after-sales:active:${orderId}`, ticketIds[index]);
+  });
+
+  // A valid Upstash-style already-decoded object proves object responses remain readable.
+  values.set(`liumeiti:after-sales:record:${ticketIds[0]}`, {
+    ticketId: ticketIds[0],
+    orderId: orderIds[0],
+    status: "pending",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    createdAtBeijing: "2026-08-01 08:00:00 Beijing Time (UTC+8)",
+  });
+  // A missing record plus missing identity, wrong field type and an
+  // unparseable timestamp are independent legacy/corruption shapes. None may
+  // fail the surrounding account read.
+  values.set(`liumeiti:after-sales:record:${ticketIds[2]}`, JSON.stringify({
+    orderId: orderIds[2], status: "pending", createdAt: "2026-08-01T00:01:00.000Z",
+  }));
+  values.set(`liumeiti:after-sales:record:${ticketIds[3]}`, JSON.stringify({
+    ticketId: ticketIds[3], orderId: orderIds[3], status: { value: "pending" }, createdAt: "2026-08-01T00:02:00.000Z",
+  }));
+  values.set(`liumeiti:after-sales:record:${ticketIds[4]}`, JSON.stringify({
+    ticketId: ticketIds[4], orderId: orderIds[4], status: "pending", createdAt: "not-a-real-timestamp",
+  }));
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => {
+    if (String(args[0] || "").includes("[after-sales] skipped invalid ticket")) warnings.push(args);
+    else originalWarn(...args);
+  };
+  try {
+    const userToken = authSession.signUserSessionForVersion(email, 1);
+    const response = await authMeRoute.GET(new Request("https://www.liumeiti.vip/api/auth/me", {
+      headers: { cookie: `lm_user=${encodeURIComponent(userToken)}; locale=en` },
+    }));
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.ok, true);
+    assert.equal(body.email, email);
+    assert.equal(body.balance, 37.5);
+    assert.equal(body.coupons.some((coupon) => coupon.id === "CPAFTERSALE1"), true);
+    assert.equal(body.orders.length, orderIds.length);
+    const orders = new Map(body.orders.map((order) => [order.orderId, order]));
+    assert.equal(orders.get(orderIds[0])?.afterSalesTicket?.ticketId, ticketIds[0]);
+    for (const orderId of orderIds.slice(1)) assert.equal(orders.get(orderId)?.afterSalesTicket, null);
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0][1]?.count, 4);
+    assert.deepEqual(new Set(warnings[0][1]?.ticketIds), new Set(ticketIds.slice(1)));
+  } finally {
+    console.warn = originalWarn;
+    cleanupKeys.forEach(deleteMockKey);
+  }
 });
 
 test("after-sales ticket lifecycle enforces one pending ticket per order", async () => {
@@ -3509,6 +3673,286 @@ test("creation outbox drains oldest failures beyond the former latest-30 window"
   const remaining = await store.getAfterSalesCreationOutbox(30);
   assert.deepEqual(remaining.map((ticket) => ticket.ticketId), tickets.slice(30).map((ticket) => ticket.ticketId));
   assert.equal(sortedSet("liumeiti:after-sales:creation-outbox").size, 15);
+});
+
+test("admin after-sales detail distinguishes Redis failure from a corrupt stored ticket", async () => {
+  const ticketId = "ASSTRICTDETAIL01";
+  const ticketKey = `liumeiti:after-sales:record:${ticketId}`;
+  const token = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const request = () => new Request(`https://www.liumeiti.vip/api/admin/after-sales/${ticketId}`, {
+    headers: { cookie: `lm_admin=${encodeURIComponent(token)}` },
+  });
+  values.set(ticketKey, JSON.stringify({
+    ticketId,
+    orderId: "LMSTRICTDETAIL01",
+    status: "completed",
+    createdAt: "2026-08-09T00:00:00.000Z",
+    completedAt: "2026-08-09T00:01:00.000Z",
+  }));
+  failNextRedisPipelineCommand = { name: "GET", keyPrefix: ticketKey };
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    const unavailable = await adminDetailRoute.GET(request(), { params: Promise.resolve({ ticketId }) });
+    assert.equal(unavailable.status, 503);
+    assert.deepEqual(await unavailable.json(), { ok: false, error: "after_sales_store_unavailable" });
+
+    values.set(ticketKey, "{broken-ticket-json");
+    const corrupt = await adminDetailRoute.GET(request(), { params: Promise.resolve({ ticketId }) });
+    assert.equal(corrupt.status, 404);
+    assert.deepEqual(await corrupt.json(), { ok: false, error: "ticket_not_found" });
+  } finally {
+    console.error = originalError;
+    values.delete(ticketKey);
+    failNextRedisPipelineCommand = null;
+  }
+});
+
+test("admin after-sales completion maps lock command failure to 503 and an explicit NX miss to 409", async () => {
+  const ticketId = "ASSTRICTLOCK01";
+  const ticketKey = `liumeiti:after-sales:record:${ticketId}`;
+  const lockKey = `liumeiti:after-sales:complete-lock:${ticketId}`;
+  values.set(ticketKey, JSON.stringify({
+    ticketId,
+    orderId: "LMSTRICTLOCK01",
+    status: "completed",
+    createdAt: "2026-08-09T00:00:00.000Z",
+    completedAt: "2026-08-09T00:01:00.000Z",
+    creationEffectsPending: false,
+    completionEffectsPending: false,
+  }));
+  const token = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const request = (idempotencyKey) => new Request(`https://www.liumeiti.vip/api/admin/after-sales/${ticketId}`, {
+    method: "PATCH",
+    headers: {
+      cookie: `lm_admin=${encodeURIComponent(token)}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({ status: "completed" }),
+  });
+  try {
+    failNextRedisPipelineCommand = { name: "SET", keyPrefix: lockKey };
+    const unavailable = await adminDetailRoute.PATCH(
+      request("after-sales-lock-storage-failure-0001"),
+      { params: Promise.resolve({ ticketId }) },
+    );
+    assert.equal(unavailable.status, 503);
+    assert.deepEqual(await unavailable.json(), { ok: false, error: "after_sales_store_unavailable" });
+
+    values.set(lockKey, "another-worker");
+    const busy = await adminDetailRoute.PATCH(
+      request("after-sales-lock-busy-result-0001"),
+      { params: Promise.resolve({ ticketId }) },
+    );
+    assert.equal(busy.status, 409);
+    assert.deepEqual(await busy.json(), { ok: false, error: "ticket_busy" });
+  } finally {
+    values.delete(ticketKey);
+    values.delete(lockKey);
+    failNextRedisPipelineCommand = null;
+  }
+});
+
+test("admin after-sales completion returns JSON 503 when pending credential hydration loses Redis", async () => {
+  const ticketId = "ASSTRICTHYDRATE1";
+  const ticketKey = `liumeiti:after-sales:record:${ticketId}`;
+  values.set(ticketKey, JSON.stringify({
+    ticketId,
+    orderId: "LMSTRICTHYDRATE1",
+    status: "pending",
+    createdAt: "2026-08-09T00:00:00.000Z",
+    items: [],
+  }));
+  const token = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin", exp: Date.now() + 60_000 });
+  const request = new Request(`https://www.liumeiti.vip/api/admin/after-sales/${ticketId}`, {
+    method: "PATCH",
+    headers: {
+      cookie: `lm_admin=${encodeURIComponent(token)}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": "after-sales-hydration-storage-failure-0001",
+    },
+    body: JSON.stringify({ status: "completed", credentialOrderHash: "a".repeat(64) }),
+  });
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    // The standalone order record is absent, then the legacy-order LRANGE HTTP
+    // request fails. This drives the actual route -> hydration -> order-store path.
+    failNextRedisCommand = { name: "LRANGE", keyPrefix: "liumeiti:orders" };
+    const response = await adminDetailRoute.PATCH(request, { params: Promise.resolve({ ticketId }) });
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { ok: false, error: "after_sales_store_unavailable" });
+    assert.equal(failNextRedisCommand, null);
+  } finally {
+    console.error = originalError;
+    values.delete(ticketKey);
+    failNextRedisCommand = null;
+  }
+});
+
+test("after-sales outboxes skip isolated corrupt records and keep valid work visible", async () => {
+  values.clear();
+  lists.clear();
+  hashes.clear();
+  sortedSets.clear();
+  sets.clear();
+  const creationIndex = "liumeiti:after-sales:creation-outbox";
+  const completionIndex = "liumeiti:after-sales:completion-outbox";
+  values.set("liumeiti:after-sales:creation-outbox:backfill:v1", "done");
+  const creationIds = ["ASPARTIALCREATE1", "ASPARTIALCREATE2"];
+  const completionIds = ["ASPARTIALCOMPLETE1", "ASPARTIALCOMPLETE2"];
+  const corruptIds = ["ASPARTIALBADJSON", "ASPARTIALMISSING", "ASPARTIALBADTIME"];
+  creationIds.forEach((ticketId, index) => {
+    values.set(`liumeiti:after-sales:record:${ticketId}`, JSON.stringify({
+      ticketId,
+      orderId: `LMPARTIALCREATE${index + 1}`,
+      status: "pending",
+      creationEffectsPending: true,
+      createdAt: new Date(Date.UTC(2026, 7, 2, 0, index)).toISOString(),
+    }));
+    sortedSet(creationIndex).set(ticketId, index + 10);
+  });
+  completionIds.forEach((ticketId, index) => {
+    values.set(`liumeiti:after-sales:record:${ticketId}`, JSON.stringify({
+      ticketId,
+      orderId: `LMPARTIALCOMPLETE${index + 1}`,
+      status: "completed",
+      completionEffectsPending: true,
+      createdAt: new Date(Date.UTC(2026, 7, 2, 1, index)).toISOString(),
+      completedAt: new Date(Date.UTC(2026, 7, 2, 2, index)).toISOString(),
+    }));
+    sortedSet(completionIndex).set(ticketId, index + 10);
+  });
+  values.set(`liumeiti:after-sales:record:${corruptIds[0]}`, "{not-json");
+  values.set(`liumeiti:after-sales:record:${corruptIds[1]}`, JSON.stringify({
+    orderId: "LMPARTIALMISSING", status: "pending", createdAt: "2026-08-02T03:00:00.000Z",
+  }));
+  values.set(`liumeiti:after-sales:record:${corruptIds[2]}`, JSON.stringify({
+    ticketId: corruptIds[2], orderId: "LMPARTIALBADTIME", status: "completed", createdAt: "32 o'clock someday",
+  }));
+  corruptIds.forEach((ticketId, index) => {
+    sortedSet(creationIndex).set(ticketId, index + 20);
+    sortedSet(completionIndex).set(ticketId, index + 20);
+  });
+  sortedSet(creationIndex).set(" ", 5);
+  sortedSet(completionIndex).set(" ", 5);
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => {
+    if (String(args[0] || "").startsWith("[after-sales] skipped")) warnings.push(args);
+    else originalWarn(...args);
+  };
+  try {
+    const creation = await store.getAfterSalesCreationOutbox(20);
+    const completion = await store.getAfterSalesCompletionOutbox(20);
+    assert.deepEqual(creation.map((ticket) => ticket.ticketId), creationIds);
+    assert.deepEqual(completion.map((ticket) => ticket.ticketId), completionIds);
+    assert.deepEqual(new Set(sortedSet(creationIndex).keys()), new Set(creationIds));
+    assert.equal(warnings.some((entry) => entry[1]?.count === 3), true);
+    assert.equal(warnings.some((entry) => entry[1]?.count === 1), true);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test("creation-outbox backfill advances by raw index members across invalid entries", async () => {
+  values.clear();
+  lists.clear();
+  hashes.clear();
+  sortedSets.clear();
+  sets.clear();
+  const allIndex = "liumeiti:after-sales:index";
+  const creationIndex = "liumeiti:after-sales:creation-outbox";
+  const firstId = "ASBACKFILLPARTIAL1";
+  const corruptId = "ASBACKFILLPARTIALBAD";
+  const secondId = "ASBACKFILLPARTIAL2";
+  sortedSet(allIndex).set(" ", 0);
+  sortedSet(allIndex).set(firstId, 1);
+  sortedSet(allIndex).set(corruptId, 2);
+  sortedSet(allIndex).set(secondId, 3);
+  values.set(`liumeiti:after-sales:record:${firstId}`, JSON.stringify({
+    ticketId: firstId,
+    orderId: "LMBACKFILLPARTIAL1",
+    status: "pending",
+    creationEffectsPending: true,
+    createdAt: "2026-08-03T00:00:00.000Z",
+  }));
+  values.set(`liumeiti:after-sales:record:${corruptId}`, "not-json");
+  values.set(`liumeiti:after-sales:record:${secondId}`, JSON.stringify({
+    ticketId: secondId,
+    orderId: "LMBACKFILLPARTIAL2",
+    status: "pending",
+    creationEffectsPending: true,
+    createdAt: "2026-08-03T00:02:00.000Z",
+  }));
+
+  const first = await store.backfillAfterSalesCreationOutbox(2);
+  assert.equal(first.processed, 2);
+  assert.equal(first.cursor, 2);
+  assert.equal(first.done, false);
+  assert.equal(values.get("liumeiti:after-sales:creation-outbox:backfill:v1"), "2");
+  const second = await store.backfillAfterSalesCreationOutbox(2);
+  assert.equal(second.processed, 2);
+  assert.equal(second.cursor, 4);
+  assert.equal(second.done, true);
+  assert.equal(values.get("liumeiti:after-sales:creation-outbox:backfill:v1"), "done");
+  assert.deepEqual(new Set(sortedSet(creationIndex).keys()), new Set([firstId, secondId]));
+  const visible = await store.getAfterSalesCreationOutbox(10);
+  assert.deepEqual(visible.map((ticket) => ticket.ticketId), [firstId, secondId]);
+});
+
+test("creation-outbox backfill does not mark the second page done when ZCARD disconnects", async () => {
+  values.clear();
+  lists.clear();
+  hashes.clear();
+  sortedSets.clear();
+  sets.clear();
+  const allIndex = "liumeiti:after-sales:index";
+  const cursorKey = "liumeiti:after-sales:creation-outbox:backfill:v1";
+  const ids = ["ASBACKFILLZCARD1", "ASBACKFILLZCARD2"];
+  ids.forEach((ticketId, index) => {
+    sortedSet(allIndex).set(ticketId, index);
+    values.set(`liumeiti:after-sales:record:${ticketId}`, JSON.stringify({
+      ticketId,
+      orderId: `LMBACKFILLZCARD${index + 1}`,
+      status: "pending",
+      creationEffectsPending: true,
+      createdAt: `2026-08-09T02:0${index}:00.000Z`,
+    }));
+  });
+  values.set(cursorKey, "1");
+  disconnectNextRedisPipelineCommand = { name: "ZCARD", keyPrefix: allIndex };
+  await assert.rejects(store.backfillAfterSalesCreationOutbox(1), /after_sales_store_unavailable/);
+  assert.equal(values.get(cursorKey), "1");
+
+  const resumed = await store.backfillAfterSalesCreationOutbox(1);
+  assert.equal(resumed.done, true);
+  assert.equal(resumed.cursor, 2);
+  assert.equal(values.get(cursorKey), "done");
+  assert.equal(disconnectNextRedisPipelineCommand, null);
+});
+
+test("after-sales outbox readers reject malformed transport-level list responses", async () => {
+  values.clear();
+  lists.clear();
+  hashes.clear();
+  sortedSets.clear();
+  sets.clear();
+  const completionIndex = "liumeiti:after-sales:completion-outbox";
+  const creationIndex = "liumeiti:after-sales:creation-outbox";
+  const allIndex = "liumeiti:after-sales:index";
+  values.set("liumeiti:after-sales:creation-outbox:backfill:v1", "done");
+
+  nonArrayZrangeResponses.add(completionIndex);
+  await assert.rejects(store.getAfterSalesCompletionOutbox(10), /after_sales_store_unavailable/);
+  nonArrayZrangeResponses.add(creationIndex);
+  await assert.rejects(store.getAfterSalesCreationOutbox(10), /creation_outbox_unavailable/);
+  values.delete("liumeiti:after-sales:creation-outbox:backfill:v1");
+  nonArrayZrangeResponses.add(allIndex);
+  await assert.rejects(store.backfillAfterSalesCreationOutbox(10), /after_sales_store_unavailable/);
+  assert.equal(nonArrayZrangeResponses.size, 0);
 });
 
 test("effect completion CAS preserves legacy ticket JSON bytes outside patched fields", async () => {

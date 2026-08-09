@@ -75,11 +75,6 @@ function parseJson(value) {
   try { return JSON.parse(value); } catch (e) { return null; }
 }
 
-function rows(value) {
-  if (!Array.isArray(value)) return [];
-  return value.map((entry) => (entry && typeof entry === "object" && Object.hasOwn(entry, "result") ? entry.result : entry));
-}
-
 function unavailable(code) {
   const error = new Error(code);
   error.code = code;
@@ -264,22 +259,39 @@ export async function readHealthHistory(component, limit = 100) {
   const name = clean(component, 40).toLowerCase();
   if (!HEALTH_COMPONENTS.includes(name)) return [];
   const safeLimit = Math.max(1, Math.min(HEALTH_HISTORY_LIMIT, Number(limit || 100)));
-  const values = await redisCmd(["LRANGE", HEALTH_HISTORY_PREFIX + name, "0", String(safeLimit - 1)]);
+  const values = await redisCmd(["LRANGE", HEALTH_HISTORY_PREFIX + name, "0", "-1"]);
   if (!Array.isArray(values)) throw unavailable("health_history_store_unavailable");
-  return values.map((value) => parseHealthRecord(value, name, "health_history_store_corrupt"))
-    .map((value) => healthStatusWithFreshness(name, value));
+  const records = [];
+  let skipped = 0;
+  values.forEach((value) => {
+    try {
+      const record = parseHealthRecord(value, name, "health_history_store_corrupt");
+      if (record) records.push(healthStatusWithFreshness(name, record));
+      else skipped += 1;
+    } catch (error) {
+      if (error?.code !== "health_history_store_corrupt") throw error;
+      skipped += 1;
+    }
+  });
+  if (skipped) console.warn("[health] skipped unreadable component history records", { component: name, skipped });
+  return records.slice(0, safeLimit);
 }
 
 export async function readAllHealthHistory(limitPerComponent = 30) {
   const result = await readAllHealthHistoryWithDiagnostics(limitPerComponent);
-  if (result.diagnostics.length > 0) throw unavailable("health_history_store_corrupt");
+  if (result.diagnostics.length > 0) {
+    console.warn("[health] skipped unreadable records while reading all component history", {
+      components: result.diagnostics.length,
+      skipped: result.diagnostics.reduce((sum, item) => sum + Number(item.corruptRecords || 0), 0),
+    });
+  }
   return result.history;
 }
 
 export async function readAllHealthHistoryWithDiagnostics(limitPerComponent = 30) {
   const safeLimit = Math.max(1, Math.min(100, Number(limitPerComponent || 30)));
   const result = strictPipelineRows(await redisPipeline(HEALTH_COMPONENTS.map((name) => [
-    "LRANGE", HEALTH_HISTORY_PREFIX + name, "0", String(safeLimit - 1),
+    "LRANGE", HEALTH_HISTORY_PREFIX + name, "0", "-1",
   ])), HEALTH_COMPONENTS.length, "health_history_store_unavailable");
   const history = {};
   const diagnostics = [];
@@ -297,7 +309,7 @@ export async function readAllHealthHistoryWithDiagnostics(limitPerComponent = 30
         corruptRecords += 1;
       }
     }
-    history[name] = records;
+    history[name] = records.slice(0, safeLimit);
     if (corruptRecords > 0) {
       diagnostics.push({
         component: name,

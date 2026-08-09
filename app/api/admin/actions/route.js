@@ -205,7 +205,13 @@ export async function GET(request) {
   const url = new URL(request.url);
   const staffId = Number(url.searchParams.get("staffId") || 0);
   const q = clean(url.searchParams.get("q") || "", 80).toLowerCase();
-  let actions = (await getAdminActionLog()).map(publicAction);
+  let actions;
+  try {
+    actions = (await getAdminActionLog()).map(publicAction);
+  } catch (error) {
+    console.warn("[admin-actions] log read unavailable", error);
+    return Response.json({ ok: false, error: "admin_action_log_store_unavailable" }, { status: 503 });
+  }
   if (Number.isFinite(staffId) && staffId > 0) actions = actions.filter((item) => item.staffId === staffId);
   if (q) {
     actions = actions.filter((item) =>
@@ -226,8 +232,21 @@ export async function DELETE(request) {
   let body = {};
   try { body = await request.json(); } catch (e) {}
   const ids = Array.isArray(body.ids) ? body.ids.map((id) => clean(id, 120)).filter(Boolean) : [];
-  const result = await deleteAdminActionLogEntries(ids, adminActorFromSession(session));
-  if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: 400 });
-  const actions = (await getAdminActionLog()).map(publicAction);
-  return Response.json({ ...result, actions });
+  let result;
+  try {
+    result = await deleteAdminActionLogEntries(ids, adminActorFromSession(session));
+  } catch (error) {
+    console.warn("[admin-actions] delete pre-read unavailable", error);
+    return Response.json({ ok: false, error: "admin_action_log_store_unavailable" }, { status: 503 });
+  }
+  if (!result.ok) return Response.json({ ok: false, error: result.error }, {
+    status: result.error === "storage_failed" ? 503 : 400,
+  });
+  try {
+    const actions = (await getAdminActionLog()).map(publicAction);
+    return Response.json({ ...result, actions });
+  } catch (error) {
+    console.warn("[admin-actions] post-delete refresh unavailable", error);
+    return Response.json({ ...result, refreshRequired: true });
+  }
 }

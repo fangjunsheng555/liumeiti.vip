@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { clean, formatBeijingTime, redisCmd } from "./_utils.js";
+import { clean, formatBeijingTime, redisCmd, redisPipeline } from "./_utils.js";
 
 const TIMELINE_PREFIX = "liumeiti:order-timeline:";
 const MAX_EVENTS = 100;
@@ -35,8 +35,27 @@ function timelineKey(orderId) {
 
 function parseEvent(value) {
   if (!value) return null;
-  if (typeof value === "object") return value;
-  try { return JSON.parse(value); } catch { return null; }
+  let event = value;
+  if (typeof value !== "object") {
+    try { event = JSON.parse(value); } catch { return null; }
+  }
+  if (!event || typeof event !== "object" || Array.isArray(event)) return null;
+  if (typeof event.id !== "string" || !clean(event.id, 80)) return null;
+  if (typeof event.type !== "string" || !clean(event.type, 60)) return null;
+  if (typeof event.createdAt !== "string" || !Number.isFinite(Date.parse(event.createdAt))) return null;
+  return event;
+}
+
+function pipelineRows(value) {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.result)) return value.result;
+  return [];
+}
+
+function pipelineValue(entry) {
+  return entry && typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, "result")
+    ? entry.result
+    : entry;
 }
 
 function safeEvent(event) {
@@ -102,8 +121,35 @@ function baseEvents(order) {
 
 export async function getOrderTimeline(order, { publicOnly = false } = {}) {
   const key = timelineKey(order?.orderId);
-  const stored = key ? await redisCmd(["LRANGE", key, "0", String(MAX_EVENTS - 1)]) : [];
-  const merged = [...(Array.isArray(stored) ? stored.map(parseEvent).filter(Boolean) : []), ...baseEvents(order)];
+  let storedRows = [];
+  if (key) {
+    // audit-partial-failure: allow partial-failure-pipeline-errors -- Redis command errors invalidate the transport batch; audit-partial-failure: allow partial-failure-pipeline-shape -- LRANGE and PING must both arrive before classifying event bodies.
+    const response = await redisPipeline([
+      ["LRANGE", key, "0", "-1"],
+      ["PING"],
+    ]);
+    const rows = pipelineRows(response);
+    let commandFailed = false;
+    for (const entry of rows) {
+      if (entry && typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, "error")) commandFailed = true;
+    }
+    if (rows.length !== 2
+      || commandFailed
+      || pipelineValue(rows[1]) !== "PONG"
+      || !Array.isArray(pipelineValue(rows[0]))) {
+      throw new Error("order_timeline_store_unavailable");
+    }
+    storedRows = pipelineValue(rows[0]);
+  }
+  const parsedStored = storedRows.map(parseEvent);
+  const skipped = parsedStored.filter((event) => !event).length;
+  if (skipped) {
+    console.warn("[order-timeline] skipped unreadable event records", {
+      orderId: normalizeOrderId(order?.orderId),
+      skipped,
+    });
+  }
+  const merged = [...parsedStored.filter(Boolean), ...baseEvents(order)];
   const seen = new Set();
   return merged
     .map(safeEvent)

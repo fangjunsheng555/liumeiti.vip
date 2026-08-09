@@ -67,7 +67,13 @@ export async function GET(request) {
 
   const url = new URL(request.url);
   const q = clean(url.searchParams.get("q") || "", 80).toLowerCase();
-  const [codes, orders] = await Promise.all([listRedeemCodes(), getAllOrders()]);
+  let codes;
+  let orders;
+  try { [codes, orders] = await Promise.all([listRedeemCodes(), getAllOrders()]); }
+  catch (error) {
+    console.error("[admin-redeem-history] storage unavailable", error?.message || error);
+    return Response.json({ ok: false, error: "redeem_store_unavailable" }, { status: 503 });
+  }
   const orderMap = new Map(orders.map((order) => [clean(order.orderId || "", 100), order]));
   let history = codes
     .filter((code) => code && code.status === "used" && !code.historyDeleted)

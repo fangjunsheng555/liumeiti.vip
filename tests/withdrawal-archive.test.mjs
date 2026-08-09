@@ -200,6 +200,44 @@ test("listWithdrawals reads the complete active index", async () => {
   });
 });
 
+test("listWithdrawals skips isolated malformed, missing, and mismatched records", async () => {
+  const parsedObject = {
+    id: "WD-OBJECT",
+    status: " pending ",
+    amount: 19.75,
+    userEmail: " Object@Example.com ",
+  };
+  const redis = new WithdrawalRedisMock([
+    [LIST_KEY, ["WD-STRING", "WD-OBJECT", "WD-CENTS-ONLY", "WD-BROKEN", "WD-MISSING", "WD-MISMATCH", "WD-EMPTY", "WD-BAD-AMOUNT", "WD-BAD-EMAIL", "WD-AMOUNT-MISMATCH"]],
+    record("WD-STRING", "pending"),
+    [RECORD_PREFIX + "WD-OBJECT", parsedObject],
+    [RECORD_PREFIX + "WD-CENTS-ONLY", JSON.stringify({ id: "WD-CENTS-ONLY", status: "pending", amountCents: 1234, userEmail: "cents@example.com" })],
+    [RECORD_PREFIX + "WD-BROKEN", "{not-json"],
+    [RECORD_PREFIX + "WD-MISMATCH", JSON.stringify({ id: "WD-SOMEONE-ELSE", status: "pending" })],
+    [RECORD_PREFIX + "WD-EMPTY", {}],
+    [RECORD_PREFIX + "WD-BAD-AMOUNT", JSON.stringify({ id: "WD-BAD-AMOUNT", status: "pending", amount: -1, userEmail: "amount@example.com" })],
+    [RECORD_PREFIX + "WD-BAD-EMAIL", JSON.stringify({ id: "WD-BAD-EMAIL", status: "pending", amount: 12.5, userEmail: "not-an-email" })],
+    [RECORD_PREFIX + "WD-AMOUNT-MISMATCH", JSON.stringify({ id: "WD-AMOUNT-MISMATCH", status: "pending", amount: 99, amountCents: 1250, userEmail: "mismatch@example.com" })],
+  ]);
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args);
+  try {
+    await withRedis(redis, async () => {
+      const withdrawals = await utils.listWithdrawals();
+      assert.deepEqual(withdrawals.map((item) => item.id).sort(), ["WD-CENTS-ONLY", "WD-OBJECT", "WD-STRING"]);
+      assert.equal(withdrawals.find((item) => item.id === "WD-OBJECT")?.amount, 19.75);
+      assert.equal(withdrawals.find((item) => item.id === "WD-OBJECT")?.status, "pending");
+      assert.equal(withdrawals.find((item) => item.id === "WD-OBJECT")?.userEmail, "object@example.com");
+      assert.equal(withdrawals.find((item) => item.id === "WD-CENTS-ONLY")?.amount, 12.34);
+    });
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0][1]?.skipped, 7);
+});
+
 test("pending and processing withdrawals cannot be archived", async (t) => {
   for (const status of ["pending", "processing"]) {
     await t.test(status, async () => {

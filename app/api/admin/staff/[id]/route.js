@@ -72,6 +72,12 @@ export async function DELETE(request, { params }) {
       headers: storageFailure ? { "Cache-Control": "no-store", "Retry-After": "5" } : undefined,
     });
   }
-  const [staff, actions] = await Promise.all([listAdminStaff(), getAdminActionLog()]);
-  return Response.json({ ok: true, staff, actions });
+  const staff = await listAdminStaff();
+  try {
+    const actions = await getAdminActionLog();
+    return Response.json({ ok: true, staff, actions });
+  } catch (error) {
+    console.warn("[admin-staff] post-delete action refresh unavailable", error);
+    return Response.json({ ok: true, staff, actions: [], refreshRequired: true });
+  }
 }

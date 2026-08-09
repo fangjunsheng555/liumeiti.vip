@@ -30,6 +30,58 @@ function flatToObj(v) {
   const o = {}; if (Array.isArray(v)) for (let i = 0; i + 1 < v.length; i += 2) o[v[i]] = v[i + 1];
   return o;
 }
+function pipelineRows(value) { return Array.isArray(value) ? value : (Array.isArray(value?.result) ? value.result : null); }
+function pipelineValue(entry) { return entry && typeof entry === "object" && Object.hasOwn(entry, "result") ? entry.result : entry; }
+function pipelineEntryFailed(entry) { return Boolean(entry && typeof entry === "object" && Object.hasOwn(entry, "error")); }
+async function strictPipeline(commands) {
+  const rows = pipelineRows(await redisPipeline([...commands, ["PING"]]));
+  // audit-partial-failure: allow partial-failure-predicate-abort -- Redis command errors are transport failures, so the whole read must fail rather than fabricate partial cart data.
+  if (!rows || rows.length !== commands.length + 1 || rows.some(pipelineEntryFailed)
+      || pipelineValue(rows.at(-1)) !== "PONG") throw new Error("abandoned_store_unavailable");
+  return rows.slice(0, -1).map(pipelineValue);
+}
+function validCartHash(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const timestamp = Number(value.ts);
+  return Number.isSafeInteger(timestamp) && timestamp > 0
+    && ["email", "services", "amount", "status", "ip", "attr"].every((field) => value[field] == null || typeof value[field] === "string");
+}
+async function readCartHashes(ids) {
+  const records = [];
+  const skipped = [];
+  for (let start = 0; start < ids.length; start += 200) {
+    const batch = ids.slice(start, start + 200);
+    const values = await strictPipeline(batch.map((id) => ["HGETALL", CART + id]));
+    batch.forEach((id, index) => {
+      const hash = flatToObj(values[index]);
+      if (validCartHash(hash)) records.push({ id, hash });
+      else skipped.push(id);
+    });
+  }
+  if (skipped.length) console.warn("[abandoned] skipped invalid or missing cart records", { skipped: skipped.length, ids: skipped.slice(0, 20) });
+  return { records, skipped: skipped.length };
+}
+
+async function readCartWindow(offset, limit) {
+  const pageEnd = offset + limit, target = pageEnd + 1, records = [];
+  let skipped = 0;
+  const pageSize = 200; let rawOffset = 0;
+  while (records.length < target) {
+    const [rawIds] = await strictPipeline([["ZRANGE", CART_INDEX, String(rawOffset), String(rawOffset + pageSize - 1), "REV"]]);
+    if (!Array.isArray(rawIds)) throw new Error("abandoned_store_unavailable");
+    if (!rawIds.length) break;
+    const ids = rawIds.filter((id) => typeof id === "string" && /^[a-f0-9]{8,32}$/.test(id));
+    const invalidIndexCount = rawIds.length - ids.length;
+    if (invalidIndexCount) console.warn("[abandoned] skipped invalid cart index members", { skipped: invalidIndexCount });
+    skipped += invalidIndexCount;
+    const batch = await readCartHashes(ids);
+    records.push(...batch.records);
+    skipped += batch.skipped;
+    rawOffset += rawIds.length;
+    if (rawIds.length < pageSize) break;
+  }
+  return { records: records.slice(offset, pageEnd), skipped, hasMore: records.length > pageEnd };
+}
 function row(id, h) {
   const ts = Number(h.ts || 0);
   let attr = null; try { attr = h.attr ? JSON.parse(h.attr) : null; } catch (e) {}
@@ -201,18 +253,25 @@ function beijingDay(now = Date.now()) {
 
 export async function GET(request) {
   if (!gate(request)) return unauth();
-  const url = new URL(request.url);
-  const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") || 50)));
-  const offset = Math.max(0, Number(url.searchParams.get("offset") || 0));
-  const total = Number((await redisCmd(["ZCARD", CART_INDEX])) || 0);
-  const ids = (await redisCmd(["ZRANGE", CART_INDEX, String(offset), String(offset + limit - 1), "REV"])) || [];
-  const rows = [];
-  for (let i = 0; i < ids.length; i += 100) {
-    const chunk = ids.slice(i, i + 100);
-    const res = (await redisPipeline(chunk.map((id) => ["HGETALL", CART + id]))) || [];
-    chunk.forEach((id, idx) => rows.push(row(id, flatToObj(res[idx] && res[idx].result))));
+  try {
+    const url = new URL(request.url);
+    const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") || 50)));
+    const offset = Math.max(0, Number(url.searchParams.get("offset") || 0));
+    const [rawTotal] = await strictPipeline([["ZCARD", CART_INDEX]]);
+    const total = Number(rawTotal);
+    if (!Number.isSafeInteger(total) || total < 0) throw new Error("abandoned_store_unavailable");
+    const window = await readCartWindow(offset, limit);
+    const knownTotal = Math.max(0, total - window.skipped);
+    return Response.json({
+      ok: true,
+      total: window.hasMore ? Math.max(offset + window.records.length + 1, knownTotal) : knownTotal,
+      hasMore: window.hasMore,
+      rows: window.records.map(({ id, hash }) => row(id, hash)),
+    });
+  } catch (error) {
+    console.error("[abandoned] list unavailable", error?.message || error);
+    return Response.json({ ok: false, error: "abandoned_store_unavailable" }, { status: 503 });
   }
-  return Response.json({ ok: true, total, rows });
 }
 
 // POST — 单条操作：{id, action:"email"|"converted"}

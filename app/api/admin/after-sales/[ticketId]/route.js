@@ -23,9 +23,14 @@ async function getAfterSalesHandler(request, { params }) {
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   if (!adminPermissionProfile(session).canViewOrders) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const { ticketId } = await params;
-  const ticket = await getAfterSalesTicket(ticketId);
-  if (!ticket) return Response.json({ ok: false, error: "ticket_not_found" }, { status: 404 });
-  return Response.json({ ok: true, ticket: await hydrateAfterSalesTicketCredentials(ticket) });
+  try {
+    const ticket = await getAfterSalesTicket(ticketId);
+    if (!ticket) return Response.json({ ok: false, error: "ticket_not_found" }, { status: 404 });
+    return Response.json({ ok: true, ticket: await hydrateAfterSalesTicketCredentials(ticket) });
+  } catch (error) {
+    console.error("[admin-after-sales] detail unavailable", error);
+    return Response.json({ ok: false, error: "after_sales_store_unavailable" }, { status: 503 });
+  }
 }
 
 async function completeAfterSalesHandler(request, { params }) {
@@ -41,13 +46,24 @@ async function completeAfterSalesHandler(request, { params }) {
   const ticketId = clean(rawTicketId, 100).toUpperCase();
   const actor = adminActorFromSession(session);
   const credentialOrderHash = clean(body.credentialOrderHash, 80).toLowerCase();
-  const currentTicket = await getAfterSalesTicket(ticketId);
+  let currentTicket;
+  try {
+    currentTicket = await getAfterSalesTicket(ticketId);
+  } catch (error) {
+    return Response.json({ ok: false, error: "after_sales_store_unavailable" }, { status: 503 });
+  }
   if (!currentTicket) return Response.json({ ok: false, error: "ticket_not_found" }, { status: 404 });
   if (currentTicket.status === "pending") {
     if (!/^[a-f0-9]{64}$/.test(credentialOrderHash)) {
       return Response.json({ ok: false, error: "credential_snapshot_required" }, { status: 400 });
     }
-    const hydrated = await hydrateAfterSalesTicketCredentials(currentTicket);
+    let hydrated;
+    try {
+      hydrated = await hydrateAfterSalesTicketCredentials(currentTicket);
+    } catch (error) {
+      console.error("[admin-after-sales] credential snapshot unavailable", error);
+      return Response.json({ ok: false, error: "after_sales_store_unavailable" }, { status: 503 });
+    }
     if (!hydrated?.credentialOrderHash) {
       return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
     }
@@ -87,17 +103,24 @@ async function completeAfterSalesHandler(request, { params }) {
     }
     return Response.json({ ...replay, idempotent: true });
   }
-  const result = await completeAfterSalesTicket(ticketId, {
-    ...completion,
-    operationId: operation.operationId,
-    requestHash,
-  }, actor);
+  let result;
+  try {
+    result = await completeAfterSalesTicket(ticketId, {
+      ...completion,
+      operationId: operation.operationId,
+      requestHash,
+    }, actor);
+  } catch (error) {
+    return Response.json({ ok: false, error: "after_sales_store_unavailable" }, { status: 503 });
+  }
   if (!result.ok) {
     const status = ["ticket_not_found", "order_not_found", "order_item_not_found"].includes(result.error)
       ? 404
       : result.error === "ticket_busy" || result.error === "idempotency_conflict" || result.error === "stale_order_credentials" || result.error === "already_completed"
         ? 409
-        : result.error === "order_sync_failed" || result.error === "storage_failed"
+        : result.error === "after_sales_store_unavailable"
+          ? 503
+          : result.error === "order_sync_failed" || result.error === "storage_failed"
           ? 500
           : 400;
     return Response.json({ ok: false, error: result.error }, { status });

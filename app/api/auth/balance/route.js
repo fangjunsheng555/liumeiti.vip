@@ -17,8 +17,13 @@ export async function GET(request) {
     return Response.json({ ok: false, error: "session_state_changed" }, { status: 409 });
   }
   const balance = Number(user?.balance || 0);
-  const txs = await getBalanceTxs(auth.email);
-  const withdrawals = (await listWithdrawals()).filter((w) => w.userEmail === auth.email);
+  let txs;
+  let withdrawals;
+  try { [txs, withdrawals] = await Promise.all([getBalanceTxs(auth.email), listWithdrawals()]); } catch (error) {
+    console.warn("[auth-balance] account ledger read unavailable", error);
+    return Response.json({ ok: false, error: "balance_transaction_store_unavailable" }, { status: 503 });
+  }
+  withdrawals = withdrawals.filter((w) => w.userEmail === auth.email);
   const withdrawalMap = new Map(withdrawals.map((w) => [w.id, w]));
   return Response.json({
     ok: true,

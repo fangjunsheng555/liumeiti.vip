@@ -403,15 +403,83 @@ function pipelineResultValue(entry) {
     : entry;
 }
 
+function warnSkippedRecords(scope, skipped, details = []) {
+  const count = Number(skipped || 0);
+  if (count <= 0) return;
+  console.warn(`[${scope}] skipped ${count} unreadable record(s)`, { skipped: count,
+    ids: (Array.isArray(details) ? details : []).filter(Boolean).slice(0, 10) });
+}
+
+function parseStoredRecordList(rows, scope, validator = (record) => Boolean(clean(record?.id, 120))) {
+  if (!Array.isArray(rows)) return [];
+  const records = [];
+  let skipped = 0;
+  rows.forEach((value) => {
+    let record = value;
+    if (typeof value === "string") {
+      try { record = JSON.parse(value); } catch { record = null; }
+    }
+    if (record && typeof record === "object" && !Array.isArray(record) && validator(record)) records.push(record);
+    else skipped += 1;
+  });
+  warnSkippedRecords(scope, skipped);
+  return records;
+}
+
+async function readStrictRedisList(key, start, stop, scope, validator, errorCode = "storage_unavailable") {
+  if (!redisConfig()) throw new Error(errorCode);
+  const rows = pipelineResults(await redisPipeline([["LRANGE", key, String(start), String(stop)], ["PING"]]));
+  const commandFailed = rows.some((entry) => entry && typeof entry === "object" && Object.hasOwn(entry, "error") && entry.error != null);
+  const values = pipelineResultValue(rows[0]);
+  if (rows.length !== 2 || commandFailed || !Array.isArray(values) || pipelineResultValue(rows[1]) !== "PONG") throw new Error(errorCode);
+  return parseStoredRecordList(values, scope, validator);
+}
+
+function validStoredMoneyPair(record, amountField, centsField, required = false) {
+  const hasAmount = Object.hasOwn(record, amountField);
+  const hasCents = Object.hasOwn(record, centsField);
+  if (!hasAmount && !hasCents) return !required;
+  if (!hasAmount) return false;
+  const rawAmount = record[amountField];
+  if (!(typeof rawAmount === "number" || (typeof rawAmount === "string" && /^-?\d+(?:\.\d+)?$/.test(rawAmount.trim())))) return false;
+  const amount = Number(rawAmount);
+  const scaled = amount * 100;
+  const rounded = Math.round(scaled);
+  if (!Number.isFinite(amount) || !Number.isSafeInteger(rounded) || Math.abs(scaled - rounded) > 1e-7) return false;
+  if (!hasCents) return true;
+  const rawCents = record[centsField];
+  if (!(typeof rawCents === "number" || (typeof rawCents === "string" && /^-?\d+$/.test(rawCents.trim())))) return false;
+  return Number.isSafeInteger(Number(rawCents)) && Number(rawCents) === rounded;
+}
+
+const REPLACE_REDIS_LIST_SCRIPT = `
+local keyType=redis.call('TYPE',KEYS[1])
+if type(keyType)=='table' then keyType=keyType.ok end
+if keyType~='none' and keyType~='list' then return -1 end
+redis.call('DEL',KEYS[1])
+if #ARGV>0 then redis.call('RPUSH',KEYS[1],unpack(ARGV)) end
+return #ARGV
+`;
+
+async function replaceRedisListStrict(key, records) {
+  const values = (Array.isArray(records) ? records : []).map((record) => JSON.stringify(record));
+  const rows = pipelineResults(await redisPipeline([["EVAL", REPLACE_REDIS_LIST_SCRIPT, "1", key, ...values], ["PING"]]));
+  const commandFailed = rows.some((entry) => entry && typeof entry === "object" && Object.hasOwn(entry, "error") && entry.error != null);
+  const replacedRaw = pipelineResultValue(rows[0]);
+  const validCount = typeof replacedRaw === "number" || (typeof replacedRaw === "string" && /^\d+$/.test(replacedRaw));
+  return rows.length === 2 && !commandFailed && validCount && Number(replacedRaw) === values.length
+    && pipelineResultValue(rows[1]) === "PONG";
+}
+
 async function getOrderIdsFromIndex(key, start = "0", stop = "-1") {
-  try {
-    const rows = await redisCmd(["LRANGE", key, String(start), String(stop)]);
-    if (!Array.isArray(rows)) return [];
-    const seen = new Set();
-    return rows
-      .map(normalizeOrderIdForStorage)
-      .filter((id) => id && !seen.has(id) && seen.add(id));
-  } catch (e) { return []; }
+  const rows = await redisCmd(["LRANGE", key, String(start), String(stop)]);
+  if (!Array.isArray(rows)) throw new Error("order_store_unavailable");
+  const seen = new Set();
+  const ids = rows
+    .map(normalizeOrderIdForStorage)
+    .filter((id) => id && !seen.has(id) && seen.add(id));
+  warnSkippedRecords("order-index", rows.length - ids.length);
+  return ids;
 }
 
 async function getOrdersByIds(orderIds) {
@@ -427,14 +495,22 @@ async function getOrdersByIds(orderIds) {
     if (rows.length !== batchIds.length) {
       throw new Error("order_record_batch_unavailable");
     }
+    const skipped = [];
     rows.forEach((entry, index) => {
+      if (entry && typeof entry === "object" && Object.hasOwn(entry, "error") && entry.error != null) {
+        throw new Error("order_record_batch_unavailable");
+      }
       const raw = entry && typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, "result")
         ? entry.result
         : entry;
       const order = parseOrderJson(raw, batchIds[index]);
-      if (raw != null && !order) throw new Error("order_store_corrupt");
+      if (raw != null && !order) {
+        skipped.push(batchIds[index]);
+        return;
+      }
       if (order) entries.push({ orderId: batchIds[index], order });
     });
+    warnSkippedRecords("order-store", skipped.length, skipped);
   }
   return entries;
 }
@@ -442,11 +518,11 @@ async function getOrdersByIds(orderIds) {
 async function getLegacyOrderEntries() {
   const r = redisConfig();
   if (!r) return [];
-  try {
-    const rows = await redisCmd(["LRANGE", ORDERS_KEY, "0", "-1"]);
-    if (!Array.isArray(rows)) return [];
-    return rows.map((raw, index) => ({ raw, index, order: parseOrderJson(raw) }));
-  } catch (e) { return []; }
+  const rows = await redisCmd(["LRANGE", ORDERS_KEY, "0", "-1"]);
+  if (!Array.isArray(rows)) throw new Error("order_store_unavailable");
+  const entries = rows.map((raw, index) => ({ raw, index, order: parseOrderJson(raw) }));
+  warnSkippedRecords("legacy-order-store", entries.filter((entry) => entry.raw != null && !entry.order).length);
+  return entries;
 }
 
 async function scanOrderRecordIds() {
@@ -490,6 +566,7 @@ async function backfillOrderIndexMembership() {
   const rawIds = await redisCmd(["LRANGE", ORDER_INDEX_KEY, "0", "-1"]);
   if (!Array.isArray(rawIds)) return false;
   const ids = Array.from(new Set(rawIds.map(normalizeOrderIdForStorage).filter(Boolean)));
+  warnSkippedRecords("order-index-membership", rawIds.length - ids.length);
   for (let offset = 0; offset < ids.length; offset += 500) {
     const batch = ids.slice(offset, offset + 500);
     const result = await redisPipeline([["SADD", ORDER_INDEX_MEMBERSHIP_KEY, ...batch]]);
@@ -631,15 +708,16 @@ export async function getOrderByIdStrict(orderId) {
     throw error;
   }
   let found = null;
+  let skippedLegacy = 0;
   for (const legacyRaw of legacyRows) {
     const order = parseOrderJson(legacyRaw);
     if (!order || typeof order !== "object" || Array.isArray(order)) {
-      const error = new Error("order_store_corrupt");
-      error.code = "order_store_corrupt";
-      throw error;
+      skippedLegacy += 1;
+      continue;
     }
     if (normalizeOrderIdForStorage(order.orderId) === id) found = order;
   }
+  warnSkippedRecords("strict-legacy-order-lookup", skippedLegacy);
   return found && !found.deleted ? found : null;
 }
 
@@ -789,9 +867,9 @@ export async function getAllOrdersStrict() {
     const id = normalizeOrderIdForStorage(order.orderId);
     if (id) legacyById.set(id, order);
   }
-  const ids = Array.from(new Set(
-    [...indexedRaw, ...standaloneIds].map(normalizeOrderIdForStorage).filter(Boolean),
-  ));
+  const rawOrderIds = [...indexedRaw, ...standaloneIds];
+  const ids = Array.from(new Set(rawOrderIds.map(normalizeOrderIdForStorage).filter(Boolean)));
+  warnSkippedRecords("strict-order-index", rawOrderIds.length - ids.length);
   const indexed = [];
   for (let offset = 0; offset < ids.length; offset += 100) {
     const batchIds = ids.slice(offset, offset + 100);
@@ -1233,57 +1311,135 @@ export async function getOrderListRevision() {
 
 export async function getOrderSummariesPageFast(offset = 0, limit = 50) {
   if (!await ensureOrderSummaryIndex()) return null;
-  const safeOffset = Math.max(0, Number(offset || 0));
-  const safeLimit = Math.min(200, Math.max(1, Number(limit || 50)));
-  const result = await redisPipeline([
-    ["ZREVRANGE", ORDER_SUMMARY_INDEX_KEY, String(safeOffset), String(safeOffset + safeLimit - 1)],
+  const requestedOffset = Number(offset);
+  const requestedLimit = Number(limit);
+  const safeOffset = Number.isSafeInteger(requestedOffset) && requestedOffset > 0 ? requestedOffset : 0;
+  const safeLimit = Number.isSafeInteger(requestedLimit)
+    ? Math.min(200, Math.max(1, requestedLimit))
+    : 50;
+  const wanted = safeOffset + safeLimit + 1;
+  const scanSize = Math.max(100, safeLimit + 1);
+  const accepted = [];
+  const seenIds = new Set();
+  const cleanupMembers = new Set();
+  const repairs = new Map();
+  const skippedDetails = [];
+  let rawOffset = 0;
+  let exhausted = false;
+
+  const failedRows = (rows, length) => storageRowsFailed(rows, length)
+    || pipelineResultValue(rows[length - 1]) !== "PONG";
+  const validRedisInteger = (value) => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+    || (typeof value === "string" && /^\d+$/.test(value) && Number.isSafeInteger(Number(value)));
+  while (!exhausted && accepted.length < wanted) {
+    const rangeRows = pipelineResults(await redisPipeline([
+      ["ZREVRANGE", ORDER_SUMMARY_INDEX_KEY, String(rawOffset), String(rawOffset + scanSize - 1)],
+      ["PING"],
+    ]));
+    if (failedRows(rangeRows, 2)) return null;
+    const rawMembers = pipelineResultValue(rangeRows[0]);
+    if (!Array.isArray(rawMembers) || rawMembers.some((value) => typeof value !== "string")) return null;
+    rawOffset += rawMembers.length;
+    exhausted = rawMembers.length < scanSize;
+    const candidates = [];
+    for (const value of rawMembers) {
+      const rawMember = value;
+      const id = normalizeOrderIdForStorage(rawMember);
+      if (!id) {
+        cleanupMembers.add(rawMember);
+        skippedDetails.push("<empty>");
+      } else if (seenIds.has(id)) {
+        if (rawMember !== id) cleanupMembers.add(rawMember);
+        skippedDetails.push(rawMember);
+      } else {
+        seenIds.add(id);
+        candidates.push({ id, rawMember });
+      }
+    }
+    if (!candidates.length) continue;
+
+    const ids = candidates.map((entry) => entry.id);
+    const summaryRows = pipelineResults(await redisPipeline([
+      ["HMGET", ORDER_OVERVIEW_HASH_KEY, ...ids],
+      ["PING"],
+    ]));
+    if (failedRows(summaryRows, 2)) return null;
+    const rawSummaries = pipelineResultValue(summaryRows[0]);
+    if (!Array.isArray(rawSummaries) || rawSummaries.length !== ids.length) return null;
+    const byId = new Map();
+    ids.forEach((id, index) => {
+      const summary = parseOrderJson(rawSummaries[index], id);
+      if (summary && !summary.deleted) byId.set(id, summary);
+    });
+
+    const missingIds = ids.filter((id) => !byId.has(id));
+    for (let detailOffset = 0; detailOffset < missingIds.length; detailOffset += 99) {
+      const batchIds = missingIds.slice(detailOffset, detailOffset + 99);
+      const detailRows = pipelineResults(await redisPipeline([
+        ...batchIds.map((id) => ["GET", orderRecordKey(id)]),
+        ["PING"],
+      ]));
+      if (failedRows(detailRows, batchIds.length + 1)) return null;
+      batchIds.forEach((id, index) => {
+        const summary = orderOverviewSnapshot(parseOrderJson(pipelineResultValue(detailRows[index]), id));
+        if (summary) {
+          byId.set(id, summary);
+          repairs.set(id, summary);
+        }
+      });
+    }
+
+    for (const { id, rawMember } of candidates) {
+      const summary = byId.get(id);
+      if (!summary) {
+        cleanupMembers.add(rawMember);
+        skippedDetails.push(rawMember || "<empty>");
+        continue;
+      }
+      accepted.push(summary);
+      if (rawMember !== id) {
+        cleanupMembers.add(rawMember);
+        repairs.set(id, summary);
+      }
+    }
+  }
+
+  const repairCommands = Array.from(repairs.values()).flatMap((summary) => [
+    ["HSET", ORDER_OVERVIEW_HASH_KEY, summary.orderId, JSON.stringify(summary)],
+    ["ZADD", ORDER_SUMMARY_INDEX_KEY, String(orderCreatedScore(summary)), summary.orderId],
+  ]);
+  const cleanup = Array.from(cleanupMembers);
+  for (let commandOffset = 0; commandOffset < repairCommands.length; commandOffset += 99) {
+    const commands = repairCommands.slice(commandOffset, commandOffset + 99);
+    const rows = pipelineResults(await redisPipeline([...commands, ["PING"]]));
+    if (failedRows(rows, commands.length + 1)
+      || rows.slice(0, -1).some((row) => !validRedisInteger(pipelineResultValue(row)))) return null;
+  }
+  for (let cleanupOffset = 0; cleanupOffset < cleanup.length; cleanupOffset += 100) {
+    const members = cleanup.slice(cleanupOffset, cleanupOffset + 100);
+    const rows = pipelineResults(await redisPipeline([
+      ["ZREM", ORDER_SUMMARY_INDEX_KEY, ...members],
+      ["PING"],
+    ]));
+    if (failedRows(rows, 2) || !validRedisInteger(pipelineResultValue(rows[0]))) return null;
+  }
+  warnSkippedRecords("order-summary-index", skippedDetails.length, skippedDetails);
+
+  const finalRows = pipelineResults(await redisPipeline([
     ["ZCARD", ORDER_SUMMARY_INDEX_KEY],
     ["GET", ORDER_LIST_REVISION_KEY],
-  ]);
-  const rows = pipelineResults(result);
-  if (rows.length !== 3 || rows.some((entry) => entry?.error)) return null;
-  const ids = (Array.isArray(pipelineResultValue(rows[0])) ? pipelineResultValue(rows[0]) : [])
-    .map(normalizeOrderIdForStorage)
-    .filter(Boolean);
-  const total = Number(pipelineResultValue(rows[1]) || 0);
-  const revision = String(pipelineResultValue(rows[2]) || "0");
-  if (ids.length === 0) {
-    return { orders: [], total, hasMore: false, listRevision: revision };
-  }
-
-  let rawValues = await redisCmd(["HMGET", ORDER_OVERVIEW_HASH_KEY, ...ids]);
-  if (!Array.isArray(rawValues)) {
-    const detailResult = await redisPipeline(ids.map((id) => ["HGET", ORDER_OVERVIEW_HASH_KEY, id]));
-    rawValues = pipelineResults(detailResult).map(pipelineResultValue);
-  }
-  const byId = new Map();
-  ids.forEach((id, index) => {
-    const summary = parseOrderJson(rawValues?.[index], id);
-    if (summary && !summary.deleted) byId.set(id, summary);
-  });
-
-  const missingIds = ids.filter((id) => !byId.has(id));
-  if (missingIds.length) {
-    const recovered = await getOrdersByIds(missingIds);
-    const commands = [];
-    for (const entry of recovered) {
-      const summary = orderOverviewSnapshot(entry.order);
-      if (!summary) continue;
-      byId.set(summary.orderId, summary);
-      commands.push(["HSET", ORDER_OVERVIEW_HASH_KEY, summary.orderId, JSON.stringify(summary)]);
-      commands.push(["ZADD", ORDER_SUMMARY_INDEX_KEY, String(orderCreatedScore(summary)), summary.orderId]);
-    }
-    if (commands.length) await redisPipeline(commands);
-    const staleIds = missingIds.filter((id) => !byId.has(id));
-    if (staleIds.length) await redisCmd(["ZREM", ORDER_SUMMARY_INDEX_KEY, ...staleIds]);
-  }
-
-  const orders = ids.map((id) => byId.get(id)).filter(Boolean);
+    ["PING"],
+  ]));
+  if (failedRows(finalRows, 3)) return null;
+  const totalRaw = pipelineResultValue(finalRows[0]);
+  if (!validRedisInteger(totalRaw)) return null;
+  const total = Number(totalRaw);
+  const orders = accepted.slice(safeOffset, safeOffset + safeLimit);
   return {
     orders,
     total,
-    hasMore: safeOffset + orders.length < total,
-    listRevision: revision,
+    hasMore: accepted.length > safeOffset + safeLimit,
+    listRevision: String(pipelineResultValue(finalRows[1]) || "0"),
   };
 }
 
@@ -1918,17 +2074,18 @@ export async function pushAdminLoginLog({ username, staffId, ok, reason, ip, use
   } catch (e) { return false; }
 }
 export async function getAdminLoginLog(limit = 100) {
-  const r = redisConfig();
-  if (!r) return [];
-  try {
-    const res = await fetch(r.url + "/lrange/" + encodeURIComponent(ADMIN_LOGIN_LOG_KEY) + "/0/" + (Math.min(300, limit) - 1), {
-      headers: { Authorization: "Bearer " + r.token },
-    });
-    const data = await res.json();
-    return Array.isArray(data.result)
-      ? data.result.map((s) => { try { return JSON.parse(s); } catch (e) { return null; } }).filter(Boolean)
-      : [];
-  } catch (e) { return []; }
+  const safeLimit = Math.max(1, Math.min(300, Number(limit) || 100));
+  const entries = await readStrictRedisList(
+    ADMIN_LOGIN_LOG_KEY,
+    0,
+    299,
+    "admin-login-log",
+    (record) => Boolean(clean(record?.id, 120))
+      && typeof record?.ok === "boolean"
+      && typeof record?.username === "string",
+    "admin_login_log_store_unavailable",
+  );
+  return entries.slice(0, safeLimit);
 }
 
 export function adminActorLabel(actor) {
@@ -1992,6 +2149,49 @@ export async function listAllUserEmailsStrict() {
   const pong = pipelineResultValue(rows[1]);
   if (!Array.isArray(emails) || pong !== "PONG") throw new Error("user_store_unavailable");
   return emails;
+}
+
+export async function getUsersByEmailsStrict(emails) {
+  if (!redisConfig()) throw new Error("user_store_unavailable");
+  const rawEmails = Array.isArray(emails) ? emails : [];
+  const normalized = Array.from(new Set(rawEmails.map((email) => String(email || "").trim().toLowerCase())
+    .filter((email) => validEmail(email))));
+  warnSkippedRecords("strict-user-index", rawEmails.length - normalized.length);
+  const users = new Map();
+  for (let offset = 0; offset < normalized.length; offset += 200) {
+    const batch = normalized.slice(offset, offset + 200);
+    const rows = pipelineResults(await redisPipeline([
+      ...batch.map((email) => ["MGET", userKey(email), balanceCentsKey(email)]), ["PING"],
+    ]));
+    let commandFailed = false;
+    for (const entry of rows) if (entry && typeof entry === "object" && Object.hasOwn(entry, "error")) commandFailed = true;
+    if (rows.length !== batch.length + 1 || commandFailed || pipelineResultValue(rows[batch.length]) !== "PONG") {
+      throw new Error("user_store_unavailable");
+    }
+    const skipped = [];
+    rows.slice(0, batch.length).forEach((entry, index) => {
+      const pair = pipelineResultValue(entry);
+      if (!Array.isArray(pair) || pair.length !== 2) throw new Error("user_store_unavailable");
+      const [raw, rawBalanceCents] = pair;
+      if (raw == null) { skipped.push(batch[index]); return; }
+      let user;
+      try { user = typeof raw === "string" ? JSON.parse(raw) : raw; } catch { user = null; }
+      const expectedEmail = batch[index];
+      if (!user || typeof user !== "object" || Array.isArray(user)) { skipped.push(expectedEmail); return; }
+      const storedEmail = String(user.email || "").trim().toLowerCase();
+      if (storedEmail && storedEmail !== expectedEmail) { skipped.push(expectedEmail); return; }
+      user.email = expectedEmail;
+      if (rawBalanceCents != null) {
+        const text = String(rawBalanceCents);
+        const cents = Number(text);
+        if (/^-?\d+$/.test(text) && Number.isSafeInteger(cents)) user.balance = cents / 100;
+        else console.warn("[strict-user-records] ignored invalid balance shadow", { email: expectedEmail });
+      }
+      users.set(expectedEmail, user);
+    });
+    warnSkippedRecords("strict-user-records", skipped.length, skipped);
+  }
+  return users;
 }
 
 export async function deleteUser(email) {
@@ -2336,18 +2536,18 @@ export async function pushAdminBalanceLog(entry) {
 }
 
 export async function getAdminBalanceLog() {
-  const r = redisConfig();
-  if (!r) return [];
-  try {
-    const res = await fetch(r.url + "/lrange/" + encodeURIComponent(ADMIN_BAL_LOG_KEY) + "/0/499", {
-      headers: { Authorization: "Bearer " + r.token },
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) return [];
-    return Array.isArray(data.result)
-      ? data.result.map((s) => { try { return JSON.parse(s); } catch (e) { return null; } }).filter(Boolean)
-      : [];
-  } catch (e) { return []; }
+  return readStrictRedisList(
+    ADMIN_BAL_LOG_KEY,
+    0,
+    499,
+    "admin-balance-log",
+    (record) => Boolean(clean(record?.id, 120))
+      && validEmail(record?.email)
+      && validStoredMoneyPair(record, "amount", "amountCents", true)
+      && validStoredMoneyPair(record, "balanceBefore", "balanceBeforeCents")
+      && validStoredMoneyPair(record, "balanceAfter", "balanceAfterCents"),
+    "admin_balance_log_store_unavailable",
+  );
 }
 
 export async function deleteAdminBalanceLogEntries(ids, actor = null) {
@@ -2359,11 +2559,7 @@ export async function deleteAdminBalanceLogEntries(ids, actor = null) {
   const removed = entries.filter((entry) => idSet.has(clean(entry.id, 120)));
   const remaining = entries.filter((entry) => !idSet.has(clean(entry.id, 120)));
   if (removed.length === 0) return { ok: false, error: "not_found" };
-  const commands = [
-    ["DEL", ADMIN_BAL_LOG_KEY],
-    ...remaining.map((entry) => ["RPUSH", ADMIN_BAL_LOG_KEY, JSON.stringify(entry)]),
-  ];
-  const saved = await redisPipeline(commands);
+  const saved = await replaceRedisListStrict(ADMIN_BAL_LOG_KEY, remaining);
   if (!saved) return { ok: false, error: "storage_failed" };
   await pushAdminActionLog({
     action: "balance_log_delete",
@@ -2395,18 +2591,18 @@ export async function addBalanceTx(email, tx) {
 }
 
 export async function getBalanceTxs(email) {
-  const r = redisConfig();
-  if (!r) return [];
-  try {
-    const res = await fetch(r.url + "/lrange/" + encodeURIComponent(txKey(email)) + "/0/199", {
-      headers: { Authorization: "Bearer " + r.token },
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) return [];
-    return Array.isArray(data.result)
-      ? data.result.map((s) => { try { return JSON.parse(s); } catch (e) { return null; } }).filter(Boolean)
-      : [];
-  } catch (e) { return []; }
+  return readStrictRedisList(
+    txKey(email),
+    0,
+    199,
+    "balance-transactions",
+    (record) => {
+      return Boolean(clean(record?.id, 120))
+        && validStoredMoneyPair(record, "amount", "amountCents", true)
+        && validStoredMoneyPair(record, "balanceAfter", "balanceAfterCents");
+    },
+    "balance_transaction_store_unavailable",
+  );
 }
 
 // ── Reset code (forgot password) — 10 min TTL ──
@@ -4773,9 +4969,14 @@ export async function pushAdminActionLog({ action, actor, target, detail, operat
 }
 
 export async function getAdminActionLog() {
-  const rows = await redisCmd(["LRANGE", ADMIN_ACTION_LOG_KEY, "0", "499"]);
-  if (!Array.isArray(rows)) return [];
-  return rows.map((s) => { try { return JSON.parse(s); } catch (e) { return null; } }).filter(Boolean);
+  return readStrictRedisList(
+    ADMIN_ACTION_LOG_KEY,
+    0,
+    499,
+    "admin-action-log",
+    (record) => Boolean(clean(record?.id, 120)) && Boolean(clean(record?.action, 80)),
+    "admin_action_log_store_unavailable",
+  );
 }
 
 export async function deleteAdminActionLogEntries(ids, actor = null) {
@@ -4787,11 +4988,7 @@ export async function deleteAdminActionLogEntries(ids, actor = null) {
   const removed = entries.filter((entry) => idSet.has(clean(entry.id, 120)));
   const remaining = entries.filter((entry) => !idSet.has(clean(entry.id, 120)));
   if (removed.length === 0) return { ok: false, error: "not_found" };
-  const commands = [
-    ["DEL", ADMIN_ACTION_LOG_KEY],
-    ...remaining.map((entry) => ["RPUSH", ADMIN_ACTION_LOG_KEY, JSON.stringify(entry)]),
-  ];
-  const saved = await redisPipeline(commands);
+  const saved = await replaceRedisListStrict(ADMIN_ACTION_LOG_KEY, remaining);
   if (!saved) return { ok: false, error: "storage_failed" };
   await pushAdminActionLog({
     action: "action_log_delete",
@@ -4883,9 +5080,16 @@ export function reconcileAdminMailLogStatuses(entries, windowMs = ADMIN_MAIL_REC
 }
 
 export async function getAdminMailLog() {
-  const rows = await redisCmd(["LRANGE", ADMIN_MAIL_LOG_KEY, "0", "499"]);
-  if (!Array.isArray(rows)) return [];
-  const entries = rows.map((s) => { try { return JSON.parse(s); } catch (e) { return null; } }).filter(Boolean);
+  const entries = await readStrictRedisList(
+    ADMIN_MAIL_LOG_KEY,
+    0,
+    499,
+    "admin-mail-log",
+    (record) => Boolean(clean(record?.id, 120))
+      && validEmail(record?.to)
+      && typeof record?.ok === "boolean",
+    "admin_mail_log_store_unavailable",
+  );
   return reconcileAdminMailLogStatuses(entries);
 }
 
@@ -4898,10 +5102,7 @@ export async function deleteAdminMailLogEntries(ids, actor = null) {
   const removed = entries.filter((entry) => idSet.has(clean(entry.id, 120)));
   const remaining = entries.filter((entry) => !idSet.has(clean(entry.id, 120)));
   if (removed.length === 0) return { ok: false, error: "not_found" };
-  const saved = await redisPipeline([
-    ["DEL", ADMIN_MAIL_LOG_KEY],
-    ...remaining.map((entry) => ["RPUSH", ADMIN_MAIL_LOG_KEY, JSON.stringify(entry)]),
-  ]);
+  const saved = await replaceRedisListStrict(ADMIN_MAIL_LOG_KEY, remaining);
   if (!saved) return { ok: false, error: "storage_failed" };
   await pushAdminActionLog({
     action: "mail_log_delete",
@@ -5149,49 +5350,107 @@ export async function createRedeemCode(input, actor = null, options = {}) {
   return { ok: true, code: result.code, batch: result.batch };
 }
 
+function redeemIndexMembers(rows, scope, normalizer) {
+  const values = [];
+  const seen = new Set();
+  let skipped = 0;
+  for (const raw of rows) {
+    const value = typeof raw === "string" ? normalizer(raw) : "";
+    if (!value || seen.has(value)) { skipped += 1; continue; }
+    seen.add(value);
+    values.push(value);
+  }
+  warnSkippedRecords(scope, skipped);
+  return values;
+}
+
+async function readRedeemJsonRecords(entries, scope, normalizeRecord) {
+  const records = new Map();
+  const skipped = [];
+  for (let offset = 0; offset < entries.length; offset += 100) {
+    const chunk = entries.slice(offset, offset + 100);
+    const commands = [...chunk.map((entry) => ["GET", entry.key]), ["PING"]];
+    const rows = pipelineResults(await redisPipeline(commands));
+    // audit-partial-failure: allow partial-failure-predicate-abort -- Any Redis command error or missing PING invalidates transport; malformed successful JSON rows are skipped below.
+    if (rows.length !== commands.length || rows.some((row) => row && typeof row === "object"
+      && Object.hasOwn(row, "error") && row.error != null) || pipelineResultValue(rows.at(-1)) !== "PONG") {
+      throw new Error("redeem_store_unavailable");
+    }
+    chunk.forEach((entry, index) => {
+      const raw = pipelineResultValue(rows[index]);
+      let parsed = raw;
+      if (typeof raw === "string") try { parsed = JSON.parse(raw); } catch { parsed = null; }
+      const normalized = normalizeRecord(parsed, entry.id);
+      if (normalized) records.set(entry.id, normalized);
+      else skipped.push(entry.id);
+    });
+  }
+  warnSkippedRecords(scope, skipped.length, skipped);
+  return records;
+}
+
+function normalizedRedeemCodeRecord(record, expectedCode) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return null;
+  const storedCode = record.code == null || record.code === "" ? expectedCode : normalizeRedeemCode(record.code);
+  if (!storedCode || storedCode !== expectedCode) return null;
+  const status = record.status == null || record.status === "" ? "active" : clean(record.status, 20);
+  if (!["active", "used", "void"].includes(status)) return null;
+  const type = redeemCodeType(record);
+  const amount = Number(record.amount ?? 0);
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  const services = type === "service" ? serviceSummaries(record.services || []) : [];
+  if (type === "service" && services.length === 0) return null;
+  return { ...record, code: expectedCode, status, type, amount: roundMoney(amount), services };
+}
+
+function normalizedRedeemBatchRecord(record, expectedId) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return null;
+  const storedId = record.id == null || record.id === "" ? expectedId : clean(record.id, 80);
+  if (storedId !== expectedId || !Array.isArray(record.codes) || record.codes.length === 0) return null;
+  const codes = redeemIndexMembers(record.codes, "redeem-batch-code-index", normalizeRedeemCode);
+  if (codes.length !== record.codes.length) return null;
+  const quantity = record.quantity == null || record.quantity === "" ? codes.length : Number(record.quantity);
+  if (!Number.isSafeInteger(quantity) || quantity !== codes.length) return null;
+  const type = redeemCodeType(record);
+  const amount = Number(record.amount ?? 0);
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  const services = type === "service" ? serviceSummaries(record.services || []) : [];
+  if (type === "service" && services.length === 0) return null;
+  return { ...record, id: expectedId, type, amount: roundMoney(amount), services, codes, quantity };
+}
+
 export async function listRedeemCodes() {
-  const codes = await redisCmd(["LRANGE", REDEEM_LIST_KEY, "0", "499"]);
-  if (!Array.isArray(codes)) return [];
-  const unique = Array.from(new Set(codes));
-  const items = await Promise.all(unique.map((code) => getJsonKey(redeemCodeKey(code))));
-  return items.filter(Boolean).map((item) => ({
-    ...item,
-    type: redeemCodeType(item),
-    services: redeemCodeType(item) === "service" ? serviceSummaries(item.services || []) : [],
-  }));
+  const codes = await redisCmd(["LRANGE", REDEEM_LIST_KEY, "0", "-1"]);
+  if (!Array.isArray(codes)) throw new Error("redeem_store_unavailable");
+  const unique = redeemIndexMembers(codes, "redeem-code-index", normalizeRedeemCode);
+  const items = await readRedeemJsonRecords(unique.map((code) => ({ id: code, key: redeemCodeKey(code) })),
+    "redeem-code-list", normalizedRedeemCodeRecord);
+  return Array.from(items.values()).slice(0, 500);
 }
 
 export async function listRedeemCodeBatches() {
-  const ids = await redisCmd(["LRANGE", REDEEM_BATCH_LIST_KEY, "0", "199"]);
-  if (!Array.isArray(ids)) return [];
-  const unique = Array.from(new Set(ids));
-  const batches = await Promise.all(unique.map((id) => getJsonKey(redeemBatchKey(id))));
-  const normalized = await Promise.all(batches.filter(Boolean).map(async (batch) => {
-    const codeList = Array.isArray(batch.codes) ? batch.codes : [];
-    const codeItems = (await Promise.all(codeList.map((code) => getJsonKey(redeemCodeKey(code)))))
-      .filter(Boolean)
-      .map((item) => ({
-        ...item,
-        type: redeemCodeType(item),
-        services: redeemCodeType(item) === "service" ? serviceSummaries(item.services || []) : [],
-      }));
+  const ids = await redisCmd(["LRANGE", REDEEM_BATCH_LIST_KEY, "0", "-1"]);
+  if (!Array.isArray(ids)) throw new Error("redeem_store_unavailable");
+  const unique = redeemIndexMembers(ids, "redeem-batch-index", (value) => clean(value, 80));
+  const batches = await readRedeemJsonRecords(unique.map((id) => ({ id, key: redeemBatchKey(id) })),
+    "redeem-batch-list", normalizedRedeemBatchRecord);
+  const allCodes = Array.from(new Set(Array.from(batches.values()).flatMap((batch) => batch.codes)));
+  const codeRecords = await readRedeemJsonRecords(allCodes.map((code) => ({ id: code, key: redeemCodeKey(code) })),
+    "redeem-batch-code-list", normalizedRedeemCodeRecord);
+  const normalized = [];
+  const skippedBatches = [];
+  batches.forEach((batch, id) => {
+    const codeItems = batch.codes.map((code) => codeRecords.get(code)).filter(Boolean);
+    if (codeItems.length !== batch.codes.length) { skippedBatches.push(id); return; }
     const counts = codeItems.reduce((acc, item) => {
       const status = item.status || "active";
       acc[status] = (acc[status] || 0) + 1;
       return acc;
     }, { active: 0, used: 0, void: 0 });
-    const type = redeemCodeType(batch);
-    return {
-      ...batch,
-      type,
-      amount: roundMoney(batch.amount),
-      services: type === "service" ? serviceSummaries(batch.services || []) : [],
-      codes: codeItems,
-      quantity: Number(batch.quantity || codeItems.length || 0),
-      counts,
-    };
-  }));
-  return normalized;
+    normalized.push({ ...batch, codes: codeItems, counts });
+  });
+  warnSkippedRecords("redeem-batch-incomplete", skippedBatches.length, skippedBatches);
+  return normalized.slice(0, 200);
 }
 
 export async function listManageableRedeemCodesAndBatches() {
@@ -5727,11 +5986,28 @@ export async function createWithdrawal(email, amount, alipayAccount, realName, o
   return createWithdrawalAtomic(email, amount, alipayAccount, realName, options);
 }
 
+function validStoredWithdrawal(record) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return false;
+  if (!validEmail(normalizeEmailForStorage(record.userEmail))
+      || !["pending", "processing", "success", "failed"].includes(clean(record.status, 40))) return false;
+  const hasCents = Object.hasOwn(record, "amountCents");
+  const rawAmount = hasCents ? record.amountCents : record.amount;
+  if (!((typeof rawAmount === "number") || (typeof rawAmount === "string" && rawAmount.trim()))) return false;
+  const numeric = Number(rawAmount);
+  const cents = hasCents ? numeric : Math.round(numeric * 100);
+  if (!Number.isSafeInteger(cents) || cents <= 0) return false;
+  if (!Object.hasOwn(record, "amount")) return true;
+  const displayed = Number(record.amount);
+  return Number.isFinite(displayed) && displayed > 0 && Math.round(displayed * 100) === cents;
+}
+
 export async function listWithdrawals() {
   const ids = await redisCmd(["LRANGE", WITHDRAWAL_LIST_KEY, "0", "-1"]);
-  if (!Array.isArray(ids)) return [];
-  const unique = Array.from(new Set(ids));
+  if (!Array.isArray(ids)) throw new Error("withdrawal_record_batch_unavailable");
+  const unique = Array.from(new Set(ids.map((id) => clean(id, 80)).filter(Boolean)));
+  warnSkippedRecords("withdrawal-index", ids.length - unique.length);
   const items = [];
+  const skipped = [];
   for (let offset = 0; offset < unique.length; offset += 100) {
     const batchIds = unique.slice(offset, offset + 100);
     const response = await redisPipeline(batchIds.map((id) => ["GET", withdrawalKey(id)]));
@@ -5739,18 +6015,36 @@ export async function listWithdrawals() {
     if (rows.length !== batchIds.length || rows.some((row) => row?.error)) {
       throw new Error("withdrawal_record_batch_unavailable");
     }
-    for (const row of rows) {
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      const expectedId = batchIds[index];
       const raw = pipelineResultValue(row);
-      if (!raw) throw new Error("withdrawal_record_invalid");
+      if (!raw) {
+        skipped.push(expectedId);
+        continue;
+      }
       try {
-        const item = typeof raw === "string" ? JSON.parse(raw) : raw;
-        if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("withdrawal_record_invalid");
-        items.push(item);
-      } catch (error) {
-        throw new Error("withdrawal_record_invalid");
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+        if (!validStoredWithdrawal(parsed)) throw new Error("withdrawal_record_invalid");
+        const storedId = clean(parsed.id, 80);
+        if (storedId && storedId.toUpperCase() !== expectedId.toUpperCase()) throw new Error("withdrawal_record_invalid");
+        const amountCents = Object.hasOwn(parsed, "amountCents")
+          ? Number(parsed.amountCents)
+          : Math.round(Number(parsed.amount) * 100);
+        items.push({
+          ...parsed,
+          id: storedId || expectedId,
+          userEmail: normalizeEmailForStorage(parsed.userEmail),
+          status: clean(parsed.status, 40),
+          amountCents,
+          amount: amountCents / 100,
+        });
+      } catch {
+        skipped.push(expectedId);
       }
     }
   }
+  warnSkippedRecords("withdrawal-store", skipped.length, skipped);
   return items;
 }
 

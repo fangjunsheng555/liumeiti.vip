@@ -71,13 +71,6 @@ function parseJson(value) {
   try { return JSON.parse(value); } catch { return null; }
 }
 
-function pipelineRows(value) {
-  if (!Array.isArray(value)) return [];
-  return value.map((entry) => (
-    entry && typeof entry === "object" && Object.hasOwn(entry, "result") ? entry.result : entry
-  ));
-}
-
 function storageError(code = "incident_store_unavailable") {
   const error = new Error(code);
   error.code = code;
@@ -475,7 +468,7 @@ export async function incidentEvents(id, limit = MAX_EVENTS) {
   const safeLimit = Math.max(1, Math.min(MAX_EVENTS, Number(limit || MAX_EVENTS)));
   if (!safeId) return [];
   const result = strictPipelineRows(await redisPipeline([
-    ["LRANGE", eventKey(safeId), "0", String(safeLimit - 1)],
+    ["LRANGE", eventKey(safeId), "0", "-1"],
     ["PING"],
   ]), 2, "incident_events_unavailable");
   const rows = result[0];
@@ -489,60 +482,56 @@ export async function incidentEvents(id, limit = MAX_EVENTS) {
     }
   }
   if (corruptCount) console.warn(`[incidents] ignored ${corruptCount} corrupt event(s) for ${safeId}`);
-  return events;
+  return events.slice(0, safeLimit);
 }
 
 export async function listIncidents({ status = "all", severity = "all", offset = 0, limit = 50 } = {}) {
   const safeOffset = Math.max(0, Number(offset || 0));
   const safeLimit = Math.max(1, Math.min(100, Number(limit || 50)));
-  const scanLimit = Math.min(1000, Math.max(safeOffset + safeLimit, 200));
-  const index = strictPipelineRows(await redisPipeline([
-    ["ZREVRANGE", INCIDENT_INDEX_KEY, "0", String(scanLimit - 1)],
-    ["PING"],
-  ]), 2, "incident_list_unavailable");
-  const ids = index[0];
-  if (!Array.isArray(ids) || index[1] !== "PONG") throw storageError("incident_list_unavailable");
-  if (ids.some((id, index) => clean(id, 80).toUpperCase() !== id || ids.indexOf(id) !== index)) throw storageError("incident_record_corrupt");
-  if (!ids.length) return { incidents: [], total: 0, counts: {}, diagnostics: { corruptCount: 0, missingCount: 0 } };
-  const rows = strictPipelineRows(
-    await redisPipeline(ids.map((incidentId) => ["GET", recordKey(incidentId)])),
-    ids.length,
-    "incident_list_unavailable",
-  );
+  const index = strictPipelineRows(await redisPipeline([["ZREVRANGE", INCIDENT_INDEX_KEY, "0", "-1"], ["PING"]]),
+    2, "incident_list_unavailable");
+  const rawIds = index[0];
+  if (!Array.isArray(rawIds) || index[1] !== "PONG") throw storageError("incident_list_unavailable");
+  const ids = [], seenIds = new Set();
   let corruptCount = 0;
+  rawIds.forEach((value) => {
+    const id = clean(value, 80).toUpperCase();
+    if (!id || id !== value || seenIds.has(id)) { corruptCount += 1; return; }
+    seenIds.add(id);
+    ids.push(id);
+  });
+  if (corruptCount) console.warn(`[incidents] ignored ${corruptCount} invalid incident index member(s)`);
+  if (!ids.length) return { incidents: [], total: 0, counts: {}, diagnostics: { corruptCount, missingCount: 0 } };
   let missingCount = 0;
   let records = [];
-  rows.forEach((value, index) => {
-    if (value == null) {
-      missingCount += 1;
-      return;
-    }
-    try {
-      const record = parseIncidentRecord(value, ids[index]);
-      if (!record) {
+  for (let offsetIndex = 0; offsetIndex < ids.length; offsetIndex += 100) {
+    const batchIds = ids.slice(offsetIndex, offsetIndex + 100);
+    const rows = strictPipelineRows(await redisPipeline(batchIds.map((incidentId) => ["GET", recordKey(incidentId)])),
+      batchIds.length, "incident_list_unavailable");
+    rows.forEach((value, index) => {
+      if (value == null) { missingCount += 1; return; }
+      try {
+        const record = parseIncidentRecord(value, batchIds[index]);
+        if (!record) { corruptCount += 1;
+          console.warn(`[incidents] ignored empty indexed incident ${clean(batchIds[index], 80).toUpperCase()}`);
+          return;
+        }
+        records.push(record);
+      } catch (error) {
+        if (error?.code !== "incident_record_corrupt") throw error;
         corruptCount += 1;
-        console.warn(`[incidents] ignored empty indexed incident ${clean(ids[index], 80).toUpperCase()}`);
-        return;
+        console.warn(`[incidents] ignored corrupt indexed incident ${clean(batchIds[index], 80).toUpperCase()}`);
       }
-      records.push(record);
-    } catch (error) {
-      if (error?.code !== "incident_record_corrupt") throw error;
-      corruptCount += 1;
-      console.warn(`[incidents] ignored corrupt indexed incident ${clean(ids[index], 80).toUpperCase()}`);
-    }
-  });
+    });
+  }
   const counts = records.reduce((out, record) => {
     out[record.status] = (out[record.status] || 0) + 1;
     return out;
   }, {});
   if (status !== "all") records = records.filter((record) => record.status === status);
   if (severity !== "all") records = records.filter((record) => record.severity === severity);
-  return {
-    incidents: records.slice(safeOffset, safeOffset + safeLimit),
-    total: records.length,
-    counts,
-    diagnostics: { corruptCount, missingCount },
-  };
+  return { incidents: records.slice(safeOffset, safeOffset + safeLimit), total: records.length,
+    counts, diagnostics: { corruptCount, missingCount } };
 }
 
 export async function reportOperationalFailure(input = {}) {

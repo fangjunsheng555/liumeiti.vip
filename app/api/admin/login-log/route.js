@@ -8,6 +8,10 @@ export async function GET(request) {
   if (!session || !isRootAdminSession(session)) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
-  const entries = await getAdminLoginLog(100);
+  let entries;
+  try { entries = await getAdminLoginLog(100); } catch (error) {
+    console.warn("[admin-login-log] read unavailable", error);
+    return Response.json({ ok: false, error: "admin_login_log_store_unavailable" }, { status: 503 });
+  }
   return Response.json({ ok: true, entries });
 }

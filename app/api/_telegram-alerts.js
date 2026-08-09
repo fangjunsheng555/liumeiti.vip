@@ -82,25 +82,18 @@ local encodedOk,encoded=pcall(cjson.encode,{ok=true,hasRecord=raw~=false,record=
 if not encodedOk then return redis.error_reply('telegram_retry_state_encode_failed') end
 return encoded`;
 
-function pipelineRows(value) {
-  if (!Array.isArray(value)) return [];
-  return value.map((entry) => (
-    entry && typeof entry === "object" && Object.hasOwn(entry, "result") ? entry.result : entry
-  ));
-}
-
 function storageError(code) {
   const error = new Error(code);
   error.code = code;
   return error;
 }
 
-function strictPipelineRows(value, expected, code) {
+function strictPipelineRows(value, expected, code, { allowNull = false } = {}) {
   if (!Array.isArray(value) || value.length !== expected) throw storageError(code);
   return value.map((entry) => {
     if (entry && typeof entry === "object" && Object.hasOwn(entry, "error")) throw storageError(code);
     const result = entry && typeof entry === "object" && Object.hasOwn(entry, "result") ? entry.result : entry;
-    if (result == null) throw storageError(code);
+    if (result == null && !allowNull) throw storageError(code);
     return result;
   });
 }
@@ -433,32 +426,61 @@ export async function sendOperationalTelegram({ fingerprint, text, incidentId = 
   }
 }
 
+async function readDueRetryMembers(now, offset, limit) {
+  const rows = strictPipelineRows(await redisPipeline([
+    ["ZRANGEBYSCORE", TELEGRAM_RETRY_INDEX, "-inf", String(now), "LIMIT", String(offset), String(limit)], ["PING"],
+  ]), 2, "telegram_retry_queue_unavailable");
+  if (!Array.isArray(rows[0]) || rows[1] !== "PONG") throw storageError("telegram_retry_queue_unavailable");
+  return rows[0];
+}
+
+async function removeRetryIndexMemberExact(member) {
+  if (typeof member !== "string") throw storageError("telegram_retry_queue_unavailable");
+  const rows = strictPipelineRows(await redisPipeline([["ZREM", TELEGRAM_RETRY_INDEX, member], ["PING"]]),
+    2, "telegram_retry_queue_unavailable");
+  const removed = Number(rows[0]);
+  if (![0, 1].includes(removed) || rows[1] !== "PONG") throw storageError("telegram_retry_queue_unavailable");
+}
+
 export async function drainTelegramAlertRetries({ limit = 20, now = Date.now(), shouldContinue = () => true } = {}) {
   const safeLimit = Math.max(1, Math.min(100, Number(limit || 20)));
-  const hashes = await redisCmd(["ZRANGEBYSCORE", TELEGRAM_RETRY_INDEX, "-inf", String(now), "LIMIT", "0", String(safeLimit)]);
-  if (!Array.isArray(hashes)) return { ok: false, error: "telegram_retry_queue_unavailable", scanned: 0, processed: 0, failed: 1 };
+  const pageSize = Math.max(100, safeLimit);
+  let scanned = 0;
   let processed = 0;
   let sent = 0;
   let rescheduled = 0;
   let terminal = 0;
   let failed = 0;
-  for (const rawHash of hashes) {
-    if (!shouldContinue()) {
-      return {
-        ok: false,
-        partial: true,
-        deadlineExceeded: true,
-        error: "maintenance_deadline_exceeded",
-        scanned: hashes.length,
-        processed,
-        sent,
-        rescheduled,
-        terminal,
-        failed,
-      };
+  let retainedOffset = 0;
+  while (processed < safeLimit) {
+    let hashes;
+    try {
+      hashes = await readDueRetryMembers(now, retainedOffset, pageSize);
+    } catch {
+      failed += 1;
+      return { ok: false, error: "telegram_retry_queue_unavailable",
+        scanned, processed, sent, rescheduled, terminal, failed };
     }
-    const hash = clean(rawHash, 64).toLowerCase();
-    if (!hash) continue;
+    if (!hashes.length) break;
+    const exhausted = hashes.length < pageSize;
+    let retainedInPage = 0;
+    for (const rawHash of hashes) {
+      if (processed >= safeLimit) break;
+      if (!shouldContinue()) {
+        return { ok: false, partial: true, deadlineExceeded: true, error: "maintenance_deadline_exceeded",
+          scanned, processed, sent, rescheduled, terminal, failed };
+      }
+      scanned += 1;
+      if (typeof rawHash !== "string" || !/^[a-f0-9]{64}$/.test(rawHash)) {
+        try {
+          await removeRetryIndexMemberExact(rawHash);
+        } catch {
+          failed += 1;
+          retainedInPage += 1;
+        }
+        continue;
+      }
+      const hash = rawHash;
     const lockKey = TELEGRAM_RETRY_LOCK_PREFIX + hash;
     const lockToken = randomBytes(12).toString("hex");
     const claim = parseJson(await redisCmd([
@@ -466,23 +488,35 @@ export async function drainTelegramAlertRetries({ limit = 20, now = Date.now(), 
     ]));
     if (claim?.ok !== true || !["acquired", "locked"].includes(claim.state)) {
       failed += 1;
+      retainedInPage += 1;
       continue;
     }
-    if (claim.state !== "acquired") continue;
+    if (claim.state !== "acquired") {
+      retainedInPage += 1;
+      continue;
+    }
+    let staysDue = true;
     try {
       const state = await readRetryState(hash);
       if (!state.ok) {
         failed += 1;
+        retainedInPage += 1;
         continue;
       }
       const record = state.record;
       if (!record) {
-        if (!await removeRetry(hash)) failed += 1;
+        if (!await removeRetry(hash)) {
+          failed += 1;
+          retainedInPage += 1;
+        }
         continue;
       }
       if (state.duplicate) {
         if (await removeRetry(hash)) processed += 1;
-        else failed += 1;
+        else {
+          failed += 1;
+          retainedInPage += 1;
+        }
         continue;
       }
       // A previous worker persisted this marker before calling Telegram but
@@ -501,10 +535,15 @@ export async function drainTelegramAlertRetries({ limit = 20, now = Date.now(), 
         processed += 1;
         terminal += 1;
         if (!removed || !historySaved) failed += 1;
+        if (!removed) retainedInPage += 1;
         continue;
       }
       if (Number(record.attempts || 0) >= RETRY_MAX_ATTEMPTS || now - Number(record.createdAtMs || now) >= RETRY_MAX_AGE_MS) {
-        if (!await removeRetry(hash)) failed += 1;
+        const removed = await removeRetry(hash);
+        if (!removed) {
+          failed += 1;
+          retainedInPage += 1;
+        }
         terminal += 1;
         processed += 1;
         await appendHistory(historyRecord({
@@ -536,8 +575,10 @@ export async function drainTelegramAlertRetries({ limit = 20, now = Date.now(), 
         });
         if (!await upsertRetry(marker)) {
           failed += 1;
+          retainedInPage += 1;
           continue;
         }
+        staysDue = false;
         result = await deliverTelegramMessage(record.message);
       }
       processed += 1;
@@ -550,7 +591,10 @@ export async function drainTelegramAlertRetries({ limit = 20, now = Date.now(), 
         }
       }
       if (result.ok === true) {
-        if (await removeRetry(hash)) sent += 1;
+        if (await removeRetry(hash)) {
+          sent += 1;
+          staysDue = false;
+        }
         else failed += 1;
       } else if (result.retryable) {
         const retry = await scheduleRetry({
@@ -564,11 +608,20 @@ export async function drainTelegramAlertRetries({ limit = 20, now = Date.now(), 
           providerDelivered: result.providerDelivered === true,
           now,
         });
-        if (retry.queued) rescheduled += 1;
-        else terminal += 1;
+        if (retry.queued) {
+          rescheduled += 1;
+          staysDue = false;
+        } else {
+          terminal += 1;
+          if (retry.expired) staysDue = false;
+          if (retry.storageFailed) failed += 1;
+        }
         result.retryQueued = Boolean(retry.queued);
       } else {
-        if (await removeRetry(hash)) terminal += 1;
+        if (await removeRetry(hash)) {
+          terminal += 1;
+          staysDue = false;
+        }
         else failed += 1;
       }
       const history = historyRecord({
@@ -585,17 +638,13 @@ export async function drainTelegramAlertRetries({ limit = 20, now = Date.now(), 
     } finally {
       await releaseLock(lockKey, lockToken);
     }
+    if (staysDue) retainedInPage += 1;
+    }
+    retainedOffset += retainedInPage;
+    if (processed >= safeLimit || exhausted) break;
   }
-  return {
-    ok: failed === 0,
-    scanned: hashes.length,
-    processed,
-    sent,
-    rescheduled,
-    terminal,
-    failed,
-    ...(failed ? { error: "telegram_retry_processing_failed" } : {}),
-  };
+  return { ok: failed === 0, scanned, processed, sent, rescheduled, terminal, failed,
+    ...(failed ? { error: "telegram_retry_processing_failed" } : {}) };
 }
 
 function incidentUrl(incidentId) {
@@ -641,39 +690,71 @@ export async function notifyIncidentRecovered(incident) {
   });
 }
 
+function validStoredHistoryRecord(record) {
+  return Boolean(
+    record && typeof record === "object" && !Array.isArray(record)
+    && clean(record.id, 80)
+    && ["sent", "disabled", "retry_scheduled", "uncertain", "failed"].includes(clean(record.status, 40)),
+  );
+}
+
+function validStoredRetryRecord(record, expectedHash) {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return false;
+  const rawNextAttempt = record.nextAttemptAt;
+  const nextAttemptAt = (typeof rawNextAttempt === "number"
+    || (typeof rawNextAttempt === "string" && rawNextAttempt.trim())) ? Number(rawNextAttempt) : NaN;
+  return clean(record.hash, 64).toLowerCase() === clean(expectedHash, 64).toLowerCase()
+    && typeof record.message === "string" && Boolean(record.message.trim())
+    && Number.isSafeInteger(nextAttemptAt) && nextAttemptAt >= 0
+    && (!Object.hasOwn(record, "providerDelivered") || typeof record.providerDelivered === "boolean");
+}
+
 export async function readTelegramAlertHistory(limit = 100) {
   const safeLimit = Math.max(1, Math.min(HISTORY_LIMIT, Number(limit || 100)));
-  const result = strictPipelineRows(await redisPipeline([
-    ["LRANGE", TELEGRAM_HISTORY_KEY, "0", String(safeLimit - 1)],
-    ["PING"],
-  ]), 2, "telegram_history_unavailable");
+  const result = strictPipelineRows(await redisPipeline([["LRANGE", TELEGRAM_HISTORY_KEY, "0", "-1"], ["PING"]]),
+    2, "telegram_history_unavailable");
   if (!Array.isArray(result[0]) || result[1] !== "PONG") throw storageError("telegram_history_unavailable");
-  return result[0].map((value) => {
+  const records = [];
+  let skipped = 0;
+  result[0].forEach((value) => {
     const record = parseJson(value);
-    if (!record || typeof record !== "object") throw storageError("telegram_history_corrupt");
-    return record;
+    if (!validStoredHistoryRecord(record)) skipped += 1;
+    else records.push(record);
   });
+  if (skipped) console.warn("[telegram-alerts] skipped unreadable history records", { skipped });
+  return records.slice(0, safeLimit);
 }
 
 export async function readTelegramRetryQueue(limit = 100) {
   const safeLimit = Math.max(1, Math.min(100, Number(limit || 100)));
-  const index = strictPipelineRows(await redisPipeline([
-    ["ZRANGE", TELEGRAM_RETRY_INDEX, "0", String(safeLimit - 1)],
-    ["PING"],
-  ]), 2, "telegram_retry_queue_unavailable");
+  const index = strictPipelineRows(await redisPipeline([["ZRANGE", TELEGRAM_RETRY_INDEX, "0", "-1"], ["PING"]]),
+    2, "telegram_retry_queue_unavailable");
   if (!Array.isArray(index[0]) || index[1] !== "PONG") throw storageError("telegram_retry_queue_unavailable");
-  const hashes = index[0];
-  if (!hashes.length) return [];
-  const rows = strictPipelineRows(
-    await redisPipeline(hashes.map((hash) => ["GET", retryRecordKey(hash)])),
-    hashes.length,
-    "telegram_retry_queue_unavailable",
-  );
-  return rows.map((value) => {
-    const record = parseJson(value);
-    if (!record || typeof record !== "object") throw storageError("telegram_retry_record_corrupt");
-    return record;
+  const rawHashes = index[0];
+  const hashes = rawHashes.map((hash) => typeof hash === "string" ? hash.trim() : "")
+    .filter((hash) => hash && clean(hash, 64) === hash);
+  const records = [];
+  const skippedHashes = Array.from({ length: rawHashes.length - hashes.length }, () => "invalid-index-member");
+  if (!hashes.length) {
+    if (skippedHashes.length) console.warn("[telegram-alerts] skipped unreadable retry records", {
+      skipped: skippedHashes.length, hashes: skippedHashes.slice(0, 10),
+    });
+    return [];
+  }
+  for (let offset = 0; offset < hashes.length && records.length < safeLimit; offset += 100) {
+    const batch = hashes.slice(offset, offset + 100);
+    const rows = strictPipelineRows(await redisPipeline(batch.map((hash) => ["GET", retryRecordKey(hash)])),
+      batch.length, "telegram_retry_queue_unavailable", { allowNull: true });
+    rows.forEach((value, index) => {
+      const record = parseJson(value);
+      if (!validStoredRetryRecord(record, batch[index])) skippedHashes.push(batch[index]);
+      else if (records.length < safeLimit) records.push(record);
+    });
+  }
+  if (skippedHashes.length) console.warn("[telegram-alerts] skipped unreadable retry records", {
+    skipped: skippedHashes.length, hashes: skippedHashes.filter(Boolean).slice(0, 10),
   });
+  return records.slice(0, safeLimit);
 }
 
 export const telegramAlertInternals = {

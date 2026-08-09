@@ -19,7 +19,13 @@ export async function GET(request) {
   // source: "all" | "admin" (staff adjustment) | "order" (user spending)
   const source = String(url.searchParams.get("source") || "all").trim();
 
-  const all = await getAdminBalanceLog();
+  let all;
+  try {
+    all = await getAdminBalanceLog();
+  } catch (error) {
+    console.warn("[admin-balance-log] read unavailable", error);
+    return Response.json({ ok: false, error: "admin_balance_log_store_unavailable" }, { status: 503 });
+  }
   let entries = all;
   if (filter === "add") entries = entries.filter((e) => Number(e.amount) > 0);
   else if (filter === "deduct") entries = entries.filter((e) => Number(e.amount) < 0);
@@ -63,7 +69,15 @@ export async function DELETE(request) {
   let body = {};
   try { body = await request.json(); } catch (e) {}
   const ids = Array.isArray(body.ids) ? body.ids.map((id) => clean(id, 120)).filter(Boolean) : [];
-  const result = await deleteAdminBalanceLogEntries(ids, adminActorFromSession(session));
-  if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: 400 });
+  let result;
+  try {
+    result = await deleteAdminBalanceLogEntries(ids, adminActorFromSession(session));
+  } catch (error) {
+    console.warn("[admin-balance-log] delete pre-read unavailable", error);
+    return Response.json({ ok: false, error: "admin_balance_log_store_unavailable" }, { status: 503 });
+  }
+  if (!result.ok) return Response.json({ ok: false, error: result.error }, {
+    status: result.error === "storage_failed" ? 503 : 400,
+  });
   return Response.json(result);
 }

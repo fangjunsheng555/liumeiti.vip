@@ -4,8 +4,10 @@ import test from "node:test";
 
 process.env.KV_REST_API_URL = "http://order-overview.redis.test";
 process.env.KV_REST_API_TOKEN = "order-overview-real-token";
+process.env.AUTH_SECRET = "order-overview-real-auth-secret-32-chars";
 
 const utils = await import("../app/api/_utils.js");
+const ordersRoute = await import("../app/api/admin/orders/route.js");
 
 function docker(args) {
   return spawnSync("docker", args, { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
@@ -146,6 +148,62 @@ test("overview shadow rebuild publishes complete snapshots atomically on Redis 7
     assert.equal(redis.run(["GET", "liumeiti:orders:overview:count:v8"]), "0");
     assert.equal(redis.run(["HLEN", "liumeiti:orders:overview"]), 0);
     assert.equal(redis.run(["ZCARD", "liumeiti:orders:summary-created"]), 0);
+
+    // A corrupt derived-index prefix must not occupy the fixed first window
+    // and hide an older valid order from either the function or HTTP route.
+    const visibleOrder = {
+      orderId: "LMREALSUMMARY001",
+      status: "received",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      createdAtBeijing: "2026-08-01 08:00:00 Beijing Time (UTC+8)",
+      finalAmount: 88,
+      paidCurrency: "CNY",
+      paymentMethod: "alipay",
+      items: [],
+    };
+    redis.run(["SET", `liumeiti:orders:record:${visibleOrder.orderId}`, JSON.stringify(visibleOrder)]);
+    redis.run(["HSET", "liumeiti:orders:overview", visibleOrder.orderId, JSON.stringify(visibleOrder)]);
+    redis.run(["ZADD", "liumeiti:orders:summary-created", "1", visibleOrder.orderId]);
+    redis.run(["SET", "liumeiti:orders:overview:ready:v8", "1"]);
+    redis.run(["SET", "liumeiti:orders:overview:count:v8", "1"]);
+    redis.run(["SET", "liumeiti:orders:list-revision:v1", "1"]);
+    for (let index = 1; index <= 100; index += 1) {
+      redis.run(["ZADD", "liumeiti:orders:summary-created", String(2_000_000_000_000 + index), " ".repeat(index)]);
+    }
+    const similarRawMember = `${visibleOrder.orderId} `;
+    redis.run(["ZADD", "liumeiti:orders:summary-created", "2000000000200", similarRawMember]);
+
+    const page = await utils.getOrderSummariesPageFast(0, 1);
+    assert.deepEqual(page?.orders.map((order) => order.orderId), [visibleOrder.orderId]);
+    assert.equal(page?.total, 1);
+    assert.equal(redis.run(["ZSCORE", "liumeiti:orders:summary-created", similarRawMember]), null);
+    assert.notEqual(redis.run(["ZSCORE", "liumeiti:orders:summary-created", visibleOrder.orderId]), null,
+      "raw-member cleanup must not delete a canonical member with a similar prefix");
+
+    const adminToken = utils.signSession({ role: "admin", staffId: 1, staffUsername: "admin",
+      exp: Date.now() + 60_000 });
+    const response = await ordersRoute.GET(new Request("https://www.liumeiti.vip/api/admin/orders?offset=0&limit=1", {
+      headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}` },
+    }));
+    assert.equal(response.status, 200);
+    assert.deepEqual((await response.json()).orders.map((order) => order.orderId), [visibleOrder.orderId]);
+
+    const healthyFetch = redis.fetch;
+    globalThis.fetch = async (input, init = {}) => {
+      const url = new URL(String(input));
+      const commands = url.pathname === "/pipeline" ? JSON.parse(String(init.body || "[]")) : [];
+      if (commands.some((command) => String(command[0]).toUpperCase() === "ZREVRANGE")) {
+        return Response.json(commands.map((command) => (
+          String(command[0]).toUpperCase() === "ZREVRANGE"
+            ? { error: "injected_summary_index_failure" }
+            : { result: redis.run(command) }
+        )));
+      }
+      return healthyFetch(input, init);
+    };
+    assert.equal(await utils.getOrderSummariesPageFast(0, 1), null,
+      "a Redis command error must not become a plausible empty page");
+    globalThis.fetch = healthyFetch;
   } finally {
     globalThis.fetch = originalFetch;
     docker(["rm", "-f", container]);

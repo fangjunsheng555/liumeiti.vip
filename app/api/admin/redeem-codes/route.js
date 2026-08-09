@@ -8,8 +8,13 @@ export async function GET(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   if (!adminPermissionProfile(session).canViewCodes) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
-  const { codes, batches } = await listManageableRedeemCodesAndBatches();
-  return Response.json({ ok: true, codes, batches });
+  try {
+    const { codes, batches } = await listManageableRedeemCodesAndBatches();
+    return Response.json({ ok: true, codes, batches });
+  } catch (error) {
+    console.error("[admin-redeem] code list unavailable", error?.message || error);
+    return Response.json({ ok: false, error: "redeem_store_unavailable" }, { status: 503 });
+  }
 }
 
 export async function POST(request) {
@@ -35,14 +40,16 @@ export async function POST(request) {
       : (error === "storage_failed" ? 503 : 400);
     return Response.json({ ok: false, error }, { status });
   }
-  const { codes, batches } = await listManageableRedeemCodesAndBatches();
+  let listing = null;
+  try { listing = await listManageableRedeemCodesAndBatches(); }
+  catch (error) { console.warn("[admin-redeem] created codes but refresh failed", error?.message || error); }
   return Response.json({
     ok: true,
     code: result.code,
     generatedCodes: result.codes,
     batch: result.batch,
-    codes,
-    batches,
+    ...(listing || {}),
+    refreshRequired: !listing,
     idempotent: Boolean(result.idempotent),
     recovered: Boolean(result.recovered),
   });

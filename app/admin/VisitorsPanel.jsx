@@ -29,6 +29,7 @@ function fmt(ms) {
 export default function VisitorsPanel() {
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [offset, setOffset] = useState(0);
   const [q, setQ] = useState("");
   const [qInput, setQInput] = useState("");
@@ -64,11 +65,13 @@ export default function VisitorsPanel() {
       // offset===0 时整组替换，否则把新一批追加到末尾（滚动加载更多）
       setRows((prev) => (offset === 0 ? (data.rows || []) : [...prev, ...(data.rows || [])]));
       setTotal(Number(data.total || 0));
+      setHasMore(Boolean(data.hasMore));
       if (data.searchCapped) info("搜索仅扫描了最近 2000 名访客");
       else setMsg(null);
       if (offset === 0) setSelected(new Set());
     } catch (e) {
       if (!isLatestRequest(listRequestRef, requestId)) return;
+      setHasMore(false);
       err(Number(e?.responseStatus || 0) === 401 ? "无权限（仅超级管理员可查看）" : "访客数据加载失败，请点击刷新重试");
     } finally {
       if (isLatestRequest(listRequestRef, requestId)) setLoading(false);
@@ -148,8 +151,6 @@ export default function VisitorsPanel() {
     setBusy(false);
     refresh();
   }
-
-  const hasMore = rows.length < total;
 
   const th = { textAlign: "left", padding: "9px 10px", fontSize: 12.5, color: C.muted, fontWeight: 600, borderBottom: `1px solid ${C.border}`, whiteSpace: "nowrap" };
   const td = { padding: "5px 9px", fontSize: 13, color: C.text, borderBottom: `1px solid ${C.border}`, verticalAlign: "middle" };

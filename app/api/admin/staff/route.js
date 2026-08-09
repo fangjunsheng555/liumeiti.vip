@@ -7,7 +7,11 @@ export async function GET(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   if (!isRootAdminSession(session)) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
-  const [staff, actions] = await Promise.all([listAdminStaff(), getAdminActionLog()]);
+  let staff, actions;
+  try { [staff, actions] = await Promise.all([listAdminStaff(), getAdminActionLog()]); } catch (error) {
+    console.warn("[admin-staff] action log read unavailable", error);
+    return Response.json({ ok: false, error: "admin_action_log_store_unavailable" }, { status: 503 });
+  }
   return Response.json({
     ok: true,
     currentStaffId: Number(session.staffId || 1),
@@ -34,6 +38,12 @@ export async function POST(request) {
   if (!result.ok) {
     return Response.json({ ok: false, error: clean(result.error, 80) }, { status: 400 });
   }
-  const [staff, actions] = await Promise.all([listAdminStaff(), getAdminActionLog()]);
-  return Response.json({ ok: true, created: result.staff, staff, actions });
+  const staff = await listAdminStaff();
+  try {
+    const actions = await getAdminActionLog();
+    return Response.json({ ok: true, created: result.staff, staff, actions });
+  } catch (error) {
+    console.warn("[admin-staff] post-create action refresh unavailable", error);
+    return Response.json({ ok: true, created: result.staff, staff, actions: [], refreshRequired: true });
+  }
 }

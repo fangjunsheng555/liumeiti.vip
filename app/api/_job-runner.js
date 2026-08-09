@@ -85,15 +85,70 @@ function parseJson(value) {
   try { return JSON.parse(value); } catch { return null; }
 }
 
-function parseJobRun(value, expectedJob = "") {
+function parseJobRun(value, expectedJob = "", expectedRunId = "") {
   const record = parseJson(value);
   const valid = record && typeof record === "object" && !Array.isArray(record)
     && Boolean(clean(record.runId, 120))
+    && (!expectedRunId || record.runId === expectedRunId)
     && Boolean(safeJobName(record.job))
     && (!expectedJob || record.job === expectedJob)
     && ["running", "success", "failed", "disabled"].includes(record.status);
   if (!valid) throw storageError("job_history_corrupt");
   return record;
+}
+
+async function readJobHistoryRows(ids) {
+  const response = await redisPipeline([
+    ...ids.map((id) => ["GET", JOB_RUN_PREFIX + clean(id, 120)]),
+    ["PING"],
+  ]);
+  const fatalErrorIndex = Array.isArray(response)
+    ? response.slice(0, ids.length).findIndex((entry) => entry?.error)
+    : -1;
+  if (!Array.isArray(response) || response.length !== ids.length + 1
+    || fatalErrorIndex >= 0 || response[ids.length]?.error) {
+    throw storageError("job_history_unavailable");
+  }
+  const rows = pipelineRows(response);
+  if (rows.length !== ids.length + 1 || rows[ids.length] !== "PONG") {
+    throw storageError("job_history_unavailable");
+  }
+  return rows.slice(0, ids.length);
+}
+
+function validIndexedRunIds(value, scope) {
+  const rows = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  const ids = [];
+  rows.forEach((value) => {
+    const raw = typeof value === "string" ? value.trim() : "";
+    const id = clean(raw, 120);
+    if (!id || id !== raw || !/^[a-z0-9_-]+$/i.test(id) || seen.has(id)) return;
+    seen.add(id);
+    ids.push(id);
+  });
+  if (ids.length !== rows.length) {
+    console.warn("[job-runner] skipped invalid job history index members", {
+      scope,
+      skipped: rows.length - ids.length,
+    });
+  }
+  return ids;
+}
+
+async function parsedJobRuns(ids, job, limit) {
+  const records = [];
+  const skippedIds = [];
+  (await readJobHistoryRows(ids)).forEach((value, index) => {
+    try { records.push(parseJobRun(value, job, clean(ids[index], 120))); } catch (error) {
+      if (error?.code !== "job_history_corrupt") throw error;
+      skippedIds.push(clean(ids[index], 120));
+    }
+  });
+  if (skippedIds.length) console.warn("[job-runner] skipped unreadable job history records", {
+    job: job || "all", skipped: skippedIds.length, runIds: skippedIds.filter(Boolean).slice(0, 10),
+  });
+  return records.slice(0, limit);
 }
 
 function hashObject(value) {
@@ -305,14 +360,28 @@ export async function readLatestJobStatuses() {
   ]), 2, "job_status_store_unavailable");
   if (stored[1] !== "PONG") throw storageError("job_status_store_unavailable");
   const raw = hashObject(stored[0]);
-  return Object.keys(JOB_POLICIES).map((job) => {
+  const corruptJobs = [];
+  const records = Object.keys(JOB_POLICIES).map((job) => {
     const policy = JOB_POLICIES[job];
     const record = parseJson(raw[job]);
     const valid = record && typeof record === "object" && !Array.isArray(record)
       && record.job === job
       && ["running", "success", "failed", "disabled"].includes(record.status);
     if (raw[job] != null && !valid) {
-      throw storageError("job_status_store_corrupt");
+      corruptJobs.push(job);
+      return {
+        job,
+        label: policy.label,
+        status: "failed",
+        startedAt: "",
+        heartbeatAt: "",
+        finishedAt: "",
+        durationMs: 0,
+        scanned: 0,
+        processed: 0,
+        failed: 1,
+        errorCode: "job_status_record_corrupt",
+      };
     }
     return record || {
       job,
@@ -328,6 +397,13 @@ export async function readLatestJobStatuses() {
       errorCode: "",
     };
   });
+  if (corruptJobs.length) {
+    console.warn("[job-runner] replaced unreadable latest job statuses", {
+      skipped: corruptJobs.length,
+      jobs: corruptJobs.slice(0, 10),
+    });
+  }
+  return records;
 }
 
 async function monitoringBootstrapStartedAt(now = Date.now()) {
@@ -407,28 +483,20 @@ export async function listJobRuns({ job: requestedJob = "", limit = 30 } = {}) {
   const job = safeJobName(requestedJob);
   const safeLimit = Math.max(1, Math.min(100, Number(limit || 30)));
   if (!job) return [];
-  const ids = await redisCmd(["ZREVRANGE", JOB_RUN_INDEX_PREFIX + job, "0", String(safeLimit - 1)]);
-  if (!Array.isArray(ids)) throw storageError("job_history_unavailable");
+  const indexed = await redisCmd(["ZREVRANGE", JOB_RUN_INDEX_PREFIX + job, "0", String(JOB_HISTORY_LIMIT - 1)]);
+  if (!Array.isArray(indexed)) throw storageError("job_history_unavailable");
+  const ids = validIndexedRunIds(indexed, job);
   if (!ids.length) return [];
-  const result = strictPipelineRows(
-    await redisPipeline(ids.map((id) => ["GET", JOB_RUN_PREFIX + clean(id, 120)])),
-    ids.length,
-    "job_history_unavailable",
-  );
-  return result.map((value) => parseJobRun(value, job));
+  return parsedJobRuns(ids, job, safeLimit);
 }
 
 export async function listRecentJobRuns(limit = 30) {
   const safeLimit = Math.max(1, Math.min(100, Number(limit || 30)));
-  const ids = await redisCmd(["ZREVRANGE", JOB_ALL_RUN_INDEX_KEY, "0", String(safeLimit - 1)]);
-  if (!Array.isArray(ids)) throw storageError("job_history_unavailable");
+  const indexed = await redisCmd(["ZREVRANGE", JOB_ALL_RUN_INDEX_KEY, "0", String(JOB_HISTORY_LIMIT - 1)]);
+  if (!Array.isArray(indexed)) throw storageError("job_history_unavailable");
+  const ids = validIndexedRunIds(indexed, "all");
   if (!ids.length) return [];
-  const result = strictPipelineRows(
-    await redisPipeline(ids.map((id) => ["GET", JOB_RUN_PREFIX + clean(id, 120)])),
-    ids.length,
-    "job_history_unavailable",
-  );
-  return result.map((value) => parseJobRun(value));
+  return parsedJobRuns(ids, "", safeLimit);
 }
 
 export const jobRunnerInternals = {

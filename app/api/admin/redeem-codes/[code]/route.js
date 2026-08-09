@@ -13,8 +13,10 @@ export async function PATCH(request, { params }) {
     const error = clean(result.error, 80);
     return Response.json({ ok: false, error }, { status: error === "code_already_used" ? 409 : (error === "storage_failed" ? 503 : 400) });
   }
-  const { codes, batches } = await listManageableRedeemCodesAndBatches();
-  return Response.json({ ok: true, code: result.code, codes, batches });
+  let listing = null;
+  try { listing = await listManageableRedeemCodesAndBatches(); }
+  catch (error) { console.warn("[admin-redeem] code updated but refresh failed", error?.message || error); }
+  return Response.json({ ok: true, code: result.code, ...(listing || {}), refreshRequired: !listing });
 }
 
 export async function DELETE(request, { params }) {
@@ -27,6 +29,8 @@ export async function DELETE(request, { params }) {
     const error = clean(result.error, 80);
     return Response.json({ ok: false, error }, { status: error === "code_already_used" ? 409 : (error === "storage_failed" ? 503 : 400) });
   }
-  const { codes, batches } = await listManageableRedeemCodesAndBatches();
-  return Response.json({ ok: true, codes, batches });
+  let listing = null;
+  try { listing = await listManageableRedeemCodesAndBatches(); }
+  catch (error) { console.warn("[admin-redeem] code deleted but refresh failed", error?.message || error); }
+  return Response.json({ ok: true, ...(listing || {}), refreshRequired: !listing });
 }

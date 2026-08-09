@@ -24,6 +24,7 @@ const STATUS = { open: { t: "待召回", c: "var(--warn,#d97706)" }, contacted: 
 export default function AbandonedPanel() {
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState("");
@@ -49,9 +50,13 @@ export default function AbandonedPanel() {
       if (!isLatestRequest(loadRequestRef, requestId)) return;
       setRows((prev) => (offset === 0 ? (d.rows || []) : [...prev, ...(d.rows || [])]));
       setTotal(Number(d.total || 0));
+      setHasMore(Boolean(d.hasMore));
       setMsg(null);
     } catch (e) {
-      if (isLatestRequest(loadRequestRef, requestId)) err(Number(e?.responseStatus || 0) === 401 ? "无权限（仅超级管理员）" : "弃单数据加载失败，请点击重试");
+      if (isLatestRequest(loadRequestRef, requestId)) {
+        setHasMore(false);
+        err(Number(e?.responseStatus || 0) === 401 ? "无权限（仅超级管理员）" : "弃单数据加载失败，请点击重试");
+      }
     } finally {
       if (isLatestRequest(loadRequestRef, requestId)) {
         setLoading(false);
@@ -62,8 +67,6 @@ export default function AbandonedPanel() {
   useEffect(() => { load(); }, [load]);
   // 从头刷新（刷新/操作/删除后）：offset 非 0 归零触发，否则递增 reloadFlag
   const refresh = () => { if (offset !== 0) setOffset(0); else setReloadFlag((f) => f + 1); };
-  const hasMore = rows.length < total;
-
   const toggleOne = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleAll = () => setSelected((s) => (s.size === rows.length ? new Set() : new Set(rows.map((r) => r.id))));
 

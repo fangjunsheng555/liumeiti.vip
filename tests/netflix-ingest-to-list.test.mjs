@@ -175,6 +175,16 @@ test("索引里出现一条坏记录时，其余记录依然可见", async () =>
   assert.ok(!afterBreak.some((event) => event.eventId === brokenId), "坏记录本身不应出现在列表里");
 });
 
+test("Netflix preview reads past corrupt records that fill its requested window", async () => {
+  const brokenId = "NM" + "E".repeat(24);
+  const auth = { headers: { Authorization: `Bearer ${redis.token}` } };
+  await redis.fetch(`${redis.url}/SET/${encodeURIComponent(`liumeiti:netflix-mail:event:${brokenId}`)}/${encodeURIComponent(JSON.stringify({ eventId: brokenId }))}`, auth);
+  await redis.fetch(`${redis.url}/ZADD/${encodeURIComponent("liumeiti:netflix-mail:received")}/${Date.now() + 9_000_000}/${brokenId}`, auth);
+  const preview = await store.listNetflixMailEvents({ limit: 1 });
+  assert.equal(preview.length, 1);
+  assert.notEqual(preview[0].eventId, brokenId);
+});
+
 test("解析失败的邮件同样会留下记录，便于排查", async () => {
   const before = (await store.listNetflixMailEvents({ limit: 100 })).length;
   const raw = [
@@ -200,4 +210,43 @@ test("解析失败的邮件同样会留下记录，便于排查", async () => {
   const unparsed = events.find((event) => event.reason === "supported_content_not_found");
   assert.ok(unparsed, "应能找到这条解析失败的记录并说明原因");
   assert.equal(unparsed.accepted, false);
+});
+
+test("a corrupt record on the second storage page does not discard the first page", async () => {
+  const seedResponse = await webhook.POST(ingestRequest(netflixEmail({
+    code: "4444",
+    src: "SRC: 444444AC_12345678-1234-1234-1234-1234567890ab_en_ES_EVO",
+  }), {
+    messageId: "<pagination-seed@test>",
+    envelopeFrom: NETFLIX_SENDER,
+  }));
+  const seed = await seedResponse.json();
+  assert.equal(seedResponse.status, 202, JSON.stringify(seed));
+  const before = await store.listAllNetflixMailEvents();
+  const dump = redis.dump();
+  const seedRaw = dump.strings.get(`liumeiti:netflix-mail:event:${seed.eventId}`);
+  assert.equal(typeof seedRaw, "string");
+  const template = JSON.parse(seedRaw);
+  const baseScore = Date.now() + 1_000_000;
+  const commands = [];
+  for (let index = 0; index < 205; index += 1) {
+    const eventId = `NM${(0x100000 + index).toString(16).toUpperCase().padStart(24, "0")}`;
+    const record = { ...template, eventId, receivedAt: new Date(baseScore + index).toISOString() };
+    commands.push(["SET", `liumeiti:netflix-mail:event:${eventId}`, JSON.stringify(record)]);
+    commands.push(["ZADD", "liumeiti:netflix-mail:received", String(baseScore + index), eventId]);
+  }
+  const brokenId = `NM${"D".repeat(24)}`;
+  commands.push(["SET", `liumeiti:netflix-mail:event:${brokenId}`, JSON.stringify({ eventId: brokenId })]);
+  commands.push(["ZADD", "liumeiti:netflix-mail:received", String(baseScore + 1.5), brokenId]);
+  const seeded = await redis.fetch(`${redis.url}/pipeline`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${redis.token}`, "content-type": "application/json" },
+    body: JSON.stringify(commands),
+  });
+  assert.equal(seeded.status, 200);
+
+  const after = await store.listAllNetflixMailEvents();
+  assert.equal(after.length, before.length + 205);
+  assert.equal(after.some((record) => record.eventId === brokenId), false);
+  assert.equal(after.some((record) => record.eventId === template.eventId), true);
 });

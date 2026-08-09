@@ -391,6 +391,7 @@ class AtomicRedisMock {
     if (name === "MGET") return args.map((key) => this.values.get(key) ?? null);
     if (name === "DEL") return args.reduce((count, key) => count + Number(this.values.delete(key)), 0);
     if (name === "LRANGE") return Array.isArray(this.values.get(args[0])) ? this.values.get(args[0]) : [];
+    if (name === "PING") return "PONG";
     if (name === "SADD") return args.slice(1).reduce((count, value) => count + this.setAdd(args[0], value), 0);
     if (name === "SMEMBERS") return Array.from(this.sets.get(args[0]) || []);
     if (name === "LPUSH") { for (const value of args.slice(1)) this.listPush(args[0], value); return this.values.get(args[0]).length; }

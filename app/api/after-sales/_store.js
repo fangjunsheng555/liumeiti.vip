@@ -174,7 +174,28 @@ function parseRecord(value) {
 function validTicketRecord(ticket, expectedId = "") {
   return Boolean(ticket && typeof ticket === "object" && !Array.isArray(ticket)
     && normalizeId(ticket.ticketId) && (!expectedId || normalizeId(ticket.ticketId) === expectedId)
-    && ["pending", "completed"].includes(ticket.status));
+    && ["pending", "completed"].includes(ticket.status)
+    && [ticket.createdAt, ticket.completedAt, ticket.updatedAt].every((value) => value == null
+      || value === ""
+      || (typeof value === "string" && Number.isFinite(Date.parse(value)))));
+}
+
+async function readTicketRecord(ticketId) {
+  const id = normalizeId(ticketId);
+  if (!id) return { raw: null, ticket: null };
+  const response = await redisPipeline([["GET", ticketKey(id)], ["PING"]]);
+  if (!writeSucceeded(response, 2)) throw new Error("after_sales_store_unavailable");
+  const rows = pipelineRows(response);
+  if (pipelineValue(rows[1]) !== "PONG") throw new Error("after_sales_store_unavailable");
+  const raw = pipelineValue(rows[0]);
+  if (raw == null) return { raw: null, ticket: null };
+  if (typeof raw !== "string") throw new Error("after_sales_store_unavailable");
+  const ticket = parseRecord(raw);
+  if (!validTicketRecord(ticket, id)) {
+    console.warn("[after-sales] ignored invalid ticket record during single lookup", { ticketId: id });
+    return { raw, ticket: null };
+  }
+  return { raw, ticket };
 }
 
 function pipelineRows(value) {
@@ -190,17 +211,40 @@ function pipelineValue(entry) {
   return entry;
 }
 
-async function getTicketsByIds(ids) {
-  const cleanIds = (Array.isArray(ids) ? ids : []).map((id) => normalizeId(id)).filter(Boolean);
+async function getTicketsByIds(ids, { invalidIds, missingIds } = {}) {
+  const cleanIds = [];
+  let invalidIndexCount = 0;
+  (Array.isArray(ids) ? ids : []).forEach((value) => {
+    const id = typeof value === "string" ? normalizeId(value) : "";
+    if (id) cleanIds.push(id);
+    else invalidIndexCount += 1;
+  });
+  if (invalidIndexCount) console.warn("[after-sales] skipped invalid ticket index member(s)", { count: invalidIndexCount });
   if (!cleanIds.length) return [];
   const response = await redisPipeline(cleanIds.map((id) => ["GET", ticketKey(id)]));
   const rows = pipelineRows(response);
   if (!writeSucceeded(response, cleanIds.length)) throw new Error("after_sales_store_unavailable");
-  return rows.map((entry, index) => {
+  const tickets = [];
+  const skippedIds = [];
+  rows.forEach((entry, index) => {
+    const expectedId = cleanIds[index];
     const raw = pipelineValue(entry), ticket = parseRecord(raw);
-    if (raw != null && !validTicketRecord(ticket, cleanIds[index])) throw new Error("after_sales_record_invalid");
-    return ticket;
-  }).filter(Boolean);
+    if (raw == null) {
+      skippedIds.push(expectedId);
+      missingIds?.add?.(expectedId);
+      return;
+    }
+    if (!validTicketRecord(ticket, cleanIds[index])) {
+      skippedIds.push(expectedId);
+      invalidIds?.add?.(expectedId);
+      return;
+    }
+    if (ticket) tickets.push(ticket);
+  });
+  if (skippedIds.length) console.warn("[after-sales] skipped invalid ticket record(s)", {
+    count: skippedIds.length, ticketIds: skippedIds.slice(0, 20),
+  });
+  return tickets;
 }
 
 async function compareDelete(key, expected) {
@@ -225,17 +269,89 @@ function writeSucceeded(result, expectedCount) {
   return rows.length === expectedCount && rows.every((entry) => !entry?.error);
 }
 
+async function readAfterSalesOutbox({ indexKey, pendingField, limit, errorCode, label }) {
+  const safeLimit = Math.max(1, Math.min(100, Number(limit || 30)));
+  const pageSize = Math.min(200, Math.max(50, safeLimit * 2));
+  const tickets = [];
+  const staleMembers = new Set();
+  const skippedTicketIds = [];
+  let missingTicketCount = 0;
+  let invalidIndexCount = 0;
+  let offset = 0;
+
+  // Defer index cleanup until the scan completes. Deleting members between
+  // rank-based pages would shift later rows left and silently skip work.
+  while (tickets.length < safeLimit) {
+    const members = await redisCmd(["ZRANGE", indexKey, String(offset), String(offset + pageSize - 1)]);
+    if (!Array.isArray(members)) throw new Error(errorCode);
+    if (!members.length) break;
+
+    const readable = [];
+    for (const member of members) {
+      const id = typeof member === "string" ? normalizeId(member) : "";
+      if (!id) {
+        invalidIndexCount += 1;
+        if (typeof member === "string") staleMembers.add(member);
+        continue;
+      }
+      readable.push({ id, member });
+    }
+
+    if (readable.length) {
+      const response = await redisPipeline(readable.map(({ id }) => ["GET", ticketKey(id)]));
+      if (!writeSucceeded(response, readable.length)) throw new Error(errorCode);
+      const rows = pipelineRows(response);
+      for (let index = 0; index < readable.length; index += 1) {
+        const { id, member } = readable[index];
+        const raw = pipelineValue(rows[index]);
+        // A Redis GET result is a string or null. An object here is a malformed
+        // transport response, not an independently corrupt stored JSON row.
+        if (raw != null && typeof raw !== "string") throw new Error(errorCode);
+        const ticket = parseRecord(raw);
+        if (!validTicketRecord(ticket, id)) {
+          staleMembers.add(member);
+          skippedTicketIds.push(id);
+          if (raw == null) missingTicketCount += 1;
+        } else if (ticket[pendingField] === false) {
+          staleMembers.add(member);
+        } else if (tickets.length < safeLimit) {
+          tickets.push(ticket);
+        }
+      }
+    }
+
+    offset += members.length;
+    if (members.length < pageSize) break;
+  }
+
+  if (invalidIndexCount) console.warn(`[after-sales] skipped invalid ${label}-outbox index member(s)`, { count: invalidIndexCount });
+  if (skippedTicketIds.length) console.warn(`[after-sales] skipped invalid or missing ${label}-outbox ticket record(s)`, {
+    count: skippedTicketIds.length, missing: missingTicketCount, ticketIds: skippedTicketIds.slice(0, 20),
+  });
+  if (staleMembers.size) {
+    const members = [...staleMembers];
+    for (let start = 0; start < members.length; start += 200) {
+      const commands = members.slice(start, start + 200).map((member) => ["ZREM", indexKey, member]);
+      const cleanup = await redisPipeline(commands);
+      if (!writeSucceeded(cleanup, commands.length)) throw new Error(errorCode);
+    }
+  }
+  return tickets;
+}
+
 export async function getAfterSalesTicket(ticketId) {
-  const id = normalizeId(ticketId), key = ticketKey(id);
-  if (!key) return null;
-  const ticket = parseRecord(await redisCmd(["GET", key]));
-  return validTicketRecord(ticket, id) ? ticket : null;
+  return (await readTicketRecord(ticketId)).ticket;
 }
 
 export async function getActiveAfterSalesTicket(orderId) {
   const key = activeOrderKey(orderId);
   if (!key) return null;
-  const ticketId = normalizeId(await redisCmd(["GET", key]));
+  const rawTicketId = await redisCmd(["GET", key]);
+  if (rawTicketId && typeof rawTicketId === "object") {
+    console.warn("[after-sales] ignored unreadable active-ticket index value", { orderId: normalizeId(orderId, 80) });
+    return null;
+  }
+  const ticketId = normalizeId(rawTicketId);
   if (!ticketId) return null;
   const ticket = await getAfterSalesTicket(ticketId);
   if (ticket?.status === "pending" && normalizeId(ticket.orderId, 80) === normalizeId(orderId, 80)) return ticket;
@@ -248,17 +364,31 @@ export async function getActiveAfterSalesTicket(orderId) {
 export async function getActiveAfterSalesTickets(orderIds) {
   const ids = [...new Set((Array.isArray(orderIds) ? orderIds : []).map((id) => normalizeId(id, 80)).filter(Boolean))];
   if (!ids.length || !redisConfig()) return {};
-  const activeRows = pipelineRows(await redisPipeline(ids.map((orderId) => ["GET", activeOrderKey(orderId)])));
-  const activeIds = activeRows.map((entry) => normalizeId(pipelineValue(entry))).filter(Boolean);
-  const records = await getTicketsByIds([...new Set(activeIds)]);
+  const activeResponse = await redisPipeline(ids.map((orderId) => ["GET", activeOrderKey(orderId)]));
+  const activeRows = pipelineRows(activeResponse);
+  if (!writeSucceeded(activeResponse, ids.length)) throw new Error("after_sales_store_unavailable");
+  let invalidActiveCount = 0;
+  const activeIds = activeRows.map((entry) => {
+    const raw = pipelineValue(entry);
+    if (raw != null && typeof raw !== "string") { invalidActiveCount += 1; return ""; }
+    return normalizeId(raw);
+  });
+  if (invalidActiveCount) console.warn("[after-sales] skipped invalid active-ticket index value(s)", { count: invalidActiveCount });
+  const invalidTicketIds = new Set();
+  const missingTicketIds = new Set();
+  const records = await getTicketsByIds([...new Set(activeIds.filter(Boolean))], {
+    invalidIds: invalidTicketIds,
+    missingIds: missingTicketIds,
+  });
   const byTicketId = new Map(records.map((ticket) => [normalizeId(ticket.ticketId), ticket]));
   const result = {};
   for (let index = 0; index < ids.length; index += 1) {
     const orderId = ids[index];
-    const ticketId = normalizeId(pipelineValue(activeRows[index]));
+    const ticketId = activeIds[index];
     if (!ticketId) continue;
     const ticket = byTicketId.get(ticketId);
     if (ticket?.status === "pending" && normalizeId(ticket.orderId, 80) === orderId) result[orderId] = ticket;
+    else if (invalidTicketIds.has(ticketId) || missingTicketIds.has(ticketId)) continue;
     else if (!ticket) result[orderId] = { ticketId, orderId, status: "pending", storagePending: true };
     else await compareDelete(activeOrderKey(orderId), ticketId);
   }
@@ -665,11 +795,18 @@ export async function completeAfterSalesTicket(ticketId, completion, actor) {
   const id = normalizeId(ticketId);
   const lockKey = COMPLETE_LOCK_PREFIX + id;
   const lockToken = randomBytes(12).toString("hex");
-  const locked = await redisCmd(["SET", lockKey, lockToken, "NX", "EX", "30"]);
-  if (locked !== "OK") return { ok: false, error: "ticket_busy" };
+  const lockResponse = await redisPipeline([
+    ["SET", lockKey, lockToken, "NX", "EX", "30"],
+    ["PING"],
+  ]);
+  if (!writeSucceeded(lockResponse, 2)) return { ok: false, error: "after_sales_store_unavailable" };
+  const lockRows = pipelineRows(lockResponse);
+  if (pipelineValue(lockRows[1]) !== "PONG") return { ok: false, error: "after_sales_store_unavailable" };
+  const locked = pipelineValue(lockRows[0]);
+  if (locked == null) return { ok: false, error: "ticket_busy" };
+  if (locked !== "OK") return { ok: false, error: "after_sales_store_unavailable" };
   try {
-    const storedRaw = await redisCmd(["GET", ticketKey(id)]);
-    const storedTicket = parseRecord(storedRaw);
+    const { raw: storedRaw, ticket: storedTicket } = await readTicketRecord(id);
     if (!validTicketRecord(storedTicket, id)) return { ok: false, error: "ticket_not_found" };
     const ticket = await hydrateAfterSalesTicketCredentials(storedTicket);
     const payload = completion && typeof completion === "object" ? completion : { staffNote: completion };
@@ -738,9 +875,13 @@ export async function completeAfterSalesTicket(ticketId, completion, actor) {
 }
 
 export async function getAfterSalesCompletionOutbox(limit = 30) {
-  const safeLimit = Math.max(1, Math.min(100, Number(limit || 30)));
-  const ids = await redisCmd(["ZRANGE", COMPLETION_OUTBOX_INDEX, "0", String(safeLimit - 1)]);
-  return getTicketsByIds(ids);
+  return readAfterSalesOutbox({
+    indexKey: COMPLETION_OUTBOX_INDEX,
+    pendingField: "completionEffectsPending",
+    limit,
+    errorCode: "after_sales_store_unavailable",
+    label: "completion",
+  });
 }
 
 export async function backfillAfterSalesCreationOutbox(batchSize = 200) {
@@ -758,28 +899,50 @@ export async function backfillAfterSalesCreationOutbox(batchSize = 200) {
     const safeBatch = Math.max(1, Math.min(500, Number(batchSize || 200)));
     const cursor = Math.max(0, Number(savedCursor || 0));
     const ids = await redisCmd(["ZRANGE", ALL_INDEX, String(cursor), String(cursor + safeBatch - 1)]);
-    const safeIds = Array.isArray(ids) ? ids.map((id) => normalizeId(id)).filter(Boolean) : [];
+    if (!Array.isArray(ids)) throw new Error("after_sales_store_unavailable");
+    const safeIds = [];
+    let invalidIndexCount = 0;
+    ids.forEach((value) => {
+      const id = typeof value === "string" ? normalizeId(value) : "";
+      if (id) safeIds.push(id);
+      else invalidIndexCount += 1;
+    });
+    if (invalidIndexCount) console.warn("[after-sales] skipped invalid all-ticket index member(s) during creation-outbox backfill", { count: invalidIndexCount });
     const readResponse = safeIds.length ? await redisPipeline(safeIds.map((id) => ["GET", ticketKey(id)])) : [];
     if (!writeSucceeded(readResponse, safeIds.length)) throw new Error("after_sales_store_unavailable");
     const rawRows = pipelineRows(readResponse);
     const commands = [];
     let indexed = 0;
+    const invalidTicketIds = [];
     safeIds.forEach((id, index) => {
-      const ticket = parseRecord(pipelineValue(rawRows[index]));
-      if (pipelineValue(rawRows[index]) != null && !validTicketRecord(ticket, id)) throw new Error("after_sales_record_invalid");
-      if (ticket && ticket.creationEffectsPending !== false) {
+      const raw = pipelineValue(rawRows[index]);
+      const ticket = parseRecord(raw);
+      if (!validTicketRecord(ticket, id)) {
+        if (raw != null) invalidTicketIds.push(id);
+        commands.push(["ZREM", CREATION_OUTBOX_INDEX, id]);
+      } else if (ticket.creationEffectsPending !== false) {
         commands.push(["ZADD", CREATION_OUTBOX_INDEX, String(createdScore(ticket)), id]);
         indexed += 1;
       } else {
         commands.push(["ZREM", CREATION_OUTBOX_INDEX, id]);
       }
     });
+    if (invalidTicketIds.length) console.warn("[after-sales] skipped invalid ticket record(s) during creation-outbox backfill", {
+      count: invalidTicketIds.length, ticketIds: invalidTicketIds.slice(0, 20),
+    });
     if (commands.length && !writeSucceeded(await redisPipeline(commands), commands.length)) throw new Error("creation_outbox_backfill_failed");
-    const total = Math.max(0, Number(await redisCmd(["ZCARD", ALL_INDEX]) || 0));
-    const nextCursor = cursor + safeIds.length;
-    const done = !safeIds.length || nextCursor >= total;
+    const countResponse = await redisPipeline([["ZCARD", ALL_INDEX], ["PING"]]);
+    if (!writeSucceeded(countResponse, 2)) throw new Error("after_sales_store_unavailable");
+    const countRows = pipelineRows(countResponse), rawTotal = pipelineValue(countRows[0]), total = Number(rawTotal);
+    if (pipelineValue(countRows[1]) !== "PONG"
+      || !((typeof rawTotal === "number" && Number.isSafeInteger(rawTotal) && rawTotal >= 0)
+        || (typeof rawTotal === "string" && /^\d+$/.test(rawTotal) && Number.isSafeInteger(total)))) {
+      throw new Error("after_sales_store_unavailable");
+    }
+    const nextCursor = cursor + ids.length;
+    const done = !ids.length || nextCursor >= total;
     if (await redisCmd(["SET", CREATION_OUTBOX_BACKFILL_CURSOR, done ? "done" : String(nextCursor)]) !== "OK") throw new Error("creation_outbox_backfill_failed");
-    return { ok: true, done, processed: safeIds.length, indexed, cursor: nextCursor, total };
+    return { ok: true, done, processed: ids.length, indexed, cursor: nextCursor, total };
   } finally {
     await compareDelete(CREATION_OUTBOX_BACKFILL_LOCK, token);
   }
@@ -792,24 +955,13 @@ export async function getAfterSalesCreationOutbox(limit = 30) {
   // outbox insertion share the same Lua transaction above.
   const backfill = await backfillAfterSalesCreationOutbox();
   if (backfill?.ok === false) throw new Error(backfill.error || "creation_outbox_backfill_failed");
-  const scanLimit = Math.min(500, Math.max(100, safeLimit * 4));
-  const ids = await redisCmd(["ZRANGE", CREATION_OUTBOX_INDEX, "0", String(scanLimit - 1)]);
-  if (!Array.isArray(ids)) throw new Error("creation_outbox_unavailable");
-  const safeIds = Array.isArray(ids) ? ids.map((id) => normalizeId(id)).filter(Boolean) : [];
-  if (!safeIds.length) return [];
-  const readResponse = await redisPipeline(safeIds.map((id) => ["GET", ticketKey(id)]));
-  if (!writeSucceeded(readResponse, safeIds.length)) throw new Error("creation_outbox_unavailable");
-  const rawRows = pipelineRows(readResponse);
-  const tickets = [];
-  const staleIds = [];
-  safeIds.forEach((id, index) => {
-    const ticket = parseRecord(pipelineValue(rawRows[index]));
-    if (pipelineValue(rawRows[index]) != null && !validTicketRecord(ticket, id)) throw new Error("after_sales_record_invalid");
-    if (!ticket || ticket.creationEffectsPending === false) staleIds.push(id);
-    else if (tickets.length < safeLimit) tickets.push(ticket);
+  return readAfterSalesOutbox({
+    indexKey: CREATION_OUTBOX_INDEX,
+    pendingField: "creationEffectsPending",
+    limit: safeLimit,
+    errorCode: "creation_outbox_unavailable",
+    label: "creation",
   });
-  if (staleIds.length) await redisPipeline(staleIds.map((id) => ["ZREM", CREATION_OUTBOX_INDEX, id]));
-  return tickets;
 }
 
 export async function markAfterSalesCreationEffectsDone(ticketId) {
@@ -860,41 +1012,72 @@ export async function markAfterSalesCompletionEffectsDone(ticketId, operationId)
 }
 
 export async function getAfterSalesCounts() {
-  if (!redisConfig()) return { all: 0, pending: 0, completed: 0 };
-  const rows = pipelineRows(await redisPipeline([
+  if (!redisConfig()) throw new Error("after_sales_store_unavailable");
+  const response = await redisPipeline([
     ["ZCARD", ALL_INDEX],
     ["ZCARD", PENDING_INDEX],
     ["ZCARD", COMPLETED_INDEX],
-  ]));
-  return {
-    all: Number(pipelineValue(rows[0]) ?? 0),
-    pending: Number(pipelineValue(rows[1]) ?? 0),
-    completed: Number(pipelineValue(rows[2]) ?? 0),
-  };
+    ["PING"],
+  ]);
+  if (!writeSucceeded(response, 4)) throw new Error("after_sales_store_unavailable");
+  const rows = pipelineRows(response);
+  const rawValues = rows.slice(0, 3).map(pipelineValue);
+  const values = rawValues.map(Number);
+  // audit-partial-failure: allow partial-failure-predicate-abort -- These are aggregate Redis counters, not independent business records; a malformed command result cannot be presented as a trustworthy count.
+  if (pipelineValue(rows[3]) !== "PONG"
+    || rawValues.some((value) => !((typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+      || (typeof value === "string" && /^\d+$/.test(value))))
+    || values.some((value) => !Number.isSafeInteger(value) || value < 0)) {
+    throw new Error("after_sales_store_unavailable");
+  }
+  return { all: values[0], pending: values[1], completed: values[2] };
+}
+
+async function scanAfterSalesTicketIndex(key, { status = "all", stopAfter = Infinity } = {}) {
+  const records = [];
+  const seen = new Set();
+  const pageSize = 200;
+  let offset = 0;
+  let exhausted = false;
+  while (records.length < stopAfter) {
+    const ids = await redisCmd(["ZREVRANGE", key, String(offset), String(offset + pageSize - 1)]);
+    if (!Array.isArray(ids)) throw new Error("after_sales_store_unavailable");
+    if (!ids.length) { exhausted = true; break; }
+    offset += ids.length;
+    const tickets = await getTicketsByIds(ids);
+    for (const ticket of tickets) {
+      const ticketId = normalizeId(ticket.ticketId);
+      if (!ticketId || seen.has(ticketId) || (status !== "all" && ticket.status !== status)) continue;
+      seen.add(ticketId);
+      records.push(ticket);
+      if (records.length >= stopAfter) break;
+    }
+    if (ids.length < pageSize) { exhausted = true; break; }
+  }
+  return { records, exhausted };
 }
 
 export async function listAfterSalesTickets({ status = "all", query = "", offset = 0, limit = 60 } = {}) {
-  if (!redisConfig()) return { tickets: [], total: 0, hasMore: false, counts: await getAfterSalesCounts() };
   const safeStatus = ["pending", "completed"].includes(status) ? status : "all";
-  const safeOffset = Math.max(0, Number(offset || 0));
-  const safeLimit = Math.max(1, Math.min(100, Number(limit || 60)));
+  const parsedOffset = Number(offset);
+  const parsedLimit = Number(limit);
+  const safeOffset = Number.isFinite(parsedOffset) ? Math.max(0, Math.trunc(parsedOffset)) : 0;
+  const safeLimit = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(100, Math.trunc(parsedLimit))) : 60;
   const q = clean(query, 200).toLowerCase();
   const key = indexForStatus(safeStatus);
   const counts = await getAfterSalesCounts();
 
   if (!q) {
-    const total = Number(await redisCmd(["ZCARD", key]) || 0);
-    const ids = await redisCmd(["ZREVRANGE", key, String(safeOffset), String(safeOffset + safeLimit - 1)]);
-    const tickets = (await getTicketsByIds(ids)).map(adminAfterSalesSummary);
-    return { tickets, total, hasMore: safeOffset + tickets.length < total, counts };
+    const scanned = await scanAfterSalesTicketIndex(key, { status: safeStatus, stopAfter: safeOffset + safeLimit + 1 });
+    const page = scanned.records.slice(safeOffset, safeOffset + safeLimit);
+    const hasMore = scanned.records.length > safeOffset + safeLimit || !scanned.exhausted;
+    const indexedTotal = Number(counts[safeStatus] ?? counts.all);
+    const total = scanned.exhausted ? scanned.records.length : Math.max(scanned.records.length, indexedTotal);
+    return { tickets: page.map(adminAfterSalesSummary), total, hasMore, counts };
   }
 
   // 搜索属于后台主动操作；只在搜索时读取记录，常规列表始终按索引分页。
-  const ids = await redisCmd(["ZREVRANGE", key, "0", "4999"]);
-  const records = [];
-  for (let start = 0; start < (Array.isArray(ids) ? ids.length : 0); start += 100) {
-    records.push(...await getTicketsByIds(ids.slice(start, start + 100)));
-  }
+  const { records } = await scanAfterSalesTicketIndex(key, { status: safeStatus });
   const referenceOrders = q.length <= 32 && /^[a-z0-9_-]+$/i.test(q)
     ? await getOrdersByInternalReference(q, 500)
     : [];

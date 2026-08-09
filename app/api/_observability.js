@@ -505,7 +505,14 @@ export async function readLatestQueueSnapshots() {
     throw error;
   }
   const raw = hashObject(rows[0]);
-  return OPERATIONAL_QUEUE_DEFINITIONS.map((definition) => {
+  const corruptQueues = [];
+  const storedCount = (value, fallback = null) => {
+    if (value === undefined && fallback !== null) return fallback;
+    if (!((typeof value === "number") || (typeof value === "string" && value.trim()))) return null;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+  };
+  const snapshots = OPERATIONAL_QUEUE_DEFINITIONS.map((definition) => {
     const stored = raw[definition.name];
     if (stored == null || stored === "") return {
       name: definition.name,
@@ -518,19 +525,44 @@ export async function readLatestQueueSnapshots() {
       checkedAt: "",
     };
     const value = parseJson(stored);
+    const count = storedCount(value?.count);
+    const dueCount = storedCount(value?.dueCount, 0);
+    const checkedAt = typeof value?.checkedAt === "string" && Number.isFinite(Date.parse(value.checkedAt));
+    const oldestAt = value?.oldestAt === undefined || value.oldestAt === ""
+      || (typeof value.oldestAt === "string" && Number.isFinite(Date.parse(value.oldestAt)));
+    const oldestAgeMs = value?.oldestAgeMs === undefined || storedCount(value.oldestAgeMs) !== null;
     const valid = value && typeof value === "object" && !Array.isArray(value)
       && value.name === definition.name
-      && Number.isFinite(Number(value.count))
-      && Number(value.count) >= 0
+      && count !== null
+      && dueCount !== null
+      && dueCount <= count
       && ["ok", "warning", "error", "unknown"].includes(value.status)
-      && typeof value.checkedAt === "string";
+      && checkedAt
+      && oldestAt
+      && oldestAgeMs;
     if (!valid) {
-      const error = new Error("operational_queue_snapshot_corrupt");
-      error.code = "operational_queue_snapshot_corrupt";
-      throw error;
+      corruptQueues.push(definition.name);
+      return {
+        name: definition.name,
+        label: definition.label,
+        count: 0,
+        dueCount: 0,
+        oldestAt: "",
+        oldestAgeMs: 0,
+        status: "error",
+        checkedAt: "",
+        error: "operational_queue_snapshot_corrupt",
+      };
     }
-    return value;
+    return { ...value, count, dueCount };
   });
+  if (corruptQueues.length) {
+    console.warn("[observability] replaced unreadable queue snapshots", {
+      skipped: corruptQueues.length,
+      queues: corruptQueues.slice(0, 10),
+    });
+  }
+  return snapshots;
 }
 
 export function businessTraceIdForOrder(orderId) {
@@ -615,7 +647,7 @@ export async function readBusinessTrace(orderId, limit = TRACE_LIMIT) {
   if (!id) return { orderId: "", businessTraceId: "", events: [] };
   const safeLimit = Math.max(1, Math.min(TRACE_LIMIT, Number(limit || TRACE_LIMIT)));
   const result = pipelineRows(await redisPipeline([
-    ["LRANGE", TRACE_PREFIX + id, "0", String(safeLimit - 1)],
+    ["LRANGE", TRACE_PREFIX + id, "0", "-1"],
     ["PING"],
   ]));
   if (result.length !== 2 || !Array.isArray(result[0]) || pipelineRowFailed(result[0]) || result[1] !== "PONG") {
@@ -640,7 +672,7 @@ export async function readBusinessTrace(orderId, limit = TRACE_LIMIT) {
   return {
     orderId: id,
     businessTraceId: businessTraceIdForOrder(id),
-    events,
+    events: events.slice(0, safeLimit),
     corruptCount,
   };
 }

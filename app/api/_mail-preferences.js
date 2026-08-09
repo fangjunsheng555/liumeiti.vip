@@ -452,31 +452,40 @@ export async function getMailSendDecisionsBatch({ emails, purpose = "", category
   if (!normalizedEmails.length) return { ok: true, decisions: new Map() };
   const ids = normalizedEmails.map(mailContactId);
   if (ids.some((id) => !id)) return { ok: false, error: "mail_policy_unavailable", decisions: new Map() };
-  const commands = [
-    ...ids.map((id) => ["GET", contactKey(id)]), ["SMISMEMBER", SUPPRESSED_ALL_KEY, ...ids],
+  const metadataCommands = [
+    ...ids.map((id) => ["TYPE", contactKey(id)]), ["SMISMEMBER", SUPPRESSED_ALL_KEY, ...ids],
     ["SMISMEMBER", SUPPRESSED_OPTIONAL_KEY, ...ids], ["SMISMEMBER", SUPPRESSED_MARKETING_KEY, ...ids], ["PING"],
   ];
-  const response = await redisPipeline(commands);
+  const response = await redisPipeline(metadataCommands);
   const entries = Array.isArray(response?.result) ? response.result : response;
   const value = (entry) => entry && typeof entry === "object" && Object.hasOwn(entry, "result") ? entry.result : entry;
   const membershipEntries = Array.isArray(entries) ? entries.slice(ids.length, ids.length + 3) : [];
   const memberships = membershipEntries.map(value);
-  const rowEntries = Array.isArray(entries) ? entries.slice(0, ids.length) : [];
-  const fatalRowError = rowEntries.some((entry) => pipelineEntryHasError(entry)
-    && !/wrongtype/i.test(String(entry?.error ?? entry?.result?.error ?? "")));
+  const typeEntries = Array.isArray(entries) ? entries.slice(0, ids.length) : [];
+  const types = typeEntries.map(value);
   const membershipsAvailable = memberships.length === 3
     && !membershipEntries.some(pipelineEntryHasError)
     && memberships.every((row) => Array.isArray(row) && row.length === ids.length);
-  if (!Array.isArray(entries) || entries.length !== commands.length || fatalRowError
-      || pipelineEntryHasError(entries.at(-1)) || value(entries.at(-1)) !== "PONG") {
+  if (!Array.isArray(entries) || entries.length !== metadataCommands.length
+      || entries.some(pipelineEntryHasError) || value(entries.at(-1)) !== "PONG"
+      || !membershipsAvailable || types.some((type) => typeof type !== "string")) {
     return { ok: false, error: "mail_policy_unavailable", decisions: new Map() };
   }
+  const readableIndexes = types.map((type, index) => type === "string" ? index : -1).filter((index) => index >= 0);
+  const readCommands = [...readableIndexes.map((index) => ["GET", contactKey(ids[index])]), ["PING"]];
+  const readResponse = await redisPipeline(readCommands);
+  const readEntries = Array.isArray(readResponse?.result) ? readResponse.result : readResponse;
+  if (!Array.isArray(readEntries) || readEntries.length !== readCommands.length
+      || readEntries.some(pipelineEntryHasError) || value(readEntries.at(-1)) !== "PONG") {
+    return { ok: false, error: "mail_policy_unavailable", decisions: new Map() };
+  }
+  const rawByIndex = new Map(readableIndexes.map((index, position) => [index, value(readEntries[position])]));
   const decisions = new Map();
   for (let index = 0; index < normalizedEmails.length; index += 1) {
     const email = normalizedEmails[index];
-    const wrongType = pipelineEntryHasError(rowEntries[index]);
-    const raw = wrongType ? null : value(rowEntries[index]);
-    const suppressionScope = !membershipsAvailable ? "" : Number(memberships[0][index]) === 1 ? "all"
+    const wrongType = !["none", "string"].includes(types[index]);
+    const raw = rawByIndex.get(index) ?? null;
+    const suppressionScope = Number(memberships[0][index]) === 1 ? "all"
       : Number(memberships[1][index]) === 1 ? "optional"
         : Number(memberships[2][index]) === 1 ? "marketing" : "";
     const parsed = raw == null ? null : parseJson(raw);
@@ -485,10 +494,6 @@ export async function getMailSendDecisionsBatch({ emails, purpose = "", category
       : null;
     if (contact && suppressionScope && SCOPE_PRIORITY[suppressionScope] > SCOPE_PRIORITY[contact.suppression?.scope || "none"]) {
       contact.suppression = normalizedSuppression({ ...contact.suppression, scope: suppressionScope, reason: contact.suppression?.reason || "suppression_index_recovered" });
-    }
-    if (raw == null && !wrongType && !membershipsAvailable) {
-      decisions.set(email, { allowed: false, retryable: true, reason: "mail_policy_unavailable", purpose: resolvedPurpose, contact: null });
-      continue;
     }
     if (wrongType || (raw != null && (!contact || contact.email !== email || contact.contactId !== ids[index]))
         || (raw == null && suppressionScope)) {
@@ -1065,18 +1070,16 @@ export async function listMailSuppressions({ limit = 200 } = {}) {
   const detailResponse = await redisPipeline(detailCommands);
   const detailEntries = Array.isArray(detailResponse?.result) ? detailResponse.result : detailResponse;
   const detailValue = (entry) => entry && typeof entry === "object" && Object.hasOwn(entry, "result") ? entry.result : entry;
-  const fatalDetailError = Array.isArray(detailEntries) && detailEntries.slice(0, -1).some((entry) => (
-    pipelineEntryHasError(entry) && !/wrongtype/i.test(String(entry?.error ?? entry?.result?.error ?? ""))
-  ));
+  const fatalDetailError = Array.isArray(detailEntries)
+    && detailEntries.slice(0, -1).some(pipelineEntryHasError);
   if (!Array.isArray(detailEntries) || detailEntries.length !== detailCommands.length || fatalDetailError
       || pipelineEntryHasError(detailEntries.at(-1)) || detailValue(detailEntries.at(-1)) !== "PONG") {
     return { ok: false, error: "mail_policy_unavailable", suppressions: [] };
   }
-  const wrongTypeRows = detailEntries.slice(0, -1).map(pipelineEntryHasError);
-  const detailRows = detailEntries.map((entry) => pipelineEntryHasError(entry) ? null : detailValue(entry));
+  const detailRows = detailEntries.map(detailValue);
   const parsedRows = detailRows.slice(0, -1).map((entry) => (entry == null ? null : parseJson(entry)));
-  const corruptCount = parsedRows.filter((entry, index) => wrongTypeRows[index] || (detailRows[index] != null
-    && (!entry || typeof entry !== "object" || Array.isArray(entry)))).length;
+  const corruptCount = parsedRows.filter((entry, index) => detailRows[index] != null
+    && (!entry || typeof entry !== "object" || Array.isArray(entry))).length;
   if (corruptCount) console.warn(`[mail-preferences] ignored ${corruptCount} corrupt derived contact record(s) while listing suppressions`);
   const suppressions = parsedRows
     .map((entry, index) => {

@@ -68,7 +68,13 @@ export async function GET(request, { params }) {
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   if (!adminPermissionProfile(session).canReviewWithdrawals) return Response.json({ ok: false, error: "forbidden" }, { status: 403 });
   const { id } = await params;
-  const detail = await getWithdrawalDetail(id);
+  let detail;
+  try {
+    detail = await getWithdrawalDetail(id);
+  } catch (error) {
+    console.warn("[admin-withdrawal] transaction read unavailable", error);
+    return Response.json({ ok: false, error: "balance_transaction_store_unavailable" }, { status: 503 });
+  }
   if (!detail) return Response.json({ ok: false, error: "withdrawal_not_found" }, { status: 404 });
   return Response.json({ ok: true, ...detail });
 }
@@ -115,6 +121,17 @@ export async function PATCH(request, { params }) {
     );
   }
 
-  const detail = await getWithdrawalDetail(id);
-  return Response.json({ ok: true, ...detail, notice: notice ? { ok: !!notice.ok } : null });
+  try {
+    const detail = await getWithdrawalDetail(id);
+    return Response.json({ ok: true, ...detail, notice: notice ? { ok: !!notice.ok } : null });
+  } catch (error) {
+    console.warn("[admin-withdrawal] post-update detail refresh unavailable", error);
+    return Response.json({
+      ok: true,
+      withdrawal: result.withdrawal,
+      transactionsUnavailable: true,
+      refreshRequired: true,
+      notice: notice ? { ok: !!notice.ok } : null,
+    });
+  }
 }

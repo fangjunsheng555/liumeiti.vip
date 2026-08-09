@@ -100,7 +100,11 @@ export async function GET(request) {
       text: isV7 ? buildMarketingMailV7Text(marketingArgs) : buildMarketingMailText(marketingArgs),
     });
   }
-  const logs = await getAdminMailLog();
+  let logs;
+  try { logs = await getAdminMailLog(); } catch (error) {
+    console.warn("[admin-mail] log read unavailable", error);
+    return Response.json({ ok: false, error: "admin_mail_log_store_unavailable" }, { status: 503 });
+  }
   return Response.json({ ok: true, logs, currentStaff: currentStaffPayload(session) });
 }
 
@@ -285,7 +289,11 @@ export async function DELETE(request) {
   let body = {};
   try { body = await request.json(); } catch (e) {}
   const ids = Array.isArray(body.ids) ? body.ids.map((id) => clean(id, 120)).filter(Boolean) : [];
-  const result = await deleteAdminMailLogEntries(ids, adminActorFromSession(session));
-  if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: 400 });
+  let result;
+  try { result = await deleteAdminMailLogEntries(ids, adminActorFromSession(session)); } catch (error) {
+    console.warn("[admin-mail] delete pre-read unavailable", error);
+    return Response.json({ ok: false, error: "admin_mail_log_store_unavailable" }, { status: 503 });
+  }
+  if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: result.error === "storage_failed" ? 503 : 400 });
   return Response.json(result);
 }

@@ -94,6 +94,14 @@ function checkedPipelineRows(response, expectedLength) {
   return pipelineRows(response);
 }
 
+function validStoredDelivery(record, expectedId = "") {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return false;
+  const id = clean(record.id, 120);
+  const status = clean(record.status, 40).toLowerCase();
+  if (!id || (expectedId && id !== clean(expectedId, 120))) return false;
+  return DELIVERY_STATUSES.includes(status) || status === "recovered";
+}
+
 function normalizeRecipients(value) {
   return Array.from(new Set((Array.isArray(value) ? value : [value])
     .map((item) => String(item || "").trim().toLowerCase())
@@ -192,15 +200,20 @@ async function readRecordByMessageId(messageId) {
   const lookup = await redisPipeline([["GET", messageKey(safeMessageId)]]);
   const lookupRows = checkedPipelineRows(lookup, 1);
   if (!lookupRows) return { ok: false, error: "storage_failed", record: null };
-  if (lookupRows[0] != null && typeof lookupRows[0] !== "string") return { ok: false, error: "storage_failed", record: null };
-  const id = clean(lookupRows[0], 120);
-  if (!id) return { ok: true, record: null };
+  const rawId = lookupRows[0];
+  if (rawId == null) return { ok: true, record: null };
+  const id = typeof rawId === "string" ? clean(rawId, 120) : "";
+  if (!id || id !== rawId) {
+    console.warn("[mail-delivery] corrupt message lookup", { messageId: safeMessageId });
+    return { ok: false, error: "storage_corrupt", record: null };
+  }
   const stored = await redisPipeline([["GET", recordKey(id)]]);
   const storedRows = checkedPipelineRows(stored, 1);
   if (!storedRows) return { ok: false, error: "storage_failed", record: null };
   const record = storedRows[0] == null ? null : parseJson(storedRows[0]);
-  if (storedRows[0] != null && (!record || typeof record !== "object" || Array.isArray(record) || clean(record.id, 120) !== id || ![record.messageId, record.providerMessageId].map(canonicalMessageId).includes(safeMessageId))) {
-    return { ok: false, error: "storage_failed", record: null };
+  if (!validStoredDelivery(record, id) || ![record?.messageId, record?.providerMessageId].map(canonicalMessageId).includes(safeMessageId)) {
+    console.warn("[mail-delivery] corrupt delivery record", { id, messageId: safeMessageId });
+    return { ok: false, error: "storage_corrupt", record: null };
   }
   return { ok: true, record };
 }
@@ -685,11 +698,20 @@ export async function listEmailDeliveries({ query = "", status = "all", category
   const commands = [...ids.map((id) => ["GET", recordKey(id)]), ["PING"]];
   const rows = checkedPipelineRows(await redisPipeline(commands), commands.length);
   if (!rows || rows.at(-1) !== "PONG") return { ok: false, error: "storage_failed", records: [], counts: {}, total: 0 };
-  const parsedRows = rows.slice(0, -1).map((row) => (row == null ? null : parseJson(row)));
-  if (parsedRows.some((record, index) => rows[index] != null && (!record || typeof record !== "object" || Array.isArray(record)))) {
-    return { ok: false, error: "storage_failed", records: [], counts: {}, total: 0 };
+  const parsedRows = [];
+  const skippedIds = [];
+  rows.slice(0, -1).forEach((row, index) => {
+    const record = row == null ? null : parseJson(row);
+    if (validStoredDelivery(record, ids[index])) parsedRows.push(record);
+    else skippedIds.push(clean(ids[index], 120));
+  });
+  if (skippedIds.length) {
+    console.warn("[mail-delivery] skipped unreadable delivery records", {
+      skipped: skippedIds.length,
+      ids: skippedIds.filter(Boolean).slice(0, 10),
+    });
   }
-  const records = reconcileDeliveryStatuses(parsedRows.filter(Boolean));
+  const records = reconcileDeliveryStatuses(parsedRows);
   const counts = records.reduce((out, record) => {
     out[record.status || "sent"] = (out[record.status || "sent"] || 0) + 1;
     return out;
@@ -710,8 +732,9 @@ export async function getEmailDelivery(id) {
   const rows = checkedPipelineRows(await redisPipeline(commands), commands.length);
   if (!rows || rows[1] !== "PONG") return { ok: false, error: "storage_failed", record: null };
   const record = rows[0] == null ? null : parseJson(rows[0]);
-  if (rows[0] != null && (!record || typeof record !== "object" || Array.isArray(record))) {
-    return { ok: false, error: "storage_failed", record: null };
+  if (rows[0] != null && !validStoredDelivery(record, id)) {
+    console.warn("[mail-delivery] corrupt delivery record", { id: clean(id, 120) });
+    return { ok: false, error: "storage_corrupt", record: null };
   }
   return { ok: true, record };
 }

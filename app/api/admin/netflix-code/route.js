@@ -7,12 +7,12 @@ import {
   getAllOrders,
   getOrderListRevision,
   getOrderEntryById,
+  getUsersByEmailsStrict,
   pushAdminActionLog,
   redisCmd,
   redisPipeline,
   setOrderAt,
   setUser,
-  USERS_KEY,
 } from "../../_utils.js";
 import {
   clearNetflixCodeLock,
@@ -47,18 +47,6 @@ function parseJson(value) {
   if (!value) return null;
   if (typeof value === "object") return value;
   try { return JSON.parse(value); } catch { return null; }
-}
-
-function pipelineRows(value) {
-  if (Array.isArray(value)) return value;
-  if (Array.isArray(value?.result)) return value.result;
-  return [];
-}
-
-function pipelineValue(entry) {
-  return entry && typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, "result")
-    ? entry.result
-    : entry;
 }
 
 function netflixItemEntry(order) {
@@ -117,6 +105,8 @@ async function netflixOrdersFromDirectory() {
     const cached = parseJson(await redisCmd(["GET", NETFLIX_ORDER_DIRECTORY_CACHE_KEY]));
     if (cached?.signature === signature && Array.isArray(cached.orders)) return cached.orders;
   }
+  // directoryOrder deliberately returns null for non-Netflix products; those
+  // rows are outside this service-specific directory, not unreadable orders.
   const orders = (await getAllOrders()).map(directoryOrder).filter(Boolean);
   if (signature) {
     // Use the POST pipeline endpoint so a large directory never lands in a
@@ -133,13 +123,7 @@ async function usersByEmail(emails) {
   const normalized = Array.from(new Set((Array.isArray(emails) ? emails : [])
     .map((email) => String(email || "").trim().toLowerCase())
     .filter(Boolean)));
-  const users = new Map();
-  for (let offset = 0; offset < normalized.length; offset += 200) {
-    const batch = normalized.slice(offset, offset + 200);
-    const rows = pipelineRows(await redisPipeline(batch.map((email) => ["GET", `${USERS_KEY}:${email}`])));
-    batch.forEach((email, index) => users.set(email, parseJson(pipelineValue(rows[index]))));
-  }
-  return users;
+  return getUsersByEmailsStrict(normalized);
 }
 
 function requireAdmin(request, permission) {
@@ -169,11 +153,23 @@ export async function GET(request) {
   const requestedScope = clean(params.get("scope"), 20).toLowerCase();
   const scope = ["mail", "access", "accounts"].includes(requestedScope) ? requestedScope : "mail";
   const queryHash = query.includes("@") ? netflixAccountHash(query) : "";
-  const orders = await netflixOrdersFromDirectory();
+  let orders;
+  try {
+    orders = await netflixOrdersFromDirectory();
+  } catch (error) {
+    console.error("[admin-netflix-code] order directory unavailable", error?.message || error);
+    return Response.json({ ok: false, error: "netflix_store_unavailable" }, { status: 503 });
+  }
   const uniqueEmails = Array.from(new Set(orders
     .map((order) => netflixOrderIdentity(order).ownerEmail)
     .filter(Boolean)));
-  const userByEmail = await usersByEmail(uniqueEmails);
+  let userByEmail;
+  try {
+    userByEmail = await usersByEmail(uniqueEmails);
+  } catch (error) {
+    console.error("[admin-netflix-code] user directory unavailable", error?.message || error);
+    return Response.json({ ok: false, error: "user_store_unavailable" }, { status: 503 });
+  }
   const byHash = new Map();
   const accountByHash = new Map();
   const orderControls = new Map();
@@ -214,7 +210,13 @@ export async function GET(request) {
     byHash.get(hash).push(control);
     accountByOrderId.set(order.orderId, account);
   }
-  const receipts = await latestNetflixMailReceipts(Array.from(byHash.keys()));
+  let receipts;
+  try {
+    receipts = await latestNetflixMailReceipts(Array.from(byHash.keys()));
+  } catch (error) {
+    console.error("[admin-netflix-code] mail receipt index unavailable", error?.message || error);
+    return Response.json({ ok: false, error: "netflix_store_unavailable" }, { status: 503 });
+  }
   const accountRows = [];
   const seenAccounts = new Set();
   for (const account of accountByOrderId.values()) {
@@ -238,10 +240,17 @@ export async function GET(request) {
   }
   accountRows.sort((left, right) => (Date.parse(left.lastMailAt) || 0) - (Date.parse(right.lastMailAt) || 0));
 
-  const [accessRows, storedEventRows] = await Promise.all([
-    query && (scope === "access" || scope === "mail") ? listAllNetflixCodeAccess() : listNetflixCodeAccess({ limit: 200 }),
-    query && scope === "mail" ? listAllNetflixMailEvents() : listNetflixMailEvents({ limit: 100 }),
-  ]);
+  let accessRows;
+  let storedEventRows;
+  try {
+    [accessRows, storedEventRows] = await Promise.all([
+      query && (scope === "access" || scope === "mail") ? listAllNetflixCodeAccess() : listNetflixCodeAccess({ limit: 200 }),
+      query && scope === "mail" ? listAllNetflixMailEvents() : listNetflixMailEvents({ limit: 100 }),
+    ]);
+  } catch (error) {
+    console.error("[admin-netflix-code] record list unavailable", error?.message || error);
+    return Response.json({ ok: false, error: "netflix_store_unavailable" }, { status: 503 });
+  }
   const access = filterNetflixAccessRecords(accessRows.map((entry) => ({
     id: entry.id,
     orderId: entry.orderId,

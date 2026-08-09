@@ -6,49 +6,90 @@ const RESTORE_PREFIX = "lm:restore-drill:";
 const DEFAULT_BACKUP_PART_LIMIT = 40 * 1024 * 1024;
 const SUPPORTED_TYPES = new Set(["string", "list", "set", "zset", "hash", "stream"]);
 
-function pipelineRows(value) {
-  if (!Array.isArray(value)) return [];
-  return value.map((entry) => (entry && typeof entry === "object" && Object.hasOwn(entry, "result") ? entry.result : entry));
+function strictPipelineValues(value, expected, code) {
+  if (!Array.isArray(value) || value.length !== expected) throw new Error(code);
+  return value.map((entry) => {
+    if (entry && typeof entry === "object" && Object.hasOwn(entry, "error")) throw new Error(code);
+    const result = entry && typeof entry === "object" && Object.hasOwn(entry, "result") ? entry.result : entry;
+    if (result == null) throw new Error(code);
+    return result;
+  });
 }
 
 function canonicalHash(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+function invalidBackupValue(type) {
+  const error = new Error(`backup_${type}_value_invalid`);
+  error.code = "backup_value_shape_invalid";
+  return error;
+}
+
 function normalizeHash(value) {
   if (Array.isArray(value)) {
+    if (!value.length || value.length % 2 !== 0) throw invalidBackupValue("hash");
     const pairs = [];
     for (let index = 0; index + 1 < value.length; index += 2) pairs.push([String(value[index]), String(value[index + 1])]);
     return pairs.sort((a, b) => a[0].localeCompare(b[0])).flat();
   }
-  if (value && typeof value === "object") {
+  if (value && typeof value === "object" && Object.keys(value).length > 0) {
     return Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).flatMap(([key, item]) => [String(key), String(item)]);
   }
-  return [];
+  throw invalidBackupValue("hash");
 }
 
 function normalizeSet(value) {
-  return (Array.isArray(value) ? value : []).map(String).sort();
+  // audit-partial-failure: allow partial-failure-predicate-abort -- A complete backup cannot silently rewrite a malformed Redis collection as an empty set.
+  if (!Array.isArray(value) || !value.length || value.some((item) => item != null && typeof item === "object")) {
+    throw invalidBackupValue("set");
+  }
+  return value.map(String).sort();
 }
 
 function normalizeZset(value) {
-  if (!Array.isArray(value)) return [];
+  if (!Array.isArray(value) || !value.length) throw invalidBackupValue("zset");
   if (value.length && value[0] && typeof value[0] === "object" && !Array.isArray(value[0])) {
-    return value.map((entry) => [String(entry.member ?? entry.value ?? ""), String(entry.score ?? 0)])
+    // audit-partial-failure: allow partial-failure-predicate-abort -- A malformed score/member pair invalidates the all-or-nothing backup snapshot.
+    if (value.some((entry) => !entry || Array.isArray(entry) || typeof entry !== "object"
+      || (entry.member == null && entry.value == null) || !Number.isFinite(Number(entry.score)))) {
+      throw invalidBackupValue("zset");
+    }
+    return value.map((entry) => [String(entry.member ?? entry.value), String(entry.score)])
       .sort((a, b) => Number(a[1]) - Number(b[1]) || a[0].localeCompare(b[0])).flat();
   }
+  if (value.length % 2 !== 0) throw invalidBackupValue("zset");
   const pairs = [];
-  for (let index = 0; index + 1 < value.length; index += 2) pairs.push([String(value[index]), String(value[index + 1])]);
+  for (let index = 0; index + 1 < value.length; index += 2) {
+    if (!Number.isFinite(Number(value[index + 1]))) throw invalidBackupValue("zset");
+    pairs.push([String(value[index]), String(value[index + 1])]);
+  }
   return pairs.sort((a, b) => Number(a[1]) - Number(b[1]) || a[0].localeCompare(b[0])).flat();
 }
 
 function normalizeStream(value) {
-  if (!Array.isArray(value)) return [];
+  const invalid = () => {
+    const error = new Error("backup_stream_record_invalid");
+    error.code = "backup_stream_record_invalid";
+    return error;
+  };
+  const fields = (candidate) => {
+    if (Array.isArray(candidate) && candidate.length >= 2 && candidate.length % 2 === 0) return normalizeHash(candidate);
+    if (candidate && typeof candidate === "object" && !Array.isArray(candidate) && Object.keys(candidate).length > 0) {
+      return normalizeHash(candidate);
+    }
+    throw invalid();
+  };
+  if (!Array.isArray(value)) throw invalid();
   return value.map((entry) => {
-    if (Array.isArray(entry)) return [String(entry[0]), normalizeHash(entry[1])];
-    if (entry && typeof entry === "object") return [String(entry.id || "*"), normalizeHash(entry.message || entry.fields || {})];
-    return null;
-  }).filter(Boolean);
+    if (Array.isArray(entry) && entry.length >= 2 && String(entry[0] ?? "").trim()) {
+      return [String(entry[0]), fields(entry[1])];
+    }
+    if (entry && typeof entry === "object" && !Array.isArray(entry) && String(entry.id ?? "").trim()) {
+      return [String(entry.id), fields(entry.message ?? entry.fields)];
+    }
+    throw invalid();
+  });
 }
 
 function normalizeValue(type, value) {
@@ -56,8 +97,15 @@ function normalizeValue(type, value) {
   if (type === "set") return normalizeSet(value);
   if (type === "zset") return normalizeZset(value);
   if (type === "stream") return normalizeStream(value);
-  if (type === "list") return (Array.isArray(value) ? value : []).map(String);
-  return value == null ? "" : String(value);
+  if (type === "list") {
+    // audit-partial-failure: allow partial-failure-predicate-abort -- A complete backup must preserve every list member and therefore rejects malformed Redis response shapes.
+    if (!Array.isArray(value) || !value.length || value.some((item) => item != null && typeof item === "object")) {
+      throw invalidBackupValue("list");
+    }
+    return value.map(String);
+  }
+  if (type === "string" && typeof value === "string") return value;
+  throw invalidBackupValue(type || "unknown");
 }
 
 function readCommand(key, type) {
@@ -93,23 +141,24 @@ async function readEntries(keys) {
   for (let offset = 0; offset < keys.length; offset += 120) {
     const chunk = keys.slice(offset, offset + 120);
     const metadataCommands = chunk.flatMap((key) => [["TYPE", key], ["PTTL", key]]);
-    const metadata = pipelineRows(await redisPipeline(metadataCommands));
-    if (metadata.length !== metadataCommands.length || metadata.some((item) => item == null)) {
-      throw new Error("backup_metadata_incomplete");
-    }
+    const metadata = strictPipelineValues(
+      await redisPipeline(metadataCommands), metadataCommands.length, "backup_metadata_incomplete",
+    );
     const readable = [];
+    // audit-partial-failure: allow partial-failure-loop-throw -- TYPE/PTTL metadata defines the complete snapshot contract; unsupported or malformed metadata aborts before publication.
     chunk.forEach((key, index) => {
-      const type = String(metadata[index * 2] || "none").toLowerCase();
+      if (typeof metadata[index * 2] !== "string") throw new Error("backup_metadata_incomplete");
+      const type = metadata[index * 2].toLowerCase();
       const pttl = Number(metadata[index * 2 + 1]);
       if (type === "none") return;
       if (!SUPPORTED_TYPES.has(type)) throw new Error(`unsupported_redis_type:${type}:${key}`);
-      readable.push({ key, type, pttl: Number.isFinite(pttl) ? pttl : -1 });
+      if (!Number.isSafeInteger(pttl) || pttl < -2) throw new Error("backup_metadata_incomplete");
+      readable.push({ key, type, pttl });
     });
     const valueCommands = readable.map((entry) => readCommand(entry.key, entry.type));
-    const values = pipelineRows(await redisPipeline(valueCommands));
-    if (values.length !== valueCommands.length || values.some((item) => item == null)) {
-      throw new Error("backup_values_incomplete");
-    }
+    const values = strictPipelineValues(
+      await redisPipeline(valueCommands), valueCommands.length, "backup_values_incomplete",
+    );
     readable.forEach((entry, index) => {
       entries.push({ ...entry, value: normalizeValue(entry.type, values[index]) });
     });
@@ -191,22 +240,33 @@ export async function runRestoreDrill(snapshot) {
   for (let offset = 0; offset < snapshot.entries.length; offset += 40) {
     const chunk = snapshot.entries.slice(offset, offset + 40);
     const targets = chunk.map((entry, index) => `${RESTORE_PREFIX}${runId}:${offset + index}:${createHash("sha1").update(entry.key).digest("hex").slice(0, 12)}`);
-    const restore = [];
-    chunk.forEach((entry, index) => restore.push(...restoreCommands(entry, targets[index])));
-    const restored = pipelineRows(await redisPipeline(restore));
-    if (restored.length !== restore.length || restored.some((item) => item == null)) throw new Error("restore_write_failed");
-    const readCommands = chunk.map((entry, index) => readCommand(targets[index], entry.type));
-    const values = pipelineRows(await redisPipeline(readCommands));
-    if (values.length !== readCommands.length || values.some((item) => item == null)) {
-      throw new Error("restore_verify_read_failed");
+    try {
+      const restore = [];
+      chunk.forEach((entry, index) => restore.push(...restoreCommands(entry, targets[index])));
+      const restored = strictPipelineValues(await redisPipeline(restore), restore.length, "restore_write_failed");
+      // audit-partial-failure: allow partial-failure-loop-throw -- Any failed expiry means a restore-drill copy could outlive the drill, so verification must abort and enter cleanup.
+      restore.forEach((command, index) => {
+        if (String(command[0]).toUpperCase() === "PEXPIRE" && Number(restored[index]) !== 1) {
+          throw new Error("restore_write_failed");
+        }
+      });
+      const readCommands = chunk.map((entry, index) => readCommand(targets[index], entry.type));
+      const values = strictPipelineValues(
+        await redisPipeline(readCommands), readCommands.length, "restore_verify_read_failed",
+      );
+      chunk.forEach((entry, index) => {
+        const expected = canonicalHash({ type: entry.type, value: normalizeValue(entry.type, entry.value) });
+        const actual = canonicalHash({ type: entry.type, value: normalizeValue(entry.type, values[index]) });
+        if (expected === actual) verified += 1;
+        else mismatches.push(entry.key);
+      });
+    } finally {
+      const cleanupCommands = targets.map((key) => ["DEL", key]);
+      const cleanup = await redisPipeline(cleanupCommands);
+      if (!Array.isArray(cleanup) || cleanup.length !== cleanupCommands.length || cleanup.some((entry) => entry?.error)) {
+        console.warn("[backup] restore-drill temporary key cleanup incomplete", { keys: targets.length });
+      }
     }
-    chunk.forEach((entry, index) => {
-      const expected = canonicalHash({ type: entry.type, value: normalizeValue(entry.type, entry.value) });
-      const actual = canonicalHash({ type: entry.type, value: normalizeValue(entry.type, values[index]) });
-      if (expected === actual) verified += 1;
-      else mismatches.push(entry.key);
-    });
-    await redisPipeline(targets.map((key) => ["DEL", key]));
     if (mismatches.length) break;
   }
   const ok = verified === snapshot.entries.length && mismatches.length === 0;

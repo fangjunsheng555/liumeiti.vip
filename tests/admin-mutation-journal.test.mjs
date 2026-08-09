@@ -158,3 +158,23 @@ test("admin callers send the persisted exact body and compare-clear only the pro
   assert.match(source, /return withCheckoutSubmissionCoordination\(callback\)/);
   assert.doesNotMatch(source, /clearIdempotencyRequest\(window\.localStorage, storageKey\)/);
 });
+
+test("withdrawal status refresh failure preserves the displayed balance and ledger", async () => {
+  const [page, route] = await Promise.all([
+    readFile(new URL("../app/admin/page.jsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/admin/withdrawals/[id]/route.js", import.meta.url), "utf8"),
+  ]);
+  const fallback = route.slice(route.indexOf("post-update detail refresh unavailable"));
+  assert.doesNotMatch(fallback, /user:\s*null|transactions:\s*\[\]/);
+  assert.match(fallback, /transactionsUnavailable:\s*true/);
+  assert.match(page, /setActiveWithdrawal\(\(current\) => \(\{[\s\S]*?user: Object\.hasOwn\(data, "user"\) \? data\.user : current\?\.user,[\s\S]*?transactions: Array\.isArray\(data\.transactions\) \? data\.transactions : \(current\?\.transactions \|\| \[\]\)/);
+  assert.match(page, /if \(data\.refreshRequired\)[\s\S]*?状态已保存，但余额明细暂未刷新/);
+});
+
+test("action deletion refresh failure keeps the confirmed local deletion", async () => {
+  const page = await readFile(new URL("../app/admin/page.jsx", import.meta.url), "utf8");
+  const deletion = page.slice(page.indexOf("async function deleteSelectedActions"), page.indexOf("async function deleteSelectedLoginLogs"));
+  assert.match(deletion, /const deletedIds = new Set\(selectedActionIds\)/);
+  assert.match(deletion, /Array\.isArray\(data\.actions\)[\s\S]*?actions\.filter\(\(action\) => !deletedIds\.has\(action\.id\)\)/);
+  assert.match(deletion, /data\.refreshRequired[\s\S]*?列表读取失败，请稍后刷新/);
+});

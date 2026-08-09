@@ -53,7 +53,11 @@ export async function GET(request) {
   if (!user) {
     return Response.json({ ok: false, error: "user_not_found" }, { status: 404 });
   }
-  const txs = await getBalanceTxs(email);
+  let txs;
+  try { txs = await getBalanceTxs(email); } catch (error) {
+    console.warn("[admin-users] balance transaction read unavailable", error);
+    return Response.json({ ok: false, error: "balance_transaction_store_unavailable" }, { status: 503 });
+  }
   const referral = permissions.canViewUsers ? await userReferralDetail(email, user) : null;
   return Response.json({
     ok: true,

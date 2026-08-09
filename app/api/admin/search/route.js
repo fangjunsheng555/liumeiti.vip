@@ -1,7 +1,7 @@
 // 后台全局搜索(⌘K)。一框搜订单 / 用户 / 兑换码 / 邮箱。按角色权限返回。
 import {
   adminSessionFromRequest, adminPermissionProfile,
-  getAllOrders, listAllUserEmails, getUser, listRedeemCodes,
+  getAllOrders, listAllUserEmailsStrict, getUsersByEmailsStrict, listRedeemCodes,
 } from "../../_utils.js";
 
 export const runtime = "nodejs";
@@ -31,8 +31,14 @@ export async function GET(request) {
   // 用户(需 canViewUsers)
   let users = [];
   if (perms.canViewUsers) {
-    const emails = await listAllUserEmails();
-    const records = (await Promise.all(emails.map((e) => getUser(e)))).filter(Boolean);
+    let records;
+    try {
+      const emails = await listAllUserEmailsStrict();
+      records = Array.from((await getUsersByEmailsStrict(emails)).values());
+    } catch (error) {
+      console.error("[admin-search] user store unavailable", error?.message || error);
+      return Response.json({ ok: false, error: "user_store_unavailable" }, { status: 503 });
+    }
     users = records
       .filter((u) => `${u.email || ""} ${u.username || ""}`.toLowerCase().includes(q))
       .slice(0, 6)
@@ -42,7 +48,11 @@ export async function GET(request) {
   // 兑换码(需 canViewCodes)
   let codes = [];
   if (perms.canViewCodes) {
-    const all = await listRedeemCodes();
+    let all;
+    try { all = await listRedeemCodes(); } catch (error) {
+      console.error("[admin-search] redeem store unavailable", error?.message || error);
+      return Response.json({ ok: false, error: "redeem_store_unavailable" }, { status: 503 });
+    }
     codes = (Array.isArray(all) ? all : [])
       .filter((c) => `${c.code || ""} ${c.usedBy || ""} ${c.email || ""}`.toLowerCase().includes(q))
       .slice(0, 6)

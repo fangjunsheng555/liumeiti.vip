@@ -376,16 +376,40 @@ export async function readMarketingCampaign(campaignId) {
 }
 
 export async function listMarketingCampaigns({ limit = 100 } = {}) {
-  const indexRead = await readRedis([["ZREVRANGE", CAMPAIGN_INDEX_KEY, "0", String(Math.max(0, Math.min(300, Number(limit || 100)) - 1))]]);
-  if (!indexRead.ok || !Array.isArray(indexRead.rows[0])) throw new Error("marketing_campaign_storage_unavailable");
-  const ids = indexRead.rows[0].map(safeCampaignId);
-  if (ids.some((id, index) => !id || id !== indexRead.rows[0][index] || ids.indexOf(id) !== index)) throw new Error("marketing_campaign_storage_corrupt");
-  if (!ids.length) return [];
-  const campaignRead = await readRedis(ids.map((id) => ["GET", campaignKey(id)]));
-  if (!campaignRead.ok) throw new Error("marketing_campaign_storage_unavailable");
-  const campaigns = campaignRead.rows.map(parseJson);
-  if (campaigns.some((campaign, index) => campaign != null && !validCampaign(campaign, ids[index]))) throw new Error("marketing_campaign_storage_corrupt");
-  return campaigns.filter(Boolean);
+  const safeLimit = Math.max(1, Math.min(300, Number(limit || 100)));
+  const pageSize = Math.max(50, Math.min(300, safeLimit * 2));
+  const campaigns = [], seen = new Set(), skippedIds = [];
+  let invalidIndexMembers = 0;
+  let offset = 0;
+  while (campaigns.length < safeLimit) {
+    const indexRead = await readRedis([["ZREVRANGE", CAMPAIGN_INDEX_KEY, String(offset), String(offset + pageSize - 1)]]);
+    if (!indexRead.ok || !Array.isArray(indexRead.rows[0])) throw new Error("marketing_campaign_storage_unavailable");
+    const rawIds = indexRead.rows[0];
+    if (!rawIds.length) break;
+    const ids = [];
+    rawIds.forEach((value) => {
+      const id = safeCampaignId(value);
+      if (!id || id !== value || seen.has(id)) { invalidIndexMembers += 1; return; }
+      seen.add(id);
+      ids.push(id);
+    });
+    if (ids.length) {
+      const campaignRead = await readRedis(ids.map((id) => ["GET", campaignKey(id)]));
+      if (!campaignRead.ok) throw new Error("marketing_campaign_storage_unavailable");
+      campaignRead.rows.forEach((raw, index) => {
+        const campaign = parseJson(raw);
+        if (validCampaign(campaign, ids[index])) campaigns.push(campaign);
+        else skippedIds.push(ids[index]);
+      });
+    }
+    offset += rawIds.length;
+    if (rawIds.length < pageSize) break;
+  }
+  if (invalidIndexMembers) console.warn("[marketing-campaign] skipped invalid campaign index members", { skipped: invalidIndexMembers });
+  if (skippedIds.length) console.warn("[marketing-campaign] skipped unreadable campaign records", {
+    skipped: skippedIds.length, ids: skippedIds.slice(0, 10),
+  });
+  return campaigns.slice(0, safeLimit);
 }
 
 async function readCampaignJobs(campaignId) {
@@ -1339,6 +1363,9 @@ export async function dispatchDueMarketingCampaigns({
 
   let submitted = 0;
   let failed = 0;
+  let providerAttempts = 0;
+  let removedInvalidQueueMembers = 0;
+  let removedInvalidJobs = 0;
   const results = [];
   let leaseLost = false;
   let deadlineExceeded = false;
@@ -1372,9 +1399,6 @@ export async function dispatchDueMarketingCampaigns({
       QUEUE_KEY,
       "-inf",
       String(now),
-      "LIMIT",
-      "0",
-      String(capacity),
     ]);
     if (!Array.isArray(dueIds)) {
       return { ok: false, reason: "storage_unavailable", submitted: 0, failed: 0 };
@@ -1384,6 +1408,7 @@ export async function dispatchDueMarketingCampaigns({
     }
 
     for (const rawJobId of dueIds) {
+      if (providerAttempts >= capacity) break;
       if (!canContinue()) {
         deadlineExceeded = true;
         break;
@@ -1392,8 +1417,20 @@ export async function dispatchDueMarketingCampaigns({
         leaseLost = true;
         break;
       }
-      const id = clean(rawJobId, 80);
-      if (!id) continue;
+      const rawId = typeof rawJobId === "string" ? rawJobId : String(rawJobId ?? "");
+      const id = clean(rawId, 80);
+      if (!rawId || !id || id !== rawId) {
+        const cleanup = await readRedis([["ZREM", QUEUE_KEY, rawId]]);
+        if (!cleanup.ok) {
+          failed += 1;
+          results.push({ id: "", ok: false, retryable: true, reason: "queue_cleanup_unavailable" });
+          break;
+        }
+        failed += 1;
+        results.push({ id: "", ok: false, retryable: false, reason: "invalid_job_id" });
+        removedInvalidQueueMembers += 1;
+        continue;
+      }
       const claimed = await redisCmd(["SET", claimKey(id), lockToken, "NX", "EX", "180"]);
       if (claimed !== "OK") {
         const claimRead = await readRedis([["GET", claimKey(id)]]);
@@ -1417,7 +1454,18 @@ export async function dispatchDueMarketingCampaigns({
         break;
       }
       const job = parseJson(jobRead.rows[0]);
-      if (!validJob(job, id)) { await redisCmd(["DEL", claimKey(id)]); failed += 1; results.push({ id, ok: false, retryable: false, reason: "invalid_job_record" }); continue; }
+      if (!validJob(job, id)) {
+        const cleanup = await readRedis([["ZREM", QUEUE_KEY, rawId], ["DEL", claimKey(id)]]);
+        if (!cleanup.ok) {
+          failed += 1;
+          results.push({ id, ok: false, retryable: true, reason: "queue_cleanup_unavailable" });
+          break;
+        }
+        failed += 1;
+        results.push({ id, ok: false, retryable: false, reason: "invalid_job_record" });
+        removedInvalidJobs += 1;
+        continue;
+      }
       if (["submitted", "suppressed", "failed", "cancelled"].includes(job.status)) {
         await redisPipeline([["ZREM", QUEUE_KEY, id], ["DEL", claimKey(id)], ...(job?.campaignId ? [["SREM", campaignPendingKey(job.campaignId), id]] : [])]);
         if (job?.campaignId) await refreshCampaignLifecycle(job.campaignId);
@@ -1853,6 +1901,7 @@ export async function dispatchDueMarketingCampaigns({
         }
         break;
       }
+      providerAttempts += 1;
       const providerDailyKey = quotaReservation.dailyKey;
       const providerTimestamp = new Date(providerLogicalNow).toISOString();
       const startedJob = {
@@ -2042,6 +2091,12 @@ export async function dispatchDueMarketingCampaigns({
         }
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
+    }
+    if (removedInvalidQueueMembers || removedInvalidJobs) {
+      console.warn("[marketing-queue] removed unreadable due queue entries", {
+        invalidMembers: removedInvalidQueueMembers,
+        invalidJobs: removedInvalidJobs,
+      });
     }
     const safeResults = results.map(({ to: _recipient, ...item }) => item);
     return {

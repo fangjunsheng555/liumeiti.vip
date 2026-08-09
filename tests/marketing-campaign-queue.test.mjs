@@ -345,7 +345,14 @@ function execute(command) {
     return removed;
   }
   if (name === "ZSCORE") return ensureZset(args[0]).has(String(args[1])) ? String(ensureZset(args[0]).get(String(args[1]))) : null;
-  if (name === "ZREVRANGE") return [];
+  if (name === "ZREVRANGE") {
+    const start = Number(args[1]);
+    const stop = Number(args[2]);
+    const rows = Array.from(ensureZset(args[0]).entries())
+      .sort((left, right) => right[1] - left[1])
+      .map(([member]) => member);
+    return rows.slice(start, stop < 0 ? undefined : stop + 1);
+  }
   if (name === "INCR") {
     const next = Number(store.get(args[0])?.value || 0) + 1;
     store.set(args[0], { type: "string", value: String(next) });
@@ -439,6 +446,44 @@ globalThis.fetch = async (input, options = {}) => {
 
 const queue = await import("../app/api/_marketing-campaign-queue.js");
 const marketingCronRoute = await import("../app/api/cron/marketing-campaign/route.js");
+
+test("campaign listing skips isolated corrupt index members and records", async () => {
+  const campaignId = "campaign-partial-failure-probe";
+  const created = await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: ["partial-list@example.com"],
+    scheduledAt: "2099-08-09T10:00:00.000Z",
+    subject: "partial failure probe",
+    html: "<p>probe</p>",
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+  assert.equal(created.ok, true, JSON.stringify(created));
+  execute(["ZADD", "lm:mail:marketing:campaign:index", String(Date.now() + 2), " "]);
+  execute(["ZADD", "lm:mail:marketing:campaign:index", String(Date.now() + 1), "campaign-corrupt-neighbor"]);
+  execute(["SET", "lm:mail:marketing:campaign:campaign-corrupt-neighbor", "{not-json"]);
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args);
+  let campaigns;
+  try {
+    campaigns = await queue.listMarketingCampaigns({ limit: 300 });
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(campaigns.some((campaign) => campaign.id === campaignId), true);
+  assert.equal(campaigns.some((campaign) => campaign.id === "campaign-corrupt-neighbor"), false);
+  assert.equal(warnings.length >= 2, true);
+
+  for (let index = 0; index < 60; index += 1) {
+    const id = `campaign-corrupt-window-${String(index).padStart(2, "0")}`;
+    execute(["ZADD", "lm:mail:marketing:campaign:index", String(Date.now() + 10_000 + index), id]);
+    execute(["SET", `lm:mail:marketing:campaign:${id}`, "{not-json"]);
+  }
+  const one = await queue.listMarketingCampaigns({ limit: 1 });
+  assert.equal(one.length, 1);
+  assert.equal(one[0].id, campaignId);
+});
 
 test("campaign recipients stay internal until their Beijing evening is due", async () => {
   const scheduledAt = "2026-07-15T10:30:00.000Z";
@@ -890,6 +935,52 @@ test("provider success followed by terminal commit failure is recovered without 
   assert.equal(currentEntry(dailyKey)?.value, "1", "recovering a new reserved sending job must not reserve again");
   assert.equal(currentEntry(`lm:mail:marketing:daily:${queue.marketingCampaignQueueInternals.beijingDayKey(recoveredAt)}`), null, "an old-day marker remains authoritative for its attempt");
   assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "submitted");
+});
+
+test("a corrupt mapped delivery blocks sending-job recovery instead of being treated as absent", async () => {
+  ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+  const scheduledAt = "2026-09-13T11:30:00.000Z";
+  const campaignId = "campaign-corrupt-delivery-recovery";
+  const email = "corrupt-delivery-recovery@example.com";
+  const enqueued = await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "corrupt delivery recovery",
+    html: "<p>corrupt delivery recovery</p>",
+    text: "corrupt delivery recovery",
+    preview: "corrupt delivery recovery",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+  assert.equal(enqueued.ok, true);
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  const sendsBefore = resendRequests.length;
+  failNextTerminalTransition = true;
+  const interrupted = await queue.dispatchDueMarketingCampaigns({ now: Date.parse(scheduledAt), interJobDelayMs: 0 });
+  assert.equal(interrupted.results[0].reason, "delivery_commit_pending");
+  const sendingJob = JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value);
+  assert.equal(sendingJob.status, "sending");
+  const mapping = currentEntry(`lm:mail:delivery:message:${sendingJob.deliveryMessageId}`);
+  assert.ok(mapping?.value);
+  const deliveryKey = `lm:mail:delivery:record:${mapping.value}`;
+  const validDelivery = currentEntry(deliveryKey);
+  assert.ok(validDelivery?.value);
+  store.set(deliveryKey, { type: "string", value: "{not-json" });
+  store.delete(`lm:mail:marketing:claim:${jobId}`);
+
+  const recoveredAt = Date.parse(scheduledAt) + 24 * 60 * 60 * 1000;
+  const blocked = await queue.dispatchDueMarketingCampaigns({ now: recoveredAt, interJobDelayMs: 0 });
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.results[0].reason, "delivery_recovery_unavailable");
+  assert.equal(resendRequests.length, sendsBefore + 1, "corrupt recovery storage must not trigger a second provider send");
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "sending");
+
+  store.set(deliveryKey, validDelivery);
+  const recovered = await queue.dispatchDueMarketingCampaigns({ now: recoveredAt + 60_000, interJobDelayMs: 0 });
+  assert.equal(recovered.results[0].recovered, true);
+  assert.equal(resendRequests.length, sendsBefore + 1);
 });
 
 test("a legacy sending job with a durable success recovers without consuming today's quota", async () => {
@@ -2161,7 +2252,7 @@ test("an ambiguous recovered recipient is prioritized ahead of a 100-address bac
 
   const attemptsBefore = resendRequests.length;
   const retried = await queue.dispatchDueMarketingCampaigns({ now: nextDay + 60_000, limit: 40, interJobDelayMs: 0 });
-  assert.equal(retried.submitted, 11, "39 sends in the recovery sweep leave exactly 11 slots in the new Beijing day");
+  assert.equal(retried.submitted, 10, "40 real provider attempts in the recovery sweep leave exactly 10 slots in the new Beijing day");
   assert.equal(resendRequests.slice(attemptsBefore).some((body) => (body.to || []).includes(crashedEmail)), true, "the ambiguous address must consume the first available retry slot");
   assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${crashedJobId}`).value).status, "submitted");
   assert.equal(currentEntry(`lm:mail:marketing:daily:${queue.marketingCampaignQueueInternals.beijingDayKey(nextDay)}`)?.value, "50");
@@ -2213,4 +2304,37 @@ test("each provider attempt selects its Beijing day at the actual logical send t
   assert.notEqual(firstDay, secondDay);
   assert.equal(currentEntry(`lm:mail:marketing:daily:${firstDay}`)?.value, "1");
   assert.equal(currentEntry(`lm:mail:marketing:daily:${secondDay}`)?.value, "1");
+});
+
+test("invalid due queue members cannot consume the provider-attempt window or starve a valid job", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2026-10-01T10:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const dayKey = queue.marketingCampaignQueueInternals.beijingDayKey(now);
+  store.delete(`lm:mail:marketing:daily:${dayKey}`);
+  const campaignId = "campaign-invalid-member-overscan";
+  const email = "valid-after-invalid-members@example.com";
+  const enqueued = await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "queue overscan",
+    html: "<p>queue overscan</p>",
+    text: "queue overscan",
+    preview: "queue overscan",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  });
+  assert.equal(enqueued.ok, true);
+  const invalidMembers = Array.from({ length: 100 }, (_, index) => `${String(index).padStart(3, "0")}-${"x".repeat(81)}`);
+  invalidMembers.forEach((member, index) => ensureZset(queueKey).set(member, now - 1_000 + index));
+  const beforeRequests = resendRequests.length;
+  const result = await queue.dispatchDueMarketingCampaigns({ now, limit: 1, interJobDelayMs: 0 });
+  assert.equal(result.submitted, 1);
+  assert.equal(resendRequests.length, beforeRequests + 1);
+  assert.equal(invalidMembers.some((member) => ensureZset(queueKey).has(member)), false);
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "submitted");
 });

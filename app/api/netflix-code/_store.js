@@ -864,20 +864,26 @@ function reportSkippedRecords(indexKey, skipped) {
 }
 
 async function recordsFromIndex(indexKey, offset, limit, prefix, validator) {
-  const ids = await redisCmd(["ZREVRANGE", indexKey, String(offset), String(offset + limit - 1)]);
-  if (!Array.isArray(ids) || !ids.length) return [];
-  const response = await redisPipeline(ids.map((id) => ["GET", prefix + id]));
-  if (!pipelineSucceeded(response, ids.length)) return [];
-  const rows = pipelineRows(response);
   const records = [];
-  const skipped = [];
-  rows.forEach((entry, index) => {
-    const record = parseJson(pipelineValue(entry));
-    if (validator(record, ids[index])) records.push(record);
-    else skipped.push(String(ids[index] || ""));
-  });
-  reportSkippedRecords(indexKey, skipped);
-  return records;
+  const pageSize = Math.max(20, Math.min(200, limit * 2));
+  let cursor = offset;
+  while (records.length < limit) {
+    const ids = await redisCmd(["ZREVRANGE", indexKey, String(cursor), String(cursor + pageSize - 1)]);
+    if (!Array.isArray(ids)) throw new Error("netflix_record_store_unavailable");
+    if (!ids.length) break;
+    const response = await redisPipeline(ids.map((id) => ["GET", prefix + id]));
+    if (!pipelineSucceeded(response, ids.length)) throw new Error("netflix_record_store_unavailable");
+    const skipped = [];
+    pipelineRows(response).forEach((entry, index) => {
+      const record = parseJson(pipelineValue(entry));
+      if (validator(record, ids[index])) records.push(record);
+      else skipped.push(String(ids[index] || ""));
+    });
+    reportSkippedRecords(indexKey, skipped);
+    cursor += ids.length;
+    if (ids.length < pageSize) break;
+  }
+  return records.slice(0, limit);
 }
 
 async function allRecordsFromIndex(indexKey, prefix, validator, pageSize = 200) {
@@ -894,9 +900,10 @@ async function allRecordsFromIndex(indexKey, prefix, validator, pageSize = 200) 
       String(offset),
       String(offset + safePageSize - 1),
     ]);
-    if (!Array.isArray(ids) || !ids.length) break;
+    if (!Array.isArray(ids)) throw new Error("netflix_record_store_unavailable");
+    if (!ids.length) break;
     const response = await redisPipeline(ids.map((id) => ["GET", prefix + id]));
-    if (!pipelineSucceeded(response, ids.length)) return [];
+    if (!pipelineSucceeded(response, ids.length)) throw new Error("netflix_record_store_unavailable");
     const skipped = [];
     pipelineRows(response).forEach((entry, index) => {
       const record = parseJson(pipelineValue(entry));
@@ -916,7 +923,8 @@ async function allRecordsFromIndex(indexKey, prefix, validator, pageSize = 200) 
 export async function latestNetflixMailReceipts(hashes) {
   const uniqueHashes = Array.from(new Set((Array.isArray(hashes) ? hashes : []).filter(Boolean)));
   if (!uniqueHashes.length) return {};
-  const rows = pipelineRows(await redisPipeline(uniqueHashes.map((hash) => ["ZREVRANGE", accountIndexKey(hash), "0", "0", "WITHSCORES"])));
+  const rows = await strictRedisRead(uniqueHashes.map((hash) => ["ZREVRANGE", accountIndexKey(hash), "0", "0", "WITHSCORES"]));
+  if (!rows) throw new Error("netflix_record_store_unavailable");
   const receipts = {};
   uniqueHashes.forEach((hash, index) => {
     const value = pipelineValue(rows[index]);

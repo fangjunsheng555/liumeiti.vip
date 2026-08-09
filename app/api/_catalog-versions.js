@@ -25,6 +25,17 @@ function pipelineRows(value) {
   return value.map((entry) => (entry && typeof entry === "object" && Object.hasOwn(entry, "result") ? entry.result : entry));
 }
 
+async function strictCatalogRead(commands) {
+  const response = await redisPipeline([...commands, ["PING"]]);
+  // audit-partial-failure: allow partial-failure-predicate-abort -- Redis command/PING failure invalidates the transport batch.
+  if (!Array.isArray(response) || response.length !== commands.length + 1 || response.some((entry) => entry?.error)) {
+    throw new Error("catalog_version_storage_error");
+  }
+  const rows = pipelineRows(response);
+  if (rows.length !== response.length || rows.at(-1) !== "PONG") throw new Error("catalog_version_storage_error");
+  return rows.slice(0, -1);
+}
+
 async function redisEval(command) {
   const rows = pipelineRows(await redisPipeline([command]));
   return rows[0];
@@ -180,19 +191,82 @@ return ARGV[3]`;
 export async function getCatalogVersion(id) {
   const safeId = clean(id, 120);
   if (!safeId || safeId !== id) return null;
-  const record = parseJson(await redisCmd(["GET", VERSION_PREFIX + safeId]));
-  return validVersionRecord(record, safeId) ? record : null;
+  const [raw] = await strictCatalogRead([["GET", VERSION_PREFIX + safeId]]);
+  if (raw == null) return null;
+  const record = parseJson(raw);
+  if (validVersionRecord(record, safeId)) return record;
+  console.warn(`[catalog-versions] ignored corrupt version record ${safeId} during single lookup`);
+  return null;
 }
 
 export async function listCatalogVersions(limit = 30) {
-  const currentVersion = clean(await redisCmd(["GET", CURRENT_VERSION_KEY]), 120);
-  const ids = await redisCmd(["ZREVRANGE", VERSION_INDEX_KEY, "0", String(Math.max(0, Math.min(99, Number(limit || 30)) - 1))]);
-  if (!Array.isArray(ids) || ids.length === 0) return { currentVersion, versions: [] };
-  if (ids.some((id, index) => clean(id, 120) !== id || ids.indexOf(id) !== index)) throw new Error("catalog_version_storage_corrupt");
-  const response = await redisPipeline(ids.map((id) => ["GET", VERSION_PREFIX + id]));
-  if (!Array.isArray(response) || response.length !== ids.length || response.some((entry) => entry?.error)) throw new Error("catalog_version_storage_error");
-  const versions = pipelineRows(response).map(parseJson);
-  if (versions.some((record, index) => !validVersionRecord(record, ids[index]))) throw new Error("catalog_version_storage_corrupt");
+  const parsedLimit = Number(limit);
+  const safeLimit = Number.isFinite(parsedLimit)
+    ? Math.max(1, Math.min(100, Math.trunc(parsedLimit)))
+    : 30;
+  const [rawCurrentVersion] = await strictCatalogRead([["GET", CURRENT_VERSION_KEY]]);
+  const currentVersion = clean(rawCurrentVersion, 120);
+  if (rawCurrentVersion != null
+    && (typeof rawCurrentVersion !== "string" || !currentVersion || currentVersion !== rawCurrentVersion)) {
+    throw new Error("catalog_version_storage_corrupt");
+  }
+
+  const seen = new Set();
+  let ignoredCount = 0;
+  let currentRecord = null;
+  if (currentVersion) {
+    const [rawCurrent] = await strictCatalogRead([["GET", VERSION_PREFIX + currentVersion]]);
+    currentRecord = parseJson(rawCurrent);
+    if (!validVersionRecord(currentRecord, currentVersion)) {
+      // A damaged active snapshot makes rollback/CAS state ambiguous and is a
+      // real storage fault, unlike an independent historical list item.
+      throw new Error("catalog_version_storage_corrupt");
+    }
+  }
+
+  const versions = [];
+  const pageSize = Math.min(100, Math.max(30, safeLimit));
+  let offset = 0;
+  while (versions.length < safeLimit) {
+    const [indexedIds] = await strictCatalogRead([[
+      "ZREVRANGE", VERSION_INDEX_KEY, String(offset), String(offset + pageSize - 1),
+    ]]);
+    if (!Array.isArray(indexedIds)) throw new Error("catalog_version_storage_error");
+    if (!indexedIds.length) break;
+    offset += indexedIds.length;
+
+    const ids = [];
+    for (const indexedId of indexedIds) {
+      const safeId = clean(indexedId, 120);
+      if (typeof indexedId !== "string" || !safeId || safeId !== indexedId || seen.has(safeId)) {
+        ignoredCount += 1;
+        continue;
+      }
+      seen.add(safeId);
+      ids.push(safeId);
+    }
+
+    const fetchIds = ids.filter((id) => id !== currentVersion);
+    let fetchedRecords = [];
+    if (fetchIds.length) {
+      fetchedRecords = (await strictCatalogRead(fetchIds.map((id) => ["GET", VERSION_PREFIX + id]))).map(parseJson);
+    }
+    const byId = new Map(fetchIds.map((id, index) => [id, fetchedRecords[index]]));
+    if (currentVersion) byId.set(currentVersion, currentRecord);
+    // audit-partial-failure: allow partial-failure-silent-continue -- ignoredCount is emitted as one aggregate warning after the paged scan.
+    for (const id of ids) {
+      const record = byId.get(id);
+      if (!validVersionRecord(record, id)) {
+        ignoredCount += 1;
+        continue;
+      }
+      versions.push(record);
+      if (versions.length >= safeLimit) break;
+    }
+    if (indexedIds.length < pageSize) break;
+  }
+
+  if (ignoredCount) console.warn(`[catalog-versions] ignored ${ignoredCount} corrupt historical version entr${ignoredCount === 1 ? "y" : "ies"}`);
   return { currentVersion, versions };
 }
 

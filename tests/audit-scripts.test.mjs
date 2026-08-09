@@ -827,3 +827,106 @@ test("Lua audit adversarial scope round: function boundaries do not absorb later
     ].join("\n"),
   });
 });
+
+test("partial-failure audit does not let an unrelated function warning hide a bad collection", async () => {
+  await assertAuditFinding("audit-partial-failure.mjs", {
+    "app/api/x/route.js": `
+      function parseRecord(raw) { if (raw === "bad") throw new Error("record_invalid"); return raw; }
+      export function recordsFromIndex(rows) {
+        console.warn("ignored a different cache warning");
+        return rows.map((row) => parseRecord(row));
+      }
+    `,
+  }, "partial-failure-map-parser-throw");
+  await assertAuditClean("audit-partial-failure.mjs", {
+    "app/api/x/route.js": `
+      function parseRecord(raw) { if (raw === "bad") throw new Error("record_invalid"); return raw; }
+      export function recordsFromIndex(rows) {
+        const kept=[]; let corruptCount=0;
+        for (const row of rows) { try { kept.push(parseRecord(row)); } catch { corruptCount += 1; } }
+        if (corruptCount) console.warn("ignored corrupt records", { corruptCount });
+        return kept;
+      }
+    `,
+  });
+});
+
+test("partial-failure audit expands read contexts to GET, usersByEmail and backfill", async () => {
+  for (const name of ["GET", "usersByEmail", "analyticsBackfill"]) {
+    await assertAuditFinding("audit-partial-failure.mjs", {
+      "app/api/x/route.js": `
+        function parseStored(raw) { if (!raw) throw new Error("record_invalid"); return raw; }
+        export function ${name}(records) { return records.map((record) => parseStored(record)); }
+      `,
+    }, "partial-failure-map-parser-throw");
+  }
+});
+
+test("partial-failure audit requires pipeline length and per-command error checks", async () => {
+  await withFixture({
+    "app/api/x/route.js": `export async function recordsFromIndex(commands) { const response=await redisPipeline(commands); return response.map((row)=>row?.result); }`,
+  }, (root) => {
+    const result = runAudit("audit-partial-failure.mjs", root);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /\[partial-failure-pipeline-shape\]/);
+    assert.match(result.stdout, /\[partial-failure-pipeline-errors\]/);
+  });
+  await assertAuditClean("audit-partial-failure.mjs", {
+    "app/api/x/route.js": `export async function recordsFromIndex(commands) { const response=await redisPipeline(commands); if(!Array.isArray(response)||response.length!==commands.length||response.some((row)=>row?.error))throw new Error("store_unavailable"); return response.map((row)=>row.result); }`,
+  });
+});
+
+test("partial-failure audit catches swallowed pagination failure followed by completion marker", async () => {
+  await assertAuditFinding("audit-partial-failure.mjs", {
+    "app/api/x/route.js": `
+      export async function analyticsBackfill() {
+        let page=0;
+        while(page<10){try{await readPage(page);page+=1}catch(error){console.warn(error);break}}
+        await redisCmd(["SET","analytics:backfill:complete","1"]);
+      }
+    `,
+  }, "partial-failure-backfill-completion");
+  await assertAuditClean("audit-partial-failure.mjs", {
+    "app/api/x/route.js": `export async function analyticsBackfill(){let page=0;while(page<10){try{await readPage(page);page+=1}catch(error){throw error}}await redisCmd(["SET","analytics:backfill:complete","1"])}`,
+  });
+});
+
+test("partial-failure audit catches fixed-window starvation and accepts cleanup", async () => {
+  await assertAuditFinding("audit-partial-failure.mjs", {
+    "app/api/x/route.js": `
+      export async function readRetryQueue(limit=30){
+        const rows=await redisCmd(["LRANGE","retry","0",String(limit-1)]);
+        return rows.map((raw)=>{try{return JSON.parse(raw)}catch{return null}}).filter(Boolean);
+      }
+    `,
+  }, "partial-failure-fixed-window-starvation");
+  await assertAuditClean("audit-partial-failure.mjs", {
+    "app/api/x/route.js": `
+      export async function readRetryQueue(limit=30){
+        const rows=await redisCmd(["LRANGE","retry","0",String(limit-1)]);const kept=[];
+        for(const raw of rows){try{kept.push(JSON.parse(raw))}catch{await redisCmd(["LREM","retry","1",raw])}}
+        return kept;
+      }
+    `,
+  });
+});
+
+test("partial-failure audit safety comment is rule-specific and adjacent", async () => {
+  await assertAuditClean("audit-partial-failure.mjs", {
+    "app/api/x/route.js": `export function readRows(rows){\n// audit-partial-failure: allow partial-failure-every-empty -- pre-write atomic integrity check\nreturn rows.every(Boolean)?rows:[]\n}`,
+  });
+  await assertAuditFinding("audit-partial-failure.mjs", {
+    "app/api/x/route.js": `export function readRows(rows){\n// audit-partial-failure: allow partial-failure-silent-filter -- wrong rule\nreturn rows.every(Boolean)?rows:[]\n}`,
+  }, "partial-failure-every-empty");
+});
+
+test("partial-failure audit classification cannot exempt a different node in the same function", async () => {
+  await assertAuditFinding("audit-partial-failure.mjs", {
+    "app/admin/MarketingCampaignPanel.jsx": `
+      export function campaignActionFromPayload(rows) {
+        if (rows.some((row) => !row || row.invalid)) return {};
+        return { rows };
+      }
+    `,
+  }, "partial-failure-predicate-abort");
+});

@@ -338,6 +338,13 @@ globalThis.fetch = async (input, options = {}) => {
         index === 0 ? { result: null } : { result: execute(command) }
       )));
     }
+    if (redisFaultMode === "job_history_outage"
+      && commands[0]?.[0] === "GET"
+      && String(commands[0]?.[1] || "").startsWith("lm:ops:job:run:v1:")) {
+      return Response.json(commands.map((command) => ({
+        result: command[0] === "PING" ? null : execute(command),
+      })));
+    }
     return Response.json(commands.map((command) => ({ result: execute(command) })));
   }
   const command = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
@@ -538,7 +545,7 @@ test("health overview derives Push state from PUSH_ENABLED and complete server c
   }
 });
 
-test("health overview degrades corrupt component records while strict stores still fail", async () => {
+test("health overview degrades corrupt component and job records without hiding healthy rows", async () => {
   const settingsKey = "lm:settings";
   const hadSettings = strings.has(settingsKey);
   const previousSettings = strings.get(settingsKey);
@@ -572,8 +579,13 @@ test("health overview degrades corrupt component records while strict stores sti
     else strings.delete(apiHealthKey);
     jobs.set("order_transition", JSON.stringify({}));
     response = await jobsRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health/jobs"));
-    assert.equal(response.status, 503);
-    assert.equal((await response.json()).error, "job_status_store_corrupt");
+    assert.equal(response.status, 200);
+    const jobsPayload = await response.json();
+    const corruptJob = jobsPayload.jobs.find((job) => job.job === "order_transition");
+    const healthyJob = jobsPayload.jobs.find((job) => job.job === "quote_expiry");
+    assert.equal(corruptJob.status, "failed");
+    assert.equal(corruptJob.errorCode, "job_status_record_corrupt");
+    assert.equal(healthyJob.status, "never");
   } finally {
     if (hadSettings) strings.set(settingsKey, previousSettings);
     else strings.delete(settingsKey);
@@ -610,10 +622,14 @@ test("health overview skips isolated corrupt history records and reports the deg
       code: "health_history_record_corrupt",
       corruptRecords: 3,
     }]);
-    await assert.rejects(
-      () => healthModule.readAllHealthHistory(12),
-      (error) => error?.code === "health_history_store_corrupt",
-    );
+    const direct = await healthModule.readHealthHistory("api", 12);
+    assert.equal(direct.length, 1);
+    assert.equal(direct[0].summary.endsWith(valid.summary), true);
+    const one = await healthModule.readHealthHistory("api", 1);
+    assert.equal(one.length, 1);
+    assert.equal(one[0].summary.endsWith(valid.summary), true);
+    const allHistory = await healthModule.readAllHealthHistory(12);
+    assert.deepEqual(allHistory.api, [valid]);
   } finally {
     if (previous) lists.set(key, previous);
     else lists.delete(key);
@@ -796,6 +812,9 @@ test("incident event history skips corrupt rows but keeps healthy events", async
     const body = await response.json();
     assert.equal(body.events.length, healthy.length);
     assert.equal(body.events.every((event) => event.id && event.type), true);
+    const one = await incidents.incidentEvents(id, 1);
+    assert.equal(one.length, 1);
+    assert.equal(Boolean(one[0].id && one[0].type), true);
   } finally {
     lists.set(key, healthy);
   }
@@ -1017,7 +1036,10 @@ test("partial queue sampling fails closed without overwriting the last snapshot"
   assert.equal(latest.find((item) => item.name === "order_transitions").count, 7);
 });
 
-test("queue route maps Redis outages and corrupt snapshots to 503", async () => {
+test("queue route keeps Redis outages strict but isolates corrupt snapshots", async () => {
+  const queueState = hash("lm:ops:queue:last:v1");
+  const previousOrderTransitions = queueState.get("order_transitions");
+  const previousQuoteExpiry = queueState.get("quote_expiry");
   try {
     redisFaultMode = "queue_read_outage";
     let response = await queuesRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health/queues"));
@@ -1025,18 +1047,128 @@ test("queue route maps Redis outages and corrupt snapshots to 503", async () => 
     assert.equal((await response.json()).error, "operational_queue_snapshot_unavailable");
 
     redisFaultMode = "";
-    hash("lm:ops:queue:last:v1").set("order_transitions", "{not-json");
+    queueState.set("quote_expiry", JSON.stringify({
+      name: "quote_expiry",
+      count: 4,
+      dueCount: 2,
+      status: "warning",
+      checkedAt: "2026-08-09T03:00:00.000Z",
+    }));
+    queueState.set("order_transitions", "{not-json");
     response = await queuesRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health/queues"));
-    assert.equal(response.status, 503);
-    assert.equal((await response.json()).error, "operational_queue_snapshot_corrupt");
+    assert.equal(response.status, 200);
+    let payload = await response.json();
+    let corrupt = payload.queues.find((queue) => queue.name === "order_transitions");
+    let healthy = payload.queues.find((queue) => queue.name === "quote_expiry");
+    assert.equal(corrupt.status, "error");
+    assert.equal(corrupt.error, "operational_queue_snapshot_corrupt");
+    assert.equal(healthy.count, 4);
+    assert.equal(healthy.status, "warning");
 
-    hash("lm:ops:queue:last:v1").set("order_transitions", JSON.stringify({}));
+    queueState.set("order_transitions", JSON.stringify({}));
     response = await queuesRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health/queues"));
-    assert.equal(response.status, 503);
-    assert.equal((await response.json()).error, "operational_queue_snapshot_corrupt");
+    assert.equal(response.status, 200);
+    payload = await response.json();
+    corrupt = payload.queues.find((queue) => queue.name === "order_transitions");
+    healthy = payload.queues.find((queue) => queue.name === "quote_expiry");
+    assert.equal(corrupt.error, "operational_queue_snapshot_corrupt");
+    assert.equal(healthy.count, 4);
+
+    for (const malformed of [
+      { name: "order_transitions", count: null, dueCount: 0, status: "ok", checkedAt: "2026-08-09T03:00:00.000Z" },
+      { name: "order_transitions", count: "", dueCount: 0, status: "ok", checkedAt: "2026-08-09T03:00:00.000Z" },
+      { name: "order_transitions", count: [], dueCount: 0, status: "ok", checkedAt: "2026-08-09T03:00:00.000Z" },
+      { name: "order_transitions", count: 2, dueCount: 3, status: "warning", checkedAt: "2026-08-09T03:00:00.000Z" },
+      { name: "order_transitions", count: 2, dueCount: 1, status: "ok", checkedAt: "without-timezone" },
+    ]) {
+      queueState.set("order_transitions", JSON.stringify(malformed));
+      response = await queuesRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health/queues"));
+      assert.equal(response.status, 200);
+      payload = await response.json();
+      corrupt = payload.queues.find((queue) => queue.name === "order_transitions");
+      assert.equal(corrupt.error, "operational_queue_snapshot_corrupt");
+    }
   } finally {
     redisFaultMode = "";
-    hash("lm:ops:queue:last:v1").delete("order_transitions");
+    if (previousOrderTransitions == null) queueState.delete("order_transitions");
+    else queueState.set("order_transitions", previousOrderTransitions);
+    if (previousQuoteExpiry == null) queueState.delete("quote_expiry");
+    else queueState.set("quote_expiry", previousQuoteExpiry);
+  }
+});
+
+test("job history skips malformed and missing runs while preserving healthy runs", async () => {
+  const job = "order_transition";
+  const validRunId = "order_transition-valid-run";
+  const malformedRunId = "order_transition-malformed-run";
+  const missingRunId = "order_transition-missing-run";
+  const invalidRunId = " ";
+  const jobIndexKey = jobsModule.jobRunnerInternals.JOB_RUN_INDEX_PREFIX + job;
+  const allIndexKey = jobsModule.jobRunnerInternals.JOB_ALL_RUN_INDEX_KEY;
+  const runPrefix = jobsModule.jobRunnerInternals.JOB_RUN_PREFIX;
+  const previousJobIndex = sortedSets.has(jobIndexKey) ? new Map(sortedSets.get(jobIndexKey)) : null;
+  const previousAllIndex = sortedSets.has(allIndexKey) ? new Map(sortedSets.get(allIndexKey)) : null;
+  const previousValid = strings.get(runPrefix + validRunId);
+  const previousMalformed = strings.get(runPrefix + malformedRunId);
+  const previousPrefixRecord = strings.get(runPrefix);
+  const validRun = {
+    runId: validRunId,
+    job,
+    status: "success",
+    startedAt: "2026-08-09T04:00:00.000Z",
+    finishedAt: "2026-08-09T04:00:01.000Z",
+  };
+  try {
+    sortedSets.set(jobIndexKey, new Map([
+      [invalidRunId, 400],
+      [validRunId, 300],
+      [malformedRunId, 200],
+      [missingRunId, 100],
+    ]));
+    sortedSets.set(allIndexKey, new Map([
+      [invalidRunId, 400],
+      [validRunId, 300],
+      [malformedRunId, 200],
+      [missingRunId, 100],
+    ]));
+    strings.set(runPrefix + validRunId, JSON.stringify(validRun));
+    strings.set(runPrefix + malformedRunId, JSON.stringify({
+      runId: malformedRunId,
+      job,
+      status: 7,
+    }));
+    strings.delete(runPrefix + missingRunId);
+    strings.set(runPrefix, JSON.stringify({
+      runId: "order_transition-wrongly-associated", job, status: "success",
+    }));
+
+    const response = await jobsRoute.GET(adminRequest(
+      `https://www.liumeiti.vip/api/admin/health/jobs?job=${job}&limit=10&recentLimit=10`,
+    ));
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.deepEqual(payload.runs.map((run) => run.runId), [validRunId]);
+    assert.deepEqual(payload.recentRuns.map((run) => run.runId), [validRunId]);
+
+    redisFaultMode = "job_history_outage";
+    const unavailable = await jobsRoute.GET(adminRequest(
+      `https://www.liumeiti.vip/api/admin/health/jobs?job=${job}&limit=10&recentLimit=10`,
+    ));
+    assert.equal(unavailable.status, 503);
+    assert.equal((await unavailable.json()).error, "job_history_unavailable");
+  } finally {
+    redisFaultMode = "";
+    if (previousJobIndex) sortedSets.set(jobIndexKey, previousJobIndex);
+    else sortedSets.delete(jobIndexKey);
+    if (previousAllIndex) sortedSets.set(allIndexKey, previousAllIndex);
+    else sortedSets.delete(allIndexKey);
+    if (previousValid == null) strings.delete(runPrefix + validRunId);
+    else strings.set(runPrefix + validRunId, previousValid);
+    if (previousMalformed == null) strings.delete(runPrefix + malformedRunId);
+    else strings.set(runPrefix + malformedRunId, previousMalformed);
+    if (previousPrefixRecord == null) strings.delete(runPrefix);
+    else strings.set(runPrefix, previousPrefixRecord);
+    strings.delete(runPrefix + missingRunId);
   }
 });
 
@@ -1144,6 +1276,11 @@ test("trace route keeps canonical order corruption fail-closed but skips corrupt
     const degraded = await response.json();
     assert.deepEqual(degraded.events, []);
     assert.equal(degraded.corruptCount, 1);
+
+    lists.set(traceKey, ["{not-json", JSON.stringify({}), JSON.stringify({ stage: "paid", outcome: "ok" })]);
+    const paged = await observability.readBusinessTrace(orderId, 1);
+    assert.deepEqual(paged.events.map((event) => event.stage), ["paid"]);
+    assert.equal(paged.corruptCount, 2);
   } finally {
     redisFaultMode = "";
     strings.set(orderKey, orderRaw);

@@ -219,6 +219,44 @@ test("delivery storage rejects per-row pipeline errors in persistence and messag
   assert.equal(lookup.record, null);
 });
 
+test("single delivery lookups surface corrupt mappings and bodies to webhook recovery", async () => {
+  const messageId = "delivery-corrupt-single-lookup";
+  const registered = await delivery.registerEmailDelivery({
+    args: { to: "delivery-corrupt@example.com", subject: "corrupt", category: "order", relatedType: "order", relatedId: "ORDER-CORRUPT" },
+    result: { ok: true, provider: "resend", messageId },
+  });
+  assert.ok(registered);
+  const mappingKey = `lm:mail:delivery:message:${messageId}`;
+  const recordKey = `lm:mail:delivery:record:${registered.id}`;
+  const originalRecord = redis.values.get(recordKey);
+  const deliveryCount = redis.sortedSets.get("lm:mail:delivery:index")?.size || 0;
+
+  redis.values.set(recordKey, "{not-json");
+  const corruptBody = await delivery.readEmailDeliveryByMessageId(messageId);
+  assert.deepEqual(corruptBody, { ok: false, error: "storage_corrupt", record: null });
+  const direct = await delivery.getEmailDelivery(registered.id);
+  assert.deepEqual(direct, { ok: false, error: "storage_corrupt", record: null });
+
+  const webhook = await delivery.applyResendWebhookEvent({
+    type: "email.delivered",
+    created_at: new Date().toISOString(),
+    data: { email_id: messageId, to: ["delivery-corrupt@example.com"] },
+  }, "delivery-corrupt-webhook-event");
+  assert.equal(webhook.ok, false);
+  assert.equal(webhook.retryable, true);
+  assert.equal(webhook.error, "delivery_lookup_failed");
+  assert.equal(redis.sortedSets.get("lm:mail:delivery:index")?.size || 0, deliveryCount, "a corrupt mapped record must not be replaced by a detached webhook record");
+
+  redis.values.set(recordKey, originalRecord);
+  redis.values.set(mappingKey, `${registered.id} `);
+  const corruptMapping = await delivery.readEmailDeliveryByMessageId(messageId);
+  assert.deepEqual(corruptMapping, { ok: false, error: "storage_corrupt", record: null });
+
+  redis.values.delete(mappingKey);
+  const absent = await delivery.readEmailDeliveryByMessageId(messageId);
+  assert.deepEqual(absent, { ok: true, record: null });
+});
+
 test("a webhook completion retry records one stable campaign metric", async () => {
   const campaignId = "CMP-WEBHOOK-METRIC-STABLE";
   const messageId = "metric-stable-message";
@@ -392,13 +430,15 @@ test("optional lifecycle and order-progress policy fails closed on storage outag
 });
 
 test("batch marketing and optional-transactional policy rejects per-row Redis errors but accepts a missing contact", async () => {
+  await preferences.ensureMailContact("batch-marketing-row-error@example.com", { source: "batch_fault_probe" });
+  await preferences.ensureMailContact("batch-order-row-error@example.com", { source: "batch_fault_probe" });
   const delegatedFetch = globalThis.fetch;
   let injected = false;
   globalThis.fetch = async (input, options = {}) => {
     const url = new URL(String(input));
     if (!injected && url.origin === "http://mail-preferences.redis.test" && url.pathname === "/pipeline") {
       const commands = JSON.parse(options.body || "[]");
-      const contactIndex = commands.findIndex((command) => String(command?.[0]).toUpperCase() === "GET" && String(command?.[1]).startsWith("lm:mail:contact:"));
+      const contactIndex = commands.findIndex((command) => String(command?.[0]).toUpperCase() === "TYPE" && String(command?.[1]).startsWith("lm:mail:contact:"));
       if (contactIndex >= 0) {
         const response = await delegatedFetch(input, options);
         const rows = await response.json();
@@ -424,7 +464,7 @@ test("batch marketing and optional-transactional policy rejects per-row Redis er
   assert.equal(marketing.error, "mail_policy_unavailable");
   assert.equal(marketing.decisions.size, 0);
 
-  redis.failNextCommand("GET", "lm:mail:contact:", { error: "nested_row_failed" });
+  redis.failNextCommand("TYPE", "lm:mail:contact:", { error: "nested_row_failed" });
   const optionalOrder = await preferences.getMailSendDecisionsBatch({
     emails: ["batch-order-row-error@example.com"],
     purpose: "transactional",
@@ -1043,6 +1083,10 @@ test("suppression admin route distinguishes an empty store from index and detail
     contactId: wrongEmailId, email: "different-owner@example.com", suppression: { scope: "none" },
   })]);
   redis.execute(["SADD", "lm:mail:suppressed:all", "not-a-contact-id", `x${"a".repeat(40)}`]);
+  const wrongType = await suppressionRoute.GET(request());
+  assert.equal(wrongType.status, 503);
+  assert.equal((await wrongType.json()).error, "storage_unavailable");
+  redis.execute(["DEL", preferences.mailPreferenceInternals.contactKey(wrongTypeId)]);
   const degraded = await suppressionRoute.GET(request());
   assert.equal(degraded.status, 200);
   const degradedRows = (await degraded.json()).suppressions;
@@ -1227,4 +1271,50 @@ test("delivery history route distinguishes empty, missing, and per-row storage f
   redis.failNextCommand("GET", "lm:mail:delivery:record:", { error: "list_row_failed" });
   const listOutage = await mailDeliveryAdminRoute.GET(request());
   assert.equal(listOutage.status, 503);
+});
+
+test("delivery history route keeps healthy string and object rows beside corrupt records", async () => {
+  const indexKey = "lm:mail:delivery:index";
+  const prefix = "lm:mail:delivery:record:";
+  const index = redis.sortedSets.get(indexKey) || new Map();
+  redis.sortedSets.set(indexKey, index);
+  const score = Date.now() + 10_000;
+  index.set("MD-PARTIAL-STRING", score + 3);
+  index.set("MD-PARTIAL-OBJECT", score + 2);
+  index.set("MD-PARTIAL-BROKEN", score + 1);
+  index.set("MD-PARTIAL-MISSING", score);
+  index.set("MD-PARTIAL-EMPTY", score - 1);
+  index.set("MD-PARTIAL-MISMATCH", score - 2);
+  redis.values.set(prefix + "MD-PARTIAL-STRING", JSON.stringify({
+    id: "MD-PARTIAL-STRING", status: "delivered", provider: "resend", to: "string@example.com",
+  }));
+  redis.values.set(prefix + "MD-PARTIAL-OBJECT", {
+    id: "MD-PARTIAL-OBJECT", status: "delivered", provider: "resend", to: "object@example.com",
+  });
+  redis.values.set(prefix + "MD-PARTIAL-BROKEN", "{not-json");
+  redis.values.set(prefix + "MD-PARTIAL-EMPTY", {});
+  redis.values.set(prefix + "MD-PARTIAL-MISMATCH", {
+    id: "MD-ANOTHER-DELIVERY", status: "delivered", provider: "resend", to: "mismatch@example.com",
+  });
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args);
+  let response;
+  try {
+    response = await mailDeliveryAdminRoute.GET(new Request("https://www.liumeiti.vip/api/admin/mail-delivery?limit=300", {
+      headers: { cookie: `lm_admin=${encodeURIComponent(adminToken)}` },
+    }));
+  } finally {
+    console.warn = originalWarn;
+  }
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  assert.equal(body.records.some((record) => record.id === "MD-PARTIAL-STRING"), true);
+  assert.equal(body.records.some((record) => record.id === "MD-PARTIAL-OBJECT"), true);
+  assert.equal(body.records.some((record) => record.id === "MD-PARTIAL-BROKEN"), false);
+  assert.equal(body.records.some((record) => record.id === "MD-PARTIAL-MISSING"), false);
+  assert.equal(body.records.some((record) => record.id === "MD-PARTIAL-EMPTY"), false);
+  assert.equal(body.records.some((record) => record.id === "MD-ANOTHER-DELIVERY"), false);
+  assert.equal(warnings.some((entry) => entry[1]?.skipped === 4), true);
 });

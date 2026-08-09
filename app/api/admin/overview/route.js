@@ -1,6 +1,6 @@
 import {
   adminSessionFromRequest, isRootAdminSession, adminPermissionProfile,
-  getOrderOverviewRows, listWithdrawals, listRedeemCodes, getAdminMailLog, listAllUserEmails,
+  getOrderOverviewRows, listWithdrawals, listRedeemCodes, getAdminMailLog, listAllUserEmailsStrict,
   redisCmd,
 } from "../../_utils.js";
 import { getSettings } from "../../_settings.js";
@@ -56,14 +56,20 @@ export async function GET(request) {
   const session = adminSessionFromRequest(request);
   if (!session) return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
 
-  const [ordersRaw, withdrawals, codes, mailLogs, userEmails, afterSalesCounts] = await Promise.all([
-    getOrderOverviewRows(),
-    listWithdrawals(),
-    listRedeemCodes(),
-    getAdminMailLog(),
-    listAllUserEmails(),
-    getAfterSalesCounts(),
-  ]);
+  let ordersRaw, withdrawals, codes, mailLogs, userEmails, afterSalesCounts;
+  try {
+    [ordersRaw, withdrawals, codes, mailLogs, userEmails, afterSalesCounts] = await Promise.all([
+      getOrderOverviewRows(),
+      listWithdrawals(),
+      listRedeemCodes(),
+      getAdminMailLog(),
+      listAllUserEmailsStrict(),
+      getAfterSalesCounts(),
+    ]);
+  } catch (error) {
+    console.warn("[admin-overview] authoritative read unavailable", error);
+    return Response.json({ ok: false, error: "overview_store_unavailable" }, { status: 503 });
+  }
 
   const orders = ordersRaw
     .map((order) => {

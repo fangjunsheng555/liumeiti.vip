@@ -2470,7 +2470,15 @@ export default function AdminPage() {
       const data = await res.json();
       if (data.ok) {
         completeAdminMutation(pending.storageKey, pending.operation);
-        setActiveWithdrawal(data);
+        setActiveWithdrawal((current) => ({
+          ...current,
+          ...data,
+          user: Object.hasOwn(data, "user") ? data.user : current?.user,
+          transactions: Array.isArray(data.transactions) ? data.transactions : (current?.transactions || []),
+        }));
+        if (data.refreshRequired) {
+          setWithdrawalDeleteResult({ type: "info", message: "状态已保存，但余额明细暂未刷新；当前显示保留原数据，请稍后点击刷新。" });
+        }
         await loadWithdrawals();
       } else {
         clearTerminalAdminMutation(pending, res, data);
@@ -3152,8 +3160,8 @@ export default function AdminPage() {
       const data = await res.json();
       if (data.ok) {
         completeAdminMutation(pending.storageKey, pending.operation);
-        setCodes(data.codes || []);
-        setCodeBatches(data.batches || []);
+        if (Array.isArray(data.codes)) setCodes(data.codes);
+        if (Array.isArray(data.batches)) setCodeBatches(data.batches);
         setCodeAmount("");
         setCodeQuantity("1");
         setCodeRemark("");
@@ -3225,8 +3233,8 @@ export default function AdminPage() {
       });
       const data = await res.json();
       if (data.ok) {
-        setCodes(data.codes || []);
-        setCodeBatches(data.batches || []);
+        if (Array.isArray(data.codes)) setCodes(data.codes);
+        if (Array.isArray(data.batches)) setCodeBatches(data.batches);
         setCodeResult({ type: "success", message: action === "delete" ? "兑换码已删除" : "兑换码已作废" });
       } else {
         setCodeResult({ type: "error", message: data.error || "操作失败" });
@@ -3257,10 +3265,10 @@ export default function AdminPage() {
       });
       const data = await res.json();
       if (data.ok) {
-        setCodes(data.codes || []);
-        setCodeBatches(data.batches || []);
-        if (activeCodeBatch) {
-          const refreshed = (data.batches || []).find((batch) => batch.id === activeCodeBatch.id);
+        if (Array.isArray(data.codes)) setCodes(data.codes);
+        if (Array.isArray(data.batches)) setCodeBatches(data.batches);
+        if (activeCodeBatch && Array.isArray(data.batches)) {
+          const refreshed = data.batches.find((batch) => batch.id === activeCodeBatch.id);
           if (refreshed) setActiveCodeBatch(refreshed);
           else setActiveCodeBatch(null);
         }
@@ -3294,11 +3302,11 @@ export default function AdminPage() {
       });
       const data = await res.json();
       if (data.ok) {
-        setCodes(data.codes || []);
-        setCodeBatches(data.batches || []);
+        if (Array.isArray(data.codes)) setCodes(data.codes);
+        if (Array.isArray(data.batches)) setCodeBatches(data.batches);
         if (action === "delete") setActiveCodeBatch(null);
-        else {
-          const refreshed = (data.batches || []).find((batch) => batch.id === batchId);
+        else if (Array.isArray(data.batches)) {
+          const refreshed = data.batches.find((batch) => batch.id === batchId);
           if (refreshed) setActiveCodeBatch(refreshed);
           else setActiveCodeBatch(null);
         }
@@ -3526,25 +3534,31 @@ export default function AdminPage() {
     if (typeof window !== "undefined" && !window.confirm(`确认删除 ${selectedActionIds.size} 条操作记录？`)) return;
     setActionDeleteBusy(true);
     setActionDeleteResult(null);
+    const deletedIds = new Set(selectedActionIds);
     try {
       const res = await fetch("/api/admin/actions", {
         method: "DELETE",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: Array.from(selectedActionIds) }),
+        body: JSON.stringify({ ids: Array.from(deletedIds) }),
       });
       const data = await res.json();
       if (data.ok) {
-        setStaffPane((current) => ({ ...current, actions: data.actions || [] }));
+        const remaining = (actions) => Array.isArray(data.actions)
+          ? data.actions
+          : actions.filter((action) => !deletedIds.has(action.id));
+        setStaffPane((current) => ({ ...current, actions: remaining(current.actions) }));
         setActiveStaffAction((current) => {
           if (!current) return null;
           return {
             ...current,
-            actions: (data.actions || []).filter((action) => Number(action.staffId || 1) === Number(current.staff?.id || 1)),
+            actions: remaining(current.actions).filter((action) => Number(action.staffId || 1) === Number(current.staff?.id || 1)),
           };
         });
         setSelectedActionIds(new Set());
-        setActionDeleteResult({ type: "success", message: `已删除 ${data.deletedCount || 0} 条操作记录` });
+        setActionDeleteResult({ type: "success", message: data.refreshRequired
+          ? `已删除 ${data.deletedCount || 0} 条记录，列表读取失败，请稍后刷新`
+          : `已删除 ${data.deletedCount || 0} 条操作记录` });
       } else {
         setActionDeleteResult({ type: "error", message: data.error || "删除失败" });
       }

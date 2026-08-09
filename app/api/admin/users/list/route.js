@@ -1,6 +1,6 @@
 import {
   getCookieFromRequest, verifySession,
-  listAllUserEmails, getUser, adminPermissionProfile, normalizeInviteCode,
+  listAllUserEmailsStrict, getUsersByEmailsStrict, adminPermissionProfile, normalizeInviteCode,
 } from "../../../_utils.js";
 
 function adminSession(request) {
@@ -22,8 +22,15 @@ export async function GET(request) {
   const url = new URL(request.url);
   const q = String(url.searchParams.get("q") || "").trim().toLowerCase();
 
-  const emails = await listAllUserEmails();
-  const records = (await Promise.all(emails.map((email) => getUser(email)))).filter(Boolean);
+  let emails;
+  let records;
+  try {
+    emails = await listAllUserEmailsStrict();
+    records = Array.from((await getUsersByEmailsStrict(emails)).values());
+  } catch (error) {
+    console.error("[admin-users] user store unavailable", error?.message || error);
+    return Response.json({ ok: false, error: "user_store_unavailable" }, { status: 503 });
+  }
   const lowerEmail = (value) => String(value || "").trim().toLowerCase();
   const relationCounts = new Map();
   records.forEach((user) => {

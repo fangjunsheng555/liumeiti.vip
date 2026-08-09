@@ -12,6 +12,7 @@ const store = new Map([
   ["liumeiti:zset", { type: "zset", value: [["second", "2"], ["first", "1"]], ttl: -1 }],
 ]);
 const originalFetch = globalThis.fetch;
+let pipelineOverride = null;
 
 function ensure(key, type, fallback) {
   if (!store.has(key)) store.set(key, { type, value: fallback, ttl: -1 });
@@ -40,6 +41,7 @@ function execute(command) {
     return 1;
   }
   if (name === "ZRANGE") return (store.get(args[0])?.value || []).flatMap(([member, score]) => [member, score]);
+  if (name === "XRANGE") return [...(store.get(args[0])?.value || [])];
   if (name === "ZADD") {
     const item = ensure(args[0], "zset", []);
     for (let index = 1; index + 1 < args.length; index += 2) {
@@ -58,6 +60,10 @@ globalThis.fetch = async (input, options = {}) => {
   if (url.origin === "http://backup.redis.test") {
     if (url.pathname === "/pipeline") {
       const commands = JSON.parse(options.body || "[]");
+      if (pipelineOverride) {
+        const overridden = pipelineOverride(commands);
+        if (overridden !== undefined) return Response.json(overridden);
+      }
       return Response.json(commands.map((command) => ({ result: execute(command) })));
     }
     return Response.json({ result: execute(url.pathname.split("/").filter(Boolean).map(decodeURIComponent)) });
@@ -90,4 +96,108 @@ test("large backups are split with a manifest and all entries retained", () => {
   const retained = files.slice(1).reduce((sum, file) => sum + file.entries, 0);
   assert.equal(retained, entries.length);
   assert.match(files[0].name, /manifest/);
+});
+
+test("a malformed business stream row aborts the complete backup instead of silently dropping data", async () => {
+  const key = "liumeiti:business-events";
+  try {
+    for (const malformed of [
+      7,
+      ["1754700000001-0", ["event"]],
+      { id: "", fields: { event: "order_paid" } },
+      { id: "1754700000002-0", fields: {} },
+    ]) {
+      store.set(key, {
+        type: "stream",
+        ttl: -1,
+        value: [
+          ["1754700000000-0", ["event", "order_paid", "orderId", "LM-BACKUP-STREAM-1"]],
+          malformed,
+        ],
+      });
+      await assert.rejects(
+        backup.createCompleteBackup(),
+        (error) => error?.code === "backup_stream_record_invalid",
+      );
+    }
+  } finally {
+    store.delete(key);
+  }
+});
+
+test("backup rejects command errors in metadata and value pipelines", async () => {
+  for (const targetCommand of ["TYPE", "GET"]) {
+    pipelineOverride = (commands) => commands.map((command) => (
+      String(command[0]).toUpperCase() === targetCommand
+        ? { error: `WRONGTYPE injected ${targetCommand}` }
+        : { result: execute(command) }
+    ));
+    await assert.rejects(
+      backup.createCompleteBackup(),
+      (error) => error?.message === (targetCommand === "TYPE" ? "backup_metadata_incomplete" : "backup_values_incomplete"),
+    );
+  }
+  pipelineOverride = (commands) => ({ result: commands.map((command) => ({ result: execute(command) })) });
+  await assert.rejects(backup.createCompleteBackup(), /backup_metadata_incomplete/);
+  pipelineOverride = null;
+});
+
+test("backup rejects malformed successful collection responses instead of publishing a complete snapshot", async () => {
+  const malformedByCommand = [
+    ["HGETALL", ["field-without-value"]],
+    ["HGETALL", {}],
+    ["LRANGE", { 0: "not-an-array" }],
+    ["SMEMBERS", ["valid", { unexpected: true }]],
+    ["ZRANGE", ["member-without-score"]],
+    ["ZRANGE", [{ member: "member", score: "not-a-number" }]],
+  ];
+  try {
+    for (const [targetCommand, malformed] of malformedByCommand) {
+      pipelineOverride = (commands) => commands.map((command) => (
+        String(command[0]).toUpperCase() === targetCommand
+          ? { result: malformed }
+          : { result: execute(command) }
+      ));
+      await assert.rejects(
+        backup.createCompleteBackup(),
+        (error) => error?.code === "backup_value_shape_invalid",
+      );
+    }
+  } finally {
+    pipelineOverride = null;
+  }
+});
+
+test("backup rejects malformed TYPE and PTTL metadata returned by successful commands", async () => {
+  try {
+    for (const [targetCommand, malformed] of [["TYPE", {}], ["PTTL", "12.5"], ["PTTL", -3]]) {
+      pipelineOverride = (commands) => commands.map((command) => (
+        String(command[0]).toUpperCase() === targetCommand
+          ? { result: malformed }
+          : { result: execute(command) }
+      ));
+      await assert.rejects(backup.createCompleteBackup(), /backup_metadata_incomplete/);
+    }
+  } finally {
+    pipelineOverride = null;
+  }
+});
+
+test("restore drill rejects write and verification command errors", async () => {
+  const snapshot = await backup.createCompleteBackup();
+  for (const targetCommand of ["SET", "GET"]) {
+    pipelineOverride = (commands) => commands.map((command) => (
+      String(command[0]).toUpperCase() === targetCommand
+        ? { error: `ERR injected ${targetCommand}` }
+        : { result: execute(command) }
+    ));
+    await assert.rejects(
+      backup.runRestoreDrill(snapshot),
+      (error) => error?.message === (targetCommand === "SET" ? "restore_write_failed" : "restore_verify_read_failed"),
+    );
+    for (const key of Array.from(store.keys())) {
+      if (key.startsWith("lm:restore-drill:")) store.delete(key);
+    }
+  }
+  pipelineOverride = null;
 });

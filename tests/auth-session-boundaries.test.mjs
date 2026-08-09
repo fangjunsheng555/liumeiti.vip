@@ -381,6 +381,15 @@ function installFakeRedis(initial = {}) {
     const op = String(parts[0] || "").toUpperCase();
     if (op === "TYPE") return redisResponse(store.has(parts[1]) ? "string" : "none");
     if (op === "GET") return redisResponse(store.get(parts[1]) ?? null);
+    if (op === "LRANGE") {
+      const value = store.get(parts[1]);
+      if (value == null) return redisResponse([]);
+      if (!Array.isArray(value)) return redisResponse({ error: "WRONGTYPE" });
+      const start = Number(parts[2]);
+      const requestedStop = Number(parts[3]);
+      const stop = requestedStop < 0 ? value.length + requestedStop : requestedStop;
+      return redisResponse(stop < start ? [] : value.slice(start, stop + 1));
+    }
     if (op === "MGET") {
       const values = parts.slice(1).map((key) => store.get(key) ?? null);
       if (parts.includes(VERSION_KEY) && typeof state.afterAuthStateRead === "function") {

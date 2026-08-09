@@ -66,7 +66,7 @@ test("admin Netflix search uses a revision cache and batched user reads", async 
   const publicRoute = await readFile(new URL("../app/api/netflix-code/route.js", import.meta.url), "utf8");
   const panel = await readFile(new URL("../app/admin/NetflixCodePanel.jsx", import.meta.url), "utf8");
   assert.match(getHandler, /NETFLIX_ORDER_DIRECTORY_CACHE_KEY/);
-  assert.match(getHandler, /redisPipeline\(batch\.map/);
+  assert.match(getHandler, /getUsersByEmailsStrict\(normalized\)/);
   assert.match(getHandler, /netflixMailSearchValues\(searchOrders\)/);
   assert.match(getHandler, /\[\.\.\.exactOrders, \.\.\.matchedOrders\]/);
   assert.doesNotMatch(getHandler, /\bgetUser\s*\(/);
