@@ -31,6 +31,10 @@ const RECORD_TTL_SECONDS = 90 * 24 * 60 * 60;
 const CAMPAIGN_TTL_SECONDS = 400 * 24 * 60 * 60;
 const METRIC_TTL_SECONDS = 2 * 365 * 24 * 60 * 60;
 export const MARKETING_DAILY_LIMIT = 50;
+export const MARKETING_RUNTIME_BATCH_LIMIT = 8;
+const PROVIDER_COMMIT_RESERVE_MS = 4_000;
+const PROVIDER_MIN_START_BUDGET_MS = 1_000;
+const DISPATCH_RETURN_RESERVE_MS = 250;
 const DAILY_LIMIT = MARKETING_DAILY_LIMIT;
 const RETRY_DELAY_MS = 15 * 60 * 1000;
 // Resend keeps idempotency keys for 24 hours. Leave two hours of scheduler and
@@ -1319,6 +1323,41 @@ export async function dispatchDueMarketingCampaigns({
     if (Number(deadlineAt) > 0 && Date.now() >= Number(deadlineAt)) return false;
     try { return typeof shouldContinue !== "function" || shouldContinue() !== false; } catch { return false; }
   };
+  const commitDeadlineAt = Number(deadlineAt) > 0
+    ? Math.max(0, Number(deadlineAt) - DISPATCH_RETURN_RESERVE_MS)
+    : 0;
+  const settleUntil = async (factory, cutoffAt = 0) => {
+    if (!cutoffAt) {
+      try { return { settled: true, value: await factory() }; }
+      catch (error) { return { settled: true, error }; }
+    }
+    const remainingMs = cutoffAt - Date.now();
+    if (remainingMs <= 0) return { settled: false };
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ settled: false }), Math.max(1, Math.trunc(remainingMs)));
+      Promise.resolve().then(factory).then(
+        (value) => { clearTimeout(timer); resolve({ settled: true, value }); },
+        (error) => { clearTimeout(timer); resolve({ settled: true, error }); },
+      );
+    });
+  };
+  const settleCommit = (factory) => settleUntil(factory, commitDeadlineAt);
+  const PRE_PROVIDER_TIMEOUT = Symbol("marketing_pre_provider_timeout");
+  const preProvider = async (factory) => {
+    const settled = await settleUntil(factory, commitDeadlineAt);
+    if (!settled.settled) throw PRE_PROVIDER_TIMEOUT;
+    if (settled.error) throw settled.error;
+    return settled.value;
+  };
+  const deadlineResult = ({ submitted = 0, failed = 0, results = [] } = {}) => ({
+    ok: false,
+    partial: true,
+    deadlineExceeded: true,
+    error: "maintenance_deadline_exceeded",
+    submitted,
+    failed,
+    results: results.map(({ to: _recipient, ...item }) => item),
+  });
   const requeueSendingForStop = async (job, _sendingJob, id) => {
     const originalScore = Number(job?.queueScore || now);
     const resumeScore = Number.isFinite(originalScore) ? originalScore : Date.now();
@@ -1351,10 +1390,22 @@ export async function dispatchDueMarketingCampaigns({
   const ttlSeconds = Math.max(1, Math.trunc(Number(lockTtlSeconds) || DISPATCH_LOCK_TTL_SECONDS));
   const heartbeatMs = Math.max(25, Math.min(ttlSeconds * 500, Number(lockHeartbeatMs) || DISPATCH_LOCK_HEARTBEAT_MS));
   const lockToken = randomBytes(18).toString("hex");
-  const acquired = await redisCmd(["SET", DISPATCH_LOCK_KEY, lockToken, "NX", "EX", String(ttlSeconds)]);
+  let acquired;
+  try {
+    acquired = await preProvider(() => redisCmd(["SET", DISPATCH_LOCK_KEY, lockToken, "NX", "EX", String(ttlSeconds)]));
+  } catch (error) {
+    if (error === PRE_PROVIDER_TIMEOUT) return deadlineResult();
+    throw error;
+  }
   if (acquired !== "OK") {
     // Distinguish a healthy competing lock from a storage outage.
-    const lockRead = await readRedis([["GET", DISPATCH_LOCK_KEY]]);
+    let lockRead;
+    try {
+      lockRead = await preProvider(() => readRedis([["GET", DISPATCH_LOCK_KEY]]));
+    } catch (error) {
+      if (error === PRE_PROVIDER_TIMEOUT) return deadlineResult();
+      throw error;
+    }
     if (!lockRead.ok || !lockRead.rows[0]) {
       return { ok: false, skipped: true, reason: "lock_store_unavailable", submitted: 0, failed: 0 };
     }
@@ -1370,6 +1421,16 @@ export async function dispatchDueMarketingCampaigns({
   let leaseLost = false;
   let deadlineExceeded = false;
   let renewalInFlight = false;
+  const commitProviderState = async (factory, id, to = "") => {
+    const committed = await settleCommit(factory);
+    if (!committed.settled) {
+      deadlineExceeded = true;
+      results.push({ id, to, ok: true, skipped: true, retryable: true, reason: "provider_outcome_commit_deferred" });
+      return { deferred: true };
+    }
+    if (committed.error) throw committed.error;
+    return { deferred: false, value: committed.value };
+  };
   const heartbeat = setInterval(() => {
     if (renewalInFlight || leaseLost) return;
     renewalInFlight = true;
@@ -1381,7 +1442,7 @@ export async function dispatchDueMarketingCampaigns({
   heartbeat.unref?.();
   try {
     const initialDayKey = DAILY_COUNT_PREFIX + beijingDayKey(logicalNow());
-    const dailyRead = await readRedis([["GET", initialDayKey]]);
+    const dailyRead = await preProvider(() => readRedis([["GET", initialDayKey]]));
     if (!dailyRead.ok) return { ok: false, reason: "storage_unavailable", submitted: 0, failed: 0 };
     const alreadyReserved = Number(dailyRead.rows[0] || 0);
     if (!Number.isSafeInteger(alreadyReserved) || alreadyReserved < 0 || alreadyReserved > DAILY_LIMIT) {
@@ -1394,12 +1455,12 @@ export async function dispatchDueMarketingCampaigns({
     const capacity = Math.max(0, Math.min(perRunLimit, DAILY_LIMIT - alreadyReserved));
     if (!capacity) return { ok: true, skipped: true, reason: "daily_limit", submitted: 0, failed: 0 };
 
-    const dueIds = await redisCmd([
+    const dueIds = await preProvider(() => redisCmd([
       "ZRANGEBYSCORE",
       QUEUE_KEY,
       "-inf",
       String(now),
-    ]);
+    ]));
     if (!Array.isArray(dueIds)) {
       return { ok: false, reason: "storage_unavailable", submitted: 0, failed: 0 };
     }
@@ -1413,14 +1474,14 @@ export async function dispatchDueMarketingCampaigns({
         deadlineExceeded = true;
         break;
       }
-      if (leaseLost || !(await renewDispatchLease(lockToken, ttlSeconds))) {
+      if (leaseLost || !(await preProvider(() => renewDispatchLease(lockToken, ttlSeconds)))) {
         leaseLost = true;
         break;
       }
       const rawId = typeof rawJobId === "string" ? rawJobId : String(rawJobId ?? "");
       const id = clean(rawId, 80);
       if (!rawId || !id || id !== rawId) {
-        const cleanup = await readRedis([["ZREM", QUEUE_KEY, rawId]]);
+        const cleanup = await preProvider(() => readRedis([["ZREM", QUEUE_KEY, rawId]]));
         if (!cleanup.ok) {
           failed += 1;
           results.push({ id: "", ok: false, retryable: true, reason: "queue_cleanup_unavailable" });
@@ -1431,31 +1492,31 @@ export async function dispatchDueMarketingCampaigns({
         removedInvalidQueueMembers += 1;
         continue;
       }
-      const claimed = await redisCmd(["SET", claimKey(id), lockToken, "NX", "EX", "180"]);
+      const claimed = await preProvider(() => redisCmd(["SET", claimKey(id), lockToken, "NX", "EX", "180"]));
       if (claimed !== "OK") {
-        const claimRead = await readRedis([["GET", claimKey(id)]]);
+        const claimRead = await preProvider(() => readRedis([["GET", claimKey(id)]]));
         if (!claimRead.ok) { failed += 1; results.push({ id, ok: false, retryable: true, reason: "claim_store_unavailable" }); break; }
         if (claimRead.rows[0] !== lockToken) continue;
       }
       if (!canContinue()) {
         deadlineExceeded = true;
-        await redisCmd(["DEL", claimKey(id)]);
+        await preProvider(() => redisCmd(["DEL", claimKey(id)]));
         break;
       }
       if (typeof _testHooks?.afterClaim === "function") {
         await _testHooks.afterClaim({ campaignJobId: id });
       }
 
-      const jobRead = await readRedis([["GET", jobKey(id)]]);
+      const jobRead = await preProvider(() => readRedis([["GET", jobKey(id)]]));
       if (!jobRead.ok) {
-        await redisCmd(["DEL", claimKey(id)]);
+        await preProvider(() => redisCmd(["DEL", claimKey(id)]));
         failed += 1;
         results.push({ id, ok: false, retryable: true, reason: "storage_unavailable" });
         break;
       }
       const job = parseJson(jobRead.rows[0]);
       if (!validJob(job, id)) {
-        const cleanup = await readRedis([["ZREM", QUEUE_KEY, rawId], ["DEL", claimKey(id)]]);
+        const cleanup = await preProvider(() => readRedis([["ZREM", QUEUE_KEY, rawId], ["DEL", claimKey(id)]]));
         if (!cleanup.ok) {
           failed += 1;
           results.push({ id, ok: false, retryable: true, reason: "queue_cleanup_unavailable" });
@@ -1467,15 +1528,15 @@ export async function dispatchDueMarketingCampaigns({
         continue;
       }
       if (["submitted", "suppressed", "failed", "cancelled"].includes(job.status)) {
-        await redisPipeline([["ZREM", QUEUE_KEY, id], ["DEL", claimKey(id)], ...(job?.campaignId ? [["SREM", campaignPendingKey(job.campaignId), id]] : [])]);
-        if (job?.campaignId) await refreshCampaignLifecycle(job.campaignId);
+        await preProvider(() => redisPipeline([["ZREM", QUEUE_KEY, id], ["DEL", claimKey(id)], ...(job?.campaignId ? [["SREM", campaignPendingKey(job.campaignId), id]] : [])]));
+        if (job?.campaignId) await preProvider(() => refreshCampaignLifecycle(job.campaignId));
         continue;
       }
       if (job.status === "sending") {
         if (["offer_expired", "invalid_offer_end"].includes(job.sendBlockedReason)) {
-          const suppression = await suppressMarketingJob(job, job.sendBlockedReason, now, { expectedStatus: "sending" });
+          const suppression = await preProvider(() => suppressMarketingJob(job, job.sendBlockedReason, now, { expectedStatus: "sending" }));
           if (!suppression.ok) {
-            await redisCmd(["DEL", claimKey(id)]);
+            await preProvider(() => redisCmd(["DEL", claimKey(id)]));
             failed += 1;
             results.push({ id, to: job.to, ok: false, retryable: true, reason: suppression.error });
           } else {
@@ -1486,9 +1547,9 @@ export async function dispatchDueMarketingCampaigns({
         // Read an existing durable provider outcome before touching today's
         // quota. Terminal/known failures need no new provider call and must not
         // consume one of the 50 slots for the current Beijing day.
-        const deliveryRead = await readEmailDeliveryByMessageId(job.deliveryMessageId);
+        const deliveryRead = await preProvider(() => readEmailDeliveryByMessageId(job.deliveryMessageId));
         if (!deliveryRead.ok) {
-          await redisCmd(["DEL", claimKey(id)]);
+          await preProvider(() => redisCmd(["DEL", claimKey(id)]));
           failed += 1;
           results.push({ id, to: job.to, ok: false, retryable: true, reason: "delivery_recovery_unavailable" });
           continue;
@@ -1511,24 +1572,24 @@ export async function dispatchDueMarketingCampaigns({
             lastError: "",
             updatedAt: new Date(now).toISOString(),
           };
-          const recoveredMetric = await recordMarketingCampaignMetric(job.campaignId, "submitted", `dispatch:${id}`);
+          const recoveredMetric = await preProvider(() => recordMarketingCampaignMetric(job.campaignId, "submitted", `dispatch:${id}`));
           if (!recoveredMetric.ok) {
-            await redisCmd(["DEL", claimKey(id)]);
+            await preProvider(() => redisCmd(["DEL", claimKey(id)]));
             failed += 1;
             results.push({ id, to: job.to, ok: false, retryable: true, reason: "metric_commit_pending" });
             continue;
           }
-          const recovered = await transitionJob(recoveredJob, {
+          const recovered = await preProvider(() => transitionJob(recoveredJob, {
             expectedStatuses: ["sending"],
             mode: "terminal",
-          });
+          }));
           if (!recovered.ok) {
-            await redisCmd(["DEL", claimKey(id)]);
+            await preProvider(() => redisCmd(["DEL", claimKey(id)]));
             failed += 1;
             results.push({ id, to: job.to, ok: false, retryable: true, reason: "delivery_commit_pending" });
             continue;
           }
-          await updateRecipientStatusStrict(job, "submitted", { provider: recoveredJob.provider, providerMessageId: recoveredJob.providerMessageId, submittedAt: recoveredJob.submittedAt });
+          await preProvider(() => updateRecipientStatusStrict(job, "submitted", { provider: recoveredJob.provider, providerMessageId: recoveredJob.providerMessageId, submittedAt: recoveredJob.submittedAt }));
           submitted += 1;
           results.push({ id, to: job.to, ok: true, recovered: true, messageId: recoveredJob.providerMessageId });
           continue;
@@ -1541,17 +1602,17 @@ export async function dispatchDueMarketingCampaigns({
             suppressedAt: trustedDelivery.updatedAt || new Date(now).toISOString(),
             updatedAt: new Date(now).toISOString(),
           };
-          const metric = await recordMarketingCampaignMetric(job.campaignId, "suppressed", `dispatch:${id}`);
-          const recovered = metric.ok ? await transitionJob(suppressedJob, {
+          const metric = await preProvider(() => recordMarketingCampaignMetric(job.campaignId, "suppressed", `dispatch:${id}`));
+          const recovered = metric.ok ? await preProvider(() => transitionJob(suppressedJob, {
             expectedStatuses: ["sending"],
             mode: "terminal",
-          }) : { ok: false };
+          })) : { ok: false };
           if (!recovered.ok) {
-            await redisCmd(["DEL", claimKey(id)]);
+            await preProvider(() => redisCmd(["DEL", claimKey(id)]));
             failed += 1;
             results.push({ id, to: job.to, ok: false, retryable: true, reason: metric.ok ? "delivery_commit_pending" : "metric_commit_pending" });
           } else {
-            await updateRecipientStatusStrict(job, "suppressed", { reason: suppressedJob.lastError });
+            await preProvider(() => updateRecipientStatusStrict(job, "suppressed", { reason: suppressedJob.lastError }));
             results.push({ id, to: job.to, ok: true, suppressed: true, recovered: true, reason: suppressedJob.lastError });
           }
           continue;
@@ -1579,10 +1640,10 @@ export async function dispatchDueMarketingCampaigns({
               failedAt: new Date(recoveryNow).toISOString(),
               updatedAt: new Date(recoveryNow).toISOString(),
             };
-            const metric = await recordMarketingCampaignMetric(job.campaignId, "failed", `dispatch:${id}`);
-            const stored = metric.ok ? await transitionJob(deadJob, { expectedStatuses: ["sending"], mode: "terminal" }) : { ok: false };
-            if (stored.ok) await updateRecipientStatusStrict(job, "failed", { reason: deadJob.lastError });
-            else await redisCmd(["DEL", claimKey(id)]);
+            const metric = await preProvider(() => recordMarketingCampaignMetric(job.campaignId, "failed", `dispatch:${id}`));
+            const stored = metric.ok ? await preProvider(() => transitionJob(deadJob, { expectedStatuses: ["sending"], mode: "terminal" })) : { ok: false };
+            if (stored.ok) await preProvider(() => updateRecipientStatusStrict(job, "failed", { reason: deadJob.lastError }));
+            else await preProvider(() => redisCmd(["DEL", claimKey(id)]));
             failed += 1;
             results.push({ id, to: job.to, ok: false, permanent: stored.ok, reason: stored.ok ? deadJob.lastError : "delivery_commit_pending" });
           } else {
@@ -1596,7 +1657,7 @@ export async function dispatchDueMarketingCampaigns({
               nextAttemptAt: new Date(nextAttemptMs).toISOString(),
               updatedAt: new Date(recoveryNow).toISOString(),
             };
-            const stored = await transitionJob(retryJob, { expectedStatuses: ["sending"], mode: "schedule", score: nextAttemptMs });
+            const stored = await preProvider(() => transitionJob(retryJob, { expectedStatuses: ["sending"], mode: "schedule", score: nextAttemptMs }));
             if (!stored.ok) failed += 1;
             results.push({ id, to: job.to, ok: false, retryable: true, reason: stored.ok ? outcomeReason : "delivery_commit_pending" });
           }
@@ -1620,7 +1681,7 @@ export async function dispatchDueMarketingCampaigns({
             nextAttemptAt: new Date(recoveryNow).toISOString(),
             updatedAt: new Date(recoveryNow).toISOString(),
           };
-          const recovered = await transitionJob(retryJob, { expectedStatuses: ["sending"], mode: "schedule", score: resumeScore });
+          const recovered = await preProvider(() => transitionJob(retryJob, { expectedStatuses: ["sending"], mode: "schedule", score: resumeScore }));
           if (!recovered.ok) failed += 1;
           results.push({ id, to: job.to, ok: recovered.ok, skipped: recovered.ok, retryable: true, reason: recovered.ok ? "provider_not_started_requeued" : "delivery_commit_pending" });
           continue;
@@ -1630,9 +1691,9 @@ export async function dispatchDueMarketingCampaigns({
             && Number.isFinite(providerStartedMs)
             && Number.isFinite(recoveryDeadlineMs) && recoveryNow < recoveryDeadlineMs) {
           const attemptMarker = dailyAttemptKey(job);
-          const markerRead = attemptMarker ? await readRedis([["GET", attemptMarker]]) : { ok: false, rows: [] };
+          const markerRead = attemptMarker ? await preProvider(() => readRedis([["GET", attemptMarker]])) : { ok: false, rows: [] };
           if (!markerRead.ok) {
-            await redisCmd(["DEL", claimKey(id)]);
+            await preProvider(() => redisCmd(["DEL", claimKey(id)]));
             failed += 1;
             results.push({ id, to: job.to, ok: false, retryable: true, reason: "quota_storage_unavailable" });
             continue;
@@ -1652,9 +1713,9 @@ export async function dispatchDueMarketingCampaigns({
             nextAttemptAt: new Date(recoveryNow).toISOString(),
             updatedAt: new Date(recoveryNow).toISOString(),
           };
-          const recovered = await transitionJob(retryJob, {
+          const recovered = await preProvider(() => transitionJob(retryJob, {
             expectedStatuses: ["sending"], mode: "schedule", score: recoveryScore,
-          });
+          }));
           if (!recovered.ok) {
             failed += 1;
             results.push({ id, to: job.to, ok: false, retryable: true, reason: "delivery_commit_pending" });
@@ -1671,56 +1732,56 @@ export async function dispatchDueMarketingCampaigns({
           failedAt: new Date(now).toISOString(),
           updatedAt: new Date(now).toISOString(),
         };
-        const unknownMetric = await recordMarketingCampaignMetric(job.campaignId, "failed", `dispatch:${id}:unknown`);
+        const unknownMetric = await preProvider(() => recordMarketingCampaignMetric(job.campaignId, "failed", `dispatch:${id}:unknown`));
         if (!unknownMetric.ok) {
-          await redisCmd(["DEL", claimKey(id)]);
+          await preProvider(() => redisCmd(["DEL", claimKey(id)]));
           failed += 1;
           results.push({ id, to: job.to, ok: false, retryable: true, reason: "metric_commit_pending" });
           continue;
         }
-        const quarantined = await transitionJob(unknownJob, { expectedStatuses: ["sending"], mode: "terminal" });
+        const quarantined = await preProvider(() => transitionJob(unknownJob, { expectedStatuses: ["sending"], mode: "terminal" }));
         if (quarantined.ok) {
-          await updateRecipientStatusStrict(job, "failed", { reason: unknownJob.lastError });
+          await preProvider(() => updateRecipientStatusStrict(job, "failed", { reason: unknownJob.lastError }));
         }
         failed += 1;
         results.push({ id, to: job.to, ok: false, permanent: quarantined.ok, reason: quarantined.ok ? "delivery_outcome_unknown" : "delivery_commit_pending" });
         continue;
       }
-      const campaignRead = await readRedis([["GET", campaignKey(job.campaignId)]]);
+      const campaignRead = await preProvider(() => readRedis([["GET", campaignKey(job.campaignId)]]));
       if (!campaignRead.ok) {
-        await redisCmd(["DEL", claimKey(id)]);
+        await preProvider(() => redisCmd(["DEL", claimKey(id)]));
         failed += 1;
         results.push({ id, to: job.to, ok: false, retryable: true, reason: "storage_unavailable" });
         break;
       }
       const campaign = parseJson(campaignRead.rows[0]);
       if (campaignRead.rows[0] != null && !validCampaign(campaign, job.campaignId)) {
-        await redisCmd(["DEL", claimKey(id)]);
+        await preProvider(() => redisCmd(["DEL", claimKey(id)]));
         failed += 1;
         results.push({ id, to: job.to, ok: false, retryable: false, reason: "invalid_campaign_record" });
         continue;
       }
       if (!campaign) {
         const failedJob = { ...job, status: "failed", lastError: "campaign_missing", updatedAt: new Date(now).toISOString() };
-        const stored = await transitionJob(failedJob, { expectedStatuses: ["queued"], mode: "terminal" });
+        const stored = await preProvider(() => transitionJob(failedJob, { expectedStatuses: ["queued"], mode: "terminal" }));
         failed += 1;
         results.push({ id, to: job.to, ok: false, reason: stored.ok ? "campaign_missing" : "storage_failed" });
         continue;
       }
       if (campaign.status === "paused") {
         const nextAttemptMs = now + 15 * 60 * 1000;
-        await transitionJob({ ...job, status: "queued", queueScore: nextAttemptMs, nextAttemptAt: new Date(nextAttemptMs).toISOString(), updatedAt: new Date(now).toISOString() }, {
+        await preProvider(() => transitionJob({ ...job, status: "queued", queueScore: nextAttemptMs, nextAttemptAt: new Date(nextAttemptMs).toISOString(), updatedAt: new Date(now).toISOString() }, {
           expectedStatuses: ["queued"], mode: "schedule", score: nextAttemptMs,
-        });
+        }));
         results.push({ id, to: job.to, ok: true, skipped: true, reason: "campaign_paused" });
         continue;
       }
       if (campaign.status === "cancelled") {
-        await transitionJob({ ...job, status: "cancelled", cancelledAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() }, {
+        await preProvider(() => transitionJob({ ...job, status: "cancelled", cancelledAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() }, {
           expectedStatuses: ["queued"], mode: "terminal",
-        });
-        await updateRecipientStatusStrict(job, "cancelled");
-        await refreshCampaignLifecycle(job.campaignId);
+        }));
+        await preProvider(() => updateRecipientStatusStrict(job, "cancelled"));
+        await preProvider(() => refreshCampaignLifecycle(job.campaignId));
         results.push({ id, to: job.to, ok: true, skipped: true, reason: "campaign_cancelled" });
         continue;
       }
@@ -1732,13 +1793,13 @@ export async function dispatchDueMarketingCampaigns({
           failedAt: new Date(now).toISOString(),
           updatedAt: new Date(now).toISOString(),
         };
-        await transitionJob(inactiveJob, { expectedStatuses: ["queued"], mode: "terminal" });
+        await preProvider(() => transitionJob(inactiveJob, { expectedStatuses: ["queued"], mode: "terminal" }));
         failed += 1;
         results.push({ id, to: job.to, ok: false, permanent: true, reason: inactiveJob.lastError });
         continue;
       }
       if (typeof campaign.subject !== "string" || typeof campaign.html !== "string") {
-        await redisCmd(["DEL", claimKey(id)]);
+        await preProvider(() => redisCmd(["DEL", claimKey(id)]));
         failed += 1;
         results.push({ id, to: job.to, ok: false, retryable: false, reason: "invalid_campaign_record" });
         continue;
@@ -1749,9 +1810,9 @@ export async function dispatchDueMarketingCampaigns({
         Math.max(Number(now) || 0, Date.now()),
       );
       if (offerBlockReason) {
-        const suppression = await suppressMarketingJob(job, offerBlockReason, now, { expectedStatus: "queued" });
+        const suppression = await preProvider(() => suppressMarketingJob(job, offerBlockReason, now, { expectedStatus: "queued" }));
         if (!suppression.ok) {
-          await redisCmd(["DEL", claimKey(id)]);
+          await preProvider(() => redisCmd(["DEL", claimKey(id)]));
           failed += 1;
           results.push({ id, to: job.to, ok: false, retryable: true, reason: suppression.error });
         } else {
@@ -1771,12 +1832,12 @@ export async function dispatchDueMarketingCampaigns({
           failedAt: new Date(providerPreparationNow).toISOString(),
           updatedAt: new Date(providerPreparationNow).toISOString(),
         };
-        const metric = await recordMarketingCampaignMetric(job.campaignId, "failed", `dispatch:${id}:unknown`);
-        const stored = metric.ok ? await transitionJob(expiredJob, {
+        const metric = await preProvider(() => recordMarketingCampaignMetric(job.campaignId, "failed", `dispatch:${id}:unknown`));
+        const stored = metric.ok ? await preProvider(() => transitionJob(expiredJob, {
           expectedStatuses: ["queued"], mode: "terminal",
-        }) : { ok: false };
-        if (stored.ok) await updateRecipientStatusStrict(job, "failed", { reason: expiredJob.lastError });
-        else await redisCmd(["DEL", claimKey(id)]);
+        })) : { ok: false };
+        if (stored.ok) await preProvider(() => updateRecipientStatusStrict(job, "failed", { reason: expiredJob.lastError }));
+        else await preProvider(() => redisCmd(["DEL", claimKey(id)]));
         failed += 1;
         results.push({ id, to: job.to, ok: false, permanent: stored.ok, reason: stored.ok ? expiredJob.lastError : "delivery_commit_pending" });
         continue;
@@ -1799,22 +1860,22 @@ export async function dispatchDueMarketingCampaigns({
         resendSiteUrl: clean(job.resendSiteUrl || process.env.SITE_URL || "https://www.liumeiti.vip", 300),
         updatedAt: new Date(now).toISOString(),
       };
-      const sendingSaved = await transitionJob(sendingJob, {
+      const sendingSaved = await preProvider(() => transitionJob(sendingJob, {
         expectedStatuses: ["queued"],
         mode: "keep",
         score: sendingJob.queueScore,
-      });
+      }));
       if (!sendingSaved.ok) {
-        await redisCmd(["DEL", claimKey(id)]);
+        await preProvider(() => redisCmd(["DEL", claimKey(id)]));
         failed += 1;
         results.push({ id, to: job.to, ok: false, retryable: true, reason: sendingSaved.error === "campaign_blocked" ? `campaign_${sendingSaved.campaignStatus}` : "storage_failed_before_send" });
         continue;
       }
       if (leaseLost) {
         const nextAttemptMs = now + RETRY_DELAY_MS;
-        await transitionJob({ ...job, status: "queued", queueScore: nextAttemptMs, nextAttemptAt: new Date(nextAttemptMs).toISOString(), updatedAt: new Date(now).toISOString() }, {
+        await preProvider(() => transitionJob({ ...job, status: "queued", queueScore: nextAttemptMs, nextAttemptAt: new Date(nextAttemptMs).toISOString(), updatedAt: new Date(now).toISOString() }, {
           expectedStatuses: ["sending"], mode: "schedule", score: nextAttemptMs,
-        });
+        }));
         break;
       }
       if (typeof _testHooks?.beforeProvider === "function") {
@@ -1822,29 +1883,29 @@ export async function dispatchDueMarketingCampaigns({
       }
       if (!canContinue()) {
         deadlineExceeded = true;
-        if (!await requeueSendingForStop(job, sendingJob, id)) {
+        if (!await preProvider(() => requeueSendingForStop(job, sendingJob, id))) {
           failed += 1;
           results.push({ id, ok: false, retryable: true, reason: "delivery_commit_pending" });
         }
         break;
       }
-      if (!(await verifySendOwnership({ lockToken, job: sendingJob }))) {
-        const currentRead = await readRedis([["GET", campaignKey(job.campaignId)], ["GET", jobKey(id)]]);
+      if (!(await preProvider(() => verifySendOwnership({ lockToken, job: sendingJob })))) {
+        const currentRead = await preProvider(() => readRedis([["GET", campaignKey(job.campaignId)], ["GET", jobKey(id)]]));
         const candidateCampaign = currentRead.ok ? parseJson(currentRead.rows[0]) : null;
         const candidateJob = currentRead.ok ? parseJson(currentRead.rows[1]) : null;
         const currentCampaign = validCampaign(candidateCampaign, job.campaignId) ? candidateCampaign : null;
         const currentJob = validJob(candidateJob, id, job.campaignId) ? candidateJob : null;
         if (currentJob?.status === "sending" && currentCampaign?.status === "paused") {
           const nextAttemptMs = now + RETRY_DELAY_MS;
-          await transitionJob({ ...job, status: "queued", queueScore: nextAttemptMs, nextAttemptAt: new Date(nextAttemptMs).toISOString(), updatedAt: new Date(now).toISOString() }, {
+          await preProvider(() => transitionJob({ ...job, status: "queued", queueScore: nextAttemptMs, nextAttemptAt: new Date(nextAttemptMs).toISOString(), updatedAt: new Date(now).toISOString() }, {
             expectedStatuses: ["sending"], mode: "schedule", score: nextAttemptMs,
-          });
+          }));
         } else if (currentJob?.status === "sending" && currentCampaign?.status === "cancelled") {
-          await transitionJob({ ...currentJob, status: "cancelled", cancelledAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() }, {
+          await preProvider(() => transitionJob({ ...currentJob, status: "cancelled", cancelledAt: new Date(now).toISOString(), updatedAt: new Date(now).toISOString() }, {
             expectedStatuses: ["sending"], mode: "terminal",
-          });
+          }));
         }
-        await redisCmd(["DEL", claimKey(id)]);
+        await preProvider(() => redisCmd(["DEL", claimKey(id)]));
         results.push({ id, to: job.to, ok: true, skipped: true, reason: currentCampaign ? `campaign_${currentCampaign.status}` : "send_lease_lost" });
         continue;
       }
@@ -1853,9 +1914,9 @@ export async function dispatchDueMarketingCampaigns({
         Math.max(Number(now) || 0, Date.now()),
       );
       if (providerOfferBlockReason) {
-        const suppression = await suppressMarketingJob(sendingJob, providerOfferBlockReason, now, { expectedStatus: "sending" });
+        const suppression = await preProvider(() => suppressMarketingJob(sendingJob, providerOfferBlockReason, now, { expectedStatus: "sending" }));
         if (!suppression.ok) {
-          await redisCmd(["DEL", claimKey(id)]);
+          await preProvider(() => redisCmd(["DEL", claimKey(id)]));
           failed += 1;
           results.push({ id, to: job.to, ok: false, retryable: true, reason: suppression.error });
         } else {
@@ -1865,19 +1926,30 @@ export async function dispatchDueMarketingCampaigns({
       }
       if (!canContinue()) {
         deadlineExceeded = true;
-        if (!await requeueSendingForStop(job, sendingJob, id)) {
+        if (!await preProvider(() => requeueSendingForStop(job, sendingJob, id))) {
+          failed += 1;
+          results.push({ id, ok: false, retryable: true, reason: "delivery_commit_pending" });
+        }
+        break;
+      }
+      const providerDeadlineAt = Number(deadlineAt) > 0
+        ? Math.max(0, Number(deadlineAt) - PROVIDER_COMMIT_RESERVE_MS)
+        : 0;
+      if (providerDeadlineAt > 0 && Date.now() + PROVIDER_MIN_START_BUDGET_MS >= providerDeadlineAt) {
+        deadlineExceeded = true;
+        if (!await preProvider(() => requeueSendingForStop(job, sendingJob, id))) {
           failed += 1;
           results.push({ id, ok: false, retryable: true, reason: "delivery_commit_pending" });
         }
         break;
       }
       const providerLogicalNow = logicalNow();
-      const quotaReservation = await reserveDailyProviderAttempt(sendingJob, providerLogicalNow);
+      const quotaReservation = await preProvider(() => reserveDailyProviderAttempt(sendingJob, providerLogicalNow));
       if (!quotaReservation.ok) {
         const nextAttemptMs = quotaReservation.dailyLimit
           ? nextBeijingDayStart(providerLogicalNow)
           : providerLogicalNow + RETRY_DELAY_MS;
-        const requeued = await transitionJob({
+        const requeued = await preProvider(() => transitionJob({
           ...job,
           status: "queued",
           queueScore: nextAttemptMs,
@@ -1885,9 +1957,9 @@ export async function dispatchDueMarketingCampaigns({
           updatedAt: new Date(providerLogicalNow).toISOString(),
         }, {
           expectedStatuses: ["sending"], mode: "schedule", score: nextAttemptMs,
-        });
+        }));
         if (!requeued.ok) {
-          await redisCmd(["DEL", claimKey(id)]);
+          await preProvider(() => redisCmd(["DEL", claimKey(id)]));
           failed += 1;
           results.push({ id, to: job.to, ok: false, retryable: true, reason: "quota_reservation_commit_pending" });
         } else {
@@ -1912,13 +1984,13 @@ export async function dispatchDueMarketingCampaigns({
           : new Date(providerLogicalNow + RESEND_IDEMPOTENCY_RECOVERY_MS).toISOString(),
         updatedAt: providerTimestamp,
       };
-      const startedSaved = await transitionJob(startedJob, {
+      const startedSaved = await preProvider(() => transitionJob(startedJob, {
         expectedStatuses: ["sending"],
         mode: "keep",
         score: startedJob.queueScore,
-      });
+      }));
       if (!startedSaved.ok) {
-        await redisCmd(["DEL", claimKey(id)]);
+        await preProvider(() => redisCmd(["DEL", claimKey(id)]));
         failed += 1;
         results.push({ id, to: job.to, ok: false, retryable: true, reason: "provider_start_marker_pending" });
         continue;
@@ -1946,12 +2018,31 @@ export async function dispatchDueMarketingCampaigns({
         marketingTokenNonce: startedJob.marketingTokenNonce,
         skipDeliveryTracking: true,
         forceProvider: "resend",
+        deadlineAt: providerDeadlineAt,
       });
+      if (result?.deadlineExceeded === true && result?.providerAttempted === false) {
+        deadlineExceeded = true;
+        const requeueCommit = await settleCommit(() => requeueSendingForStop(job, startedJob, id));
+        if (!requeueCommit.settled) {
+          results.push({ id, ok: true, skipped: true, retryable: true, reason: "provider_outcome_commit_deferred" });
+        } else if (requeueCommit.error || !requeueCommit.value) {
+          failed += 1;
+          results.push({ id, ok: false, retryable: true, reason: "delivery_commit_pending" });
+        } else {
+          results.push({ id, ok: true, skipped: true, retryable: true, reason: "provider_not_started_requeued" });
+        }
+        break;
+      }
       if (typeof _testHooks?.afterProviderBeforeRecord === "function") {
         await _testHooks.afterProviderBeforeRecord({ campaignId: job.campaignId, campaignJobId: id, result });
       }
       let deliveryRecord = null;
-      try { deliveryRecord = await recordDispatch(startedJob, campaign, result); } catch {}
+      const deliveryCommit = await commitProviderState(async () => {
+        try { return await recordDispatch(startedJob, campaign, result); }
+        catch { return null; }
+      }, id, job.to);
+      if (deliveryCommit.deferred) break;
+      deliveryRecord = deliveryCommit.value;
       if (typeof _testHooks?.afterRecordBeforeState === "function") {
         await _testHooks.afterRecordBeforeState({
           campaignId: job.campaignId,
@@ -1969,20 +2060,32 @@ export async function dispatchDueMarketingCampaigns({
           suppressedAt: providerTimestamp,
           updatedAt: providerTimestamp,
         };
-        const metric = await recordMarketingCampaignMetric(job.campaignId, "suppressed", `dispatch:${id}`);
+        const metricCommit = await commitProviderState(
+          () => recordMarketingCampaignMetric(job.campaignId, "suppressed", `dispatch:${id}`), id, job.to,
+        );
+        if (metricCommit.deferred) break;
+        const metric = metricCommit.value;
         if (!metric.ok) {
-          await redisCmd(["DEL", claimKey(id)]);
+          const claimCommit = await commitProviderState(() => redisCmd(["DEL", claimKey(id)]), id, job.to);
+          if (claimCommit.deferred) break;
           failed += 1;
           results.push({ id, to: job.to, ok: false, retryable: true, reason: "metric_commit_pending" });
           continue;
         }
-        const stored = await transitionJob(suppressedJob, { expectedStatuses: ["sending"], mode: "terminal" });
+        const terminalCommit = await commitProviderState(
+          () => transitionJob(suppressedJob, { expectedStatuses: ["sending"], mode: "terminal" }), id, job.to,
+        );
+        if (terminalCommit.deferred) break;
+        const stored = terminalCommit.value;
         if (!stored.ok) {
           failed += 1;
           results.push({ id, to: job.to, ok: false, retryable: true, reason: "delivery_commit_pending" });
           continue;
         }
-        await updateRecipientStatusStrict(job, "suppressed", { reason: suppressedJob.lastError });
+        const recipientCommit = await commitProviderState(
+          () => updateRecipientStatusStrict(job, "suppressed", { reason: suppressedJob.lastError }), id, job.to,
+        );
+        if (recipientCommit.deferred) break;
         results.push({ id, to: job.to, ok: false, suppressed: true, reason: suppressedJob.lastError });
       } else if (result?.ok) {
         const completedJob = {
@@ -1995,32 +2098,41 @@ export async function dispatchDueMarketingCampaigns({
           lastError: "",
           updatedAt: providerTimestamp,
         };
-        const metric = await recordMarketingCampaignMetric(job.campaignId, "submitted", `dispatch:${id}`);
+        const metricCommit = await commitProviderState(
+          () => recordMarketingCampaignMetric(job.campaignId, "submitted", `dispatch:${id}`), id, job.to,
+        );
+        if (metricCommit.deferred) break;
+        const metric = metricCommit.value;
         if (!metric.ok) {
-          await redisCmd(["DEL", claimKey(id)]);
+          const claimCommit = await commitProviderState(() => redisCmd(["DEL", claimKey(id)]), id, job.to);
+          if (claimCommit.deferred) break;
           failed += 1;
           results.push({ id, to: job.to, ok: false, retryable: true, deliveryRecorded: Boolean(deliveryRecord?.ok), reason: "metric_commit_pending" });
           continue;
         }
-        const stored = await transitionJob(completedJob, {
-          expectedStatuses: ["sending"],
-          mode: "terminal",
-        });
+        const terminalCommit = await commitProviderState(() => transitionJob(completedJob, {
+            expectedStatuses: ["sending"],
+            mode: "terminal",
+          }), id, job.to);
+        if (terminalCommit.deferred) break;
+        const stored = terminalCommit.value;
         if (!stored.ok) {
           failed += 1;
           results.push({ id, to: job.to, ok: false, retryable: true, deliveryRecorded: Boolean(deliveryRecord?.ok), reason: "delivery_commit_pending" });
           continue;
         }
-        await updateRecipientStatusStrict(job, "submitted", {
-          provider: completedJob.provider,
-          providerMessageId: completedJob.providerMessageId,
-          submittedAt: completedJob.submittedAt,
-        });
+        const recipientCommit = await commitProviderState(() => updateRecipientStatusStrict(job, "submitted", {
+            provider: completedJob.provider,
+            providerMessageId: completedJob.providerMessageId,
+            submittedAt: completedJob.submittedAt,
+          }), id, job.to);
+        if (recipientCommit.deferred) break;
         submitted += 1;
         results.push({ id, to: job.to, ok: true, messageId: result.messageId || "" });
       } else {
         const quotaFailure = isQuotaFailure(result);
         const policyRetry = Boolean(result?.retryable || result?.policyUnavailable);
+        const budgetDeferred = result?.deadlineExceeded === true && result?.retryDeferred === true;
         const lastError = clean(result?.reason || result?.error || result?.code || "send_failed", 200);
         // 配额失败是系统性原因(顺延到下个发送窗口),不计入永久失败次数。
         const idempotencyConflict = Boolean(result?.idempotencyConflict);
@@ -2035,20 +2147,32 @@ export async function dispatchDueMarketingCampaigns({
             failedAtBeijing: formatBeijingTime(providerLogicalNow),
             updatedAt: providerTimestamp,
           };
-          const metric = await recordMarketingCampaignMetric(job.campaignId, "failed", `dispatch:${id}`);
+          const metricCommit = await commitProviderState(
+            () => recordMarketingCampaignMetric(job.campaignId, "failed", `dispatch:${id}`), id, job.to,
+          );
+          if (metricCommit.deferred) break;
+          const metric = metricCommit.value;
           if (!metric.ok) {
-            await redisCmd(["DEL", claimKey(id)]);
+            const claimCommit = await commitProviderState(() => redisCmd(["DEL", claimKey(id)]), id, job.to);
+            if (claimCommit.deferred) break;
             failed += 1;
             results.push({ id, to: job.to, ok: false, retryable: true, reason: "metric_commit_pending" });
             continue;
           }
-          const stored = await transitionJob(deadJob, { expectedStatuses: ["sending"], mode: "terminal" });
+          const terminalCommit = await commitProviderState(
+            () => transitionJob(deadJob, { expectedStatuses: ["sending"], mode: "terminal" }), id, job.to,
+          );
+          if (terminalCommit.deferred) break;
+          const stored = terminalCommit.value;
           if (!stored.ok) {
             failed += 1;
             results.push({ id, to: job.to, ok: false, retryable: true, reason: "delivery_commit_pending" });
             continue;
           }
-          await updateRecipientStatusStrict(job, "failed", { reason: deadJob.lastError });
+          const recipientCommit = await commitProviderState(
+            () => updateRecipientStatusStrict(job, "failed", { reason: deadJob.lastError }), id, job.to,
+          );
+          if (recipientCommit.deferred) break;
           failed += 1;
           results.push({ id, to: job.to, ok: false, reason: deadJob.lastError, permanent: true });
         } else {
@@ -2068,15 +2192,25 @@ export async function dispatchDueMarketingCampaigns({
             nextAttemptAt: new Date(nextAttemptMs).toISOString(),
             updatedAt: providerTimestamp,
           };
-          const stored = await transitionJob(retryJob, {
+          const retryCommit = await commitProviderState(() => transitionJob(retryJob, {
             expectedStatuses: ["sending"], mode: "schedule", score: retryScore,
-          });
-          failed += 1;
-          results.push({ id, to: job.to, ok: false, retryable: true, reason: stored.ok ? lastError : "delivery_commit_pending" });
-          if (quotaFailure) {
-            await redisCmd(["SET", providerDailyKey, String(DAILY_LIMIT), "EX", String(3 * 24 * 60 * 60)]);
+          }), id, job.to);
+          if (retryCommit.deferred) break;
+          const stored = retryCommit.value;
+          if (budgetDeferred && stored.ok) {
+            deadlineExceeded = true;
+            results.push({ id, to: job.to, ok: true, skipped: true, retryable: true, reason: lastError });
             break;
           }
+          if (quotaFailure) {
+            const quotaCommit = await commitProviderState(
+              () => redisCmd(["SET", providerDailyKey, String(DAILY_LIMIT), "EX", String(3 * 24 * 60 * 60)]), id, job.to,
+            );
+            if (quotaCommit.deferred) break;
+          }
+          failed += 1;
+          results.push({ id, to: job.to, ok: false, retryable: true, reason: stored.ok ? lastError : "delivery_commit_pending" });
+          if (quotaFailure) break;
         }
       }
       if (!canContinue()) {
@@ -2111,10 +2245,24 @@ export async function dispatchDueMarketingCampaigns({
         error: "maintenance_deadline_exceeded",
       } : {}),
     };
+  } catch (error) {
+    if (error !== PRE_PROVIDER_TIMEOUT) throw error;
+    deadlineExceeded = true;
+    return deadlineResult({ submitted, failed, results });
   } finally {
     clearInterval(heartbeat);
-    await releaseDispatchLease(lockToken);
+    await settleUntil(() => releaseDispatchLease(lockToken), Number(deadlineAt) > 0 ? Number(deadlineAt) : 0);
   }
+}
+
+export function normalizeMarketingBudgetResult(result) {
+  if (result?.deadlineExceeded !== true
+      || result?.error !== "maintenance_deadline_exceeded"
+      || Number(result?.failed || 0) > 0
+      || result?.leaseLost === true
+      || result?.reason === "lock_lost") return result;
+  const { deadlineExceeded: _deadline, partial: _partial, error: _error, ...completedSlice } = result;
+  return { ...completedSlice, ok: true, deferred: true, reason: "maintenance_budget_exhausted" };
 }
 
 export const marketingCampaignQueueInternals = {
@@ -2123,6 +2271,9 @@ export const marketingCampaignQueueInternals = {
   DISPATCH_LOCK_TTL_SECONDS,
   ENQUEUE_CONCURRENCY,
   MAX_SEND_ATTEMPTS,
+  PROVIDER_COMMIT_RESERVE_MS,
+  PROVIDER_MIN_START_BUDGET_MS,
+  DISPATCH_RETURN_RESERVE_MS,
   QUEUE_KEY,
   beijingDayKey,
   deliveryMessageId,

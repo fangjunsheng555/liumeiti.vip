@@ -511,6 +511,30 @@ export async function drainTelegramAlertRetries({ limit = 20, now = Date.now(), 
         }
         continue;
       }
+      // Incident delivery became opt-in after older retries may already have
+      // been persisted. Retire those records without calling Telegram; generic
+      // security/business operational retries have no incidentId and continue.
+      if (record.incidentId && !incidentTelegramEnabled()) {
+        const removed = await removeRetry(hash);
+        if (!removed) {
+          failed += 1;
+          retainedInPage += 1;
+          continue;
+        }
+        processed += 1;
+        terminal += 1;
+        staysDue = false;
+        const historySaved = await appendHistory(historyRecord({
+          fingerprint: record.fingerprint,
+          incidentId: record.incidentId,
+          event: record.event,
+          result: { ok: false, disabled: true, error: "incident_telegram_disabled" },
+          started: now,
+          attempt: Number(record.attempts || 0),
+        }));
+        if (!historySaved) console.warn("[telegram] retired incident retry but could not append disabled history", { hash });
+        continue;
+      }
       if (state.duplicate) {
         if (await removeRetry(hash)) processed += 1;
         else {
@@ -652,8 +676,13 @@ function incidentUrl(incidentId) {
   return `${base}/admin?tab=health&incident=${encodeURIComponent(incidentId)}`;
 }
 
+export function incidentTelegramEnabled() {
+  return process.env.OPS_INCIDENT_TELEGRAM_ENABLED === "1";
+}
+
 export async function notifyIncidentOpened(incident, { reopened = false } = {}) {
   if (!incident?.id) return { ok: false, error: "incident_required" };
+  if (!incidentTelegramEnabled()) return { ok: true, skipped: true, reason: "incident_telegram_disabled" };
   const title = reopened ? "事故再次发生" : "系统事故告警";
   const text = [
     `🚨 [${incident.severity || "P2"}] ${title}`,
@@ -674,6 +703,7 @@ export async function notifyIncidentOpened(incident, { reopened = false } = {}) 
 
 export async function notifyIncidentRecovered(incident) {
   if (!incident?.id) return { ok: false, error: "incident_required" };
+  if (!incidentTelegramEnabled()) return { ok: true, skipped: true, reason: "incident_telegram_disabled" };
   const text = [
     "✅ 系统事故已连续三次恢复正常",
     `事故: ${incident.id}`,

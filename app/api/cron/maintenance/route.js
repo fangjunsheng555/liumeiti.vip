@@ -3,6 +3,7 @@ import { detectMissedJobs, runObservedJob } from "../../_job-runner.js";
 import { runMaintenanceTick } from "../../_keeper.js";
 import { readMetricSeries, summarizeMetricSeries, withApiTelemetry } from "../../_observability.js";
 import { reportOperationalFailure, reportOperationalRecovery } from "../../_incidents.js";
+import { CORE_API_AGGREGATE_GROUP } from "../../_telemetry-groups.js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,7 +30,7 @@ function requireMonitoringBudget(deadlineAt, minimumActionMs = 11_000) {
 }
 
 async function evaluateApiSignals({ deadlineAt = 0 } = {}) {
-  const series = await readMetricSeries({ kind: "api", range: "1h" });
+  const series = await readMetricSeries({ kind: "api", group: CORE_API_AGGREGATE_GROUP, range: "1h" });
   const recent = series.points.slice(-3);
   const summary = summarizeMetricSeries(recent);
   const hasRecoverySample = summary.requests >= 10;

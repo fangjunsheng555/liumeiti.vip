@@ -84,8 +84,40 @@ globalThis.fetch = async (input, options = {}) => {
 };
 
 const keeper = await import("../app/api/_keeper.js");
+const marketingQueue = await import("../app/api/_marketing-campaign-queue.js");
 
 test.after(() => { globalThis.fetch = originalFetch; });
+
+test("shared maintenance uses a bounded marketing slice", () => {
+  assert.equal(marketingQueue.MARKETING_RUNTIME_BATCH_LIMIT, 8);
+  assert.equal(keeper.keeperInternals.MARKETING_MAINTENANCE_RESERVE_MS, 10_000);
+  const deferred = marketingQueue.normalizeMarketingBudgetResult({
+    ok: false,
+    partial: true,
+    deadlineExceeded: true,
+    error: "maintenance_deadline_exceeded",
+    submitted: 8,
+    failed: 0,
+  });
+  assert.deepEqual(deferred, {
+    ok: true,
+    deferred: true,
+    reason: "maintenance_budget_exhausted",
+    submitted: 8,
+    failed: 0,
+  });
+  const taskOrder = keeper.runMaintenanceTick.toString();
+  const positions = ["marketingCampaignTick", "queueSampleTick", "pushMaintenanceTick"].map((name) => taskOrder.indexOf(name));
+  assert.ok(positions.every((position) => position >= 0));
+  assert.ok(positions[0] < positions[1] && positions[1] < positions[2]);
+});
+
+test("a marketing business failure remains a failed maintenance job", () => {
+  const failed = { ok: false, partial: true, deadlineExceeded: true, error: "send_failed", submitted: 7, failed: 1 };
+  assert.equal(marketingQueue.normalizeMarketingBudgetResult(failed), failed);
+  const leaseLost = { ok: false, partial: true, deadlineExceeded: true, leaseLost: true, reason: "lock_lost", failed: 0 };
+  assert.equal(marketingQueue.normalizeMarketingBudgetResult(leaseLost), leaseLost);
+});
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

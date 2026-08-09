@@ -20,6 +20,7 @@ const ORDER_SLA_TICK_LOCK = "lm:keeper:order-sla-tick";
 const ORDER_SLA_TICK_INTERVAL_SEC = 5 * 60;
 const MARKETING_TICK_LOCK = "lm:keeper:marketing-tick";
 const MARKETING_TICK_INTERVAL_SEC = 120;
+const MARKETING_MAINTENANCE_RESERVE_MS = 10_000;
 const AFTER_SALES_OUTBOX_TICK_LOCK = "lm:keeper:after-sales-completion-outbox";
 const AFTER_SALES_OUTBOX_TICK_INTERVAL_SEC = 60;
 const QUEUE_SAMPLE_TICK_LOCK = "lm:keeper:queue-sample-tick";
@@ -332,8 +333,17 @@ async function marketingCampaignTick(trigger, { deadlineAt = 0 } = {}) {
     trigger,
     deadlineAt,
     handler: async ({ shouldContinue }) => {
-      const { dispatchDueMarketingCampaigns } = await import("./_marketing-campaign-queue.js");
-      return dispatchDueMarketingCampaigns({ limit: 40, shouldContinue, deadlineAt });
+      const {
+        dispatchDueMarketingCampaigns,
+        MARKETING_RUNTIME_BATCH_LIMIT,
+        normalizeMarketingBudgetResult,
+      } = await import("./_marketing-campaign-queue.js");
+      const dispatchDeadlineAt = deadlineAt ? Math.max(Date.now(), deadlineAt - MARKETING_MAINTENANCE_RESERVE_MS) : 0;
+      return normalizeMarketingBudgetResult(await dispatchDueMarketingCampaigns({
+        limit: MARKETING_RUNTIME_BATCH_LIMIT,
+        shouldContinue,
+        deadlineAt: dispatchDeadlineAt,
+      }));
     },
   });
 }
@@ -449,12 +459,13 @@ async function queueSampleTick(trigger, { deadlineAt = 0 } = {}) {
           const fingerprint = `queue:${queue.name}`;
           let incidentResult;
           if (queue.status === "error" || queue.status === "warning") {
+            const invalidTimeIndex = queue.error === "operational_queue_score_invalid";
             incidentResult = await reportOperationalFailure({
               fingerprint,
               component: "queue",
               severity: queue.status === "error" ? "P1" : "P2",
-              title: `${queue.label}${queue.status === "error" ? "严重" : "出现"}积压`,
-              errorCode: queue.status === "error" ? "queue_backlog_critical" : "queue_backlog_warning",
+              title: invalidTimeIndex ? `${queue.label}时间索引异常` : `${queue.label}${queue.status === "error" ? "严重" : "出现"}积压`,
+              errorCode: invalidTimeIndex ? queue.error : queue.status === "error" ? "queue_backlog_critical" : "queue_backlog_warning",
               detail: { count: queue.count, dueCount: queue.dueCount, oldestAgeMs: queue.oldestAgeMs },
             });
           } else {
@@ -504,9 +515,9 @@ export async function runMaintenanceTick({
     renewalTick,
     orderSlaTick,
     marketingCampaignTick,
+    queueSampleTick,
     pushMaintenanceTick,
     telegramAlertRetryTick,
-    queueSampleTick,
   ];
   for (let index = 0; index < tasks.length; index += 1) {
     const task = tasks[index];
@@ -552,6 +563,7 @@ export async function runMaintenanceTick({
 }
 
 export const keeperInternals = {
+  MARKETING_MAINTENANCE_RESERVE_MS,
   acquireTick,
   afterSalesCompletionOutboxTick,
   queueSampleTick,

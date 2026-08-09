@@ -1,4 +1,8 @@
-import { dispatchDueMarketingCampaigns } from "../../_marketing-campaign-queue.js";
+import {
+  dispatchDueMarketingCampaigns,
+  MARKETING_RUNTIME_BATCH_LIMIT,
+  normalizeMarketingBudgetResult,
+} from "../../_marketing-campaign-queue.js";
 import { withApiTelemetry } from "../../_observability.js";
 
 export const runtime = "nodejs";
@@ -15,7 +19,10 @@ async function handler(request) {
   if (!authorized(request)) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
-  const result = await dispatchDueMarketingCampaigns({ limit: 40 });
+  const result = normalizeMarketingBudgetResult(await dispatchDueMarketingCampaigns({
+    limit: MARKETING_RUNTIME_BATCH_LIMIT,
+    deadlineAt: Date.now() + 50_000,
+  }));
   return Response.json(result, {
     status: result?.ok === false ? 503 : 200,
     headers: { "cache-control": "no-store" },

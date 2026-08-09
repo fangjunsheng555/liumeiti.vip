@@ -58,8 +58,31 @@ export const MONITORED_API_GROUP_NAMES = Object.freeze(
   MONITORED_API_GROUP_DEFINITIONS.map((group) => group.name),
 );
 
-const monitoredRouteCount = new Set(
-  MONITORED_API_GROUP_DEFINITIONS.flatMap((group) => group.routes),
+// Long-running schedulers, webhook ingestion and the health dashboard itself
+// retain their own per-group telemetry, but must not feed the customer-facing
+// API aggregate. Otherwise one expected 30-second maintenance request (or the
+// dashboard reading that request) can manufacture both a P95 and a 5xx alert.
+export const CORE_API_AGGREGATE_GROUP = "core";
+export const BACKGROUND_API_GROUP_NAMES = Object.freeze([
+  "admin_health",
+  "cron_maintenance",
+  "cron_push",
+  "cron_marketing_campaign",
+  "netflix_mail_ingest",
+]);
+const backgroundApiGroups = new Set(BACKGROUND_API_GROUP_NAMES);
+export const BACKGROUND_API_GROUP_DEFINITIONS = Object.freeze(
+  MONITORED_API_GROUP_DEFINITIONS.filter((group) => backgroundApiGroups.has(group.name)),
+);
+export const CORE_API_GROUP_DEFINITIONS = Object.freeze(
+  MONITORED_API_GROUP_DEFINITIONS.filter((group) => !backgroundApiGroups.has(group.name)),
+);
+export const CORE_API_GROUP_NAMES = Object.freeze(
+  CORE_API_GROUP_DEFINITIONS.map((group) => group.name),
+);
+
+const coreRouteCount = new Set(
+  CORE_API_GROUP_DEFINITIONS.flatMap((group) => group.routes),
 ).size;
 
 // These exclusions make the boundaries for this release explicit. They still
@@ -68,12 +91,17 @@ const monitoredRouteCount = new Set(
 export const CORE_API_TELEMETRY_COVERAGE = Object.freeze({
   scope: "core_api",
   scopeLabel: "核心 API",
-  aggregationPolicy: "explicit_allowlist",
-  aggregateGroup: "all",
-  groupCount: MONITORED_API_GROUP_DEFINITIONS.length,
-  routeCount: monitoredRouteCount,
-  groups: MONITORED_API_GROUP_DEFINITIONS,
+  aggregationPolicy: "interactive_allowlist",
+  aggregateGroup: CORE_API_AGGREGATE_GROUP,
+  groupCount: CORE_API_GROUP_DEFINITIONS.length,
+  routeCount: coreRouteCount,
+  groups: CORE_API_GROUP_DEFINITIONS,
   explicitExclusions: Object.freeze([
+    {
+      area: "后台任务、邮件入站与健康诊断",
+      routes: BACKGROUND_API_GROUP_DEFINITIONS.flatMap((group) => group.routes),
+      reason: "继续保留独立趋势，但不纳入交互 API 的错误率和延迟告警",
+    },
     {
       area: "Push 账户端设置",
       routes: ["/api/auth/push/*"],

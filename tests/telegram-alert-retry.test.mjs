@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 process.env.AUTH_SECRET = "telegram-retry-test-secret-at-least-32-characters";
 process.env.KV_REST_API_URL = "http://telegram-retry.redis.test";
 process.env.KV_REST_API_TOKEN = "redis-secret-token";
 process.env.TELEGRAM_BOT_TOKEN = "123456:telegram-secret-token";
 process.env.TELEGRAM_CHAT_ID = "987654";
+process.env.OPS_INCIDENT_TELEGRAM_ENABLED = "1";
 
 const strings = new Map();
 const lists = new Map();
@@ -167,6 +169,61 @@ function reset() {
   failExactInvalidCleanupOnce = false;
 }
 
+test("health incident Telegram is opt-in without disabling other operational alerts", async () => {
+  reset();
+  const previous = process.env.OPS_INCIDENT_TELEGRAM_ENABLED;
+  try {
+    delete process.env.OPS_INCIDENT_TELEGRAM_ENABLED;
+    const incident = {
+      id: "INC-HEALTH-SILENT",
+      fingerprint: "health:cron:maintenance",
+      severity: "P1",
+      title: "maintenance cron missed",
+      component: "cron",
+    };
+    const opened = await telegram.notifyIncidentOpened(incident, { reopened: false });
+    const reopened = await telegram.notifyIncidentOpened(incident, { reopened: true });
+    const recovered = await telegram.notifyIncidentRecovered(incident);
+    for (const result of [opened, reopened, recovered]) {
+      assert.deepEqual(result, {
+        ok: true,
+        skipped: true,
+        reason: "incident_telegram_disabled",
+      });
+    }
+    assert.equal(telegramBodies.length, 0);
+
+    const securityAlert = await telegram.sendOperationalTelegram({
+      fingerprint: "security:admin-login:unexpected-origin",
+      incidentId: "",
+      event: "security_alert",
+      text: "security notification remains enabled",
+    });
+    assert.equal(securityAlert.ok, true);
+    assert.equal(telegramBodies.length, 1);
+
+    reset();
+    process.env.OPS_INCIDENT_TELEGRAM_ENABLED = "1";
+    const enabled = await telegram.notifyIncidentOpened({
+      ...incident,
+      id: "INC-HEALTH-OPT-IN",
+      fingerprint: "health:cron:maintenance:opt-in",
+    }, { reopened: false });
+    assert.equal(enabled.ok, true);
+    assert.notEqual(enabled.skipped, true);
+    assert.equal(telegramBodies.length, 1);
+  } finally {
+    if (previous == null) delete process.env.OPS_INCIDENT_TELEGRAM_ENABLED;
+    else process.env.OPS_INCIDENT_TELEGRAM_ENABLED = previous;
+  }
+});
+
+test("maintenance workflow has no independent system-health Telegram sender", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/maintenance-cron.yml", import.meta.url), "utf8");
+  assert.doesNotMatch(workflow, /TELEGRAM_(?:BOT_TOKEN|CHAT_ID)|api\.telegram\.org|Telegram failure alert/);
+  assert.doesNotMatch(workflow, /--retry(?:-all-errors|-delay)?\b/);
+});
+
 test("history and retry readers skip isolated corrupt rows without hiding healthy object rows", async () => {
   reset();
   lists.set("lm:ops:telegram:history:v1", [
@@ -251,7 +308,7 @@ test("a committed provider marker with a lost Redis response still sends exactly
   assert.equal((await telegram.readTelegramRetryQueue()).length, 0);
 });
 
-test("a 5xx alert is persisted and maintenance retries it exactly once", async () => {
+test("a generic 5xx operational alert is persisted and maintenance retries it exactly once", async () => {
   reset();
   telegramResponses.push(
     { status: 503, payload: { ok: false, description: "temporary" } },
@@ -259,7 +316,7 @@ test("a 5xx alert is persisted and maintenance retries it exactly once", async (
   );
   const first = await telegram.sendOperationalTelegram({
     fingerprint: "incident:telegram-retry",
-    incidentId: "INC-RETRY",
+    incidentId: "",
     event: "opened",
     text: "buyer@example.com token=123456:telegram-secret-token 发生故障",
   });
@@ -279,12 +336,42 @@ test("a 5xx alert is persisted and maintenance retries it exactly once", async (
 
   const replay = await telegram.sendOperationalTelegram({
     fingerprint: "incident:telegram-retry",
-    incidentId: "INC-RETRY",
+    incidentId: "",
     event: "opened",
     text: "同一事故",
   });
   assert.equal(replay.duplicate, true);
   assert.equal(telegramBodies.length, 2);
+});
+
+test("maintenance retires pre-deployment incident retries while health Telegram is disabled", async () => {
+  reset();
+  const previous = process.env.OPS_INCIDENT_TELEGRAM_ENABLED;
+  try {
+    process.env.OPS_INCIDENT_TELEGRAM_ENABLED = "1";
+    telegramResponses.push({ status: 503, payload: { ok: false, description: "temporary" } });
+    const first = await telegram.sendOperationalTelegram({
+      fingerprint: "incident:legacy-health-retry",
+      incidentId: "INC-LEGACY-HEALTH",
+      event: "reopened:4",
+      text: "legacy system incident retry",
+    });
+    assert.equal(first.retryQueued, true);
+    const [queued] = await telegram.readTelegramRetryQueue();
+    assert.ok(queued);
+    assert.equal(telegramBodies.length, 1);
+
+    process.env.OPS_INCIDENT_TELEGRAM_ENABLED = "0";
+    const drained = await telegram.drainTelegramAlertRetries({ now: queued.nextAttemptAt });
+    assert.equal(drained.ok, true);
+    assert.equal(drained.sent, 0);
+    assert.equal(drained.terminal, 1);
+    assert.equal((await telegram.readTelegramRetryQueue()).length, 0);
+    assert.equal(telegramBodies.length, 1, "disabled incident retry must not call Telegram again");
+  } finally {
+    if (previous == null) delete process.env.OPS_INCIDENT_TELEGRAM_ENABLED;
+    else process.env.OPS_INCIDENT_TELEGRAM_ENABLED = previous;
+  }
 });
 
 test("retry drain removes 100 overlong raw members exactly and still reaches the valid task", async () => {
@@ -295,7 +382,7 @@ test("retry drain removes 100 overlong raw members exactly and still reaches the
   );
   const first = await telegram.sendOperationalTelegram({
     fingerprint: "incident:retry-invalid-index-prefix",
-    incidentId: "INC-INVALID-INDEX",
+    incidentId: "",
     event: "opened",
     text: "valid task after corrupt index members",
   });

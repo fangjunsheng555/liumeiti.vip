@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 process.env.AUTH_SECRET ||= "test-auth-secret";
@@ -20,6 +21,9 @@ let resendDelayMs = 0;
 let redisDelayMs = 0;
 let failNextJobWrite = false;
 let failNextTerminalTransition = false;
+let hangNextTerminalTransition = false;
+let hangNextRedisRequest = false;
+let hangRedisWhen = null;
 let failNextDispatchLockWrite = false;
 let loseNextSaveJobResponse = false;
 let loseNextCreateCampaignResponse = false;
@@ -378,6 +382,28 @@ function execute(command) {
   return null;
 }
 
+function isTerminalTransitionCommand(command) {
+  if (String(command?.[0] || "").toUpperCase() !== "EVAL") return false;
+  const script = String(command?.[1] || "");
+  const keyCount = Number(command?.[2] || 0);
+  const argv = command.slice(3 + keyCount);
+  return script.includes("__campaign_conflict__")
+    && script.includes("responseEncoded")
+    && argv[4] === "terminal";
+}
+
+function shouldHangRedisRequest(commands) {
+  if (hangNextRedisRequest) {
+    hangNextRedisRequest = false;
+    return true;
+  }
+  if (typeof hangRedisWhen === "function" && commands.some(hangRedisWhen)) {
+    hangRedisWhen = null;
+    return true;
+  }
+  return false;
+}
+
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(String(input));
   if (url.origin === "http://marketing-queue.redis.test") {
@@ -387,6 +413,11 @@ globalThis.fetch = async (input, options = {}) => {
     activeRedisRequests -= 1;
     if (url.pathname === "/pipeline") {
       const commands = JSON.parse(options.body || "[]");
+      if (shouldHangRedisRequest(commands)) return new Promise(() => {});
+      if (hangNextTerminalTransition && commands.some(isTerminalTransitionCommand)) {
+        hangNextTerminalTransition = false;
+        return new Promise(() => {});
+      }
       return Response.json(commands.map((command) => {
         if (failNextPipelineCommand && String(command?.[0] || "").toUpperCase() === failNextPipelineCommand) {
           failNextPipelineCommand = "";
@@ -395,7 +426,13 @@ globalThis.fetch = async (input, options = {}) => {
         return { result: execute(command) };
       }));
     }
-    return Response.json({ result: execute(url.pathname.split("/").filter(Boolean).map(decodeURIComponent)) });
+    const command = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+    if (shouldHangRedisRequest([command])) return new Promise(() => {});
+    if (hangNextTerminalTransition && isTerminalTransitionCommand(command)) {
+      hangNextTerminalTransition = false;
+      return new Promise(() => {});
+    }
+    return Response.json({ result: execute(command) });
   }
   if (url.origin === "https://api.resend.com") {
     if (resendDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, resendDelayMs));
@@ -410,6 +447,13 @@ globalThis.fetch = async (input, options = {}) => {
     const currentResendBehavior = resendBehaviorSequence.length
       ? resendBehaviorSequence.shift()
       : resendBehavior;
+    if (currentResendBehavior === "hang") {
+      return new Promise((resolve, reject) => {
+        const abort = () => reject(new DOMException("deadline", "AbortError"));
+        if (options.signal?.aborted) abort();
+        else options.signal?.addEventListener("abort", abort, { once: true });
+      });
+    }
     if (currentResendBehavior === "fail") return Response.json({ message: "invalid_recipient" }, { status: 400 });
     if (currentResendBehavior === "quota") return Response.json({ message: "daily_quota_exceeded" }, { status: 429 });
     if (currentResendBehavior === "server") return Response.json({ message: "upstream_unavailable" }, { status: 503 });
@@ -445,7 +489,16 @@ globalThis.fetch = async (input, options = {}) => {
 };
 
 const queue = await import("../app/api/_marketing-campaign-queue.js");
+const mailPreferences = await import("../app/api/_mail-preferences.js");
 const marketingCronRoute = await import("../app/api/cron/marketing-campaign/route.js");
+
+test("dedicated marketing cron has a bounded Hobby runtime contract", async () => {
+  const source = await readFile(new URL("../app/api/cron/marketing-campaign/route.js", import.meta.url), "utf8");
+  assert.match(source, /limit:\s*MARKETING_RUNTIME_BATCH_LIMIT/);
+  assert.match(source, /deadlineAt:\s*Date\.now\(\) \+ 50_000/);
+  assert.match(source, /normalizeMarketingBudgetResult\(await dispatchDueMarketingCampaigns/);
+  assert.doesNotMatch(source, /limit:\s*40/);
+});
 
 test("campaign listing skips isolated corrupt index members and records", async () => {
   const campaignId = "campaign-partial-failure-probe";
@@ -1453,6 +1506,372 @@ test("dispatch deadline cancellation before the provider requeues a claimed job 
   assert.equal(storedJob.status, "queued");
   assert.equal(Object.hasOwn(storedJob, "resendIdempotencyDeadlineAt"), false, "a controlled stop before the provider must not create an uncertain outcome deadline");
   assert.equal(ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).has(jobId), true);
+});
+
+test("a hanging first Redis lock request stops before the deadline without reaching the provider", async () => {
+  ensureZset(queue.marketingCampaignQueueInternals.QUEUE_KEY).clear();
+  const attemptsBefore = resendAttempts.length;
+  const deadlineAt = Date.now() + 600;
+  hangNextRedisRequest = true;
+  let result;
+  try {
+    result = await queue.dispatchDueMarketingCampaigns({
+      now: Date.parse("2026-09-24T10:00:00.000Z"),
+      limit: 1,
+      interJobDelayMs: 0,
+      deadlineAt,
+    });
+  } finally {
+    hangNextRedisRequest = false;
+  }
+
+  assert.equal(result.ok, false);
+  assert.equal(result.deadlineExceeded, true);
+  assert.equal(result.error, "maintenance_deadline_exceeded");
+  assert.equal(result.failed, 0);
+  assert.ok(Date.now() < deadlineAt, "the dispatch must retain time to return before the platform deadline");
+  assert.equal(resendAttempts.length, attemptsBefore);
+});
+
+test("a hanging job read stops before provider and safely resumes after the stale claim expires", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2026-09-25T10:00:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-midstream-redis-hang";
+  const email = "midstream-redis-hang@example.com";
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "midstream Redis hang",
+    html: "<p>midstream Redis hang</p>",
+    text: "midstream Redis hang",
+    preview: "midstream Redis hang",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+
+  const attemptsBefore = resendAttempts.length;
+  const deadlineAt = Date.now() + 800;
+  hangRedisWhen = (command) => String(command?.[0] || "").toUpperCase() === "GET"
+    && String(command?.[1] || "").startsWith("lm:mail:marketing:job:");
+  let first;
+  try {
+    first = await queue.dispatchDueMarketingCampaigns({ now, limit: 1, interJobDelayMs: 0, deadlineAt });
+  } finally {
+    hangRedisWhen = null;
+  }
+  assert.equal(first.ok, false);
+  assert.equal(first.deadlineExceeded, true);
+  assert.equal(first.failed, 0);
+  assert.ok(Date.now() < deadlineAt, "a midstream Redis timeout must leave time for a bounded lease release");
+  assert.equal(resendAttempts.length, attemptsBefore);
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "queued");
+  assert.equal(ensureZset(queueKey).has(jobId), true);
+
+  const realNow = Date.now;
+  Date.now = () => realNow() + 181_000;
+  let second;
+  try {
+    second = await queue.dispatchDueMarketingCampaigns({ now: now + 60_000, limit: 1, interJobDelayMs: 0 });
+  } finally {
+    Date.now = realNow;
+  }
+  assert.equal(second.ok, true);
+  assert.equal(second.submitted, 1);
+  assert.equal(second.failed, 0);
+  assert.equal(resendAttempts.length, attemptsBefore + 1);
+  assert.equal(ensureZset(queueKey).has(jobId), false);
+});
+
+test("an eight-message maintenance slice succeeds and the next tick resumes the remainder", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2026-09-19T11:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-maintenance-slice";
+  const recipients = Array.from({ length: 9 }, (_, index) => `maintenance-slice-${index}@example.com`);
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients,
+    scheduledAt,
+    subject: "maintenance slice",
+    html: "<p>maintenance slice</p>",
+    text: "maintenance slice",
+    preview: "maintenance slice",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+
+  const first = await queue.dispatchDueMarketingCampaigns({ now, limit: queue.MARKETING_RUNTIME_BATCH_LIMIT, interJobDelayMs: 0 });
+  assert.equal(first.ok, true);
+  assert.equal(first.submitted, 8);
+  assert.equal(first.failed, 0);
+  assert.equal(first.deadlineExceeded, undefined);
+  assert.equal(ensureZset(queueKey).size, 1);
+
+  const second = await queue.dispatchDueMarketingCampaigns({ now: now + 60_000, limit: queue.MARKETING_RUNTIME_BATCH_LIMIT, interJobDelayMs: 0 });
+  assert.equal(second.ok, true);
+  assert.equal(second.submitted, 1);
+  assert.equal(second.failed, 0);
+  assert.equal(ensureZset(queueKey).size, 0);
+});
+
+test("a provider deadline safely persists a hanging send and the next tick resumes it", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2026-09-19T12:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-provider-deadline-resume";
+  const email = "provider-deadline-resume@example.com";
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "provider deadline",
+    html: "<p>provider deadline</p>",
+    text: "provider deadline",
+    preview: "provider deadline",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+
+  const requestsBefore = resendAttempts.length;
+  resendBehavior = "hang";
+  let first;
+  try {
+    first = await queue.dispatchDueMarketingCampaigns({
+      now,
+      limit: 1,
+      interJobDelayMs: 0,
+      deadlineAt: Date.now()
+        + queue.marketingCampaignQueueInternals.PROVIDER_COMMIT_RESERVE_MS
+        + queue.marketingCampaignQueueInternals.PROVIDER_MIN_START_BUDGET_MS
+        + 100,
+    });
+  } finally {
+    resendBehavior = "ok";
+  }
+  assert.equal(first.ok, false);
+  assert.equal(first.deadlineExceeded, true);
+  assert.equal(first.failed, 0);
+  assert.equal(resendAttempts.length, requestsBefore + 1, "the deadline-bounded attempt must not retry in the same tick");
+  assert.equal(queue.normalizeMarketingBudgetResult(first).ok, true);
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "queued");
+  assert.equal(ensureZset(queueKey).has(jobId), true);
+
+  const second = await queue.dispatchDueMarketingCampaigns({ now: now + 60_000, limit: 1, interJobDelayMs: 0 });
+  assert.equal(second.ok, true);
+  assert.equal(second.submitted, 1);
+  assert.equal(second.failed, 0);
+  assert.equal(ensureZset(queueKey).has(jobId), false);
+});
+
+test("a definite 400 with no retry budget remains a counted provider failure", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2026-09-19T13:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-definite-no-retry-budget";
+  const email = "definite-no-retry-budget@example.com";
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "definite failure",
+    html: "<p>definite failure</p>",
+    text: "definite failure",
+    preview: "definite failure",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+
+  const attemptsBefore = resendAttempts.length;
+  resendBehavior = "fail";
+  let result;
+  try {
+    result = await queue.dispatchDueMarketingCampaigns({
+      now,
+      limit: 1,
+      interJobDelayMs: 0,
+      deadlineAt: Date.now()
+        + queue.marketingCampaignQueueInternals.PROVIDER_COMMIT_RESERVE_MS
+        + queue.marketingCampaignQueueInternals.PROVIDER_MIN_START_BUDGET_MS
+        + 100,
+    });
+  } finally {
+    resendBehavior = "ok";
+  }
+  assert.equal(result.ok, false);
+  assert.equal(result.failed, 1);
+  assert.equal(result.deadlineExceeded, undefined);
+  assert.equal(resendAttempts.length, attemptsBefore + 1);
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  const storedJob = JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value);
+  assert.equal(storedJob.status, "queued");
+  assert.equal(storedJob.failedAttempts, 1);
+});
+
+test("a provider success survives a hanging terminal commit and recovers without another send", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2026-09-19T14:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-success-terminal-hang";
+  const email = "success-terminal-hang@example.com";
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "terminal recovery",
+    html: "<p>terminal recovery</p>",
+    text: "terminal recovery",
+    preview: "terminal recovery",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+
+  const realNow = Date.now;
+  const deadlineAt = realNow()
+    + queue.marketingCampaignQueueInternals.PROVIDER_COMMIT_RESERVE_MS
+    + queue.marketingCampaignQueueInternals.PROVIDER_MIN_START_BUDGET_MS
+    + 500;
+  const attemptsBefore = resendAttempts.length;
+  let clockOffset = 0;
+  Date.now = () => realNow() + clockOffset;
+  hangNextTerminalTransition = true;
+  let first;
+  try {
+    first = await queue.dispatchDueMarketingCampaigns({
+      now,
+      limit: 1,
+      interJobDelayMs: 0,
+      deadlineAt,
+      _testHooks: {
+        afterProviderBeforeRecord() {
+          clockOffset = queue.marketingCampaignQueueInternals.PROVIDER_COMMIT_RESERVE_MS
+            + queue.marketingCampaignQueueInternals.PROVIDER_MIN_START_BUDGET_MS;
+        },
+      },
+    });
+  } finally {
+    Date.now = realNow;
+    hangNextTerminalTransition = false;
+  }
+  assert.equal(first.ok, false);
+  assert.equal(first.deadlineExceeded, true);
+  assert.equal(first.failed, 0);
+  assert.equal(resendAttempts.length, attemptsBefore + 1);
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "sending");
+  assert.equal(ensureZset(queueKey).has(jobId), true, JSON.stringify([...ensureZset(queueKey)]));
+
+  Date.now = () => realNow() + 181_000;
+  let second;
+  try {
+    second = await queue.dispatchDueMarketingCampaigns({ now: now + 60_000, limit: 1, interJobDelayMs: 0 });
+  } finally {
+    Date.now = realNow;
+  }
+  assert.equal(second.ok, true);
+  assert.equal(second.submitted, 1, `recovery result: ${JSON.stringify(second)}`);
+  assert.equal(second.failed, 0);
+  assert.equal(resendAttempts.length, attemptsBefore + 1, "durable provider success must recover without a replay");
+  assert.equal(ensureZset(queueKey).has(jobId), false);
+});
+
+test("a suppressed outcome survives a hanging terminal commit and recovers without provider delivery", async () => {
+  const queueKey = queue.marketingCampaignQueueInternals.QUEUE_KEY;
+  ensureZset(queueKey).clear();
+  const scheduledAt = "2026-09-19T15:30:00.000Z";
+  const now = Date.parse(scheduledAt);
+  const campaignId = "campaign-suppressed-terminal-hang";
+  const email = "suppressed-terminal-hang@example.com";
+  assert.equal((await queue.enqueueMarketingCampaign({
+    campaignId,
+    recipients: [email],
+    scheduledAt,
+    subject: "suppressed recovery",
+    html: "<p>suppressed recovery</p>",
+    text: "suppressed recovery",
+    preview: "suppressed recovery",
+    brandName: "test",
+    support: {},
+    actor: { staffId: 1, staffUsername: "admin" },
+  })).ok, true);
+  assert.equal((await mailPreferences.updateMailPreferences({
+    email,
+    preferences: { marketing: "denied" },
+    source: "terminal_hang_probe",
+  })).ok, true);
+
+  const realNow = Date.now;
+  const deadlineAt = realNow()
+    + queue.marketingCampaignQueueInternals.PROVIDER_COMMIT_RESERVE_MS
+    + queue.marketingCampaignQueueInternals.PROVIDER_MIN_START_BUDGET_MS
+    + 500;
+  const attemptsBefore = resendAttempts.length;
+  let clockOffset = 0;
+  Date.now = () => realNow() + clockOffset;
+  hangNextTerminalTransition = true;
+  let first;
+  try {
+    first = await queue.dispatchDueMarketingCampaigns({
+      now,
+      limit: 1,
+      interJobDelayMs: 0,
+      deadlineAt,
+      _testHooks: {
+        afterProviderBeforeRecord() {
+          clockOffset = queue.marketingCampaignQueueInternals.PROVIDER_COMMIT_RESERVE_MS
+            + queue.marketingCampaignQueueInternals.PROVIDER_MIN_START_BUDGET_MS;
+        },
+      },
+    });
+  } finally {
+    Date.now = realNow;
+    hangNextTerminalTransition = false;
+  }
+  assert.equal(first.ok, false);
+  assert.equal(first.deadlineExceeded, true);
+  assert.equal(first.failed, 0);
+  assert.equal(resendAttempts.length, attemptsBefore);
+  const jobId = queue.marketingCampaignQueueInternals.makeJobId(campaignId, email, scheduledAt);
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "sending");
+
+  Date.now = () => realNow() + 181_000;
+  let second;
+  try {
+    second = await queue.dispatchDueMarketingCampaigns({ now: now + 60_000, limit: 1, interJobDelayMs: 0 });
+  } finally {
+    Date.now = realNow;
+  }
+  assert.equal(second.ok, true);
+  assert.equal(second.failed, 0);
+  assert.equal(second.results[0]?.suppressed, true);
+  assert.equal(resendAttempts.length, attemptsBefore);
+  assert.equal(JSON.parse(currentEntry(`lm:mail:marketing:job:${jobId}`).value).status, "suppressed");
+  assert.equal(ensureZset(queueKey).has(jobId), false);
+});
+
+test("marketing budget normalization rejects storage errors even if a caller sets a deadline flag", () => {
+  const storageFailure = {
+    ok: false,
+    partial: true,
+    deadlineExceeded: true,
+    error: "storage_unavailable",
+    submitted: 0,
+    failed: 0,
+  };
+  assert.equal(queue.normalizeMarketingBudgetResult(storageFailure), storageFailure);
 });
 
 test("500-recipient enqueue uses bounded concurrency under Redis latency", async () => {

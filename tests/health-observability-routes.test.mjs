@@ -421,13 +421,21 @@ test("metrics, jobs and incidents admin routes return real root-only data", asyn
   const now = Date.now();
   const bucket = Math.floor(now / 300_000) * 300_000;
   const metricHash = hash(`lm:obs:api:5m:v1:${bucket}`);
-  metricHash.set("all:requests", "20");
-  metricHash.set("all:status_2xx", "18");
-  metricHash.set("all:status_4xx", "1");
-  metricHash.set("all:status_5xx", "1");
-  metricHash.set("all:duration_sum_ms", "4000");
-  metricHash.set("all:latency_250", "18");
-  metricHash.set("all:latency_2500", "2");
+  metricHash.set("auth_login:requests", "20");
+  metricHash.set("auth_login:timed_requests", "20");
+  metricHash.set("auth_login:status_2xx", "18");
+  metricHash.set("auth_login:status_4xx", "1");
+  metricHash.set("auth_login:status_5xx", "1");
+  metricHash.set("auth_login:duration_sum_ms", "4000");
+  metricHash.set("auth_login:latency_250", "18");
+  metricHash.set("auth_login:latency_2500", "2");
+  // A retried maintenance request is deliberately slow and failed. It stays
+  // queryable under its own group but cannot manufacture a core API incident.
+  metricHash.set("cron_maintenance:requests", "3");
+  metricHash.set("cron_maintenance:timed_requests", "3");
+  metricHash.set("cron_maintenance:status_5xx", "3");
+  metricHash.set("cron_maintenance:duration_sum_ms", "102000");
+  metricHash.set("cron_maintenance:latency_inf", "3");
 
   const metricResponse = await metricsRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health/metrics?range=1h"));
   assert.equal(metricResponse.status, 200);
@@ -435,19 +443,41 @@ test("metrics, jobs and incidents admin routes return real root-only data", asyn
   assert.equal(metricPayload.summary.requests, 20);
   assert.equal(metricPayload.summary.status5xx, 1);
   assert.equal(metricPayload.summary.p95Ms, 2500);
+  assert.equal(metricPayload.group, "core");
   assert.equal(metricPayload.coverage.scope, "core_api");
   assert.equal(metricPayload.coverage.scopeLabel, "核心 API");
-  assert.equal(metricPayload.coverage.aggregationPolicy, "explicit_allowlist");
-  assert.equal(metricPayload.coverage.groupCount, telemetryGroups.MONITORED_API_GROUP_NAMES.length);
-  assert.equal(metricPayload.coverage.routeCount, 34);
+  assert.equal(metricPayload.coverage.aggregationPolicy, "interactive_allowlist");
+  assert.equal(metricPayload.coverage.groupCount, telemetryGroups.CORE_API_GROUP_NAMES.length);
+  assert.equal(metricPayload.coverage.routeCount, new Set(
+    telemetryGroups.CORE_API_GROUP_DEFINITIONS.flatMap((group) => group.routes),
+  ).size);
   assert.ok(metricPayload.coverage.groups.some((group) => group.name === "netflix_code"));
-  assert.ok(metricPayload.coverage.groups.some((group) => group.name === "netflix_mail_ingest"));
-  assert.ok(metricPayload.coverage.groups.some((group) => group.name === "cron_push"));
+  assert.equal(metricPayload.coverage.groups.some((group) => group.name === "netflix_mail_ingest"), false);
+  assert.equal(metricPayload.coverage.groups.some((group) => group.name === "cron_push"), false);
   assert.ok(metricPayload.coverage.groups.some((group) => group.name === "mail_preferences"));
   assert.ok(metricPayload.coverage.groups.some((group) => group.name === "admin_marketing_campaign"));
-  assert.ok(metricPayload.coverage.groups.some((group) => group.name === "cron_marketing_campaign"));
+  assert.equal(metricPayload.coverage.groups.some((group) => group.name === "cron_marketing_campaign"), false);
+  assert.ok(metricPayload.coverage.explicitExclusions.some((item) => item.routes.includes("/api/cron/maintenance")));
   assert.ok(metricPayload.coverage.explicitExclusions.some((item) => item.routes.includes("/api/auth/push/*")));
   assert.ok(metricPayload.coverage.explicitExclusions.some((item) => item.routes.includes("/api/email/unsubscribe")));
+
+  const cronMetricResponse = await metricsRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health/metrics?range=1h&group=cron_maintenance"));
+  assert.equal(cronMetricResponse.status, 200);
+  const cronMetricPayload = await cronMetricResponse.json();
+  assert.equal(cronMetricPayload.summary.requests, 3);
+  assert.equal(cronMetricPayload.summary.status5xx, 3);
+  assert.equal(cronMetricPayload.summary.p95Ms, 10000);
+
+  const dependencyHash = hash(`lm:obs:dep:5m:v1:${bucket}`);
+  dependencyHash.set("core:requests", "2");
+  dependencyHash.set("core:timed_requests", "2");
+  dependencyHash.set("core:status_2xx", "2");
+  dependencyHash.set("core:latency_25", "2");
+  dependencyHash.set("auth_login:requests", "99");
+  const dependencyResponse = await metricsRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health/metrics?kind=dependency&range=1h&group=core"));
+  assert.equal(dependencyResponse.status, 200);
+  const dependencyPayload = await dependencyResponse.json();
+  assert.equal(dependencyPayload.summary.requests, 2, "dependency groups must not expand through the API core allowlist");
 
   const heartbeat = new Date(now - 60_000).toISOString();
   execute(["HSET", jobsModule.jobRunnerInternals.JOB_LAST_KEY, "order_transition", JSON.stringify({
@@ -486,6 +516,52 @@ test("metrics, jobs and incidents admin routes return real root-only data", asyn
 
   const unauthorized = await metricsRoute.GET(new Request("https://www.liumeiti.vip/api/admin/health/metrics"));
   assert.equal(unauthorized.status, 401);
+});
+
+test("incident lifecycle remains durable while health Telegram is disabled", async () => {
+  const previous = process.env.OPS_INCIDENT_TELEGRAM_ENABLED;
+  const fingerprint = "route:test:health-telegram-disabled";
+  const telegramBefore = telegramFetches;
+  try {
+    delete process.env.OPS_INCIDENT_TELEGRAM_ENABLED;
+    const opened = await incidents.reportOperationalFailure({
+      fingerprint,
+      component: "cron",
+      severity: "P1",
+      title: "maintenance health incident stays recorded",
+      errorCode: "maintenance_probe_failed",
+    });
+    assert.equal(opened.ok, true);
+    assert.equal(opened.created, true);
+    assert.equal(opened.alertOk, true);
+    assert.deepEqual(opened.alert, {
+      ok: true,
+      skipped: true,
+      reason: "incident_telegram_disabled",
+    });
+    assert.equal((await incidents.getIncident(opened.record.id)).status, "open");
+
+    const first = await incidents.reportOperationalRecovery({ fingerprint });
+    const second = await incidents.reportOperationalRecovery({ fingerprint });
+    const third = await incidents.reportOperationalRecovery({ fingerprint });
+    assert.deepEqual(
+      [first.pending, second.pending, third.record?.status],
+      [true, true, "recovered"],
+    );
+    assert.equal(third.ok, true);
+    assert.equal(third.alertOk, true);
+    assert.equal(third.alert?.reason, "incident_telegram_disabled");
+    assert.equal((await incidents.getIncident(opened.record.id)).status, "recovered");
+
+    const response = await incidentsRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health/incidents?status=recovered"));
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.incidents.some((incident) => incident.id === opened.record.id), true);
+    assert.equal(telegramFetches, telegramBefore);
+  } finally {
+    if (previous == null) delete process.env.OPS_INCIDENT_TELEGRAM_ENABLED;
+    else process.env.OPS_INCIDENT_TELEGRAM_ENABLED = previous;
+  }
 });
 
 test("health overview derives Push state from PUSH_ENABLED and complete server configuration", async () => {
@@ -1036,6 +1112,43 @@ test("partial queue sampling fails closed without overwriting the last snapshot"
   assert.equal(latest.find((item) => item.name === "order_transitions").count, 7);
 });
 
+test("queue refresh isolates a historical finite score outside the JavaScript Date range", async () => {
+  const key = "liumeiti:orders:quote-expiry";
+  const latestKey = "lm:ops:queue:last:v1";
+  const historyKey = "lm:ops:queue:history:v1:quote_expiry";
+  const previousQueue = sortedSets.has(key) ? new Map(sortedSets.get(key)) : null;
+  const previousLatest = hashes.has(latestKey) ? new Map(hashes.get(latestKey)) : null;
+  const previousHistory = lists.has(historyKey) ? [...lists.get(historyKey)] : null;
+  const previousEnvironment = process.env.VERCEL_ENV;
+  try {
+    process.env.VERCEL_ENV = "production";
+    sortedSets.set(key, new Map([["legacy-nanosecond-score", Number.MAX_SAFE_INTEGER]]));
+    const response = await queuesRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health/queues?refresh=1"));
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.queues.length, observability.OPERATIONAL_QUEUE_DEFINITIONS.length);
+    const queue = body.queues.find((item) => item.name === "quote_expiry");
+    assert.equal(queue.count, 1);
+    assert.equal(queue.dueCount, 0);
+    assert.equal(queue.oldestAt, "");
+    assert.equal(queue.status, "warning");
+    assert.equal(queue.error, "operational_queue_score_invalid");
+    assert.equal(parseJson(lists.get(historyKey)?.[0])?.error, "operational_queue_score_invalid");
+
+    const storedResponse = await queuesRoute.GET(adminRequest("https://www.liumeiti.vip/api/admin/health/queues"));
+    assert.equal(storedResponse.status, 200);
+    const stored = (await storedResponse.json()).queues.find((item) => item.name === "quote_expiry");
+    assert.equal(stored.count, 1);
+    assert.equal(stored.error, "operational_queue_score_invalid");
+  } finally {
+    if (previousQueue) sortedSets.set(key, previousQueue); else sortedSets.delete(key);
+    if (previousLatest) hashes.set(latestKey, previousLatest); else hashes.delete(latestKey);
+    if (previousHistory) lists.set(historyKey, previousHistory); else lists.delete(historyKey);
+    if (previousEnvironment == null) delete process.env.VERCEL_ENV;
+    else process.env.VERCEL_ENV = previousEnvironment;
+  }
+});
+
 test("queue route keeps Redis outages strict but isolates corrupt snapshots", async () => {
   const queueState = hash("lm:ops:queue:last:v1");
   const previousOrderTransitions = queueState.get("order_transitions");
@@ -1201,6 +1314,7 @@ test("maintenance cron and keeper retain explicit response/monitoring tail budge
   assert.match(maintenance, /runMaintenanceTick\(\{\s*trigger:\s*["']cron["'],\s*deadlineMs:\s*34_000\s*\}\)/);
   assert.match(maintenance, /detectMissedJobs\([^)]*deadlineAt:\s*monitoringDeadlineAt/);
   assert.match(maintenance, /requireMonitoringBudget\(deadlineAt\)/);
+  assert.match(maintenance, /readMetricSeries\(\{\s*kind:\s*["']api["'],\s*group:\s*CORE_API_AGGREGATE_GROUP/);
   assert.match(keeper, /deadlineAt\s*=\s*started\s*\+\s*Math\.max\(1_000,\s*safeDeadlineMs\s*-\s*2_000\)/);
 });
 
@@ -1427,9 +1541,8 @@ test("every normal response in a monitored route group is telemetry wrapped", ()
     }
   }
   assert.deepEqual([...coveredGroups].sort(), [...observability.MONITORED_API_GROUPS].sort());
-  const declaredRoutes = new Set(telemetryGroups.CORE_API_TELEMETRY_COVERAGE.groups.flatMap((group) => group.routes));
+  const declaredRoutes = new Set(telemetryGroups.MONITORED_API_GROUP_DEFINITIONS.flatMap((group) => group.routes));
   assert.deepEqual([...coveredRoutes].sort(), [...declaredRoutes].sort());
-  assert.equal(telemetryGroups.CORE_API_TELEMETRY_COVERAGE.routeCount, declaredRoutes.size);
 });
 
 test("telemetry writers reject a successful HTTP pipeline with a failed Redis row", async () => {

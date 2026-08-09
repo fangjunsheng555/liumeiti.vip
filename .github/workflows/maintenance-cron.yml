@@ -21,8 +21,6 @@ jobs:
     env:
       MAINTENANCE_URL: https://www.liumeiti.vip/api/cron/maintenance
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
     steps:
       - name: Run maintenance
         shell: bash
@@ -39,9 +37,6 @@ jobs:
             --output "$response_file" \
             --write-out '%{http_code}' \
             --max-time 55 \
-            --retry 2 \
-            --retry-delay 5 \
-            --retry-all-errors \
             --header "Authorization: Bearer ${CRON_SECRET}" \
             "$MAINTENANCE_URL")"
 
@@ -55,20 +50,3 @@ jobs:
             head -c 2000 "$response_file"
             exit 1
           fi
-
-      - name: Send independent Telegram failure alert
-        if: ${{ failure() }}
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          if [[ -z "${TELEGRAM_BOT_TOKEN:-}" || -z "${TELEGRAM_CHAT_ID:-}" ]]; then
-            echo "Telegram failure alert secrets are not configured"
-            exit 0
-          fi
-          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          curl --silent --show-error --fail \
-            --max-time 20 \
-            --request POST \
-            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-            --data-urlencode "text=⚠️ liumeiti.vip 生产维护任务失败。GitHub Actions: ${run_url}" \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" >/dev/null

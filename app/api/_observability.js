@@ -1,7 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import { after as nextAfter } from "next/server.js";
 import { clean, redisCmd, redisPipeline } from "./_utils.js";
-import { MONITORED_API_GROUP_NAMES } from "./_telemetry-groups.js";
+import {
+  CORE_API_AGGREGATE_GROUP,
+  CORE_API_GROUP_NAMES,
+  MONITORED_API_GROUP_NAMES,
+} from "./_telemetry-groups.js";
 
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
@@ -349,27 +353,31 @@ function histogramPercentile(counts, percentile) {
 
 function metricPoint(raw, at, group) {
   const hash = hashObject(raw);
-  const prefix = `${group}:`;
+  const groups = [...new Set((Array.isArray(group) ? group : [group])
+    .map((item) => normalizedMetricGroup(item))
+    .filter(Boolean))];
+  const sum = (field) => groups.reduce((total, item) => total + Number(hash[`${item}:${field}`] || 0), 0);
   const histogram = {};
   for (const boundary of LATENCY_BUCKETS) {
     const label = boundary === Infinity ? "inf" : String(boundary);
-    histogram[label] = Number(hash[`${prefix}latency_${label}`] || 0);
+    histogram[label] = sum(`latency_${label}`);
   }
-  const requests = Number(hash[`${prefix}requests`] || 0);
-  const timedRequests = hash[`${prefix}timed_requests`] == null
-    ? requests
-    : Number(hash[`${prefix}timed_requests`] || 0);
-  const status5xx = Number(hash[`${prefix}status_5xx`] || 0);
+  const requests = sum("requests");
+  const timedRequests = groups.reduce((total, item) => {
+    const value = hash[`${item}:timed_requests`];
+    return total + (value == null ? Number(hash[`${item}:requests`] || 0) : Number(value || 0));
+  }, 0);
+  const status5xx = sum("status_5xx");
   return {
     at: new Date(at).toISOString(),
     requests,
     timedRequests,
-    status2xx: Number(hash[`${prefix}status_2xx`] || 0),
-    status3xx: Number(hash[`${prefix}status_3xx`] || 0),
-    status4xx: Number(hash[`${prefix}status_4xx`] || 0),
+    status2xx: sum("status_2xx"),
+    status3xx: sum("status_3xx"),
+    status4xx: sum("status_4xx"),
     status5xx,
-    thrown: Number(hash[`${prefix}thrown`] || 0),
-    averageMs: timedRequests ? Math.round(Number(hash[`${prefix}duration_sum_ms`] || 0) / timedRequests) : 0,
+    thrown: sum("thrown"),
+    averageMs: timedRequests ? Math.round(sum("duration_sum_ms") / timedRequests) : 0,
     p50Ms: histogramPercentile(histogram, 0.5),
     p95Ms: histogramPercentile(histogram, 0.95),
     p99Ms: histogramPercentile(histogram, 0.99),
@@ -407,7 +415,10 @@ export async function readMetricSeries({ kind = "api", group = "all", range = "2
     error.code = "metric_series_unavailable";
     throw error;
   }
-  const points = buckets.map((at, index) => metricPoint(rows[index], at, safeGroup));
+  const metricGroups = kind !== "dependency" && safeGroup === CORE_API_AGGREGATE_GROUP
+    ? CORE_API_GROUP_NAMES
+    : safeGroup;
+  const points = buckets.map((at, index) => metricPoint(rows[index], at, metricGroups));
   return { points, resolutionMs, range, group: safeGroup };
 }
 
@@ -433,7 +444,7 @@ export function summarizeMetricSeries(points) {
 function oldestScore(value) {
   if (!Array.isArray(value) || value.length < 2) return null;
   const score = Number(value[1]);
-  return Number.isFinite(score) ? score : null;
+  return Number.isFinite(score) && Number.isFinite(new Date(score).getTime()) ? score : Number.NaN;
 }
 
 function queueStatus(definition, count, dueCount, ageMs) {
@@ -458,11 +469,16 @@ export async function sampleOperationalQueues({ now = Date.now() } = {}) {
   }
   const snapshots = [];
   const historyCommands = [];
+  const invalidScoreQueues = [];
   OPERATIONAL_QUEUE_DEFINITIONS.forEach((definition, index) => {
     const count = Math.max(0, Number(rows[index * 3] || 0));
     const dueCount = Math.max(0, Number(rows[index * 3 + 1] || 0));
     const score = oldestScore(rows[index * 3 + 2]);
-    const ageMs = score == null ? 0 : Math.max(0, now - score);
+    const invalidScore = Number.isNaN(score);
+    const hasScore = Number.isFinite(score);
+    const ageMs = hasScore ? Math.max(0, now - score) : 0;
+    const status = queueStatus(definition, count, dueCount, ageMs);
+    if (invalidScore) invalidScoreQueues.push(definition.name);
     const snapshot = {
       name: definition.name,
       label: definition.label,
@@ -470,13 +486,14 @@ export async function sampleOperationalQueues({ now = Date.now() } = {}) {
       dueCount,
       backlogCount: definition.countBasis === "due" ? dueCount : count,
       countBasis: definition.countBasis || "total",
-      oldestAt: score == null ? "" : new Date(score).toISOString(),
+      oldestAt: hasScore ? new Date(score).toISOString() : "",
       oldestAgeMs: ageMs,
       warningAgeMs: definition.warningAgeMs,
       criticalAgeMs: definition.criticalAgeMs,
       criticalCount: definition.criticalCount,
-      status: queueStatus(definition, count, dueCount, ageMs),
+      status: invalidScore && status === "ok" ? "warning" : status,
       checkedAt: new Date(now).toISOString(),
+      ...(invalidScore ? { error: "operational_queue_score_invalid" } : {}),
     };
     snapshots.push(snapshot);
     const raw = JSON.stringify(snapshot);
@@ -486,6 +503,7 @@ export async function sampleOperationalQueues({ now = Date.now() } = {}) {
       ["LTRIM", QUEUE_HISTORY_PREFIX + definition.name, "0", String(QUEUE_HISTORY_LIMIT - 1)],
     );
   });
+  if (invalidScoreQueues.length) console.warn("[observability] queue snapshots ignored invalid oldest scores", { queues: invalidScoreQueues });
   if (historyCommands.length && observabilityWritesEnabled()) {
     const saved = pipelineRows(await redisPipeline(historyCommands));
     if (saved.length !== historyCommands.length || saved.some(pipelineRowFailed)) {

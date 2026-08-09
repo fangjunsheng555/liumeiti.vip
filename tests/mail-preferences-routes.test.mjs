@@ -1273,6 +1273,161 @@ test("delivery history route distinguishes empty, missing, and per-row storage f
   assert.equal(listOutage.status, 503);
 });
 
+test("a hanging Resend request is aborted at the caller deadline without starting a retry", async () => {
+  const delegatedFetch = globalThis.fetch;
+  let providerCalls = 0;
+  globalThis.fetch = async (input, options = {}) => {
+    if (new URL(String(input)).origin !== "https://api.resend.com") return delegatedFetch(input, options);
+    providerCalls += 1;
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(new DOMException("deadline", "AbortError"));
+      if (options.signal?.aborted) abort();
+      else options.signal?.addEventListener("abort", abort, { once: true });
+    });
+  };
+  const startedAt = Date.now();
+  try {
+    const result = await sendSimpleEmail({
+      to: "resend-hanging-deadline@example.com",
+      subject: "deadline",
+      text: "deadline",
+      category: "security",
+      forceProvider: "resend",
+      deadlineAt: Date.now() + 80,
+      skipDeliveryTracking: true,
+      support: {},
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.deadlineExceeded, true);
+    assert.equal(result.retryDeferred, true);
+    assert.equal(result.providerAttempted, true);
+    assert.equal(providerCalls, 1);
+    assert.ok(Date.now() - startedAt < 750, "a caller deadline must bound a hanging provider");
+  } finally {
+    globalThis.fetch = delegatedFetch;
+  }
+});
+
+test("Resend does not start a second request when the remaining retry budget is insufficient", async () => {
+  const delegatedFetch = globalThis.fetch;
+  let providerCalls = 0;
+  globalThis.fetch = async (input, options = {}) => {
+    if (new URL(String(input)).origin !== "https://api.resend.com") return delegatedFetch(input, options);
+    providerCalls += 1;
+    return Response.json({ message: "upstream unavailable" }, { status: 503 });
+  };
+  try {
+    const result = await sendSimpleEmail({
+      to: "resend-no-retry-budget@example.com",
+      subject: "deadline",
+      text: "deadline",
+      category: "security",
+      forceProvider: "resend",
+      deadlineAt: Date.now() + 500,
+      skipDeliveryTracking: true,
+      support: {},
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.deadlineExceeded, true);
+    assert.equal(result.retryDeferred, true);
+    assert.equal(result.reason, "provider_retry_budget_exhausted");
+    assert.equal(providerCalls, 1);
+  } finally {
+    globalThis.fetch = delegatedFetch;
+  }
+});
+
+test("a definite Resend 400 keeps its failure semantics when there is no retry budget", async () => {
+  const delegatedFetch = globalThis.fetch;
+  const previousApiKey = process.env.RESEND_API_KEY;
+  const previousFrom = process.env.RESEND_FROM;
+  const previousProvider = process.env.EMAIL_PROVIDER;
+  const previousTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+  const previousTelegramChat = process.env.TELEGRAM_CHAT_ID;
+  process.env.RESEND_API_KEY = "re_definite_deadline_test";
+  process.env.RESEND_FROM = "info@liumeiti.vip";
+  process.env.EMAIL_PROVIDER = "resend";
+  process.env.TELEGRAM_BOT_TOKEN = "deadline-alert-token";
+  process.env.TELEGRAM_CHAT_ID = "deadline-alert-chat";
+  let providerCalls = 0;
+  let telegramCalls = 0;
+  globalThis.fetch = async (input, options = {}) => {
+    const url = new URL(String(input));
+    if (url.origin === "http://mail-preferences.redis.test"
+        && decodeURIComponent(url.pathname).includes("lm:mail-alert:throttle")) return new Promise(() => {});
+    if (url.origin === "https://api.telegram.org") {
+      telegramCalls += 1;
+      return Response.json({ ok: true });
+    }
+    if (url.origin !== "https://api.resend.com") return delegatedFetch(input, options);
+    providerCalls += 1;
+    return Response.json({ message: "invalid recipient" }, { status: 400 });
+  };
+  const startedAt = Date.now();
+  try {
+    const result = await sendSimpleEmail({
+      to: "resend-definite-no-retry@example.com",
+      subject: "deadline",
+      text: "deadline",
+      category: "security",
+      forceProvider: "resend",
+      deadlineAt: Date.now() + 500,
+      skipDeliveryTracking: true,
+      support: {},
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 400);
+    assert.equal(result.retrySkipped, true);
+    assert.notEqual(result.retryable, true);
+    assert.notEqual(result.deadlineExceeded, true);
+    assert.equal(providerCalls, 1);
+    assert.equal(telegramCalls, 0);
+    assert.ok(Date.now() - startedAt < 900, "alert throttling must share the caller deadline");
+  } finally {
+    globalThis.fetch = delegatedFetch;
+    if (previousApiKey == null) delete process.env.RESEND_API_KEY; else process.env.RESEND_API_KEY = previousApiKey;
+    if (previousFrom == null) delete process.env.RESEND_FROM; else process.env.RESEND_FROM = previousFrom;
+    if (previousProvider == null) delete process.env.EMAIL_PROVIDER; else process.env.EMAIL_PROVIDER = previousProvider;
+    if (previousTelegramToken == null) delete process.env.TELEGRAM_BOT_TOKEN; else process.env.TELEGRAM_BOT_TOKEN = previousTelegramToken;
+    if (previousTelegramChat == null) delete process.env.TELEGRAM_CHAT_ID; else process.env.TELEGRAM_CHAT_ID = previousTelegramChat;
+  }
+});
+
+test("a hanging marketing policy read reaches its deadline without ever calling a provider", async () => {
+  const delegatedFetch = globalThis.fetch;
+  let providerCalls = 0;
+  globalThis.fetch = async (input, options = {}) => {
+    const origin = new URL(String(input)).origin;
+    if (origin === "http://mail-preferences.redis.test") return new Promise(() => {});
+    if (origin === "https://api.resend.com") {
+      providerCalls += 1;
+      return Response.json({ id: "must-not-send" });
+    }
+    return delegatedFetch(input, options);
+  };
+  try {
+    const result = await sendSimpleEmail({
+      to: "policy-hanging-deadline@example.com",
+      subject: "policy deadline",
+      text: "policy deadline",
+      html: "<p>policy deadline</p>",
+      category: "marketing",
+      marketing: true,
+      campaignId: "CMP-POLICY-DEADLINE",
+      forceProvider: "resend",
+      deadlineAt: Date.now() + 80,
+      skipDeliveryTracking: true,
+      support: {},
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.deadlineExceeded, true);
+    assert.equal(result.providerAttempted, false);
+    assert.equal(providerCalls, 0);
+  } finally {
+    globalThis.fetch = delegatedFetch;
+  }
+});
+
 test("delivery history route keeps healthy string and object rows beside corrupt records", async () => {
   const indexKey = "lm:mail:delivery:index";
   const prefix = "lm:mail:delivery:record:";

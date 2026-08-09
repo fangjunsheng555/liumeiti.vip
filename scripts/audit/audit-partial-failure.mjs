@@ -125,7 +125,7 @@ const ALLOW_FINGERPRINTS = new Map([
   ["app/api/_incidents.js|strictPipelineRows|partial-failure-map-throw", new Set(["3d39b0a0a9dc9197ab50"])],
   ["app/api/_job-runner.js|strictPipelineRows|partial-failure-map-throw", new Set(["4d059c37668d4ec323d3"])],
   ["app/api/_job-runner.js|detectMissedJobs|partial-failure-loop-throw", new Set(["07eb3ceba4b69c84a3b7"])],
-  ["app/api/_keeper.js|handler|partial-failure-loop-throw", new Set(["7ef9d0c19e673f5d561f", "81e25785324e4c73a9fb"])],
+  ["app/api/_keeper.js|handler|partial-failure-loop-throw", new Set(["7ef9d0c19e673f5d561f", "6730e9d5c96eb4adf625"])],
   ["app/api/_mail-delivery.js|checkedPipelineRows|partial-failure-predicate-abort", new Set(["3e1c0154f7a259e0f197"])],
   ["app/api/_mail-preferences.js|checkedPipelineRows|partial-failure-predicate-abort", new Set(["f974b29708d81351b6b3"])],
   ["app/api/_mail-preferences.js|repairCorruptContact|partial-failure-predicate-abort", new Set(["e3dd94911d89cab17766"])],

@@ -2772,7 +2772,7 @@ function resendTag(value, fallback = "") {
 
 async function sendViaResend({
   to, subject, text, html, fromName, marketing = false, category = "", relatedType = "", relatedId = "",
-  scheduledAt = "", idempotencyKey = "", oneClickUnsubscribeUrl = "", fromAddress = "",
+  scheduledAt = "", idempotencyKey = "", oneClickUnsubscribeUrl = "", fromAddress = "", deadlineAt = 0,
 }) {
   const apiKey = process.env.RESEND_API_KEY;
   const from = validEmail(fromAddress) ? String(fromAddress).trim().toLowerCase() : mailFromAddress();
@@ -2801,9 +2801,31 @@ async function sendViaResend({
     ],
   };
 
+  const finiteDeadlineAt = Number.isFinite(Number(deadlineAt)) && Number(deadlineAt) > 0
+    ? Number(deadlineAt)
+    : 0;
+  const remainingBudgetMs = () => finiteDeadlineAt
+    ? Math.max(0, finiteDeadlineAt - Date.now())
+    : Number.POSITIVE_INFINITY;
+  const retryDelayMs = 1200;
+  const minimumRetryAttemptMs = 1000;
+
   async function attemptSend(attempt) {
+    const remainingMs = remainingBudgetMs();
+    if (remainingMs <= 0) {
+      return {
+        ok: false,
+        provider: "resend",
+        reason: "provider_deadline_exhausted",
+        retryable: true,
+        deadlineExceeded: true,
+        providerAttempted: false,
+        attempt,
+      };
+    }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20000);
+    const timeoutMs = Math.max(1, Math.min(20_000, Math.trunc(remainingMs)));
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch("https://api.resend.com/emails", {
         method: "POST",
@@ -2815,7 +2837,6 @@ async function sendViaResend({
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
-      clearTimeout(timer);
       if (!res.ok) {
         const apiError = await readEmailApiError(res);
         const concurrentIdempotency = res.status === 409 && apiError.code === "concurrent_idempotent_requests";
@@ -2828,6 +2849,7 @@ async function sendViaResend({
           attempt,
           uncertain: res.status >= 500 || res.status === 408 || res.status === 425 || concurrentIdempotency,
           idempotencyConflict: invalidIdempotency,
+          providerAttempted: true,
         };
       }
       const data = await res.json();
@@ -2839,20 +2861,60 @@ async function sendViaResend({
         scheduledAt: scheduledAt || "",
         scheduled: Boolean(scheduledAt),
         rateLimitRemaining: res.headers.get("ratelimit-remaining") || "",
+        providerAttempted: true,
       };
     } catch (e) {
+      const deadlineExceeded = finiteDeadlineAt > 0 && Date.now() >= finiteDeadlineAt;
+      return {
+        ok: false,
+        error: e.message,
+        code: e.name || "fetch_error",
+        attempt,
+        uncertain: true,
+        providerAttempted: true,
+        ...(deadlineExceeded ? { deadlineExceeded: true, retryable: true, reason: "provider_deadline_exhausted" } : {}),
+      };
+    } finally {
       clearTimeout(timer);
-      return { ok: false, error: e.message, code: e.name || "fetch_error", attempt, uncertain: true };
     }
   }
 
   const r1 = await attemptSend(1);
   if (r1.ok) return r1;
+  if (r1.providerAttempted === false) return r1;
   if (r1.idempotencyConflict) return { ...r1, provider: "resend", reason: "idempotency_payload_conflict" };
+  if (r1.deadlineExceeded || remainingBudgetMs() <= retryDelayMs + minimumRetryAttemptMs) {
+    if (!r1.uncertain) {
+      return { ...r1, provider: "resend", retrySkipped: true };
+    }
+    return {
+      ...r1,
+      provider: "resend",
+      reason: r1.deadlineExceeded ? "provider_deadline_exhausted" : "provider_retry_budget_exhausted",
+      retryable: true,
+      retryDeferred: true,
+      deadlineExceeded: true,
+    };
+  }
   console.warn(`[email:resend] attempt 1 failed (${r1.code || "?"}): ${r1.error}; retrying...`);
-  await new Promise((res) => setTimeout(res, 1200));
+  await new Promise((res) => setTimeout(res, retryDelayMs));
   const r2 = await attemptSend(2);
   if (r2.ok) return r2;
+  if (r2.deadlineExceeded || r2.providerAttempted === false) {
+    if (!r1.uncertain && r2.providerAttempted === false) {
+      return { ...r1, provider: "resend", retrySkipped: true };
+    }
+    return {
+      ...r2,
+      provider: "resend",
+      reason: "provider_deadline_exhausted",
+      retryable: true,
+      retryDeferred: true,
+      deadlineExceeded: true,
+      providerAttempted: true,
+      uncertain: Boolean(r1.uncertain || r2.uncertain),
+    };
+  }
   console.error(`[email:resend] both attempts failed for ${recipients.join(",")}: ${r2.error}`);
   return {
     ok: false,
@@ -2982,12 +3044,25 @@ async function sendViaSmtp({
 // 关键邮件发送失败 → Telegram 运维告警(10 分钟节流防告警风暴)。
 // 订单确认/报价/密码修正/验证码等全部经 sendSimpleEmail,此处是唯一出口:
 // 客户收不到关键邮件(如修正链接)= 订单死锁,必须即时知道而不是等着翻邮件日志。
-async function alertMailFailure(prepared, result) {
+async function alertMailFailure(prepared, result, deadlineAt = 0) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) return;
+  const finiteDeadlineAt = Number.isFinite(Number(deadlineAt)) && Number(deadlineAt) > 0
+    ? Number(deadlineAt)
+    : 0;
+  if (finiteDeadlineAt && Date.now() >= finiteDeadlineAt) return;
+  const controller = finiteDeadlineAt ? new AbortController() : null;
+  const timer = controller
+    ? setTimeout(() => controller.abort(), Math.max(1, Math.trunc(finiteDeadlineAt - Date.now())))
+    : null;
   try {
-    const throttled = (await redisCmd(["SET", "lm:mail-alert:throttle", "1", "NX", "EX", "600"])) !== "OK";
+    const throttleWrite = await settleBeforeDeadline(
+      () => redisCmd(["SET", "lm:mail-alert:throttle", "1", "NX", "EX", "600"]),
+      finiteDeadlineAt,
+    );
+    if (!throttleWrite.settled || throttleWrite.error) return;
+    const throttled = throttleWrite.value !== "OK";
     if (throttled) return;
     const text = [
       "⚠️ 邮件发送失败",
@@ -3000,8 +3075,13 @@ async function alertMailFailure(prepared, result) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+      ...(controller ? { signal: controller.signal } : {}),
     });
-  } catch (e) {}
+  } catch (e) {
+    // Operational alerting is best-effort and must not replace the mail result.
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function settleWithin(promise, timeoutMs) {
@@ -3014,11 +3094,53 @@ function settleWithin(promise, timeoutMs) {
   });
 }
 
+async function settleBeforeDeadline(factory, deadlineAt) {
+  const finiteDeadlineAt = Number.isFinite(Number(deadlineAt)) && Number(deadlineAt) > 0
+    ? Number(deadlineAt)
+    : 0;
+  if (!finiteDeadlineAt) {
+    try { return { settled: true, value: await factory() }; }
+    catch (error) { return { settled: true, error }; }
+  }
+  const remainingMs = finiteDeadlineAt - Date.now();
+  if (remainingMs <= 0) return { settled: false };
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ settled: false }), Math.max(1, Math.trunc(remainingMs)));
+    Promise.resolve().then(factory).then(
+      (value) => { clearTimeout(timer); resolve({ settled: true, value }); },
+      (error) => { clearTimeout(timer); resolve({ settled: true, error }); },
+    );
+  });
+}
+
+function mailDeadlineResult(messageId = "") {
+  return {
+    ok: false,
+    provider: "policy",
+    reason: "provider_deadline_exhausted",
+    retryable: true,
+    deadlineExceeded: true,
+    providerAttempted: false,
+    messageId,
+  };
+}
+
 export async function sendSimpleEmail(args) {
+  const finiteDeadlineAt = Number.isFinite(Number(args?.deadlineAt)) && Number(args?.deadlineAt) > 0
+    ? Number(args.deadlineAt)
+    : 0;
+  const idempotencyKey = clean(args?.idempotencyKey, 256) || `lm-${Date.now().toString(36)}-${randomBytes(12).toString("hex")}`;
+  let support = args?.support;
+  if (!support) {
+    const supportRead = await settleBeforeDeadline(() => currentEmailSupport(), finiteDeadlineAt);
+    if (!supportRead.settled) return mailDeadlineResult(idempotencyKey);
+    if (supportRead.error) throw supportRead.error;
+    support = supportRead.value;
+  }
   let prepared = {
-    ...applyEmailSupportContacts(args, args?.support || await currentEmailSupport()),
+    ...applyEmailSupportContacts(args, support),
     // One key is reused by both Resend attempts and the fallback transport.
-    idempotencyKey: clean(args?.idempotencyKey, 256) || `lm-${Date.now().toString(36)}-${randomBytes(12).toString("hex")}`,
+    idempotencyKey,
   };
   try {
     const {
@@ -3032,14 +3154,23 @@ export async function sendSimpleEmail(args) {
     // links have been created. This also turns a missing policy secret/store
     // into a retryable failure instead of an untracked send.
     if (purpose === "marketing") {
-      prepared = await prepareMarketingEmail({ ...prepared, marketing: true, category: "marketing" });
+      const preparation = await settleBeforeDeadline(
+        () => prepareMarketingEmail({ ...prepared, marketing: true, category: "marketing" }),
+        finiteDeadlineAt,
+      );
+      if (!preparation.settled) return mailDeadlineResult(prepared.idempotencyKey);
+      if (preparation.error) throw preparation.error;
+      prepared = preparation.value;
     }
-    const decision = await getMailSendDecision({
-      email: recipient,
-      purpose,
-      category: prepared.category,
-      marketing: prepared.marketing,
-    });
+    const decisionRead = await settleBeforeDeadline(() => getMailSendDecision({
+        email: recipient,
+        purpose,
+        category: prepared.category,
+        marketing: prepared.marketing,
+      }), finiteDeadlineAt);
+    if (!decisionRead.settled) return mailDeadlineResult(prepared.idempotencyKey);
+    if (decisionRead.error) throw decisionRead.error;
+    const decision = decisionRead.value;
     if (!decision.allowed) {
       const retryable = Boolean(decision.retryable || decision.policyUnavailable);
       const result = {
@@ -3146,8 +3277,13 @@ export async function sendSimpleEmail(args) {
       }));
     }
   } catch (e) {}
-  if (trackingTasks.length) await settleWithin(Promise.allSettled(trackingTasks), 1500);
-  if (!result?.ok) await alertMailFailure(prepared, result);
+  const remainingTailMs = finiteDeadlineAt ? Math.max(0, finiteDeadlineAt - Date.now()) : 1500;
+  if (trackingTasks.length && remainingTailMs > 0) {
+    await settleWithin(Promise.allSettled(trackingTasks), Math.min(1500, remainingTailMs));
+  }
+  if (!result?.ok && result?.deadlineExceeded !== true) {
+    await alertMailFailure(prepared, result, finiteDeadlineAt);
+  }
   return result;
 }
 
