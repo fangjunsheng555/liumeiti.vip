@@ -45,25 +45,29 @@ if not nextOk or type(nextTicket)~='table' or tostring(nextTicket.ticketId or ''
   or tostring(nextTicket.orderId or '')~=ARGV[4] or tostring(nextTicket.status or '')~='pending' then
   return redis.error_reply('after_sales_ticket_invalid')
 end
+local repairedActive=false
 local activeId=redis.call('GET',KEYS[2])
 if activeId then
   local activeRaw=redis.call('GET',ARGV[5]..activeId)
   if not activeRaw then
-    local responseOk,response=pcall(cjson.encode,{ok=false,error='pending_ticket_exists',ticketId=activeId,storagePending=true})
-    if not responseOk then return redis.error_reply('after_sales_response_encode_failed') end
-    return response
+    redis.call('DEL',KEYS[2])
+    repairedActive=true
+  else
+    local parsed,active=pcall(cjson.decode,activeRaw)
+    if parsed and type(active)=='table' and tostring(active.ticketId or '')==activeId
+      and tostring(active.orderId or '')==ARGV[4] and tostring(active.status or '')=='pending' then
+      local responseOk,response=pcall(cjson.encode,{ok=false,error='pending_ticket_exists',ticketId=activeId})
+      if not responseOk then return redis.error_reply('after_sales_response_encode_failed') end
+      return response
+    end
+    redis.call('DEL',KEYS[2])
+    repairedActive=true
   end
-  local parsed,active=pcall(cjson.decode,activeRaw)
-  if not parsed or type(active)~='table' or tostring(active.ticketId or '')~=activeId
-    or tostring(active.orderId or '')~=ARGV[4] or tostring(active.status or '')=='pending' then
-    local responseOk,response=pcall(cjson.encode,{ok=false,error='pending_ticket_exists',ticketId=activeId})
-    if not responseOk then return redis.error_reply('after_sales_response_encode_failed') end
-    return response
-  end
-  redis.call('DEL',KEYS[2])
 end
 if redis.call('EXISTS',KEYS[1])==1 then
-  return cjson.encode({ok=false,error='ticket_id_conflict'})
+  local responseOk,response=pcall(cjson.encode,{ok=false,error='ticket_id_conflict'})
+  if not responseOk then return redis.error_reply('after_sales_response_encode_failed') end
+  return response
 end
 redis.call('SET',KEYS[1],ARGV[1])
 redis.call('ZADD',KEYS[3],ARGV[2],ARGV[3])
@@ -71,7 +75,9 @@ redis.call('ZADD',KEYS[4],ARGV[2],ARGV[3])
 redis.call('ZREM',KEYS[5],ARGV[3])
 redis.call('ZADD',KEYS[6],ARGV[2],ARGV[3])
 redis.call('SET',KEYS[2],ARGV[3])
-return cjson.encode({ok=true})`;
+local responseOk,response=pcall(cjson.encode,{ok=true,repairedActive=repairedActive})
+if not responseOk then return redis.error_reply('after_sales_response_encode_failed') end
+return response`;
 
 const COMPLETE_TICKET_SCRIPT = `
 local function validtype(key,expected)
@@ -580,6 +586,9 @@ export async function createAfterSalesTicket(ticket) {
       error: result?.error || "storage_failed",
       ticket: existing || (existingId ? { ticketId: existingId, orderId, status: "pending", storagePending: Boolean(result?.storagePending) } : null),
     };
+  }
+  if (result.repairedActive) {
+    console.warn("[after-sales] repaired stale active-ticket pointer while creating ticket", { orderId, ticketId });
   }
   return { ok: true, ticket: normalized };
 }

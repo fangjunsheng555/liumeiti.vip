@@ -29,7 +29,7 @@ export const MONITORED_API_GROUP_DEFINITIONS = Object.freeze([
     "/api/admin/orders/[orderId]",
     "/api/admin/orders/batch",
   ] },
-  { name: "after_sales", label: "用户售后", routes: ["/api/after-sales"] },
+  { name: "after_sales", label: "用户售后", routes: ["/api/after-sales", "/api/after-sales/status"] },
   { name: "auth_account", label: "账户状态", routes: ["/api/auth/me"] },
   { name: "auth_login", label: "用户登录", routes: ["/api/auth/login"] },
   { name: "auth_logout", label: "用户登出", routes: ["/api/auth/login"] },

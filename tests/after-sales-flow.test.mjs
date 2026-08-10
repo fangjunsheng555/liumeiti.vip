@@ -185,14 +185,29 @@ function execute(command) {
       values.set(keys[0], argv[1]);
       return 1;
     }
-    if (script.includes("ticket_id_conflict") && script.includes("storagePending=true")) {
+    if (script.includes("ticket_id_conflict") && script.includes("pending_ticket_exists")) {
+      const repairsStaleActive = script.includes("repairedActive");
+      let repairedActive = false;
       const activeId = values.get(keys[1]);
       if (activeId) {
         const activeRaw = values.get(argv[4] + activeId);
-        if (!activeRaw) return JSON.stringify({ ok: false, error: "pending_ticket_exists", ticketId: activeId, storagePending: true });
-        const active = JSON.parse(activeRaw);
-        if (active.status === "pending") return JSON.stringify({ ok: false, error: "pending_ticket_exists", ticketId: activeId });
+        let active = null;
+        try { active = activeRaw ? JSON.parse(activeRaw) : null; } catch {}
+        const validPending = Boolean(active
+          && String(active.ticketId || "") === String(activeId)
+          && String(active.orderId || "") === String(argv[3])
+          && active.status === "pending");
+        if (validPending) return JSON.stringify({ ok: false, error: "pending_ticket_exists", ticketId: activeId });
+        if (!repairsStaleActive) {
+          return JSON.stringify({
+            ok: false,
+            error: "pending_ticket_exists",
+            ticketId: activeId,
+            storagePending: !activeRaw,
+          });
+        }
         values.delete(keys[1]);
+        repairedActive = true;
       }
       if (values.has(keys[0])) return JSON.stringify({ ok: false, error: "ticket_id_conflict" });
       values.set(keys[0], argv[0]);
@@ -201,7 +216,13 @@ function execute(command) {
       sortedSet(keys[4]).delete(argv[2]);
       sortedSet(keys[5]).set(argv[2], Number(argv[1]));
       values.set(keys[1], argv[2]);
-      return JSON.stringify({ ok: true });
+      return JSON.stringify({ ok: true, repairedActive });
+    }
+    if (script.includes("redis.call('GET',KEYS[1])==ARGV[1]")
+      && script.includes("redis.call('DEL',KEYS[1])")) {
+      if (values.get(keys[0]) !== argv[0]) return 0;
+      deleteMockKey(keys[0]);
+      return 1;
     }
     if (script.includes("if redis.call('GET',KEYS[1])~=ARGV[1] then return 0 end")) {
       if (failNextCompletionCommit) {
@@ -500,6 +521,7 @@ globalThis.fetch = async (input, options = {}) => {
 
 const utils = await import("../app/api/_utils.js");
 const customerRoute = await import("../app/api/after-sales/route.js");
+const statusRoute = await import("../app/api/after-sales/status/route.js");
 const adminListRoute = await import("../app/api/admin/after-sales/route.js");
 const adminDetailRoute = await import("../app/api/admin/after-sales/[ticketId]/route.js");
 const referenceNoticeRoute = await import("../app/api/admin/after-sales/notify-by-reference/route.js");
@@ -551,6 +573,30 @@ function customerRequest(order, token, issue = "账号当前无法正常登录")
       remark: "updated note",
       items: [{ index: 0, account: "edited-account@example.com", password: "edited-password" }],
     }),
+  });
+}
+
+function cleanupAfterSalesCreationFixture(orderIds, ticketIds) {
+  for (const orderId of orderIds) {
+    deleteMockKey(`liumeiti:orders:record:${orderId}`);
+    deleteMockKey(`liumeiti:after-sales:active:${orderId}`);
+    deleteMockKey(`liumeiti:order-timeline:${orderId}`);
+  }
+  for (const ticketId of ticketIds.filter(Boolean)) {
+    deleteMockKey(`liumeiti:after-sales:record:${ticketId}`);
+    sortedSet("liumeiti:after-sales:index").delete(ticketId);
+    sortedSet("liumeiti:after-sales:status:pending").delete(ticketId);
+    sortedSet("liumeiti:after-sales:status:completed").delete(ticketId);
+    sortedSet("liumeiti:after-sales:creation-outbox").delete(ticketId);
+    sortedSet("liumeiti:after-sales:completion-outbox").delete(ticketId);
+  }
+}
+
+function afterSalesStatusRequest(orderId, token) {
+  return new Request("https://www.liumeiti.vip/api/after-sales/status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ orderId, token }),
   });
 }
 
@@ -721,6 +767,414 @@ test("auth/me skips malformed active after-sales records without hiding account 
   } finally {
     console.warn = originalWarn;
     cleanupKeys.forEach(deleteMockKey);
+  }
+});
+
+test("customer POST atomically replaces an active pointer whose ticket record is missing", async () => {
+  const order = orderRecord("LMAFTERSALESACTIVEMISSING1", "active-missing@example.com");
+  const staleTicketId = "ASACTIVEMISSING1";
+  const activeKey = `liumeiti:after-sales:active:${order.orderId}`;
+  let createdTicketId = "";
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  values.set(activeKey, staleTicketId);
+  const token = authSession.signAfterSalesToken({ orderId: order.orderId, email: order.email });
+  try {
+    const response = await customerRoute.POST(customerRequest(
+      order,
+      token,
+      "The previous active pointer has no stored ticket and must self-heal.",
+    ));
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.ok, true);
+    createdTicketId = body.ticket?.ticketId || "";
+    assert.match(createdTicketId, /^AS[A-Z0-9]+$/);
+    assert.notEqual(createdTicketId, staleTicketId);
+    assert.equal(values.get(activeKey), createdTicketId);
+    const stored = await store.getAfterSalesTicket(createdTicketId);
+    assert.equal(stored?.orderId, order.orderId);
+    assert.equal(stored?.status, "pending");
+  } finally {
+    cleanupAfterSalesCreationFixture([order.orderId], [staleTicketId, createdTicketId]);
+  }
+});
+
+test("customer POST atomically replaces an active pointer whose ticket JSON is corrupt", async () => {
+  const order = orderRecord("LMAFTERSALESACTIVECORRUPT1", "active-corrupt@example.com");
+  const staleTicketId = "ASACTIVECORRUPT1";
+  const activeKey = `liumeiti:after-sales:active:${order.orderId}`;
+  let createdTicketId = "";
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  values.set(activeKey, staleTicketId);
+  values.set(`liumeiti:after-sales:record:${staleTicketId}`, "{not-valid-json");
+  const token = authSession.signAfterSalesToken({ orderId: order.orderId, email: order.email });
+  try {
+    const response = await customerRoute.POST(customerRequest(
+      order,
+      token,
+      "A corrupt historical ticket must not prevent this valid request.",
+    ));
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.ok, true);
+    createdTicketId = body.ticket?.ticketId || "";
+    assert.match(createdTicketId, /^AS[A-Z0-9]+$/);
+    assert.notEqual(createdTicketId, staleTicketId);
+    assert.equal(values.get(activeKey), createdTicketId);
+    assert.equal((await store.getAfterSalesTicket(createdTicketId))?.status, "pending");
+    assert.equal(values.get(`liumeiti:after-sales:record:${staleTicketId}`), "{not-valid-json");
+  } finally {
+    cleanupAfterSalesCreationFixture([order.orderId], [staleTicketId, createdTicketId]);
+  }
+});
+
+test("customer POST atomically replaces an active pointer to another order's ticket", async () => {
+  const order = orderRecord("LMAFTERSALESACTIVEWRONG1", "active-wrong@example.com");
+  const otherOrderId = "LMOTHERAFTERSALESORDER1";
+  const staleTicketId = "ASACTIVEWRONGORDER1";
+  const activeKey = `liumeiti:after-sales:active:${order.orderId}`;
+  let createdTicketId = "";
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  values.set(activeKey, staleTicketId);
+  values.set(`liumeiti:after-sales:record:${staleTicketId}`, JSON.stringify({
+    ticketId: staleTicketId,
+    orderId: otherOrderId,
+    status: "pending",
+    email: "other-order@example.com",
+    issue: "This ticket belongs to another order.",
+    items: [],
+    createdAt: "2026-07-21T07:17:47.893Z",
+    creationEffectsPending: false,
+  }));
+  const token = authSession.signAfterSalesToken({ orderId: order.orderId, email: order.email });
+  try {
+    const response = await customerRoute.POST(customerRequest(
+      order,
+      token,
+      "A ticket for another order cannot reserve this order's active slot.",
+    ));
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.ok, true);
+    createdTicketId = body.ticket?.ticketId || "";
+    assert.match(createdTicketId, /^AS[A-Z0-9]+$/);
+    assert.notEqual(createdTicketId, staleTicketId);
+    assert.equal(values.get(activeKey), createdTicketId);
+    assert.equal((await store.getAfterSalesTicket(createdTicketId))?.orderId, order.orderId);
+    assert.equal(JSON.parse(values.get(`liumeiti:after-sales:record:${staleTicketId}`)).orderId, otherOrderId);
+  } finally {
+    cleanupAfterSalesCreationFixture([order.orderId, otherOrderId], [staleTicketId, createdTicketId]);
+  }
+});
+
+test("customer POST keeps a legitimate pending ticket as the one active ticket", async () => {
+  const order = orderRecord("LMAFTERSALESACTIVEVALID1", "active-valid@example.com");
+  const pendingTicketId = "ASACTIVEVALID1";
+  const activeKey = `liumeiti:after-sales:active:${order.orderId}`;
+  const pendingTicket = {
+    ticketId: pendingTicketId,
+    orderId: order.orderId,
+    status: "pending",
+    email: order.email,
+    contact: order.contact,
+    issue: "This legitimate request is still pending.",
+    items: [],
+    createdAt: "2026-07-21T07:17:47.893Z",
+    creationEffectsPending: false,
+  };
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  values.set(activeKey, pendingTicketId);
+  values.set(`liumeiti:after-sales:record:${pendingTicketId}`, JSON.stringify(pendingTicket));
+  const beforeCount = sortedSet("liumeiti:after-sales:index").size;
+  const token = authSession.signAfterSalesToken({ orderId: order.orderId, email: order.email });
+  try {
+    const response = await customerRoute.POST(customerRequest(
+      order,
+      token,
+      "A second request must not replace the legitimate pending ticket.",
+    ));
+    const body = await response.json();
+    assert.equal(response.status, 409, JSON.stringify(body));
+    assert.equal(body.error, "pending_ticket_exists");
+    assert.equal(body.ticket?.ticketId, pendingTicketId);
+    assert.equal(values.get(activeKey), pendingTicketId);
+    assert.equal(sortedSet("liumeiti:after-sales:index").size, beforeCount);
+  } finally {
+    cleanupAfterSalesCreationFixture([order.orderId], [pendingTicketId]);
+  }
+});
+
+test("historical Spotify plus Netflix order creates a two-item ticket through a production v2 token", async () => {
+  const order = {
+    orderId: "LMMRUBN0FP5DF220C8",
+    status: "completed",
+    orderType: "",
+    revision: 2,
+    locale: "zh",
+    email: "mixed-history@example.com",
+    contact: "1",
+    service: "spotify",
+    serviceLabel: "Spotify · 家庭成员 + Netflix · 单独车位",
+    account: "spotify-owner@example.com",
+    password: "spotify-owner-password",
+    staffAccount: "",
+    staffPassword: "",
+    netflixDeliveryMode: "",
+    items: [
+      {
+        service: "spotify",
+        label: "Spotify · 家庭成员",
+        plan: "member",
+        account: "spotify-owner@example.com",
+        password: "spotify-owner-password",
+        staffAccount: "",
+        staffPassword: "",
+        amount: 128,
+      },
+      {
+        service: "netflix",
+        label: "Netflix · 单独车位",
+        plan: "seat",
+        account: "",
+        password: "",
+        staffAccount: "netflix-login@example.com",
+        staffPassword: "485106",
+        amount: 168,
+      },
+    ],
+  };
+  let createdTicketId = "";
+  values.set(`liumeiti:orders:record:${order.orderId}`, JSON.stringify(order));
+  const token = authSession.signAfterSalesToken({ orderId: order.orderId, email: order.email });
+  try {
+    const response = await customerRoute.POST(new Request("https://www.liumeiti.vip/api/after-sales", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "locale=zh" },
+      body: JSON.stringify({
+        orderId: order.orderId,
+        token,
+        issue: "Spotify and Netflix both need after-sales assistance.",
+        contact: order.contact,
+        remark: "Historical mixed-order production shape.",
+        items: [
+          {
+            index: 0,
+            service: "spotify",
+            account: order.items[0].account,
+            password: order.items[0].password,
+          },
+          {
+            index: 1,
+            service: "netflix",
+            account: order.items[1].staffAccount,
+            password: order.items[1].staffPassword,
+          },
+        ],
+      }),
+    }));
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.ok, true);
+    createdTicketId = body.ticket?.ticketId || "";
+    const stored = await store.getAfterSalesTicket(createdTicketId);
+    assert.equal(stored?.orderId, order.orderId);
+    assert.equal(stored?.status, "pending");
+    assert.equal(stored?.items?.length, 2);
+    assert.deepEqual(stored.items.map((item) => item.service), ["spotify", "netflix"]);
+    assert.equal(stored.items[0].account, order.items[0].account);
+    assert.equal(stored.items[0].password, order.items[0].password);
+    assert.equal(stored.items[1].account, order.items[1].staffAccount);
+    assert.equal(stored.items[1].password, order.items[1].staffPassword);
+    assert.equal(stored.items[1].netflixSelfService, false);
+  } finally {
+    cleanupAfterSalesCreationFixture([order.orderId], [createdTicketId]);
+  }
+});
+
+test("after-sales status POST returns the real pending ticket without exposing private fields", async () => {
+  const orderId = "LMAFTERSALESSTATUSPENDING1";
+  const ticketId = "ASSTATUSPENDING1";
+  const orderKey = `liumeiti:orders:record:${orderId}`;
+  const activeKey = `liumeiti:after-sales:active:${orderId}`;
+  const ticketKey = `liumeiti:after-sales:record:${ticketId}`;
+  const ticket = {
+    ticketId,
+    orderId,
+    status: "pending",
+    email: "status-pending@example.com",
+    issue: "Private issue details must not be returned by the status endpoint.",
+    items: [{ service: "spotify", account: "private@example.com", password: "private-password" }],
+    createdAt: "2026-08-10T01:02:03.000Z",
+    createdAtBeijing: "2026-08-10 09:02:03 Beijing Time (UTC+8)",
+  };
+  values.set(orderKey, JSON.stringify(orderRecord(orderId, ticket.email)));
+  values.set(activeKey, ticketId);
+  values.set(ticketKey, JSON.stringify(ticket));
+  const token = authSession.signAfterSalesToken({ orderId, email: ticket.email });
+  try {
+    const response = await statusRoute.POST(afterSalesStatusRequest(` ${orderId.toLowerCase()} `, token));
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(body, {
+      ok: true,
+      ticket: {
+        ticketId,
+        orderId,
+        status: "pending",
+        createdAtBeijing: ticket.createdAtBeijing,
+        completedAtBeijing: "",
+      },
+    });
+    assert.equal(JSON.stringify(body).includes("private-password"), false);
+    assert.equal(JSON.stringify(body).includes(ticket.issue), false);
+  } finally {
+    deleteMockKey(orderKey);
+    deleteMockKey(activeKey);
+    deleteMockKey(ticketKey);
+  }
+});
+
+test("after-sales status POST returns ticket null after completion and with no active ticket", async () => {
+  const completedOrderId = "LMAFTERSALESSTATUSDONE1";
+  const emptyOrderId = "LMAFTERSALESSTATUSEMPTY1";
+  const ticketId = "ASSTATUSDONE1";
+  const completedOrderKey = `liumeiti:orders:record:${completedOrderId}`;
+  const emptyOrderKey = `liumeiti:orders:record:${emptyOrderId}`;
+  const activeKey = `liumeiti:after-sales:active:${completedOrderId}`;
+  const ticketKey = `liumeiti:after-sales:record:${ticketId}`;
+  values.set(completedOrderKey, JSON.stringify(orderRecord(completedOrderId, "status-done@example.com")));
+  values.set(emptyOrderKey, JSON.stringify(orderRecord(emptyOrderId, "status-empty@example.com")));
+  values.set(activeKey, ticketId);
+  values.set(ticketKey, JSON.stringify({
+    ticketId,
+    orderId: completedOrderId,
+    status: "completed",
+    createdAt: "2026-08-09T01:02:03.000Z",
+    completedAt: "2026-08-10T01:02:03.000Z",
+    completedAtBeijing: "2026-08-10 09:02:03 Beijing Time (UTC+8)",
+  }));
+  const completedToken = authSession.signAfterSalesToken({ orderId: completedOrderId, email: "status-done@example.com" });
+  const emptyToken = authSession.signAfterSalesToken({ orderId: emptyOrderId, email: "status-empty@example.com" });
+  try {
+    const completedResponse = await statusRoute.POST(afterSalesStatusRequest(completedOrderId, completedToken));
+    assert.equal(completedResponse.status, 200);
+    assert.deepEqual(await completedResponse.json(), { ok: true, ticket: null });
+    assert.equal(values.has(activeKey), false, "a completed ticket must release its stale active pointer");
+
+    const emptyResponse = await statusRoute.POST(afterSalesStatusRequest(emptyOrderId, emptyToken));
+    assert.equal(emptyResponse.status, 200);
+    assert.deepEqual(await emptyResponse.json(), { ok: true, ticket: null });
+  } finally {
+    deleteMockKey(completedOrderKey);
+    deleteMockKey(emptyOrderKey);
+    deleteMockKey(activeKey);
+    deleteMockKey(ticketKey);
+  }
+});
+
+test("after-sales status POST rejects expired and cross-order capability tokens", async () => {
+  const orderId = "LMAFTERSALESSTATUSTOKEN1";
+  const expiredToken = authSession.signAfterSalesToken(
+    { orderId, email: "status-expired@example.com" },
+    1_000,
+    Date.now() - 2_000,
+  );
+  const crossOrderToken = authSession.signAfterSalesToken({
+    orderId: "LMAFTERSALESSTATUSOTHER1",
+    email: "status-other@example.com",
+  });
+  for (const token of [expiredToken, crossOrderToken]) {
+    const response = await statusRoute.POST(afterSalesStatusRequest(orderId, token));
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await response.json(), { ok: false, error: "verification_required" });
+  }
+});
+
+test("after-sales status POST rejects a missing order and a token issued before its email changed", async () => {
+  const missingOrderId = "LMAFTERSALESSTATUSMISSING1";
+  const changedOrderId = "LMAFTERSALESSTATUSEMAIL1";
+  const changedOrderKey = `liumeiti:orders:record:${changedOrderId}`;
+  const missingToken = authSession.signAfterSalesToken({
+    orderId: missingOrderId,
+    email: "status-missing@example.com",
+  });
+  const staleEmailToken = authSession.signAfterSalesToken({
+    orderId: changedOrderId,
+    email: "previous-owner@example.com",
+  });
+  values.set(changedOrderKey, JSON.stringify(orderRecord(changedOrderId, "current-owner@example.com")));
+  try {
+    for (const [orderId, token] of [[missingOrderId, missingToken], [changedOrderId, staleEmailToken]]) {
+      const response = await statusRoute.POST(afterSalesStatusRequest(orderId, token));
+      assert.equal(response.status, 401);
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      assert.deepEqual(await response.json(), { ok: false, error: "verification_required" });
+    }
+  } finally {
+    deleteMockKey(changedOrderKey);
+  }
+});
+
+test("after-sales status POST maps Redis command errors and pipeline disconnects to JSON 503", async () => {
+  const orderId = "LMAFTERSALESSTATUSREDIS1";
+  const orderKey = `liumeiti:orders:record:${orderId}`;
+  const activeKey = `liumeiti:after-sales:active:${orderId}`;
+  const token = authSession.signAfterSalesToken({ orderId, email: "status-redis@example.com" });
+  values.set(orderKey, JSON.stringify(orderRecord(orderId, "status-redis@example.com")));
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    failNextRedisPipelineCommand = { name: "GET", keyPrefix: activeKey };
+    const commandFailure = await statusRoute.POST(afterSalesStatusRequest(orderId, token));
+    assert.equal(commandFailure.status, 503);
+    assert.deepEqual(await commandFailure.json(), { ok: false, error: "after_sales_store_unavailable" });
+    assert.equal(failNextRedisPipelineCommand, null);
+
+    disconnectNextRedisPipelineCommand = { name: "GET", keyPrefix: activeKey };
+    const disconnect = await statusRoute.POST(afterSalesStatusRequest(orderId, token));
+    assert.equal(disconnect.status, 503);
+    assert.deepEqual(await disconnect.json(), { ok: false, error: "after_sales_store_unavailable" });
+    assert.equal(disconnectNextRedisPipelineCommand, null);
+  } finally {
+    console.error = originalError;
+    deleteMockKey(orderKey);
+    failNextRedisPipelineCommand = null;
+    disconnectNextRedisPipelineCommand = null;
+  }
+});
+
+test("after-sales status POST reports 503 when current-order verification loses Redis transport", async () => {
+  const orderId = "LMAFTERSALESSTATUSORDERREDIS1";
+  const orderKey = `liumeiti:orders:record:${orderId}`;
+  const token = authSession.signAfterSalesToken({ orderId, email: "status-order-redis@example.com" });
+  values.set(orderKey, JSON.stringify(orderRecord(orderId, "status-order-redis@example.com")));
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    disconnectNextRedisPipelineCommand = { name: "GET", keyPrefix: orderKey };
+    const response = await statusRoute.POST(afterSalesStatusRequest(orderId, token));
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { ok: false, error: "after_sales_store_unavailable" });
+    assert.equal(disconnectNextRedisPipelineCommand, null);
+  } finally {
+    console.error = originalError;
+    deleteMockKey(orderKey);
+    disconnectNextRedisPipelineCommand = null;
+  }
+});
+
+test("after-sales status GET is rejected without reading storage", async () => {
+  failNextRedisPipelineCommand = { name: "GET", keyPrefix: "liumeiti:after-sales:active:" };
+  try {
+    const response = await statusRoute.GET(new Request("https://www.liumeiti.vip/api/after-sales/status"));
+    assert.equal(response.status, 405);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await response.json(), { ok: false, error: "method_not_allowed" });
+    assert.notEqual(failNextRedisPipelineCommand, null, "GET must not touch the after-sales store");
+  } finally {
+    failNextRedisPipelineCommand = null;
   }
 });
 

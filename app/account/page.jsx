@@ -158,6 +158,8 @@ export default function AccountPage() {
   const [afterSalesForm, setAfterSalesForm] = useState(null);
   const [afterSalesBusy, setAfterSalesBusy] = useState(false);
   const [afterSalesStatus, setAfterSalesStatus] = useState(null);
+  const [afterSalesRefresh, setAfterSalesRefresh] = useState({ orderId: "", busy: false, error: "", terminal: false });
+  const afterSalesRefreshBusyRef = useRef(false);
   const [txModal, setTxModal] = useState(false);
   const [avatarModal, setAvatarModal] = useState(false);
   const [avatarSaving, setAvatarSaving] = useState("");
@@ -351,15 +353,75 @@ export default function AccountPage() {
     } : current);
   }
 
-  function attachAfterSalesTicket(orderId, ticket) {
-    if (!ticket) return;
+  function replaceAfterSalesTicket(orderId, ticket) {
     setState((current) => ({
       ...current,
-      orders: current.orders.map((order) => order.orderId === orderId ? { ...order, afterSalesTicket: ticket } : order),
+      orders: current.orders.map((order) => order.orderId === orderId ? { ...order, afterSalesTicket: ticket || null } : order),
     }));
-    setActiveOrder((order) => order?.orderId === orderId ? { ...order, afterSalesTicket: ticket } : order);
-    setAfterSalesOrder((order) => order?.orderId === orderId ? { ...order, afterSalesTicket: ticket } : order);
+    setActiveOrder((order) => order?.orderId === orderId ? { ...order, afterSalesTicket: ticket || null } : order);
+    setAfterSalesOrder((order) => order?.orderId === orderId ? { ...order, afterSalesTicket: ticket || null } : order);
   }
+
+  function attachAfterSalesTicket(orderId, ticket) {
+    if (ticket) replaceAfterSalesTicket(orderId, ticket);
+  }
+
+  async function refreshAfterSalesStatus(order, { silent = false, automatic = false } = {}) {
+    if (!order?.orderId || !order?.afterSalesToken || afterSalesRefreshBusyRef.current) return;
+    if (automatic && afterSalesRefresh.orderId === order.orderId && afterSalesRefresh.terminal) return;
+    afterSalesRefreshBusyRef.current = true;
+    setAfterSalesRefresh({ orderId: order.orderId, busy: true, error: "", terminal: false });
+    try {
+      const response = await fetch("/api/after-sales/status", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orderId: order.orderId, token: order.afterSalesToken }),
+      });
+      let data = null;
+      try { data = await response.json(); } catch {}
+      if (!response.ok || !data?.ok) {
+        const statusError = new Error(data?.error || "status_refresh_failed");
+        statusError.code = data?.error || "status_refresh_failed";
+        throw statusError;
+      }
+      replaceAfterSalesTicket(order.orderId, data.ticket || null);
+      setAfterSalesRefresh({ orderId: order.orderId, busy: false, error: "", terminal: false });
+    } catch (error) {
+      const message = error?.code === "verification_required"
+        ? L("状态核验已过期，请刷新账号页后重试", "Status verification expired. Refresh the account page and retry.")
+        : error?.code === "order_not_found"
+          ? L("订单信息已更新，请刷新账号页后重试", "The order details changed. Refresh the account page and retry.")
+        : L("工单状态刷新失败，请稍后重试", "Couldn't refresh the ticket status. Please try again.");
+      const terminal = error?.code === "verification_required" || error?.code === "order_not_found";
+      if (terminal) {
+        setAfterSalesRefresh({ orderId: order.orderId, busy: false, error: message, terminal: true });
+      } else {
+        setAfterSalesRefresh({ orderId: order.orderId, busy: false, error: silent ? "" : message, terminal: false });
+      }
+    } finally {
+      afterSalesRefreshBusyRef.current = false;
+    }
+  }
+
+  useEffect(() => {
+    const order = activeOrder;
+    if (!order?.afterSalesToken || order?.afterSalesTicket?.status !== "pending") return undefined;
+    if (afterSalesRefresh.orderId === order.orderId && afterSalesRefresh.terminal) return undefined;
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      refreshAfterSalesStatus(order, { silent: true, automatic: true });
+    };
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    const interval = window.setInterval(refresh, 30_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [activeOrder?.orderId, activeOrder?.afterSalesTicket?.ticketId, activeOrder?.afterSalesToken, afterSalesRefresh.orderId, afterSalesRefresh.terminal]);
 
   async function submitAfterSales(event) {
     event.preventDefault();
@@ -394,6 +456,8 @@ export default function AccountPage() {
           missing_credentials: L("请完整填写该服务的账号与密码", "Enter the full account and password for this service."),
           missing_proxy_details: L("请完整填写网站链接与商品标价", "Enter the website link and listed price."),
           contact_required: L("请填写有效联系方式", "Enter a valid contact."),
+          too_many_requests: data.message || L("售后申请提交过于频繁，请稍后再试", "Too many ticket requests. Please try again later."),
+          after_sales_store_unavailable: L("售后服务暂时不可用，请稍后重试", "After-sales service is temporarily unavailable. Please try again."),
         }[data.error] || L("售后工单提交失败，请稍后再试", "Ticket submission failed. Please try again.");
         throw new Error(message);
       }
@@ -1502,7 +1566,21 @@ export default function AccountPage() {
                 {activeOrder.afterSalesTicket?.status === "pending" ? (
                   <div className="query-after-sales-pending">
                     <span><Clock size={17} /></span>
-                    <div><strong>{L("售后工单待处理", "After-sales ticket pending")}</strong><small>{activeOrder.afterSalesTicket.ticketId} · {L("工作人员会尽快处理", "Our team will handle it shortly")}</small></div>
+                    <div>
+                      <strong>{L("售后工单待处理", "After-sales ticket pending")}</strong>
+                      <small>{afterSalesRefresh.orderId === activeOrder.orderId && afterSalesRefresh.error
+                        ? afterSalesRefresh.error
+                        : `${activeOrder.afterSalesTicket.ticketId} · ${L("工作人员会尽快处理", "Our team will handle it shortly")}`}</small>
+                    </div>
+                    <button
+                      type="button"
+                      className="query-after-sales-refresh"
+                      disabled={afterSalesRefresh.orderId === activeOrder.orderId && afterSalesRefresh.busy}
+                      onClick={() => refreshAfterSalesStatus(activeOrder)}
+                    >
+                      <RefreshCw size={13} className={afterSalesRefresh.orderId === activeOrder.orderId && afterSalesRefresh.busy ? "spin-icon" : ""} />
+                      {L("刷新状态", "Refresh")}
+                    </button>
                   </div>
                 ) : activeOrder.afterSalesEligible ? (
                   <button type="button" className="query-after-sales-btn" onClick={() => openAfterSales(activeOrder)}>

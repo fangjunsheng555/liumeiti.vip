@@ -14405,7 +14405,7 @@ body:has(.admin-page) {
 .query-after-sales-btn strong { color: #173f3c; font-size: 13.5px; }
 .query-after-sales-pending {
   min-height: 64px;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   padding: 12px 14px;
   border: 1px solid #fed7aa;
   background: #fff7ed;
@@ -14413,6 +14413,27 @@ body:has(.admin-page) {
 }
 .query-after-sales-pending > span { background: #ffedd5; }
 .query-after-sales-pending small { color: #c2410c; font-size: 11px; font-weight: 650; }
+.query-after-sales-refresh {
+  min-height: 32px;
+  padding: 6px 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid #fdba74;
+  border-radius: 9px;
+  background: #fff;
+  color: #9a3412;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.query-after-sales-refresh:hover:not(:disabled) { border-color: #fb923c; background: #ffedd5; }
+.query-after-sales-refresh:disabled { cursor: wait; opacity: .65; }
+@media (max-width: 520px) {
+  .query-after-sales-pending { grid-template-columns: auto minmax(0, 1fr); }
+  .query-after-sales-refresh { grid-column: 2; justify-self: start; }
+}
 
 /* 订单详情:密码修正待办横幅(琥珀警示) + 服务到期横幅(青绿/到期红) */
 .query-attention-banner,

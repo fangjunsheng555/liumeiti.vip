@@ -160,6 +160,10 @@ async function createAfterSalesHandler(request) {
   };
   const created = await createAfterSalesTicket(ticket);
   if (!created.ok) {
+    if (created.error === "pending_ticket_exists" && created.ticket?.storagePending) {
+      console.warn("[after-sales] active ticket could not be confirmed after create conflict", { orderId });
+      return Response.json({ ok: false, error: "after_sales_store_unavailable" }, { status: 503 });
+    }
     const existingEffects = created.error === "pending_ticket_exists" && created.ticket?.ticketId && !created.ticket?.storagePending
       ? await settleAfterSalesCreationEffects(created.ticket).catch(() => ({ email: false }))
       : null;
