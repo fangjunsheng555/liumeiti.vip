@@ -530,7 +530,11 @@ function anchorLinks(html) {
 function textLinks(text) {
   const source = String(text || "");
   return Array.from(source.matchAll(/https:\/\/[^\s<>"']+/gi)).map((match) => ({
-    url: decodeEntities(match[0]).replace(/[),.;]+$/, ""),
+    // Netflix's plain-text alternative wraps every URL in square brackets
+    // (`获取代码\n[https://www.netflix.com/account/travel/verify?...]`). A
+    // trailing bracket is punctuation, not part of the link: leaving it in
+    // makes the text copy of a link differ from the identical HTML anchor.
+    url: decodeEntities(match[0]).replace(/[\])},.;]+$/, ""),
     context: source.slice(Math.max(0, (match.index || 0) - 220), Math.min(source.length, (match.index || 0) + match[0].length + 220)),
     anchor: "",
   }));
@@ -581,10 +585,23 @@ function travelVerifyLink(links) {
     const context = normalizeSearchText(`${link.anchor} ${link.context}`);
     if (SENSITIVE_CONTEXT.some((phrase) => context.includes(normalizeSearchText(phrase)))) continue;
     const phraseMatch = LANGUAGE_RULES.some((rule) => rule.link.some((phrase) => context.includes(normalizeSearchText(phrase))));
-    const hasToken = link.params.has("token") || link.params.has("nftoken");
-    if (phraseMatch || hasToken) matches.push(link.url);
+    const token = String(link.params.get("nftoken") || link.params.get("token") || "");
+    if (phraseMatch || token) matches.push({ url: link.url, token });
   }
-  const distinct = unique(matches);
+  if (!matches.length) return "";
+
+  // One delivery carries the same link twice: once as an HTML anchor and once
+  // in the plain-text alternative, and the two copies routinely differ in
+  // punctuation and tracking parameters. The signed token is the request's
+  // identity, so compare on that. Only two genuinely different tokens mean two
+  // requests arrived together, and then neither may be returned.
+  const tokens = unique(matches.map((match) => match.token).filter(Boolean));
+  if (tokens.length > 1) return "";
+  // Prefer the HTML anchor: collectNetflixLinks lists anchors before text
+  // links, and the anchor href is the copy Netflix rendered for the button.
+  if (tokens.length === 1) return matches.find((match) => match.token === tokens[0]).url;
+
+  const distinct = unique(matches.map((match) => match.url));
   return distinct.length === 1 ? distinct[0] : "";
 }
 
@@ -798,7 +815,17 @@ export async function parseNetflixEmail(raw, envelope = {}) {
   };
 
   const runs = extractDigitRuns(codeText).filter((run) => !FORWARD_HEADER_LINE.test(run.line || ""));
-  const fourDigitRuns = runs.filter((run) => run.value.length === 4);
+  // A four-digit run that is both a plausible year and surrounded by date
+  // wording (`发送时间: 2026年8月13日`, `13 Aug 2026`) is a forwarding
+  // timestamp, not a sign-in code — some clients flatten their forward header
+  // into a line that no longer starts with a header label, so FORWARD_HEADER_LINE
+  // alone does not catch it. Both signals are required together: Netflix prints
+  // the real code in a standalone block, so a genuine code that happens to read
+  // like a year still survives. Filtering here rather than only as a tie-break
+  // between competing candidates is what stops a lone forwarded year from being
+  // returned as "the code" and hiding the access link the email actually carries.
+  const fourDigitRuns = runs.filter((run) => run.value.length === 4
+    && !(isYearLike(run.value) && dateLikeRun(codeText, run)));
   const hasSixDigitToken = runs.some((run) => run.value.length === 6);
   const hintPhrases = LANGUAGE_RULES.flatMap((rule) => rule.hints);
   const candidates = fourDigitRuns.filter((run) => hasNearbyPhrase(codeText, run.index, CODE_WORD_STEMS, 300)
