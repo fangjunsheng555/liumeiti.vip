@@ -20,6 +20,7 @@ import MobileNav from "../components/MobileNav";
 import { useLocale } from "../components/LocaleProvider";
 import { fetchNetflixJson } from "./fetch-json";
 import { eligibleNetflixCodeOrder } from "./order-eligibility";
+import { canonicalOrderQuery } from "../lib/order-query-identity";
 import styles from "./netflix-code.module.css";
 
 const RESULT_POLL_MS = 6000;
@@ -168,7 +169,7 @@ export default function NetflixCodePage() {
         throw new Error(message);
       }
       if (data.verificationRequired) {
-        setVerification({ query: query.trim(), emailHint: data.emailHint || "" });
+        setVerification({ query: canonicalOrderQuery(query), emailHint: data.emailHint || "" });
         setCode("");
         setStatus({ type: "info", text: L("验证邮件已发送，请查收", "Check your inbox for the verification email") });
         return;
@@ -393,7 +394,11 @@ export default function NetflixCodePage() {
                   <form className={styles.queryForm} onSubmit={submitQuery}>
                     <label>
                       <span>{L("订单号或下单邮箱", "Order number or order email")}</span>
-                      <div><Search size={16} /><input value={query} onChange={(event) => { setQuery(event.target.value); if (verification && event.target.value.trim() !== verification.query) { setVerification(null); setCode(""); } }} placeholder={L("输入订单号或邮箱", "Enter order number or email")} autoComplete="off" /></div>
+                      {/* Only a change that reaches a different order or address
+                          discards a code the customer already received. Recasing
+                          an order number, or trimming a line break pasted with
+                          it, still points at the same lookup. */}
+                      <div><Search size={16} /><input value={query} onChange={(event) => { setQuery(event.target.value); if (verification && canonicalOrderQuery(event.target.value) !== verification.query) { setVerification(null); setCode(""); } }} placeholder={L("输入订单号或邮箱", "Enter order number or email")} autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} /></div>
                     </label>
                     {verification && (
                       <label>

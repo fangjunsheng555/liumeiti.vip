@@ -36,6 +36,7 @@ import {
 import FloatingSupport from "../components/FloatingSupport";
 import { QQBrandIcon, TelegramBrandIcon, WhatsAppBrandIcon } from "../components/BrandIcons";
 import { useLocale } from "../components/LocaleProvider";
+import { canonicalOrderQuery } from "../lib/order-query-identity";
 import AfterSalesTicketSheet from "../components/AfterSalesTicketSheet";
 import { clientFetch as fetch, isClientRequestTimeout } from "../lib/client-fetch";
 import { authenticatedUserMatches, isSuccessfulAuthResponse, safeLoginAfterUncertainAuth, shouldRecoverAuthMutationResponse } from "../lib/auth-recovery";
@@ -575,7 +576,7 @@ export default function ServiceCenterPage() {
       if (data.verificationRequired) {
         setQueryResults([]);
         setQueryDetailOrder(null);
-        setQueryVerification({ query: value, emailHint: data.emailHint || (locale === "en" ? "your order email" : "下单邮箱") });
+        setQueryVerification({ query: canonicalOrderQuery(value), emailHint: data.emailHint || (locale === "en" ? "your order email" : "下单邮箱") });
         setQueryCode("");
         setQueryStatus({
           type: "info",
@@ -613,7 +614,7 @@ export default function ServiceCenterPage() {
 
   function submitQuery(event) {
     event.preventDefault();
-    const sameQuery = queryVerification?.query && queryVerification.query === queryInput.trim();
+    const sameQuery = queryVerification?.query && queryVerification.query === canonicalOrderQuery(queryInput);
     if (sameQuery && queryCode.trim()) runQuery(queryInput, queryCode.trim());
     else runQuery(queryInput);
   }
@@ -892,7 +893,11 @@ export default function ServiceCenterPage() {
                       value={queryInput}
                       onChange={(e) => {
                         setQueryInput(e.target.value);
-                        if (queryVerification && e.target.value.trim() !== queryVerification.query) {
+                        // Recasing an order number, or dropping a line break
+                        // pasted with it, still addresses the same lookup, so
+                        // it must not throw away a code already in the customer's
+                        // inbox.
+                        if (queryVerification && canonicalOrderQuery(e.target.value) !== queryVerification.query) {
                           setQueryVerification(null);
                           setQueryCode("");
                         }
@@ -900,6 +905,9 @@ export default function ServiceCenterPage() {
                       placeholder={L("输入完整订单号或下单时填写的邮箱", "Enter your full order number or order email")}
                       aria-label={L("完整订单号或下单邮箱", "Full order number or order email")}
                       autoComplete="off"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck={false}
                     />
                   </label>
                   {queryVerification && (

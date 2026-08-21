@@ -20,6 +20,7 @@ import {
   signNetflixOrderVerification,
 } from "../_auth-session.js";
 import { netflixOrderIdentity } from "../netflix-code/_ownership.js";
+import { canonicalOrderQuery } from "../../lib/order-query-identity.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { buildEmailBrandHeader } from "../email-brand.js";
 import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../after-sales/_store.js";
@@ -239,7 +240,7 @@ async function readBody(request) {
 
 function verificationKey(email, query) {
   const digest = createHash("sha256")
-    .update(normalizeEmail(email) + "|" + normalizeOrderId(query || normalizeEmail(query)))
+    .update(normalizeEmail(email) + "|" + canonicalOrderQuery(query))
     .digest("hex");
   return "liumeiti:order-query-code:" + digest;
 }
@@ -323,7 +324,10 @@ async function sendQueryCode(email, code, query, locale) {
 }
 
 async function storeVerificationCode(email, query, code) {
-  const payload = JSON.stringify({ email: normalizeEmail(email), query: clean(query, 160), code, createdAt: new Date().toISOString() });
+  // Bind the code to the same canonical query its key is built from. Storing
+  // the raw keystrokes makes the record stricter than its own key: the lookup
+  // finds the code and the comparison in verifyCode then rejects it.
+  const payload = JSON.stringify({ email: normalizeEmail(email), query: canonicalOrderQuery(query), code, createdAt: new Date().toISOString() });
   const result = await redisCmd(["SET", verificationKey(email, query), payload, "EX", String(QUERY_CODE_TTL_SECONDS)]);
   return result === "OK";
 }
@@ -334,7 +338,11 @@ local raw=redis.call('GET',KEYS[1])
 if not raw then return 'missing' end
 local decoded,record=pcall(cjson.decode,raw)
 if not decoded or type(record)~='table' then return 'invalid' end
-if tostring(record.email or '')~=ARGV[1] or tostring(record.query or '')~=ARGV[2] or tostring(record.code or '')~=ARGV[3] then
+if tostring(record.email or '')~=ARGV[1] or tostring(record.code or '')~=ARGV[3] then
+  return 'invalid'
+end
+local storedQuery=tostring(record.query or '')
+if storedQuery~=ARGV[2] and storedQuery~=ARGV[4] then
   return 'invalid'
 end
 redis.call('DEL',KEYS[1])
@@ -345,8 +353,11 @@ return 'matched'`;
     "1",
     verificationKey(email, query),
     normalizeEmail(email),
-    clean(query, 160),
+    canonicalOrderQuery(query),
     String(code || ""),
+    // ARGV[4] keeps codes issued before this deploy verifiable: those records
+    // still hold the raw query. New records only ever store the canonical form.
+    clean(query, 160),
   ]);
   return result === "matched";
 }
