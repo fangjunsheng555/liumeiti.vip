@@ -46,6 +46,35 @@ function netflixItem(order) {
     || (!items.length && isNetflixOrderItem(order, order, 0) ? order : null);
 }
 
+// A profile slot and PIN are optional delivery details, not part of what makes
+// an order eligible: a full-account order has no slot, an order delivered
+// before the delivery workbench existed carries no fulfillment object at all,
+// and staff may simply not have filled them in yet. Read them defensively so
+// any of those shapes yields an empty string instead of reaching the response.
+function assignedDetail(value, max) {
+  if (typeof value !== "string" && typeof value !== "number") return "";
+  // Filtering by code point rather than by a regex character class: the value
+  // is a short token, so dropping control characters outright is the right
+  // normalization, and it leaves nothing in the source that can be mangled.
+  const raw = String(value);
+  return Array.from(raw)
+    .filter((char) => { const code = char.codePointAt(0); return code >= 0x20 && code !== 0x7f; })
+    .join("")
+    .trim()
+    .slice(0, max);
+}
+
+function netflixProfileAssignment(order) {
+  const fulfillment = netflixItem(order)?.fulfillment;
+  if (!fulfillment || typeof fulfillment !== "object" || Array.isArray(fulfillment)) {
+    return { profileNumber: "", pin: "" };
+  }
+  return {
+    profileNumber: assignedDetail(fulfillment.profileNumber, 20),
+    pin: assignedDetail(fulfillment.pin, 30),
+  };
+}
+
 function effectiveNetflixAccounts(order) {
   const items = Array.isArray(order?.items) ? order.items : [];
   const accounts = items.flatMap((item, index) => (
@@ -118,7 +147,7 @@ export async function eligibility(order) {
   }
   const owner = ownerState?.ok ? ownerState.user : null;
   if (owner?.netflixSelfServiceDisabled) return { ok: false, error: "self_service_disabled" };
-  return { ok: true, account };
+  return { ok: true, account, ...netflixProfileAssignment(order) };
 }
 
 async function readBody(request) {
@@ -219,6 +248,10 @@ async function postHandler(request) {
       orderId,
       netflixAccount: eligible.account,
       accountHint: maskNetflixEmail(eligible.account),
+      // Empty whenever the order has no slot or PIN assigned. The page shows
+      // only what is present, so an unassigned order simply omits the line.
+      profileNumber: eligible.profileNumber || "",
+      pin: eligible.pin || "",
       expiresIn: 15 * 60,
     }, { headers: { "Cache-Control": "no-store" } });
   }
@@ -232,6 +265,10 @@ async function postHandler(request) {
   const eligible = await eligibility(order);
   if (!eligible.ok) return Response.json({ ok: false, error: eligible.error }, { status: eligible.status || 409 });
   if (netflixAccountHash(eligible.account) !== claim.accountHash) return Response.json({ ok: false, error: "account_changed" }, { status: 409 });
+  // Staff reassign a slot or PIN while a customer is mid-sign-in. Every reply
+  // below is built from an order just read from the store, so the page can
+  // refresh what it shows on each poll rather than keep what authorize said.
+  const assignment = { profileNumber: eligible.profileNumber || "", pin: eligible.pin || "" };
   const lockKey = netflixCodeLockKey(order.orderId);
   if (await redisCmd(["GET", lockKey]) === "blocked") return Response.json({ ok: false, error: "temporarily_locked" }, { status: 429 });
   const cycleId = createHash("sha256")
@@ -270,7 +307,7 @@ async function postHandler(request) {
   if (storageError) return storageError;
   if (mailState.state === "rejected") {
     if (shouldAwaitAcceptedSibling(mailState)) {
-      return Response.json({ ok: true, pending: true, mailReceived: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
+      return Response.json({ ok: true, pending: true, mailReceived: true, retryAfter: 6, ...assignment }, { headers: { "Cache-Control": "no-store" } });
     }
     return Response.json({
       ok: false,
@@ -280,12 +317,12 @@ async function postHandler(request) {
     }, { status: 422, headers: { "Cache-Control": "no-store" } });
   }
   const result = mailState.state === "result" ? mailState.result : null;
-  if (!result) return Response.json({ ok: true, pending: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
+  if (!result) return Response.json({ ok: true, pending: true, retryAfter: 6, ...assignment }, { headers: { "Cache-Control": "no-store" } });
   if (result.kind === "code" && /^\d{4}$/.test(result.value)) {
     await persistResultSafetyMarker(order, result.eventId);
     await redisCmd(["DEL", attemptsKey]);
     await logSuccessfulAccess(order, eligible.account, claim, "code_returned", result.eventId);
-    return Response.json({ ok: true, kind: "code", code: result.value, expiresAt: result.expiresAt, receivedAtBeijing: result.receivedAtBeijing }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ ok: true, kind: "code", code: result.value, expiresAt: result.expiresAt, receivedAtBeijing: result.receivedAtBeijing, ...assignment }, { headers: { "Cache-Control": "no-store" } });
   }
   if (result.kind === "link" || result.kind === "household") {
     const link = safeResultLink(result.kind, result.value);
@@ -294,10 +331,10 @@ async function postHandler(request) {
       await redisCmd(["DEL", attemptsKey]);
       const outcome = result.kind === "household" ? "household_link_returned" : "travel_link_returned";
       await logSuccessfulAccess(order, eligible.account, claim, outcome, result.eventId);
-      return Response.json({ ok: true, kind: result.kind, url: link, expiresAt: result.expiresAt, receivedAtBeijing: result.receivedAtBeijing }, { headers: { "Cache-Control": "no-store" } });
+      return Response.json({ ok: true, kind: result.kind, url: link, expiresAt: result.expiresAt, receivedAtBeijing: result.receivedAtBeijing, ...assignment }, { headers: { "Cache-Control": "no-store" } });
     }
   }
-  return Response.json({ ok: true, pending: true, retryAfter: 6 }, { headers: { "Cache-Control": "no-store" } });
+  return Response.json({ ok: true, pending: true, retryAfter: 6, ...assignment }, { headers: { "Cache-Control": "no-store" } });
 }
 
 async function getHandler() {

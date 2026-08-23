@@ -226,6 +226,11 @@ export default function NetflixCodePage() {
         orderId: data.orderId,
         account: data.netflixAccount,
         accountHint: data.accountHint,
+        // Absent on an order with no slot or PIN assigned, and absent entirely
+        // from a response issued before this shipped. Coerce here so the render
+        // below never has to reason about the shape it was handed.
+        profileNumber: typeof data.profileNumber === "string" ? data.profileNumber : "",
+        pin: typeof data.pin === "string" ? data.pin : "",
       });
       setEntryNeedsVerification(false);
       setStatus(null);
@@ -249,6 +254,21 @@ export default function NetflixCodePage() {
     void authorize({ orderId: entryOrderId }, { fromVerifiedLink: true });
   }, [authorize, entryOrderId, entryResumeAttempt, session]);
 
+  // Staff reassign a slot or PIN while a customer is part-way through signing
+  // in. Every reply from the server is built from an order it just read, so
+  // adopt the pair it reports instead of holding what authorize first returned.
+  const applyAssignment = useCallback((data) => {
+    if (!data || typeof data !== "object") return;
+    // A reply from a release older than this field expresses no opinion about
+    // the assignment. Only one that carries it may change what is on screen.
+    if (!Object.hasOwn(data, "profileNumber") && !Object.hasOwn(data, "pin")) return;
+    const profileNumber = typeof data.profileNumber === "string" ? data.profileNumber : "";
+    const pin = typeof data.pin === "string" ? data.pin : "";
+    setSession((current) => (current && (current.profileNumber !== profileNumber || current.pin !== pin)
+      ? { ...current, profileNumber, pin }
+      : current));
+  }, []);
+
   const retrieveResult = useCallback(async () => {
     const token = sessionRef.current;
     if (!token) return;
@@ -267,6 +287,7 @@ export default function NetflixCodePage() {
         }
         throw new Error(errorCopy(data?.error));
       }
+      applyAssignment(data);
       if (data.kind === "code" || data.kind === "link" || data.kind === "household") {
         stopPolling();
         setCodeCopyState("idle");
@@ -293,7 +314,7 @@ export default function NetflixCodePage() {
       stopPolling();
       setStatus({ type: "error", text: error?.message || L("读取失败，请稍后再试", "Retrieval failed; try again later") });
     }
-  }, [L, stopPolling]);
+  }, [L, stopPolling, applyAssignment, errorCopy]);
 
   function beginRetrieve() {
     if (!session?.token || retrieving) return;
@@ -428,6 +449,15 @@ export default function NetflixCodePage() {
               <span>{L("Netflix 登录邮箱", "Netflix sign-in email")}</span>
               <strong>{session.account}</strong>
               <button type="button" onClick={copyAccount}>{copied ? <Check size={15} /> : <Clipboard size={15} />}{copied ? L("已复制", "Copied") : L("复制", "Copy")}</button>
+              {/* Only what this order actually has. A full-account order has no
+                  slot, and an order whose slot is not filled in yet shows
+                  nothing here rather than a label with nothing behind it. */}
+              {(session.profileNumber || session.pin) ? (
+                <p className={styles.assignment}>
+                  {session.profileNumber ? <span>{L("车位", "Profile")}<b>{session.profileNumber}</b></span> : null}
+                  {session.pin ? <span>PIN<b>{session.pin}</b></span> : null}
+                </p>
+              ) : null}
             </div>
 
             <ol className={styles.steps}>

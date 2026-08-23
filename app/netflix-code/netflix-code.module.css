@@ -181,3 +181,9 @@
 @media (min-width: 901px) {
   .page { padding-bottom: 40px; }
 }
+
+/* Slot and PIN sit on their own full-width line inside the account band, so a
+   long sign-in email keeps the row above to itself. */
+.assignment { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 0; }
+.assignment span { display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 8px; border: 1px solid #dbe4ea; border-radius: 6px; background: #f8fafc; color: #64748b; font-size: 10px; font-weight: 800; }
+.assignment b { color: #0f172a; font-size: 12px; overflow-wrap: anywhere; }
