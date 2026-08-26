@@ -154,21 +154,21 @@ export const GUIDES = [
   {
     slug: "how-to-use-vpn-node",
     service: "airport-node",
-    updated: "2026-07-11",
+    updated: "2026-08-22",
     title: "机场节点购买与导入指南：Shadowrocket、Clash Meta、Clash Verge",
     titleEn: "VPN Node Buying and Import Guide: Shadowrocket, Clash Meta and Clash Verge",
-    desc: "说明 50GB、100GB、200GB、无限流量与 10GB 测试规格，并介绍主流客户端的订阅链接导入流程。",
-    descEn: "How to choose among 50 GB, 100 GB, 200 GB, Unlimited and 10 GB Trial plans, then import the subscription into common clients.",
-    intro: "机场节点按月流量提供普通、高级、豪华和无限四档年付规格，另有 10GB 测试规格。订单完成后会生成订阅链接，将链接导入兼容客户端即可使用。",
+    desc: "说明 600GB/年、1200GB/年、2400GB/年、一年无限流量与 10GB 测试规格，并介绍主流客户端的订阅链接导入流程。",
+    descEn: "How to choose among the 600 GB, 1200 GB and 2400 GB annual plans, one-year Unlimited and the 10 GB Trial, then import the subscription into common clients.",
+    intro: "机场节点按全年流量提供普通、高级、豪华和无限四档年付规格，另有 10GB 测试规格。订单完成后会生成订阅链接，将链接导入兼容客户端即可使用。",
     introEn: "VPN nodes are offered as annual Standard, Plus, Premium and Unlimited plans, plus a 10 GB Trial. Once the order is completed, import the supplied subscription URL into a compatible client.",
     steps: [
-      ["按月流量选择规格", "普通为 50GB/月，高级为 100GB/月，豪华为 200GB/月，无限规格不设月流量上限；首次使用可先选 10GB 测试。"],
+      ["按全年流量选择规格", "普通为 600GB/年，高级为 1200GB/年，豪华为 2400GB/年，无限规格为一年无限流量；首次使用可先选 10GB 测试。"],
       ["提交订单", "选择规格并填写接收订单通知的邮箱，核对应付金额后按结算页提示完成付款。"],
       ["复制订阅链接", "订单提交后可在完成页、订单详情或通知邮件中查看订阅链接，请完整复制，不要遗漏字符。"],
       ["导入客户端", {
         parts: [
-          "iPhone/iPad 可用 Shadowrocket（",
-          { text: "点击获取共享 ID", href: "https://tool.liumeiti.vip/apple-id?v=20260703at", ariaLabel: "获取 Shadowrocket 共享 ID" },
+          "iPhone/iPad 可用 Nextin/Shadowrocket（",
+          { text: "点击获取共享 ID", href: "https://tool.liumeiti.vip/apple-id?v=20260703at", ariaLabel: "获取 Nextin/Shadowrocket 共享 ID" },
           "），Android 可用 Clash Meta（",
           { text: "点击下载", href: "https://github.com/MetaCubeX/ClashMetaForAndroid/releases", ariaLabel: "下载 Clash Meta" },
           "），Windows/macOS 可用 Clash Verge（",
@@ -178,13 +178,13 @@ export const GUIDES = [
       }],
     ],
     stepsEn: [
-      ["Choose by monthly traffic", "Standard includes 50 GB/month, Plus 100 GB/month, Premium 200 GB/month, and Unlimited has no monthly traffic cap. New users can start with the 10 GB Trial."],
+      ["Choose by annual traffic", "Standard includes 600 GB/year, Plus 1200 GB/year, Premium 2400 GB/year, and Unlimited has no traffic cap for the year. New users can start with the 10 GB Trial."],
       ["Place the order", "Select the plan, enter the email for order notices, review the payable amount and follow the checkout instructions."],
       ["Copy the subscription URL", "After submitting the order, find the URL on the completion page, in order details or in the notification email. Copy it in full."],
       ["Import into a client", {
         parts: [
-          "Use Shadowrocket on iPhone/iPad (",
-          { text: "get a shared Apple ID", href: "https://tool.liumeiti.vip/apple-id?v=20260703at", ariaLabel: "Get a shared Apple ID for Shadowrocket" },
+          "Use Nextin/Shadowrocket on iPhone/iPad (",
+          { text: "get a shared Apple ID", href: "https://tool.liumeiti.vip/apple-id?v=20260703at", ariaLabel: "Get a shared Apple ID for Nextin/Shadowrocket" },
           "), Clash Meta on Android (",
           { text: "download", href: "https://github.com/MetaCubeX/ClashMetaForAndroid/releases", ariaLabel: "Download Clash Meta" },
           "), or Clash Verge on Windows/macOS (",
@@ -194,7 +194,7 @@ export const GUIDES = [
       }],
     ],
     faq: [
-      ["首次购买建议哪种规格？", "不确定线路适配时可先选 10GB 测试；确认使用稳定后，再按每月流量选择年付规格。"],
+      ["首次购买建议哪种规格？", "不确定线路适配时可先选 10GB 测试；确认使用稳定后，再按全年流量选择年付规格。"],
       ["订阅链接在哪里查看？", "可在订单完成页、订单详情和订单通知邮件中查看。"],
       ["导入后没有节点怎么办？", "先确认链接复制完整并在客户端更新订阅；仍无法加载时，凭订单号联系在线客服。"],
     ],
