@@ -1640,12 +1640,12 @@ export default function AccountPage() {
                     )}
                     {it.subscriptionLinks && (
                       <div className="account-modal-subs">
-                        <button type="button" onClick={() => handleCopy(it.subscriptionLinks, `sub-${idx}`)}>
+                        <button type="button" onClick={() => handleCopy(it.subscriptionLinks, `sub-${idx}`)} aria-label={L("复制订阅链接", "Copy the subscription link")}>
                           <div>
                             <strong>{L("订阅链接", "Subscription link")}</strong>
                             <small>{it.subscriptionLinks}</small>
                           </div>
-                          <em>{copiedKey === `sub-${idx}` ? L("已复制", "Copied") : L("复制", "Copy")}</em>
+                          <em>{copiedKey === `sub-${idx}` ? <Check size={12} /> : <Copy size={12} />}{copiedKey === `sub-${idx}` ? L("已复制", "Copied") : L("复制", "Copy")}</em>
                         </button>
                       </div>
                     )}

@@ -111,7 +111,16 @@ function orderItemsForAdmin(order) {
   const source = Array.isArray(order?.items) && order.items.length > 0
     ? order.items
     : [legacyOrderItem(order)];
-  return source.map(({ passwordCorrectionTokenHash, ...item }) => item);
+  // The subscription URL is a function of the order number, so derive it the
+  // same way every customer-facing page does. Passing through whatever an older
+  // record happened to store made the workbench report "not generated" for a
+  // link the customer could already see in their order.
+  return source.map(({ passwordCorrectionTokenHash, ...item }) => ({
+    ...item,
+    subscriptionLinks: item.service === "rocket"
+      ? rocketSubscriptionUrl(order?.orderId)
+      : readRocketSubscriptionUrl(item.subscriptionLinks) || null,
+  }));
 }
 
 function missingCompletionCredential(order, itemUpdates = [], netflixSelfServiceDelivery = order?.netflixDeliveryMode === "self_service") {

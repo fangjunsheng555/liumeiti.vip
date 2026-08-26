@@ -1277,8 +1277,12 @@ export default function ServiceCenterPage() {
                     )}
                     {item.subscriptionLinks && (
                       <div className="query-modal-item-subs">
-                        <button className="query-modal-sub-row" onClick={() => handleCopy(item.subscriptionLinks, `sub-${idx}`)}>
-                          <span>{L("订阅链接", "Subscription link")}</span><small>{item.subscriptionLinks}</small><em>{copiedKey === `sub-${idx}` ? L("已复制", "Copied") : L("复制", "Copy")}</em>
+                        <button type="button" className="query-modal-sub-row" onClick={() => handleCopy(item.subscriptionLinks, `sub-${idx}`)} aria-label={L("复制订阅链接", "Copy the subscription link")}>
+                          <div>
+                            <strong>{L("订阅链接", "Subscription link")}</strong>
+                            <small>{item.subscriptionLinks}</small>
+                          </div>
+                          <em>{copiedKey === `sub-${idx}` ? <CheckCircle2 size={12} /> : <Copy size={12} />}{copiedKey === `sub-${idx}` ? L("已复制", "Copied") : L("复制", "Copy")}</em>
                         </button>
                       </div>
                     )}

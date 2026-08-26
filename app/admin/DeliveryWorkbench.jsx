@@ -117,7 +117,7 @@ function RocketFields({ item, onChange }) {
   const subscriptionUrl = readRocketSubscriptionUrl(item.subscriptionLinks);
   return (
     <div className="admin-delivery-fields two">
-      <div className={`admin-delivery-readonly${subscriptionUrl ? " ok" : ""}`}>
+      <div className={`admin-delivery-readonly${subscriptionUrl ? " ok" : ""}`} title={subscriptionUrl || undefined}>
         <span>订阅链接</span>
         <b>{subscriptionUrl ? "已生成" : "尚未生成"}</b>
       </div>
