@@ -233,8 +233,8 @@ function rocketMessage(order, item, fulfillment, locale) {
     : "机场节点订阅链接已随订单交付，可在完成邮件或订单详情中复制。"];
   if (fulfillment.clientGuide) {
     parts.push(en
-      ? "It supports Shadowrocket, Clash Meta and Clash Verge. Follow the VPN setup guide to import the subscription."
-      : "支持 Shadowrocket、Clash Meta 和 Clash Verge，请按机场节点使用指南导入订阅。");
+      ? "It supports Nextin, Shadowrocket, Clash Meta and Clash Verge. Follow the VPN setup guide to import the subscription."
+      : "支持 Nextin、Shadowrocket、Clash Meta 和 Clash Verge，请按机场节点使用指南导入订阅。");
   }
   const validity = validitySentence(order, item, locale);
   if (validity) parts.push(validity);

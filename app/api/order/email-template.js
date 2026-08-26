@@ -1,4 +1,5 @@
 import { buildEmailBrandHeader } from "../email-brand.js";
+import { readRocketSubscriptionUrl } from "../../lib/rocket-subscription.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { supportContactHtml } from "../support-links.js";
 import { supportHtml } from "../../lib/settings-defaults.js";
@@ -57,17 +58,11 @@ export function buildOrderEmailHtml({ order, brandName, siteDomain, siteUrl, sup
           <span style="font-family:ui-monospace,Menlo,Consolas,monospace;color:#0f172a;font-weight:600;">${escapeHtml(it.password)}</span>
         </div>`
       : "";
-    const subRows = it.subscriptionLinks
+    const subscriptionUrl = readRocketSubscriptionUrl(it.subscriptionLinks);
+    const subRows = subscriptionUrl
       ? `<div style="margin-top:8px;padding:10px 12px;background:#f0fdfa;border-radius:10px;border:1px solid #a7f3d0;">
-          <div style="font-size:10px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#0f766e;margin-bottom:6px;">${L("订阅链接", "Subscription links")}</div>
-          <div style="margin-bottom:6px;">
-            <div style="font-size:11px;color:#0f766e;font-weight:700;">${L("Shadowrocket 订阅", "Shadowrocket")}</div>
-            <a href="${escapeHtml(it.subscriptionLinks.shadowrocket)}" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#134e4a;word-break:break-all;text-decoration:underline;">${escapeHtml(it.subscriptionLinks.shadowrocket)}</a>
-          </div>
-          <div>
-            <div style="font-size:11px;color:#0f766e;font-weight:700;">${L("Clash 订阅", "Clash")}</div>
-            <a href="${escapeHtml(it.subscriptionLinks.clash)}" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#134e4a;word-break:break-all;text-decoration:underline;">${escapeHtml(it.subscriptionLinks.clash)}</a>
-          </div>
+          <div style="font-size:10px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#0f766e;margin-bottom:6px;">${L("订阅链接", "Subscription link")}</div>
+          <a href="${escapeHtml(subscriptionUrl)}" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#134e4a;word-break:break-all;text-decoration:underline;">${escapeHtml(subscriptionUrl)}</a>
         </div>`
       : "";
     return `
@@ -292,10 +287,8 @@ export function buildOrderEmailText({ order, brandName, siteDomain, siteUrl, usd
     lines.push(`  · ${it.label} (${it.cycle || L("1年", "1 yr")}) ¥${it.amount}`);
     if (it.account) lines.push(`      ${it.service === "rocket" ? L("用户名", "Username") : L("账号", "Account")}: ${it.account}`);
     if (it.password) lines.push(`      ${L("密码", "Password")}: ${it.password}`);
-    if (it.subscriptionLinks) {
-      lines.push(`      Shadowrocket: ${it.subscriptionLinks.shadowrocket}`);
-      lines.push(`      Clash: ${it.subscriptionLinks.clash}`);
-    }
+    const subscriptionUrl = readRocketSubscriptionUrl(it.subscriptionLinks);
+    if (subscriptionUrl) lines.push(`      ${L("订阅链接", "Subscription link")}: ${subscriptionUrl}`);
   });
   if (isCart) {
     lines.push(``, `${L("商品总价", "Subtotal")}: ¥${order.subtotal}`);

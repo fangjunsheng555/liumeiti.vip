@@ -6,17 +6,10 @@ import {
   listAssignableAdminStaff,
 } from "../../_utils.js";
 import { hasPendingSpotifyPasswordCorrection } from "../../../lib/order-attention.js";
+import { rocketSubscriptionUrl, readRocketSubscriptionUrl } from "../../../lib/rocket-subscription.js";
 import { getOrderSla } from "../../../lib/order-sla.js";
 import { effectiveQuoteStatus } from "../../_quote-expiry.js";
 import { withApiTelemetry } from "../../_observability.js";
-
-function subscriptionLinks(username) {
-  const encoded = encodeURIComponent(String(username || "").trim());
-  return {
-    shadowrocket: "https://hk.joinvip.vip:2056/sub/" + encoded,
-    clash: "https://hk.joinvip.vip:2056/sub/" + encoded + "?format=clash",
-  };
-}
 
 function abnormalInfo(order, status = effectiveQuoteStatus(order)) {
   if (status === "invalid") return { abnormal: true, reason: "已标记无效", level: "danger" };
@@ -56,7 +49,7 @@ function normalizeOrder(order) {
       customerPasswordUpdatedAt: it.customerPasswordUpdatedAt || "",
       customerPasswordUpdatedAtBeijing: it.customerPasswordUpdatedAtBeijing || "",
       customerPasswordUpdateCount: Number(it.customerPasswordUpdateCount || 0),
-      subscriptionLinks: it.subscriptionLinks || (it.service === "rocket" && (it.staffAccount || it.account) ? subscriptionLinks(it.staffAccount || it.account) : null),
+      subscriptionLinks: it.service === "rocket" ? rocketSubscriptionUrl(order.orderId) : readRocketSubscriptionUrl(it.subscriptionLinks) || null,
     }));
   } else {
     items = [{
@@ -72,9 +65,7 @@ function normalizeOrder(order) {
       password: order.password || "",
       staffAccount: order.staffAccount || "",
       staffPassword: order.staffPassword || "",
-      subscriptionLinks: order.service === "rocket" && (order.staffAccount || order.account)
-        ? subscriptionLinks(order.staffAccount || order.account)
-        : null,
+      subscriptionLinks: order.service === "rocket" ? rocketSubscriptionUrl(order.orderId) : null,
     }];
   }
   const abnormal = abnormalInfo(order, status);

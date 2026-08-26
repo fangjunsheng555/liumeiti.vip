@@ -21,6 +21,7 @@ import {
 } from "../_auth-session.js";
 import { netflixOrderIdentity } from "../netflix-code/_ownership.js";
 import { canonicalOrderQuery } from "../../lib/order-query-identity.js";
+import { rocketSubscriptionUrl, readRocketSubscriptionUrl } from "../../lib/rocket-subscription.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { buildEmailBrandHeader } from "../email-brand.js";
 import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../after-sales/_store.js";
@@ -64,14 +65,6 @@ function matchType(type) {
   return type === "orderId" ? "orderId" : type === "email" ? "email" : "";
 }
 
-function subscriptionLinks(username) {
-  const encoded = encodeURIComponent(clean(username, 80));
-  return {
-    shadowrocket: "https://hk.joinvip.vip:2056/sub/" + encoded,
-    clash: "https://hk.joinvip.vip:2056/sub/" + encoded + "?format=clash",
-  };
-}
-
 function publicOrder(order, type, locale = "zh", netflixUserSelfServiceEnabled = true) {
   const hasStoredNetflixDeliveryMode = order.netflixDeliveryMode !== undefined
     && order.netflixDeliveryMode !== null
@@ -104,9 +97,9 @@ function publicOrder(order, type, locale = "zh", netflixUserSelfServiceEnabled =
         password,
       };
       if (service === "rocket") {
-        out.subscriptionLinks = subscriptionLinks(order.orderId) || it.subscriptionLinks;
+        out.subscriptionLinks = rocketSubscriptionUrl(order.orderId);
       } else if (it.subscriptionLinks) {
-        out.subscriptionLinks = it.subscriptionLinks;
+        out.subscriptionLinks = readRocketSubscriptionUrl(it.subscriptionLinks);
       }
       return out;
     });
@@ -124,7 +117,7 @@ function publicOrder(order, type, locale = "zh", netflixUserSelfServiceEnabled =
       account,
       password,
     };
-    if (it.service === "rocket") it.subscriptionLinks = subscriptionLinks(order.orderId);
+    if (it.service === "rocket") it.subscriptionLinks = rocketSubscriptionUrl(order.orderId);
     items = [it];
   }
 
@@ -179,8 +172,8 @@ function publicOrder(order, type, locale = "zh", netflixUserSelfServiceEnabled =
     netflixDeliveryMode,
     netflixSelfServiceEnabled,
   };
-  if (output.service === "rocket" && output.account) {
-    output.subscriptionLinks = subscriptionLinks(output.account);
+  if (output.service === "rocket") {
+    output.subscriptionLinks = rocketSubscriptionUrl(order.orderId);
   }
   // 服务到期摘要(仅已完成且有周期的订单)+ 一键续费预填路径
   const expiry = orderExpirySummary(order);

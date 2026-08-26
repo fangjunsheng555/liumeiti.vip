@@ -39,7 +39,6 @@ import {
   validUsername,
   validEmail,
   productNeedsAccountPassword,
-  subscriptionLinks,
   blankCheckoutForm,
   DEFAULT_ROCKET_PLAN,
   getRocketPlan,
@@ -2072,31 +2071,17 @@ export default function CheckoutPage() {
                         {it.subscriptionLinks && (
                           <div className="subscription-links">
                             <div className="subscription-link-row">
-                              <a href={it.subscriptionLinks.shadowrocket} target="_blank" rel="noopener noreferrer">
-                                <strong>{L("Shadowrocket 订阅:", "Shadowrocket sub:")}</strong>
-                                <span>{it.subscriptionLinks.shadowrocket}</span>
+                              <a href={it.subscriptionLinks} target="_blank" rel="noopener noreferrer">
+                                <strong>{L("订阅链接:", "Subscription link:")}</strong>
+                                <span>{it.subscriptionLinks}</span>
                               </a>
                               <button
                                 type="button"
                                 className="subscription-copy-btn"
-                                onClick={() => handleCopy(it.subscriptionLinks.shadowrocket, `sr-${orderId}-${it.service}`)}
+                                onClick={() => handleCopy(it.subscriptionLinks, `sub-${orderId}-${it.service}`)}
                               >
                                 <Copy size={14} />
-                                {copiedKey === `sr-${orderId}-${it.service}` ? L("已复制", "Copied") : L("复制", "Copy")}
-                              </button>
-                            </div>
-                            <div className="subscription-link-row">
-                              <a href={it.subscriptionLinks.clash} target="_blank" rel="noopener noreferrer">
-                                <strong>{L("Clash 订阅:", "Clash sub:")}</strong>
-                                <span>{it.subscriptionLinks.clash}</span>
-                              </a>
-                              <button
-                                type="button"
-                                className="subscription-copy-btn"
-                                onClick={() => handleCopy(it.subscriptionLinks.clash, `cl-${orderId}-${it.service}`)}
-                              >
-                                <Copy size={14} />
-                                {copiedKey === `cl-${orderId}-${it.service}` ? L("已复制", "Copied") : L("复制", "Copy")}
+                                {copiedKey === `sub-${orderId}-${it.service}` ? L("已复制", "Copied") : L("复制", "Copy")}
                               </button>
                             </div>
                           </div>

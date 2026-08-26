@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { rocketSubscriptionUrl, readRocketSubscriptionUrl } from "../../../../lib/rocket-subscription.js";
 import {
   getOrderById, getOrderEntryById, getOrderEntryByIdIncludingDeleted, setOrderAt, archiveOrderAt, orderArchiveEligibility,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
@@ -102,9 +103,7 @@ function legacyOrderItem(order) {
     password: order?.password || "",
     staffAccount,
     staffPassword: order?.staffPassword || "",
-    subscriptionLinks: order?.service === "rocket" && (staffAccount || account)
-      ? subscriptionLinks(staffAccount || account)
-      : null,
+    subscriptionLinks: order?.service === "rocket" ? rocketSubscriptionUrl(order?.orderId) : null,
   };
 }
 
@@ -216,14 +215,6 @@ function adminOk(request) {
 
 function normalizedOrderId(value) {
   return clean(value, 80).replace(/\s+/g, "").toUpperCase();
-}
-
-function subscriptionLinks(username) {
-  const encoded = encodeURIComponent(String(username || "").trim());
-  return {
-    shadowrocket: "https://hk.joinvip.vip:2056/sub/" + encoded,
-    clash: "https://hk.joinvip.vip:2056/sub/" + encoded + "?format=clash",
-  };
 }
 
 async function sendCompletionEmail(order) {
@@ -1021,10 +1012,7 @@ async function updateOrderHandler(request, { params }) {
           it.staffPassword = "";
         }
         // Refresh subscription links if rocket
-        if (service === "rocket") {
-          const u = it.staffAccount || it.account;
-          if (u) it.subscriptionLinks = subscriptionLinks(u);
-        }
+        if (service === "rocket") it.subscriptionLinks = rocketSubscriptionUrl(order.orderId);
       }
     });
   }

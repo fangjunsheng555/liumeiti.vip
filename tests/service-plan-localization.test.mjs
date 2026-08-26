@@ -12,7 +12,12 @@ test("English plan copy is selected by stable catalog id", () => {
     reorderedCatalogPlans.map((id) => getLocalizedServicePlanCopy("spotify", id, "en").name),
     ["Family", "Family Member", "Duo", "Individual"],
   );
-  assert.equal(getLocalizedServicePlanCopy("airport-node", "trial", "en").description, "10 GB trial traffic");
+  // A second service proves the lookup keys on the plan id rather than on the
+  // catalog's ordering. The copy itself tracks the plans actually on sale.
+  assert.deepEqual(getLocalizedServicePlanCopy("airport-node", "trial", "en"), {
+    name: "¥5 / 10 GB trial",
+    description: "¥5 for 10 GB — try before you commit",
+  });
 });
 
 test("new catalog plans use their own copy instead of an adjacent translation", () => {

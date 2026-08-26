@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { rocketSubscriptionUrl, readRocketSubscriptionUrl } from "../../lib/rocket-subscription.js";
 import { after } from "next/server.js";
 import { buildOrderEmailHtml, buildOrderEmailText } from "./email-template.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
@@ -90,14 +91,6 @@ function normalizePaymentAdjustment(value) {
   return amount;
 }
 
-function subscriptionLinks(username) {
-  const encoded = encodeURIComponent(String(username || "").trim());
-  return {
-    shadowrocket: "https://hk.joinvip.vip:2056/sub/" + encoded,
-    clash: "https://hk.joinvip.vip:2056/sub/" + encoded + "?format=clash",
-  };
-}
-
 function orderText(order) {
   const isUsdt = order.paymentMethod === "usdt";
   const isBalance = order.paymentMethod === "balance";
@@ -115,10 +108,8 @@ function orderText(order) {
     lines.push(`${i + 1}. ${it.label}（${it.cycle}）¥${it.amount}`);
     if (it.account) lines.push(`   ${it.service === "rocket" ? "用户名" : "账号"}: ${it.account}`);
     if (it.password) lines.push(`   密码: ${it.password}`);
-    if (it.subscriptionLinks) {
-      lines.push(`   Shadowrocket: ${it.subscriptionLinks.shadowrocket}`);
-      lines.push(`   Clash: ${it.subscriptionLinks.clash}`);
-    }
+    const subscriptionUrl = readRocketSubscriptionUrl(it.subscriptionLinks);
+    if (subscriptionUrl) lines.push(`   订阅链接: ${subscriptionUrl}`);
   });
   lines.push("━━ 价格 ━━");
   lines.push(`商品总价: ¥${order.subtotal}`);
@@ -594,12 +585,12 @@ async function handler(request) {
     marketingAttribution = marketingAttributionFromRequest(request);
   } catch {}
 
-  // Generate subscription links per item using the orderId (one shared link
-  // for all rocket items in the cart — a future change can suffix `-{i}` if
-  // multiple rocket items per order need separate identifiers).
+  // One subscription URL per order, keyed on the order number, shared by every
+  // rocket item in the cart — a future change can suffix `-{i}` if multiple
+  // rocket items ever need separate identifiers.
   items.forEach((it) => {
     if (it.service === "rocket") {
-      it.subscriptionLinks = subscriptionLinks(orderId);
+      it.subscriptionLinks = rocketSubscriptionUrl(orderId);
     }
   });
 

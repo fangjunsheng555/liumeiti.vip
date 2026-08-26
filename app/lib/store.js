@@ -713,14 +713,6 @@ export function usdtAmount(rmb) {
   return Math.round((Number(rmb || 0) * siteUsdtDiscount() / USDT_RATE) * 100) / 100;
 }
 
-export function subscriptionLinks(username) {
-  const encoded = encodeURIComponent(String(username || "").trim());
-  return {
-    shadowrocket: "https://hk.joinvip.vip:2056/sub/" + encoded,
-    clash: "https://hk.joinvip.vip:2056/sub/" + encoded + "?format=clash",
-  };
-}
-
 const CART_STORAGE_KEY = "liumeiti:cart:v1";
 const CART_PLAN_STORAGE_KEY = "liumeiti:cart-plans:v1";
 const CART_EVENT = "liumeiti:cart-update";

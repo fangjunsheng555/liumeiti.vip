@@ -3,6 +3,7 @@ import {
   publicNetflixStaffNotes,
   stripNetflixCredentialSecrets,
 } from "../../../lib/netflix-delivery.js";
+import { readRocketSubscriptionUrl } from "../../../lib/rocket-subscription.js";
 
 function esc(value) {
   return String(value ?? "")
@@ -63,8 +64,7 @@ function credentialSection(order, en) {
     const details = [
       detailRow(accountLabel, item.account),
       detailRow(L("密码", "Password"), item.password),
-      detailRow("Shadowrocket", item.subscriptionLinks?.shadowrocket, { link: true }),
-      detailRow("Clash", item.subscriptionLinks?.clash, { link: true }),
+      detailRow(L("订阅链接", "Subscription link"), readRocketSubscriptionUrl(item.subscriptionLinks), { link: true }),
     ].filter(Boolean).join("");
     if (!details) return "";
     return `<div style="padding:10px 0;border-bottom:1px solid #edf2f7;">
@@ -161,8 +161,8 @@ export function buildReferenceNotificationEmail({ orders, subject, message, bran
       text.push(`${L("服务", "Service")}: ${item.label}${item.cycle ? ` · ${item.cycle}` : ""}`);
       if (item.account) text.push(`${item.service === "rocket" ? L("用户名", "Username") : item.netflixSelfService ? L("Netflix 登录邮箱", "Netflix sign-in email") : L("账号", "Account")}: ${item.account}`);
       if (item.password) text.push(`${L("密码", "Password")}: ${item.password}`);
-      if (item.subscriptionLinks?.shadowrocket) text.push(`Shadowrocket: ${item.subscriptionLinks.shadowrocket}`);
-      if (item.subscriptionLinks?.clash) text.push(`Clash: ${item.subscriptionLinks.clash}`);
+      const subscriptionUrl = readRocketSubscriptionUrl(item.subscriptionLinks);
+      if (subscriptionUrl) text.push(`${L("订阅链接", "Subscription link")}: ${subscriptionUrl}`);
     }
     if (order.remark) text.push(`${L("下单备注", "Order note")}: ${order.remark}`);
     if (visibleStaffNotes) text.push(`${L("订单备注", "Service note")}: ${visibleStaffNotes}`);

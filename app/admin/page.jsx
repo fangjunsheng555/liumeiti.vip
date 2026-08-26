@@ -1138,8 +1138,7 @@ function orderPdfRows(order) {
       pdfText(item.password, 200) ? `用户密码: ${pdfText(item.password, 200)}` : "",
       pdfText(item.staffAccount, 200) ? `开通账号: ${pdfText(item.staffAccount, 200)}` : "",
       pdfText(item.staffPassword, 200) ? `开通密码: ${pdfText(item.staffPassword, 200)}` : "",
-      pdfText(item.subscriptionLinks?.shadowrocket, 500) ? `Shadowrocket: ${pdfText(item.subscriptionLinks.shadowrocket, 500)}` : "",
-      pdfText(item.subscriptionLinks?.clash, 500) ? `Clash: ${pdfText(item.subscriptionLinks.clash, 500)}` : "",
+      pdfText(item.subscriptionLinks, 500) ? `订阅链接: ${pdfText(item.subscriptionLinks, 500)}` : "",
     ].filter(Boolean);
     const label = pdfText(item.label, 120) || `商品 ${index + 1}`;
     if (!parts.length) return null;

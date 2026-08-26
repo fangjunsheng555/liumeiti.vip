@@ -10,6 +10,7 @@ import {
   sendSimpleEmail,
   validEmail,
 } from "../../../_utils.js";
+import { readRocketSubscriptionUrl } from "../../../../lib/rocket-subscription.js";
 import { getSettings } from "../../../_settings.js";
 import { appendOrderTimelineOnce } from "../../../_order-timeline.js";
 import { deliverOnce } from "../../../_delivery-once.js";
@@ -86,10 +87,7 @@ function referenceNoticeOrderSnapshot(order) {
       ? order.netflixDeliveryMode
       : "",
     netflixSelfServiceEnabled: order?.netflixSelfServiceEnabled !== false,
-    subscriptionLinks: order?.subscriptionLinks && typeof order.subscriptionLinks === "object" ? {
-      shadowrocket: clean(order.subscriptionLinks.shadowrocket, 1000),
-      clash: clean(order.subscriptionLinks.clash, 1000),
-    } : null,
+    subscriptionLinks: clean(readRocketSubscriptionUrl(order?.subscriptionLinks), 1000) || null,
     items: (Array.isArray(order?.items) ? order.items : []).map((item) => ({
       label: clean(item?.label, 240),
       cycle: clean(item?.cycle, 80),
@@ -98,10 +96,7 @@ function referenceNoticeOrderSnapshot(order) {
       password: clean(item?.password, 300),
       staffAccount: clean(item?.staffAccount, 200),
       staffPassword: clean(item?.staffPassword, 300),
-      subscriptionLinks: item?.subscriptionLinks && typeof item.subscriptionLinks === "object" ? {
-        shadowrocket: clean(item.subscriptionLinks.shadowrocket, 1000),
-        clash: clean(item.subscriptionLinks.clash, 1000),
-      } : null,
+      subscriptionLinks: clean(readRocketSubscriptionUrl(item?.subscriptionLinks), 1000) || null,
     })),
   };
 }
@@ -190,10 +185,7 @@ function overlayCurrentOrderCredentials(plannedOrder, currentOrder) {
         password: clean(current.password, 300),
         staffAccount: clean(current.staffAccount, 200),
         staffPassword: clean(current.staffPassword, 300),
-        subscriptionLinks: current.subscriptionLinks && typeof current.subscriptionLinks === "object" ? {
-          shadowrocket: clean(current.subscriptionLinks.shadowrocket, 1000),
-          clash: clean(current.subscriptionLinks.clash, 1000),
-        } : null,
+        subscriptionLinks: clean(readRocketSubscriptionUrl(current.subscriptionLinks), 1000) || null,
       };
     }),
   };

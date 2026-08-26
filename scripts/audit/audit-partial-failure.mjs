@@ -116,7 +116,7 @@ const ALLOW_CLASSIFICATIONS = new Map([
 const ALLOW_FINGERPRINTS = new Map([
   ["app/admin/MarketingCampaignPanel.jsx|campaignActionFromPayload|partial-failure-predicate-abort", new Set(["0b670a88a8ddc12ddcf8"])],
   ["app/admin/NetflixCodePanel.jsx|removeRecords|partial-failure-loop-throw", new Set(["0550d6a3d2abb4c924a3"])],
-  ["app/admin/page.jsx|orderPdfRows|partial-failure-silent-filter", new Set(["663a5af040c701959287"])],
+  ["app/admin/page.jsx|orderPdfRows|partial-failure-silent-filter", new Set(["713c1e25949a05f4c385"])],
   ["app/api/_backup.js|normalizeStream|partial-failure-map-throw", new Set(["f752e12b44dac4ed4869"])],
   ["app/api/_backup.js|readEntries|partial-failure-loop-throw", new Set(["3c2e4f4118d2d0e89d32"])],
   ["app/api/_backup.js|strictPipelineValues|partial-failure-map-throw", new Set(["5c0274e75d28e61c1add"])],

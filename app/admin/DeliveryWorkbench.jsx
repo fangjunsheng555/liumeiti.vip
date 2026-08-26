@@ -2,6 +2,7 @@
 
 import { FileText, RefreshCw } from "lucide-react";
 import { itemValidityLabel } from "../lib/order-fulfillment";
+import { readRocketSubscriptionUrl } from "../lib/rocket-subscription";
 
 const SPOTIFY_REGIONS = [
   ["", "选择地区"],
@@ -111,20 +112,20 @@ function ProfileFields({ item, onChange }) {
 
 function RocketFields({ item, onChange }) {
   const fulfillment = item.fulfillment || {};
-  const linkCount = item.subscriptionLinks && typeof item.subscriptionLinks === "object"
-    ? Object.values(item.subscriptionLinks).filter(Boolean).length
-    : 0;
+  // One order, one Clash-format subscription URL. Older orders stored a pair,
+  // which this still reads so their status is not shown as missing.
+  const subscriptionUrl = readRocketSubscriptionUrl(item.subscriptionLinks);
   return (
     <div className="admin-delivery-fields two">
-      <div className={`admin-delivery-readonly${linkCount ? " ok" : ""}`}>
+      <div className={`admin-delivery-readonly${subscriptionUrl ? " ok" : ""}`}>
         <span>订阅链接</span>
-        <b>{linkCount ? `已生成 ${linkCount} 个链接` : "尚未生成"}</b>
+        <b>{subscriptionUrl ? "已生成" : "尚未生成"}</b>
       </div>
       <CompactSwitch
         checked={fulfillment.clientGuide !== false}
         onChange={(value) => onChange({ clientGuide: value })}
         label="加入客户端说明"
-        hint="Shadowrocket / Clash"
+        hint="Nextin / Shadowrocket / Clash"
       />
     </div>
   );

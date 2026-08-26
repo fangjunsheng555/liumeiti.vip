@@ -1277,11 +1277,8 @@ export default function ServiceCenterPage() {
                     )}
                     {item.subscriptionLinks && (
                       <div className="query-modal-item-subs">
-                        <button className="query-modal-sub-row" onClick={() => handleCopy(item.subscriptionLinks.shadowrocket, `sr-${idx}`)}>
-                          <span>Shadowrocket</span><small>{item.subscriptionLinks.shadowrocket}</small><em>{copiedKey === `sr-${idx}` ? L("已复制", "Copied") : L("复制", "Copy")}</em>
-                        </button>
-                        <button className="query-modal-sub-row" onClick={() => handleCopy(item.subscriptionLinks.clash, `cl-${idx}`)}>
-                          <span>Clash</span><small>{item.subscriptionLinks.clash}</small><em>{copiedKey === `cl-${idx}` ? L("已复制", "Copied") : L("复制", "Copy")}</em>
+                        <button className="query-modal-sub-row" onClick={() => handleCopy(item.subscriptionLinks, `sub-${idx}`)}>
+                          <span>{L("订阅链接", "Subscription link")}</span><small>{item.subscriptionLinks}</small><em>{copiedKey === `sub-${idx}` ? L("已复制", "Copied") : L("复制", "Copy")}</em>
                         </button>
                       </div>
                     )}

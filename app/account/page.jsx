@@ -1640,19 +1640,12 @@ export default function AccountPage() {
                     )}
                     {it.subscriptionLinks && (
                       <div className="account-modal-subs">
-                        <button type="button" onClick={() => handleCopy(it.subscriptionLinks.shadowrocket, `sr-${idx}`)}>
+                        <button type="button" onClick={() => handleCopy(it.subscriptionLinks, `sub-${idx}`)}>
                           <div>
-                            <strong>{L("Shadowrocket 订阅", "Shadowrocket sub")}</strong>
-                            <small>{it.subscriptionLinks.shadowrocket}</small>
+                            <strong>{L("订阅链接", "Subscription link")}</strong>
+                            <small>{it.subscriptionLinks}</small>
                           </div>
-                          <em>{copiedKey === `sr-${idx}` ? L("已复制", "Copied") : L("复制", "Copy")}</em>
-                        </button>
-                        <button type="button" onClick={() => handleCopy(it.subscriptionLinks.clash, `cl-${idx}`)}>
-                          <div>
-                            <strong>{L("Clash 订阅", "Clash sub")}</strong>
-                            <small>{it.subscriptionLinks.clash}</small>
-                          </div>
-                          <em>{copiedKey === `cl-${idx}` ? L("已复制", "Copied") : L("复制", "Copy")}</em>
+                          <em>{copiedKey === `sub-${idx}` ? L("已复制", "Copied") : L("复制", "Copy")}</em>
                         </button>
                       </div>
                     )}

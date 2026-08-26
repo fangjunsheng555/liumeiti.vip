@@ -10,6 +10,7 @@ import {
   signAfterSalesToken,
   userAuthErrorResponse,
 } from "../../_auth-session.js";
+import { rocketSubscriptionUrl, readRocketSubscriptionUrl } from "../../../lib/rocket-subscription.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../../lib/order-i18n.js";
 import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../../after-sales/_store.js";
 import { orderExpirySummary, renewalCheckoutPath } from "../../../lib/order-expiry.js";
@@ -19,14 +20,6 @@ import {
   orderItemService,
   publicNetflixStaffNotes,
 } from "../../../lib/netflix-delivery.js";
-
-function subscriptionLinks(username) {
-  const encoded = encodeURIComponent(String(username || "").trim());
-  return {
-    shadowrocket: "https://hk.joinvip.vip:2056/sub/" + encoded,
-    clash: "https://hk.joinvip.vip:2056/sub/" + encoded + "?format=clash",
-  };
-}
 
 function publicOrder(order, locale = "zh", netflixUserSelfServiceEnabled = true) {
   const hasStoredNetflixDeliveryMode = order.netflixDeliveryMode !== undefined
@@ -59,9 +52,9 @@ function publicOrder(order, locale = "zh", netflixUserSelfServiceEnabled = true)
           : it.staffPassword || it.password || legacyPassword,
       };
       if (service === "rocket") {
-        out.subscriptionLinks = subscriptionLinks(order.orderId);
+        out.subscriptionLinks = rocketSubscriptionUrl(order.orderId);
       } else if (it.subscriptionLinks) {
-        out.subscriptionLinks = it.subscriptionLinks;
+        out.subscriptionLinks = readRocketSubscriptionUrl(it.subscriptionLinks);
       }
       return out;
     });
@@ -78,7 +71,7 @@ function publicOrder(order, locale = "zh", netflixUserSelfServiceEnabled = true)
       amount: Number(order.finalAmount || 0),
       account,
       password,
-      subscriptionLinks: service === "rocket" ? subscriptionLinks(order.orderId) : null,
+      subscriptionLinks: service === "rocket" ? rocketSubscriptionUrl(order.orderId) : null,
     }];
   }
   const netflixAccounts = items
