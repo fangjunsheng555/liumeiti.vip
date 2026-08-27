@@ -48,6 +48,18 @@ function hashToken(value) {
   return createHash("sha256").update(String(value || "")).digest("hex");
 }
 
+// The payment token is a signed capability around 320 characters long. Reading
+// it must never shorten it: a truncated token hashes to a value that can never
+// match, and the customer is told their payment link is invalid. GET carries it
+// in the Authorization header and POST in the body, so accept either and take
+// it whole in both.
+export function paymentToken(request, body = {}) {
+  // Only a well-formed bearer credential counts as the token; any other scheme
+  // falls through to the body rather than being read as one.
+  const bearer = /^Bearer\s+(\S+)\s*$/i.exec(String(request.headers.get("authorization") || ""));
+  return bearer ? bearer[1] : clean(body?.token, 4000);
+}
+
 function tokenMatches(order, token) {
   const expected = String(order?.quotePaymentTokenHash || "");
   const actual = hashToken(token);
@@ -194,8 +206,7 @@ export async function GET(request, { params }) {
   const { orderId: rawOrderId } = await params;
   const orderId = normalizeOrderId(rawOrderId);
   if (!orderId) return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
-  const auth = request.headers.get("authorization") || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const token = paymentToken(request);
   const entry = await findOrder(orderId);
   if (!entry || entry.order.orderType !== "proxy_payment") {
     return Response.json({ ok: false, error: "order_not_found" }, { status: 404 });
@@ -229,7 +240,7 @@ export async function POST(request, { params }) {
   let body = {};
   try { body = await request.json(); } catch {}
 
-  const token = clean(body.token, 200);
+  const token = paymentToken(request, body);
   const expectedRevision = body.expectedRevision == null || body.expectedRevision === ""
     ? null
     : Number(body.expectedRevision);
