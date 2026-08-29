@@ -61,7 +61,7 @@ test("all cookie-authenticated account routes are covered by the proxy matcher",
   assert.ok(config.matcher.includes("/api/order-query"));
 });
 
-test("the tool origin can only read account identity, never mutate account, money, orders or admin APIs", async () => {
+test("the tool origin never reaches account mutations, money, orders or admin APIs", async () => {
   const { proxy } = await loadProxy();
 
   const accountPreflight = await proxy(request("/api/auth/me", {
@@ -84,9 +84,14 @@ test("the tool origin can only read account identity, never mutate account, mone
     ["/api/admin/users/list", "GET"],
     ["/api/admin/users/test%40example.com", "PATCH"],
     ["/api/auth/me", "PATCH"],
-    ["/api/auth/login", "POST"],
+    // Sign-in is part of the tool origin's SSO surface, but only through its
+    // real methods: anything else on the same path stays same-origin-only.
+    ["/api/auth/login", "PUT"],
+    ["/api/auth/captcha", "POST"],
     ["/api/auth/balance", "GET"],
     ["/api/auth/transfer", "POST"],
+    ["/api/auth/withdraw", "POST"],
+    ["/api/auth/redeem", "POST"],
     ["/api/account/email-preferences", "PATCH"],
     ["/api/order", "POST"],
     ["/api/order-query", "POST"],
@@ -181,6 +186,58 @@ test("apex and www storefront origins trust each other without trusting lookalik
   for (const origin of ["https://liumeiti.vip.evil.example", "https://www-liumeiti.vip"]) {
     const rejected = await proxy(request("/api/order", { method: "POST", origin }));
     assert.equal(rejected.status, 403);
+    assert.equal(rejected.headers.get("access-control-allow-origin"), null);
+  }
+});
+
+test("the tool origin can sign in, out and recover through the shared account system", async () => {
+  const { proxy } = await loadProxy();
+  const origin = "https://tool.liumeiti.vip";
+
+  // The tool site has no account system of its own: its client signs in
+  // against the main site's session cookie. Blocking these turned every tool
+  // site sign-in into a generic network error.
+  for (const [pathname, method] of [
+    ["/api/auth/login", "POST"],
+    ["/api/auth/login", "DELETE"],
+    ["/api/auth/captcha", "GET"],
+    ["/api/auth/register", "POST"],
+    ["/api/auth/forgot", "POST"],
+    ["/api/auth/reset", "POST"],
+  ]) {
+    const preflight = await proxy(request(pathname, {
+      method: "OPTIONS",
+      origin,
+      headers: { "access-control-request-method": method },
+    }));
+    assert.equal(preflight.status, 204, `preflight ${method} ${pathname}`);
+    assert.equal(preflight.headers.get("access-control-allow-origin"), origin);
+    assert.equal(preflight.headers.get("access-control-allow-credentials"), "true");
+    assert.ok(
+      preflight.headers.get("access-control-allow-methods").split(",").includes(method),
+      `${pathname} preflight must offer ${method}, got ${preflight.headers.get("access-control-allow-methods")}`,
+    );
+
+    const actual = await proxy(request(pathname, { method, origin }));
+    assert.equal(actual.status, 200, `${method} ${pathname}`);
+    assert.equal(actual.headers.get("x-middleware-next"), "1");
+    assert.equal(actual.headers.get("access-control-allow-origin"), origin);
+    assert.equal(actual.headers.get("access-control-allow-credentials"), "true");
+  }
+
+  // The sign-in path advertises exactly its own methods, not the tool API's
+  // broad list: a PUT preflight on it must not be offered PUT.
+  const loginPreflight = await proxy(request("/api/auth/login", {
+    method: "OPTIONS",
+    origin,
+    headers: { "access-control-request-method": "PUT" },
+  }));
+  assert.equal(loginPreflight.headers.get("access-control-allow-methods"), "POST,DELETE,OPTIONS");
+
+  // The same endpoints stay closed to any origin outside the allowlist.
+  for (const badOrigin of ["https://tool.liumeiti.vip.evil.example", "https://evil.example"]) {
+    const rejected = await proxy(request("/api/auth/login", { method: "POST", origin: badOrigin }));
+    assert.equal(rejected.status, 403, badOrigin);
     assert.equal(rejected.headers.get("access-control-allow-origin"), null);
   }
 });

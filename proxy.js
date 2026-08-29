@@ -38,9 +38,31 @@ function isToolApiPath(pathname) {
   return pathname === "/api/tool" || pathname.startsWith("/api/tool/");
 }
 
-function isToolReadOnlyAccountApiPath(pathname, method) {
-  return pathname === "/api/auth/me"
-    && ["GET", "HEAD", "OPTIONS"].includes(String(method || "GET").toUpperCase());
+// The tool site runs on the main site's account system: one session cookie,
+// issued here, scoped to .liumeiti.vip. Its cross-origin surface is exactly
+// the endpoints its account client calls, method by method — identity stays
+// read-only, sign-in/out, and the register/recover trio. None of these act on
+// an existing session (sign-out at worst signs the caller out), and the origin
+// allowlist is exact, so this is not a CSRF surface. Everything that moves
+// money or touches orders remains same-origin-only.
+const TOOL_ACCOUNT_API_METHODS = new Map([
+  ["/api/auth/me", ["GET", "HEAD"]],
+  ["/api/auth/login", ["POST", "DELETE"]],
+  ["/api/auth/captcha", ["GET"]],
+  ["/api/auth/register", ["POST"]],
+  ["/api/auth/forgot", ["POST"]],
+  ["/api/auth/reset", ["POST"]],
+]);
+
+function toolAccountApiMethods(pathname) {
+  return TOOL_ACCOUNT_API_METHODS.get(pathname) || null;
+}
+
+function isToolAccountApiPath(pathname, method) {
+  const allowed = toolAccountApiMethods(pathname);
+  if (!allowed) return false;
+  const normalized = String(method || "GET").toUpperCase();
+  return normalized === "OPTIONS" || allowed.includes(normalized);
 }
 
 function isProtectedCookieApiPath(pathname) {
@@ -206,8 +228,8 @@ export async function proxy(request) {
   const origin = request.headers.get("origin") || "";
   const { pathname } = request.nextUrl;
   const toolApi = isToolApiPath(pathname);
-  const toolReadOnlyAccountApi = isToolReadOnlyAccountApiPath(pathname, request.method);
-  const toolCorsSurface = toolApi || toolReadOnlyAccountApi;
+  const toolAccountApi = isToolAccountApiPath(pathname, request.method);
+  const toolCorsSurface = toolApi || toolAccountApi;
   const allowToolCors = toolCorsSurface && ALLOWED_TOOL_ORIGINS.has(origin);
   const allowMainSiteBridgeCors = isTrustedMainSiteBridge(request, origin);
 
@@ -243,8 +265,11 @@ export async function proxy(request) {
   if (request.method === "OPTIONS" && (allowToolCors || allowMainSiteBridgeCors)) {
     const headers = new Headers();
     applyCors(headers, origin);
-    headers.set("Access-Control-Allow-Methods", toolReadOnlyAccountApi
-      ? "GET,HEAD,OPTIONS"
+    // An account path advertises exactly its own allowed methods; the wider
+    // list is reserved for the /api/tool/* surface.
+    const accountMethods = toolAccountApi ? toolAccountApiMethods(pathname) : null;
+    headers.set("Access-Control-Allow-Methods", accountMethods
+      ? accountMethods.concat("OPTIONS").join(",")
       : "GET,HEAD,POST,PATCH,PUT,DELETE,OPTIONS");
     const requestedHeaders = request.headers.get("access-control-request-headers") || "Content-Type";
     headers.set("Access-Control-Allow-Headers", requestedHeaders);
