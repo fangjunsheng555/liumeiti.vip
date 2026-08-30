@@ -241,3 +241,30 @@ test("the tool origin can sign in, out and recover through the shared account sy
     assert.equal(rejected.headers.get("access-control-allow-origin"), null);
   }
 });
+
+test("the main site's own sign-in and registration keep working from their own origin", async () => {
+  const { proxy } = await loadProxy();
+
+  // Browsers attach Origin to every non-GET request, so these arrive carrying
+  // the site's own origin. Treating that as a foreign caller took sign-in and
+  // registration down for everyone the moment the auth paths joined the tool
+  // CORS surface.
+  for (const targetOrigin of ["https://www.liumeiti.vip", "https://liumeiti.vip"]) {
+    for (const [pathname, method] of [
+      ["/api/auth/login", "POST"],
+      ["/api/auth/login", "DELETE"],
+      ["/api/auth/register", "POST"],
+      ["/api/auth/forgot", "POST"],
+      ["/api/auth/reset", "POST"],
+      ["/api/tool/data", "PUT"],
+    ]) {
+      const sameOrigin = await proxy(request(pathname, {
+        targetOrigin,
+        origin: targetOrigin,
+        method,
+      }));
+      assert.equal(sameOrigin.status, 200, `${method} ${pathname} from ${targetOrigin}`);
+      assert.equal(sameOrigin.headers.get("x-middleware-next"), "1");
+    }
+  }
+});

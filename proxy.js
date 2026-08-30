@@ -246,7 +246,16 @@ export async function proxy(request) {
 
   // Tool APIs are the only cross-origin surface. Unknown, null and lookalike
   // origins receive neither a permissive preflight nor readable responses.
-  if (toolCorsSurface && origin && !allowToolCors && !allowMainSiteBridgeCors) {
+  // Same-origin traffic is exempt: browsers attach Origin to every non-GET
+  // request, so the main site's own sign-in and registration POSTs arrive here
+  // carrying their own origin and must never be treated as a foreign caller.
+  if (
+    toolCorsSurface
+    && origin
+    && origin !== request.nextUrl.origin
+    && !allowToolCors
+    && !allowMainSiteBridgeCors
+  ) {
     return forbiddenOriginResponse();
   }
 
