@@ -1,0 +1,283 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import {
+  describeNodeProvision,
+  nodePanelConfigFromSettings,
+  panelPlanForItem,
+  provisionNodeOrder,
+} from "../app/api/_node-panel.js";
+import { rocketUsagePageUrl } from "../app/lib/rocket-subscription.js";
+import {
+  SETTINGS_DEFAULTS,
+  mergeSettings,
+  publicSiteSettings,
+  validateSettingsSubmission,
+} from "../app/lib/settings-defaults.js";
+
+// Marking a node order completed creates the panel user named after the order
+// and applies the plan. These pin the request shapes the panel's external API
+// (m-ui web/public_api.go) actually accepts, the idempotency on re-runs, that
+// configuration comes from the site settings, and that the token never leaks
+// into anything the site records, shows, or serves to browsers.
+
+const TOKEN = "test-panel-token-0123456789abcdef";
+const BASE = "https://panel.example:2053/ad/api/v1";
+const ORDER_ID = "LM7D4E5F6A7B8C9D0E1F";
+
+function settingsWithPanel(overrides = {}) {
+  return mergeSettings({ nodePanel: { enabled: true, apiBase: BASE, apiToken: TOKEN, ...overrides } });
+}
+const config = (overrides) => nodePanelConfigFromSettings(settingsWithPanel(overrides));
+
+function nodeOrder(plan = "basic", extraItems = []) {
+  return {
+    orderId: ORDER_ID,
+    status: "completed",
+    items: [{ service: "rocket", label: "机场节点 · 普通套餐", plan, planLabel: "普通套餐", cycle: "1年", amount: 108 }, ...extraItems],
+  };
+}
+
+function panelUser(overrides = {}) {
+  return {
+    id: 7, name: ORDER_ID, enabled: true, volume: 600 * 2 ** 30, used: 0, expiry: 0,
+    subLink: `https://panel.example:2056/sub/${ORDER_ID}`,
+    subClash: `https://panel.example:2056/sub/${ORDER_ID}?format=clash`,
+    ...overrides,
+  };
+}
+
+// A scripted fetch: each call pops the next scripted reply and records what
+// was sent, so tests assert both the outcome and the exact requests made.
+function scriptedFetch(replies) {
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method || "GET", headers: init.headers || {}, body: init.body ? JSON.parse(init.body) : undefined });
+    const next = replies.shift();
+    if (!next) throw new Error("unexpected extra request " + url);
+    if (next instanceof Error) throw next;
+    return new Response(next.body === undefined ? "" : JSON.stringify(next.body), {
+      status: next.status,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  return { fetchImpl, calls };
+}
+
+// ── Configuration lives in the site settings ───────────────────────────────
+
+test("automation is off until staff enable it and enter a token in the site settings", async () => {
+  assert.equal(nodePanelConfigFromSettings(mergeSettings({})).configured, false);
+  assert.equal(nodePanelConfigFromSettings(settingsWithPanel({ enabled: false })).configured, false);
+  assert.equal(nodePanelConfigFromSettings(settingsWithPanel({ apiToken: "" })).configured, false);
+  assert.equal(config().configured, true);
+  const { fetchImpl, calls } = scriptedFetch([]);
+  const result = await provisionNodeOrder(nodeOrder(), { config: nodePanelConfigFromSettings(mergeSettings({})), fetchImpl });
+  assert.deepEqual([result.ok, result.status, result.error], [false, "skipped", "panel_not_configured"]);
+  assert.equal(calls.length, 0);
+});
+
+test("the token is never served to browsers", () => {
+  const visible = publicSiteSettings(settingsWithPanel());
+  assert.equal("nodePanel" in visible, false);
+  assert.equal(JSON.stringify(visible).includes(TOKEN), false);
+  // Everything customers do need is still there.
+  for (const section of ["support", "brand", "footer", "usdt", "bundle", "payment", "notify"]) {
+    assert.ok(visible[section], `${section} must survive the public strip`);
+  }
+});
+
+test("the admin validator accepts the panel section and rejects what would break provisioning", () => {
+  const base = JSON.parse(JSON.stringify(mergeSettings({})));
+  const ok = validateSettingsSubmission({ ...base, nodePanel: { enabled: true, apiBase: `${BASE}/`, apiToken: ` ${TOKEN} `, planNames: { ...SETTINGS_DEFAULTS.nodePanel.planNames, basic: "标准" } } });
+  assert.equal(ok.ok, true, JSON.stringify(ok.fieldErrors));
+  assert.equal(ok.settings.nodePanel.apiBase, BASE, "a trailing slash is normalized away");
+  assert.equal(ok.settings.nodePanel.apiToken, TOKEN, "the token is trimmed");
+  assert.equal(ok.settings.nodePanel.planNames.basic, "标准");
+
+  const enabledWithoutToken = validateSettingsSubmission({ ...base, nodePanel: { ...base.nodePanel, enabled: true, apiToken: "" } });
+  assert.equal(enabledWithoutToken.ok, false);
+  assert.match(enabledWithoutToken.fieldErrors["nodePanel.apiToken"], /令牌/);
+
+  const httpBase = validateSettingsSubmission({ ...base, nodePanel: { ...base.nodePanel, apiBase: "http://panel.example/api/v1" } });
+  assert.equal(httpBase.ok, false);
+  assert.ok(httpBase.fieldErrors["nodePanel.apiBase"]);
+
+  const tokenWithSpace = validateSettingsSubmission({ ...base, nodePanel: { ...base.nodePanel, apiToken: "abc def" } });
+  assert.equal(tokenWithSpace.ok, false);
+  assert.ok(tokenWithSpace.fieldErrors["nodePanel.apiToken"]);
+
+  const missingPlanName = validateSettingsSubmission({ ...base, nodePanel: { ...base.nodePanel, planNames: { ...base.nodePanel.planNames, trial: "" } } });
+  assert.equal(missingPlanName.ok, false);
+  assert.ok(missingPlanName.fieldErrors["nodePanel.planNames.trial"]);
+
+  const disabledWithoutToken = validateSettingsSubmission({ ...base, nodePanel: { ...base.nodePanel, enabled: false, apiToken: "" } });
+  assert.equal(disabledWithoutToken.ok, true, "leaving automation off needs no token");
+});
+
+test("site plan ids map to the names staff gave the panel plans", () => {
+  const names = config().planNames;
+  assert.deepEqual(names, { basic: "Standard", pro: "Plus", luxury: "Premium", unlimited: "Unlimited", trial: "trial" });
+  assert.equal(panelPlanForItem({ plan: "luxury" }, names).name, "Premium");
+  // The historical field name still resolves.
+  assert.equal(panelPlanForItem({ rocketPlan: "pro" }, names).name, "Plus");
+  assert.equal(panelPlanForItem({ plan: "mystery" }, names).name, "");
+  // A renamed panel plan takes effect through the settings, without a deploy.
+  assert.equal(config({ planNames: { basic: "标准" } }).planNames.basic, "标准");
+  assert.equal(config({ planNames: { basic: "标准" } }).planNames.pro, "Plus");
+});
+
+// ── Provisioning against the panel ─────────────────────────────────────────
+
+test("a new order creates the panel user with the plan in one call", async () => {
+  const { fetchImpl, calls } = scriptedFetch([
+    { status: 404, body: { error: "用户不存在" } },
+    { status: 200, body: panelUser() },
+  ]);
+  const result = await provisionNodeOrder(nodeOrder("basic"), { config: config(), fetchImpl });
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "done");
+  assert.equal(result.existed, false);
+  assert.equal(result.plan, "Standard");
+  assert.equal(result.subLink, `https://panel.example:2056/sub/${ORDER_ID}`);
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].method, "GET");
+  assert.equal(calls[0].url, `${BASE}/users/${ORDER_ID}`);
+  assert.equal(calls[0].headers.Authorization, `Bearer ${TOKEN}`);
+  assert.equal(calls[1].method, "POST");
+  assert.equal(calls[1].url, `${BASE}/users`);
+  assert.equal(calls[1].headers["Content-Type"], "application/json");
+  // Exactly the fields public_api.go reads: name, plan by name, a remark.
+  assert.equal(calls[1].body.name, ORDER_ID);
+  assert.equal(calls[1].body.plan, "Standard");
+  assert.match(calls[1].body.remark, new RegExp(`^订单 ${ORDER_ID}`));
+  assert.equal("planId" in calls[1].body, false);
+});
+
+test("a user that already exists is left untouched and reported as done", async () => {
+  // Whether an earlier attempt died after creating it or staff made it by
+  // hand, applying the plan again would reset the customer's period.
+  const { fetchImpl, calls } = scriptedFetch([{ status: 200, body: panelUser({ enabled: true }) }]);
+  const result = await provisionNodeOrder(nodeOrder("pro"), { config: config(), fetchImpl });
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "done");
+  assert.equal(result.existed, true);
+  assert.equal(calls.length, 1, "no create or plan call may follow an existing user");
+});
+
+test("a duplicate-name rejection from a racing attempt reads the user back as done", async () => {
+  const { fetchImpl, calls } = scriptedFetch([
+    { status: 404, body: { error: "用户不存在" } },
+    { status: 400, body: { error: "用户名已存在" } },
+    { status: 200, body: panelUser() },
+  ]);
+  const result = await provisionNodeOrder(nodeOrder(), { config: config(), fetchImpl });
+  assert.equal(result.status, "done");
+  assert.equal(result.existed, true);
+  assert.equal(calls.length, 3);
+});
+
+test("a rejected token stops before any write and names the cause", async () => {
+  const { fetchImpl, calls } = scriptedFetch([{ status: 401, body: { error: "外部 API 未开启或令牌错误" } }]);
+  const result = await provisionNodeOrder(nodeOrder(), { config: config(), fetchImpl });
+  assert.deepEqual([result.ok, result.status, result.error], [false, "failed", "panel_unauthorized"]);
+  assert.equal(calls.length, 1);
+  assert.equal(describeNodeProvision(result), "面板令牌无效或外部 API 未开启");
+});
+
+test("a panel that cannot be reached is a retryable failure, not a crash", async () => {
+  const { fetchImpl } = scriptedFetch([new TypeError("fetch failed")]);
+  const result = await provisionNodeOrder(nodeOrder(), { config: config(), fetchImpl });
+  assert.deepEqual([result.ok, result.status, result.error], [false, "failed", "panel_unreachable"]);
+});
+
+test("a panel-side rejection carries the panel's own reason", async () => {
+  const { fetchImpl } = scriptedFetch([
+    { status: 404, body: { error: "用户不存在" } },
+    { status: 400, body: { error: "套餐不存在: Standard" } },
+  ]);
+  const result = await provisionNodeOrder(nodeOrder(), { config: config(), fetchImpl });
+  assert.equal(result.status, "failed");
+  assert.equal(result.error, "panel_rejected:套餐不存在: Standard");
+  assert.equal(describeNodeProvision(result), "面板拒绝：套餐不存在: Standard");
+});
+
+test("orders that cannot be provisioned automatically say so instead of guessing", async () => {
+  const { fetchImpl, calls } = scriptedFetch([]);
+  const unmapped = await provisionNodeOrder(nodeOrder("mystery"), { config: config(), fetchImpl });
+  assert.deepEqual([unmapped.status, unmapped.error], ["failed", "plan_unmapped:mystery"]);
+  const twoNodes = await provisionNodeOrder(nodeOrder("basic", [{ service: "rocket", plan: "pro" }]), { config: config(), fetchImpl });
+  assert.deepEqual([twoNodes.status, twoNodes.error], ["failed", "multiple_node_items"]);
+  const notNode = await provisionNodeOrder({ orderId: ORDER_ID, items: [{ service: "netflix" }] }, { config: config(), fetchImpl });
+  assert.deepEqual([notNode.status, notNode.error], ["skipped", "no_node_item"]);
+  assert.equal(calls.length, 0, "none of these may touch the panel");
+});
+
+test("the token never appears in what is recorded or shown", async () => {
+  const { fetchImpl } = scriptedFetch([{ status: 401, body: { error: `bad token ${TOKEN}` } }]);
+  const result = await provisionNodeOrder(nodeOrder(), { config: config(), fetchImpl });
+  const serialized = JSON.stringify(result) + describeNodeProvision(result);
+  assert.equal(serialized.includes(TOKEN), false);
+});
+
+test("the usage page is the bare subscription path", () => {
+  assert.equal(rocketUsagePageUrl(ORDER_ID), `https://hk.joinvip.vip:2056/sub/${ORDER_ID}`);
+  assert.equal(rocketUsagePageUrl(" LM 1 "), "https://hk.joinvip.vip:2056/sub/LM1");
+  assert.equal(rocketUsagePageUrl(""), "");
+  assert.equal(rocketUsagePageUrl(null), "");
+});
+
+// ── Wiring: the route provisions on completion, staff can retry, customers can see usage ──
+
+const route = await readFile(new URL("../app/api/admin/orders/[orderId]/route.js", import.meta.url), "utf8");
+const admin = await readFile(new URL("../app/admin/page.jsx", import.meta.url), "utf8");
+const settingsPanel = await readFile(new URL("../app/admin/SettingsPanel.jsx", import.meta.url), "utf8");
+const publicRoute = await readFile(new URL("../app/api/settings/route.js", import.meta.url), "utf8");
+const serviceCentre = await readFile(new URL("../app/service-center/page.jsx", import.meta.url), "utf8");
+const account = await readFile(new URL("../app/account/page.jsx", import.meta.url), "utf8");
+const envExample = await readFile(new URL("../.env.example", import.meta.url), "utf8");
+
+test("completing a node order provisions it once, from the live settings, and records the outcome", () => {
+  assert.match(route, /provisionNodeOrder\(order, \{ config: nodePanelConfigFromSettings\(await getSettings\(\)\) \}\)/);
+  assert.match(route, /newStatus === "completed" && !wasCompleted && nodeItemsOf\(order\)\.length && order\.nodeProvision\?\.status !== "done"/);
+  assert.match(route, /trigger: "completion"/);
+  assert.match(route, /order\.nodeProvision = \{/);
+  // The outcome is persisted with the same optimistic revision guard as every
+  // other post-write effect, so a concurrent edit cannot silently drop it.
+  assert.match(route, /const provisionSaved = await setOrderAt\(index, order, \{ expectedRevision: provisionExpectedRevision \}\)/);
+  assert.match(route, /nodeProvision: nodeProvisionResult \? order\.nodeProvision : null,/);
+});
+
+test("staff can retry provisioning from the order, and only on a completed node order", () => {
+  assert.match(route, /body\.action === "node_provision"/);
+  assert.match(route, /error: "node_item_not_found"/);
+  assert.match(route, /error: "order_not_completed"/);
+  assert.match(route, /trigger: "manual"/);
+  assert.match(admin, /action: "node_provision"/);
+  assert.match(admin, /onClick=\{retryNodeProvision\}/);
+  assert.match(admin, /admin-node-provision-status is-\$\{activeOrder\.nodeProvision\?\.status \|\| "pending"\}/);
+});
+
+test("a failed provisioning is announced, never swallowed", () => {
+  assert.match(route, /if \(!result\.ok && result\.status === "failed"\) \{\s*try \{\s*await sendTelegramNotice\(/);
+  assert.match(route, /console\.error\("\[node-provision\] telegram alert failed:"/);
+  assert.match(route, /type: result\.ok \? "node_provisioned" : "node_provision_failed"/);
+});
+
+test("customers reach the plan-usage page from both order surfaces", () => {
+  for (const [name, source] of [["service centre", serviceCentre], ["account", account]]) {
+    assert.match(source, /import \{ rocketUsagePageUrl \} from "\.\.\/lib\/rocket-subscription";/, name);
+    assert.match(source, /className="sub-usage-link" href=\{rocketUsagePageUrl\(/, name);
+    assert.match(source, /查看套餐用量/, name);
+  }
+  assert.match(admin, /href=\{rocketUsagePageUrl\(activeOrder\.orderId\)\}/);
+});
+
+test("the panel token is edited in the site settings and kept out of the environment and public payload", () => {
+  assert.match(settingsPanel, /nodePanel\.apiToken/);
+  assert.match(settingsPanel, /type: showPanelToken \? "text" : "password"/);
+  assert.match(publicRoute, /publicSiteSettings\(await getSettings\(\)\)/);
+  assert.doesNotMatch(envExample, /NODE_PANEL/);
+  assert.equal(/[0-9a-f]{64}/.test(route + admin + settingsPanel), false, "no 64-hex token literal may sit in code");
+});

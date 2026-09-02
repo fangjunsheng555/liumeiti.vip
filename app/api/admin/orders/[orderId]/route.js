@@ -19,6 +19,7 @@ import { effectiveQuoteStatus, normalizeQuoteValidDays } from "../../../_quote-e
 import { beginOrderTransition, resumePendingOrderTransition } from "../../../_order-transition.js";
 import { getOrderSla } from "../../../../lib/order-sla.js";
 import { deliverOnce } from "../../../_delivery-once.js";
+import { describeNodeProvision, nodeItemsOf, nodePanelConfigFromSettings, provisionNodeOrder } from "../../../_node-panel.js";
 import { idempotencyPayloadHash, requiredIdempotencyKey } from "../../../_money.js";
 import { claimDurableOperation, completeDurableOperation } from "../../../_durable-operation.js";
 import { enqueueOrderPushEvent } from "../../../_push.js";
@@ -308,6 +309,54 @@ async function sendProxyQuoteEmail(order, paymentUrl) {
     support: settings.support,
     locale: order.locale === "en" ? "en" : "zh",
   });
+}
+
+// Node orders are provisioned on the panel the moment staff complete them.
+// The outcome is written onto the order so the admin can see it, retry it, and
+// so a repeated completion never provisions twice. A failure here never undoes
+// the completion — the customer already holds the subscription URL, and the
+// panel user is what makes it serve traffic — so it is surfaced loudly instead.
+async function runNodeProvision(order, { actor, operationId, trigger }) {
+  // Read the panel configuration fresh from the site settings on every run:
+  // staff rotate the token there, and a cached value would keep failing.
+  const result = await provisionNodeOrder(order, { config: nodePanelConfigFromSettings(await getSettings()) });
+  const at = new Date();
+  order.nodeProvision = {
+    status: result.status,
+    panelUser: result.panelUser || order.orderId,
+    plan: result.plan || "",
+    existed: Boolean(result.existed),
+    error: result.ok ? "" : clean(result.error || "provision_failed", 120),
+    detail: result.ok ? "" : clean(result.detail || "", 160),
+    at: at.toISOString(),
+    atBeijing: formatBeijingTime(at),
+    attempts: Number(order.nodeProvision?.attempts || 0) + 1,
+    by: actor?.staffUsername || "system",
+    trigger,
+  };
+  const summary = describeNodeProvision(result);
+  const timelineOk = await appendOrderTimelineOnce(order.orderId, `${operationId}:node-provision-timeline`, {
+    type: result.ok ? "node_provisioned" : "node_provision_failed",
+    visibility: "internal",
+    summaryZh: result.ok ? `面板已开通：${summary}` : `面板开通失败：${summary}`,
+    summaryEn: result.ok ? `Node panel provisioned: ${result.plan || ""}` : `Node panel provisioning failed: ${result.error || ""}`,
+    actor: actor?.staffUsername || "system",
+    meta: { status: result.status, plan: result.plan || "", error: result.ok ? "" : result.error || "" },
+  });
+  if (!result.ok && result.status === "failed") {
+    try {
+      await sendTelegramNotice([
+        `⚠️ 机场节点自动开通失败 ${order.orderId}`,
+        "━━━━━━━━━━━━━━━━",
+        `原因: ${summary}`,
+        `套餐: ${result.plan || nodeItemsOf(order)[0]?.plan || "-"}`,
+        "请在后台订单详情点击「重试开通」，或到面板手动开通。",
+      ].join("\n"));
+    } catch (error) {
+      console.error("[node-provision] telegram alert failed:", clean(error?.message, 120));
+    }
+  }
+  return { result, timelineOk };
 }
 
 async function sendTelegramNotice(text) {
@@ -944,6 +993,44 @@ async function updateOrderHandler(request, { params }) {
     return Response.json(responsePayload);
   }
 
+  if (body.action === "node_provision") {
+    if (!nodeItemsOf(order).length) {
+      return Response.json({ ok: false, error: "node_item_not_found" }, { status: 404 });
+    }
+    if (order.status !== "completed") {
+      return Response.json({ ok: false, error: "order_not_completed" }, { status: 409 });
+    }
+    const { result, timelineOk } = await runNodeProvision(order, {
+      actor, operationId: operation.operationId, trigger: "manual",
+    });
+    order.revision = currentRevision + 1;
+    order.processedMutations = [
+      {
+        id: mutationId,
+        hash: mutationHash,
+        principal: operationPrincipal,
+        revision: order.revision,
+        createdAt: new Date().toISOString(),
+        effects: { adminAction: "node_provision", adminDetail: { status: result.status, error: result.ok ? "" : result.error || "" } },
+      },
+      ...processedMutations.filter((entry) => entry?.id !== mutationId || entry?.principal !== operationPrincipal),
+    ].slice(0, 100);
+    const saved = await setOrderAt(index, order, { expectedRevision: currentRevision });
+    if (!saved) return Response.json({ ok: false, error: "stale_revision", mutationApplied: false }, { status: 409 });
+    const logOk = await pushAdminActionLog({
+      action: "node_provision",
+      actor,
+      target: "order:" + canonicalOrderId,
+      detail: { status: result.status, plan: result.plan || "", error: result.ok ? "" : result.error || "" },
+      operationId: `${operation.operationId}:admin-log`,
+    });
+    if (!logOk || !timelineOk) return Response.json({ ok: false, error: "operation_effect_journal_unavailable" }, { status: 503 });
+    const responsePayload = { ok: true, order: orderForAdminResponse(order), nodeProvision: order.nodeProvision };
+    const completed = await completeDurableOperation(operation, responsePayload);
+    if (!completed.ok) return Response.json({ ok: false, error: completed.error }, { status: 503 });
+    return Response.json(responsePayload);
+  }
+
   if (order.orderType !== "proxy_payment" && ["awaiting_quote", "pending_payment", "quote_expired"].includes(newStatus)) {
     return Response.json({ ok: false, error: "invalid_status" }, { status: 400 });
   }
@@ -1261,6 +1348,31 @@ async function updateOrderHandler(request, { params }) {
       () => sendCompletionEmail(order),
     );
   }
+  // Provision the node panel user when a node order first becomes completed.
+  // A completion replayed later does not re-run this: the record on the order
+  // (and the panel's own existence check) make it idempotent, and staff can
+  // retry from the order detail if it failed.
+  let nodeProvisionResult = null;
+  if (newStatus === "completed" && !wasCompleted && nodeItemsOf(order).length && order.nodeProvision?.status !== "done") {
+    const { result, timelineOk } = await runNodeProvision(order, {
+      actor, operationId: operation.operationId, trigger: "completion",
+    });
+    nodeProvisionResult = result;
+    if (!timelineOk) console.error("[node-provision] timeline entry not journaled for", order.orderId);
+    const provisionExpectedRevision = Number(order.revision);
+    const provisionSaved = await setOrderAt(index, order, { expectedRevision: provisionExpectedRevision });
+    if (!provisionSaved) {
+      const latestEntry = await getOrderEntryById(canonicalOrderId);
+      return Response.json({
+        ok: false,
+        error: "stale_revision",
+        mutationApplied: true,
+        order: latestEntry?.order ? orderForAdminResponse(latestEntry.order) : null,
+        completion: { email: emailResult },
+        nodeProvision: order.nodeProvision,
+      }, { status: 409 });
+    }
+  }
   let invalidEmailResult = null;
   if (newStatus === "invalid" && !wasInvalid) {
     invalidEmailResult = await deliverEmailOnce(
@@ -1321,6 +1433,7 @@ async function updateOrderHandler(request, { params }) {
   const responsePayload = {
     ok: true, order: responseOrder,
     completion: newStatus === "completed" && !wasCompleted ? { email: emailResult } : null,
+    nodeProvision: nodeProvisionResult ? order.nodeProvision : null,
     invalidNotice: newStatus === "invalid" && !wasInvalid ? { email: invalidEmailResult } : null,
     commission: commissionResult,
     refund: refundResult,

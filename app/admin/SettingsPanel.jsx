@@ -3,7 +3,7 @@
 // 站点设置 — 仅超级管理员。读写 /api/admin/settings。
 // 改任何项,保存后前端站点(客服/服务中心/页脚/收款码/结账)与订单邮件即时同步。
 import { useEffect, useState, useCallback, useRef } from "react";
-import { LoaderCircle, Save, RotateCcw, Settings as SettingsIcon, AlertTriangle, CheckCircle2, Headphones, Coins, Layers, QrCode, Tag, FileText, Bell, Upload, DatabaseBackup, Undo2 } from "lucide-react";
+import { LoaderCircle, Save, RotateCcw, Settings as SettingsIcon, AlertTriangle, CheckCircle2, Headphones, Coins, Layers, QrCode, Tag, FileText, Bell, Upload, DatabaseBackup, Undo2, Server } from "lucide-react";
 import { clientFetch as fetch } from "../lib/client-fetch";
 import { beginLatestRequest, isLatestRequest } from "../lib/latest-request";
 
@@ -131,6 +131,7 @@ export default function SettingsPanel({ onDirtyChange }) {
   const [fieldErrors, setFieldErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [showPanelToken, setShowPanelToken] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -337,6 +338,28 @@ export default function SettingsPanel({ onDirtyChange }) {
             提现申请 Telegram 通知
           </label>
         </div>
+      </Section>
+
+      <Section icon={<Server size={15} />} title="机场节点面板 · 自动开通" sub="订单标记完成后，按订单号在面板开号并套用套餐；令牌仅服务端使用，不会出现在前台接口" onReset={() => restoreSection("nodePanel")} disabled={saving}>
+        <label className="admin-settings-check" style={{ marginBottom: 10 }}>
+          <input type="checkbox" checked={!!s.nodePanel.enabled} onChange={(e) => set("nodePanel.enabled", e.target.checked)} />
+          标记完成时自动在面板开通
+        </label>
+        <div className="admin-settings-grid">
+          <Field full label="接口前缀">{I("nodePanel.apiBase", { placeholder: "https://hk.joinvip.vip:2053/ad/api/v1", autoComplete: "off", spellCheck: false })}</Field>
+          <Field full label="外部 API 令牌">
+            <div style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+              <div className="grow">{I("nodePanel.apiToken", { type: showPanelToken ? "text" : "password", placeholder: "在面板「管理员 → 外部 API」获取；更换令牌后在此更新即可", autoComplete: "new-password", spellCheck: false })}</div>
+              <button type="button" className="admin-settings-btn" onClick={() => setShowPanelToken((v) => !v)}>{showPanelToken ? "隐藏" : "显示"}</button>
+            </div>
+          </Field>
+          <Field label="普通套餐 → 面板套餐名">{I("nodePanel.planNames.basic", { autoComplete: "off" })}</Field>
+          <Field label="高级套餐 → 面板套餐名">{I("nodePanel.planNames.pro", { autoComplete: "off" })}</Field>
+          <Field label="豪华套餐 → 面板套餐名">{I("nodePanel.planNames.luxury", { autoComplete: "off" })}</Field>
+          <Field label="无限套餐 → 面板套餐名">{I("nodePanel.planNames.unlimited", { autoComplete: "off" })}</Field>
+          <Field label="10GB 测试 → 面板套餐名">{I("nodePanel.planNames.trial", { autoComplete: "off" })}</Field>
+        </div>
+        <small style={{ display: "block", marginTop: 8, color: "var(--muted)", fontSize: 11 }}>面板按套餐名称精确匹配（区分大小写）。开通结果会显示在订单详情，失败会推送 Telegram 并可在订单里重试。</small>
       </Section>
       </fieldset>
 

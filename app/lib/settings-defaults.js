@@ -35,7 +35,18 @@ export const SETTINGS_DEFAULTS = {
   payment: { alipayQr: "/payment/alipay.jpg", usdtQr: "/payment/usdt.png" },
   // Telegram 通知开关(token/chatId 仍在 env,不在前端暴露)
   notify: { telegramEnabled: true, telegramWithdrawEnabled: true },
+  // 机场节点面板自动开通:订单标记完成后按订单号在面板开号并套用套餐。
+  // 令牌只在服务端使用;公开设置接口会整段剔除 nodePanel(见 publicSiteSettings)。
+  nodePanel: {
+    enabled: false,
+    apiBase: "https://hk.joinvip.vip:2053/ad/api/v1",
+    apiToken: "",
+    // 站内套餐 id → 面板里的套餐名称(面板按名称精确匹配)
+    planNames: { basic: "Standard", pro: "Plus", luxury: "Premium", unlimited: "Unlimited", trial: "trial" },
+  },
 };
+
+export const NODE_PANEL_PLAN_IDS = ["basic", "pro", "luxury", "unlimited", "trial"];
 
 // 合并工具:把覆盖深合并到默认上(只接受已知字段,防注入;非法值回退默认)。
 const SETTINGS_TEXT_LIMITS = {
@@ -57,7 +68,7 @@ const SETTINGS_TEXT_LIMITS = {
   "footer.copyright": 300,
 };
 
-const SETTINGS_SECTIONS = ["support", "brand", "footer", "usdt", "bundle", "payment", "notify"];
+const SETTINGS_SECTIONS = ["support", "brand", "footer", "usdt", "bundle", "payment", "notify", "nodePanel"];
 const MAX_IMAGE_DATA_URL_LENGTH = 500000;
 const MAX_IMAGE_BINARY_BYTES = 360000;
 
@@ -108,6 +119,31 @@ function validImageSource(value) {
   }
 }
 
+// The panel API base must be an https origin-plus-path with no embedded
+// credentials; the token travels in a header, never in the URL.
+function validPanelApiBase(value) {
+  if (typeof value !== "string" || !value || value.length > 300 || hasControlOrSpace(value)) return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" && Boolean(parsed.hostname) && !parsed.username && !parsed.password && !parsed.search && !parsed.hash;
+  } catch {
+    return false;
+  }
+}
+
+// Code-point checks instead of a control-character class: an escaped class
+// has been rewritten into raw control bytes by editing tools before.
+function hasControlChar(text) {
+  for (const ch of String(text)) {
+    const code = ch.codePointAt(0);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+function hasControlOrSpace(text) {
+  return hasControlChar(text) || /\s/.test(String(text));
+}
+
 function decimalNumber(value, { min, max, decimals = 4, allowEmpty = false } = {}) {
   if (allowEmpty && (value === "" || value == null)) return { ok: true, value: "" };
   if (typeof value !== "number" && typeof value !== "string") return { ok: false };
@@ -134,7 +170,7 @@ export function validateSettingsSubmission(input) {
 
   const settings = {
     support: { qq: {}, whatsapp: {}, telegram: {}, hours: "" },
-    brand: {}, footer: {}, usdt: {}, bundle: {}, payment: {}, notify: {},
+    brand: {}, footer: {}, usdt: {}, bundle: {}, payment: {}, notify: {}, nodePanel: { planNames: {} },
   };
   for (const kind of ["qq", "whatsapp", "telegram"]) {
     if (!objectAt(input.support, kind)) fieldErrors[`support.${kind}`] = "联系方式格式错误";
@@ -191,6 +227,30 @@ export function validateSettingsSubmission(input) {
   for (const key of ["telegramEnabled", "telegramWithdrawEnabled"]) {
     if (typeof input.notify[key] !== "boolean") fieldErrors[`notify.${key}`] = "请选择开启或关闭";
     else settings.notify[key] = input.notify[key];
+  }
+
+  const panel = input.nodePanel;
+  if (typeof panel.enabled !== "boolean") fieldErrors["nodePanel.enabled"] = "请选择开启或关闭";
+  else settings.nodePanel.enabled = panel.enabled;
+  const apiBase = typeof panel.apiBase === "string" ? panel.apiBase.trim().replace(/\/+$/, "") : "";
+  if (!validPanelApiBase(apiBase)) fieldErrors["nodePanel.apiBase"] = "请输入 https:// 开头的面板接口前缀";
+  else settings.nodePanel.apiBase = apiBase;
+  const apiToken = typeof panel.apiToken === "string" ? panel.apiToken.trim() : null;
+  if (apiToken == null || apiToken.length > 200 || hasControlOrSpace(apiToken)) {
+    fieldErrors["nodePanel.apiToken"] = "令牌不能含空格，且不超过 200 个字符";
+  } else settings.nodePanel.apiToken = apiToken;
+  if (settings.nodePanel.enabled && !settings.nodePanel.apiToken && !fieldErrors["nodePanel.apiToken"]) {
+    fieldErrors["nodePanel.apiToken"] = "开启自动开通需要填写面板令牌";
+  }
+  const planNames = objectAt(panel, "planNames");
+  if (!planNames) fieldErrors["nodePanel.planNames"] = "套餐名称映射格式错误";
+  else {
+    for (const id of NODE_PANEL_PLAN_IDS) {
+      const name = planNames[id];
+      if (typeof name !== "string" || !name.trim() || name.trim().length > 60 || hasControlChar(name)) {
+        fieldErrors[`nodePanel.planNames.${id}`] = "请输入 1-60 个字符的面板套餐名称";
+      } else settings.nodePanel.planNames[id] = name.trim();
+    }
   }
 
   return Object.keys(fieldErrors).length
@@ -250,7 +310,22 @@ export function mergeSettings(overrides) {
       telegramEnabled: typeof o.notify?.telegramEnabled === "boolean" ? o.notify.telegramEnabled : d.notify.telegramEnabled,
       telegramWithdrawEnabled: typeof o.notify?.telegramWithdrawEnabled === "boolean" ? o.notify.telegramWithdrawEnabled : d.notify.telegramWithdrawEnabled,
     },
+    nodePanel: {
+      enabled: typeof o.nodePanel?.enabled === "boolean" ? o.nodePanel.enabled : d.nodePanel.enabled,
+      apiBase: str(o.nodePanel?.apiBase, d.nodePanel.apiBase).replace(/\/+$/, ""),
+      // An empty token is meaningful (automation off), so it is not defaulted.
+      apiToken: typeof o.nodePanel?.apiToken === "string" ? o.nodePanel.apiToken.trim() : d.nodePanel.apiToken,
+      planNames: Object.fromEntries(NODE_PANEL_PLAN_IDS.map((id) => [id, str(o.nodePanel?.planNames?.[id], d.nodePanel.planNames[id])])),
+    },
   };
+}
+
+// What browsers may see. The node panel section carries an administrator
+// token and has no customer-facing use, so it is removed whole rather than
+// masked: a masked field would still announce that automation exists.
+export function publicSiteSettings(settings) {
+  const { nodePanel, ...visible } = settings || {};
+  return visible;
 }
 
 // 折扣文案:把折扣率转成展示文案("9 折" / "10% off")。rate 0.1 = 9折;<=0 返回空。

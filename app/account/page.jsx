@@ -22,6 +22,7 @@ import {
   isExplicitTerminalIdempotencyResponse,
 } from "../lib/idempotency";
 import { withCheckoutSubmissionCoordination } from "../lib/checkout-pending-journal";
+import { rocketUsagePageUrl } from "../lib/rocket-subscription";
 import {
   clearSinglePendingOperation,
   prepareSinglePendingOperation,
@@ -1647,6 +1648,13 @@ export default function AccountPage() {
                           </div>
                           <em>{copiedKey === `sub-${idx}` ? <Check size={12} /> : <Copy size={12} />}{copiedKey === `sub-${idx}` ? L("已复制", "Copied") : L("复制", "Copy")}</em>
                         </button>
+                        {it.service === "rocket" && rocketUsagePageUrl(activeOrder.orderId) && (
+                          <a className="sub-usage-link" href={rocketUsagePageUrl(activeOrder.orderId)} target="_blank" rel="noopener noreferrer">
+                            <span>{L("查看套餐用量", "View plan usage")}</span>
+                            <small>{L("流量 · 到期 · 在线设备", "Traffic · expiry · devices")}</small>
+                            <ExternalLink size={13} />
+                          </a>
+                        )}
                       </div>
                     )}
                   </div>

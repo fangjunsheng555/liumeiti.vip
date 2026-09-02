@@ -150,11 +150,12 @@ test("admin callers send the persisted exact body and compare-clear only the pro
   const source = await readFile(new URL("../app/admin/page.jsx", import.meta.url), "utf8");
   assert.match(source, /prepareAdminMutationJournal\(window\.localStorage, scope, target, payload\)/);
   assert.match(source, /clearAdminMutationJournal\(window\.localStorage, storageKey, operation\.key\)/);
-  // Nine UI mutations plus one exact replay used only to resume a mutation
-  // whose primary order write already committed before a CAS conflict.
-  assert.equal((source.match(/body: JSON\.stringify\(pending\.payload\)/g) || []).length, 10);
-  assert.equal((source.match(/clearTerminalAdminMutation\(pending, (?:res|response), data\)/g) || []).length, 11);
-  assert.equal((source.match(/await withAdminMutationCoordination\(async \(\) => \{/g) || []).length, 10);
+  // Ten UI mutations (the node-panel retry joined them) plus one exact replay
+  // used only to resume a mutation whose primary order write already committed
+  // before a CAS conflict.
+  assert.equal((source.match(/body: JSON\.stringify\(pending\.payload\)/g) || []).length, 11);
+  assert.equal((source.match(/clearTerminalAdminMutation\(pending, (?:res|response), data\)/g) || []).length, 12);
+  assert.equal((source.match(/await withAdminMutationCoordination\(async \(\) => \{/g) || []).length, 11);
   assert.match(source, /return withCheckoutSubmissionCoordination\(callback\)/);
   assert.doesNotMatch(source, /clearIdempotencyRequest\(window\.localStorage, storageKey\)/);
 });

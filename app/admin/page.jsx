@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { getCatalogProducts, getProductPlan, getProductPlanOptions, hasProductPlans, useCatalogSync, useSiteSettings, getSiteSettings } from "../lib/store";
 import { getSpotifyPasswordAttention } from "../lib/order-attention";
+import { rocketUsagePageUrl } from "../lib/rocket-subscription";
 import {
   clearAdminMutationJournal,
   prepareAdminMutationJournal,
@@ -1241,6 +1242,25 @@ function AdminRetryAlert({ message, onRetry, busy = false }) {
   );
 }
 
+// Staff-facing reason for a node panel outcome. Mirrors describeNodeProvision
+// on the server without importing server code into the client bundle.
+function nodeProvisionSummary(provision) {
+  const error = String(provision?.error || "");
+  const reasons = {
+    panel_unauthorized: "面板令牌无效或外部 API 未开启",
+    panel_unreachable: "无法连接面板",
+    panel_timeout: "连接面板超时",
+    multiple_node_items: "订单含多个节点商品，需人工开通",
+    plan_missing: "订单缺少套餐信息",
+    panel_not_configured: "站点设置未开启面板自动开通",
+  };
+  if (reasons[error]) return reasons[error];
+  if (error.startsWith("plan_unmapped:")) return `套餐未映射到面板：${error.slice(14)}`;
+  if (error.startsWith("panel_rejected:")) return `面板拒绝：${error.slice(15)}`;
+  if (error.startsWith("panel_error_")) return `面板服务错误 ${error.slice(12)}`;
+  return error || "未知原因";
+}
+
 export default function AdminPage() {
   const [authed, setAuthed] = useState(null); // null=loading, false=login, true=ok
   const [loginName, setLoginName] = useState("");
@@ -1279,6 +1299,7 @@ export default function AdminPage() {
   const [showPwds, setShowPwds] = useState({});
   const [spotifyPasswordMail, setSpotifyPasswordMail] = useState(null);
   const [spotifyPasswordMailBusy, setSpotifyPasswordMailBusy] = useState(false);
+  const [nodeProvisionBusy, setNodeProvisionBusy] = useState(false);
 
   // Batch selection state
   const [batchMode, setBatchMode] = useState(false);
@@ -4468,6 +4489,46 @@ export default function AdminPage() {
     }));
   }
 
+  async function retryNodeProvision() {
+    if (!activeOrder || nodeProvisionBusy) return;
+    setNodeProvisionBusy(true);
+    setSaveResult(null);
+    try {
+      await withAdminMutationCoordination(async () => {
+      const payload = { expectedRevision: Number(activeOrder.revision || 0), action: "node_provision" };
+      const pending = prepareAdminMutation("node-provision", activeOrder.orderId, payload);
+      let response = await fetch(`/api/admin/orders/${encodeURIComponent(activeOrder.orderId)}`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": pending.operation.key },
+        body: JSON.stringify(pending.payload),
+      });
+      let data = await response.json();
+      ({ response, data } = await replayAppliedOrderMutationOnce(pending, response, data));
+      if (!response.ok || !data.ok) {
+        if (await handleOrderMutationConflict(pending, response, data, "开通失败")) return;
+        clearTerminalAdminMutation(pending, response, data);
+        const message = {
+          node_item_not_found: "该订单不含机场节点商品",
+          order_not_completed: "订单尚未标记完成，完成后会自动开通",
+        }[data.error] || data.error || "开通失败";
+        throw new Error(message);
+      }
+      completeAdminMutation(pending.storageKey, pending.operation);
+      setActiveOrder(data.order);
+      const provision = data.nodeProvision;
+      setSaveResult(provision?.status === "done"
+        ? { type: "success", message: provision.existed ? "面板已有该用户，未重复开通" : `面板已开通套餐 ${provision.plan || ""}` }
+        : { type: "error", message: "面板开通失败：" + nodeProvisionSummary(provision) });
+      loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
+      });
+    } catch (error) {
+      setSaveResult({ type: "error", message: adminMutationFailureMessage(error) });
+    } finally {
+      setNodeProvisionBusy(false);
+    }
+  }
+
   async function sendSpotifyPasswordError(itemPosition) {
     if (!activeOrder || !editForm || spotifyPasswordMailBusy) return;
     const item = editForm.items[itemPosition];
@@ -4576,11 +4637,15 @@ export default function AdminPage() {
         completeAdminMutation(pending.storageKey, pending.operation);
         const completionMessage = data.completion?.email?.ok ? " · 完成邮件已发送" : data.completion ? " · 完成邮件发送失败" : "";
         const invalidMessage = data.invalidNotice?.email?.ok ? " · 无效通知已发送" : data.invalidNotice ? " · 无效通知发送失败" : "";
+        const provisionMessage = !data.nodeProvision ? ""
+          : data.nodeProvision.status === "done" ? (data.nodeProvision.existed ? " · 面板已有用户" : ` · 面板已开通 ${data.nodeProvision.plan || ""}`)
+          : data.nodeProvision.status === "skipped" ? " · 未配置面板令牌，未自动开通"
+          : ` · 面板开通失败：${nodeProvisionSummary(data.nodeProvision)}`;
         setSaveResult({
           type: "success",
           message: pending.resumed && pending.payloadChanged
             ? "已安全确认上次订单操作，订单已刷新；如仍需其他修改，请核对后再次保存。"
-            : "已保存" + completionMessage + invalidMessage,
+            : "已保存" + completionMessage + invalidMessage + provisionMessage,
         });
         loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
         loadOverview({ silent: true });
@@ -6774,6 +6839,38 @@ export default function AdminPage() {
                   );
                 })}
               </section>
+
+              {activeOrder.items?.some((item) => item.service === "rocket") && (
+                <section className="admin-modal-section admin-node-provision">
+                  <div className="admin-node-provision-head">
+                    <div>
+                      <h3>面板开通</h3>
+                      <p>标记完成后自动在节点面板开号（用户名 = 订单号）并套用套餐。</p>
+                    </div>
+                    <a href={rocketUsagePageUrl(activeOrder.orderId)} target="_blank" rel="noopener noreferrer" className="admin-node-provision-usage">
+                      <Activity size={12} />查看用量
+                    </a>
+                  </div>
+                  <div className={`admin-node-provision-status is-${activeOrder.nodeProvision?.status || "pending"}`}>
+                    <b>
+                      {activeOrder.nodeProvision?.status === "done"
+                        ? (activeOrder.nodeProvision.existed ? "面板已有该用户" : `已开通 · ${activeOrder.nodeProvision.plan || ""}`)
+                        : activeOrder.nodeProvision?.status === "failed"
+                          ? "开通失败"
+                          : activeOrder.nodeProvision?.status === "skipped"
+                            ? "未自动开通（未配置面板令牌）"
+                            : activeOrder.status === "completed" ? "尚未开通" : "标记完成后自动开通"}
+                    </b>
+                    {activeOrder.nodeProvision?.status === "failed" && <small>{nodeProvisionSummary(activeOrder.nodeProvision)}</small>}
+                    {activeOrder.nodeProvision?.atBeijing && <time>{activeOrder.nodeProvision.atBeijing}{activeOrder.nodeProvision.by ? ` · ${activeOrder.nodeProvision.by}` : ""}</time>}
+                  </div>
+                  {activeOrder.status === "completed" && activeOrder.nodeProvision?.status !== "done" && (
+                    <button type="button" className="admin-delivery-generate" onClick={retryNodeProvision} disabled={nodeProvisionBusy}>
+                      {nodeProvisionBusy ? <><LoaderCircle size={12} className="spin-icon" />开通中</> : <><RefreshCw size={12} />{activeOrder.nodeProvision ? "重试开通" : "立即开通"}</>}
+                    </button>
+                  )}
+                </section>
+              )}
 
               <DeliveryWorkbench
                 order={activeOrder}
