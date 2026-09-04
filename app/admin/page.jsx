@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { getCatalogProducts, getProductPlan, getProductPlanOptions, hasProductPlans, useCatalogSync, useSiteSettings, getSiteSettings } from "../lib/store";
 import { getSpotifyPasswordAttention } from "../lib/order-attention";
-import { rocketUsagePageUrl } from "../lib/rocket-subscription";
+import { rocketSubscriptionUrl } from "../lib/rocket-subscription";
 import {
   clearAdminMutationJournal,
   prepareAdminMutationJournal,
@@ -6847,7 +6847,7 @@ export default function AdminPage() {
                       <h3>面板开通</h3>
                       <p>标记完成后自动在节点面板开号（用户名 = 订单号）并套用套餐。</p>
                     </div>
-                    <a href={rocketUsagePageUrl(activeOrder.orderId)} target="_blank" rel="noopener noreferrer" className="admin-node-provision-usage">
+                    <a href={activeOrder.nodeProvision?.subLink || rocketSubscriptionUrl(activeOrder.orderId)} target="_blank" rel="noopener noreferrer" className="admin-node-provision-usage">
                       <Activity size={12} />查看用量
                     </a>
                   </div>

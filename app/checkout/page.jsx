@@ -2072,7 +2072,7 @@ export default function CheckoutPage() {
                           <div className="subscription-links">
                             <div className="subscription-link-row">
                               <a href={it.subscriptionLinks} target="_blank" rel="noopener noreferrer">
-                                <strong>{L("订阅链接:", "Subscription link:")}</strong>
+                                <strong>{L("浏览器打开下方链接以使用服务:", "Open this link in a browser to use the service:")}</strong>
                                 <span>{it.subscriptionLinks}</span>
                               </a>
                               <button

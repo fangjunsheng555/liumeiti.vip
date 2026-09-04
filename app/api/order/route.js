@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { rocketSubscriptionUrl, readRocketSubscriptionUrl } from "../../lib/rocket-subscription.js";
+import { customerSubscriptionUrl } from "../../lib/rocket-subscription.js";
 import { after } from "next/server.js";
 import { buildOrderEmailHtml, buildOrderEmailText } from "./email-template.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
@@ -108,8 +108,8 @@ function orderText(order) {
     lines.push(`${i + 1}. ${it.label}（${it.cycle}）¥${it.amount}`);
     if (it.account) lines.push(`   ${it.service === "rocket" ? "用户名" : "账号"}: ${it.account}`);
     if (it.password) lines.push(`   密码: ${it.password}`);
-    const subscriptionUrl = readRocketSubscriptionUrl(it.subscriptionLinks);
-    if (subscriptionUrl) lines.push(`   订阅链接: ${subscriptionUrl}`);
+    const subscriptionUrl = customerSubscriptionUrl({ status: order.status, orderId: order.orderId, stored: it.subscriptionLinks });
+    if (subscriptionUrl) lines.push(`   浏览器打开下方链接以使用服务: ${subscriptionUrl}`);
   });
   lines.push("━━ 价格 ━━");
   lines.push(`商品总价: ¥${order.subtotal}`);
@@ -585,14 +585,10 @@ async function handler(request) {
     marketingAttribution = marketingAttributionFromRequest(request);
   } catch {}
 
-  // One subscription URL per order, keyed on the order number, shared by every
-  // rocket item in the cart — a future change can suffix `-{i}` if multiple
-  // rocket items ever need separate identifiers.
-  items.forEach((it) => {
-    if (it.service === "rocket") {
-      it.subscriptionLinks = rocketSubscriptionUrl(orderId);
-    }
-  });
+  // No subscription URL is minted here. The panel user does not exist until
+  // staff complete the order, so a link handed out at checkout would resolve
+  // to an empty subscription. Provisioning records the panel's own URL on the
+  // item when the order is completed.
 
   const order = {
     orderId,

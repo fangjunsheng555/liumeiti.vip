@@ -37,7 +37,6 @@ import FloatingSupport from "../components/FloatingSupport";
 import { QQBrandIcon, TelegramBrandIcon, WhatsAppBrandIcon } from "../components/BrandIcons";
 import { useLocale } from "../components/LocaleProvider";
 import { canonicalOrderQuery } from "../lib/order-query-identity";
-import { rocketUsagePageUrl } from "../lib/rocket-subscription";
 import AfterSalesTicketSheet from "../components/AfterSalesTicketSheet";
 import { clientFetch as fetch, isClientRequestTimeout } from "../lib/client-fetch";
 import { authenticatedUserMatches, isSuccessfulAuthResponse, safeLoginAfterUncertainAuth, shouldRecoverAuthMutationResponse } from "../lib/auth-recovery";
@@ -1280,18 +1279,11 @@ export default function ServiceCenterPage() {
                       <div className="query-modal-item-subs">
                         <button type="button" className="query-modal-sub-row" onClick={() => handleCopy(item.subscriptionLinks, `sub-${idx}`)} aria-label={L("复制订阅链接", "Copy the subscription link")}>
                           <div>
-                            <strong>{L("订阅链接", "Subscription link")}</strong>
+                            <strong>{L("浏览器打开下方链接以使用服务", "Open this link in a browser to use the service")}</strong>
                             <small>{item.subscriptionLinks}</small>
                           </div>
                           <em>{copiedKey === `sub-${idx}` ? <CheckCircle2 size={12} /> : <Copy size={12} />}{copiedKey === `sub-${idx}` ? L("已复制", "Copied") : L("复制", "Copy")}</em>
                         </button>
-                        {item.service === "rocket" && rocketUsagePageUrl(queryDetailOrder.orderId) && (
-                          <a className="sub-usage-link" href={rocketUsagePageUrl(queryDetailOrder.orderId)} target="_blank" rel="noopener noreferrer">
-                            <span>{L("查看套餐用量", "View plan usage")}</span>
-                            <small>{L("流量 · 到期 · 在线设备", "Traffic · expiry · devices")}</small>
-                            <ExternalLink size={13} />
-                          </a>
-                        )}
                       </div>
                     )}
                   </div>

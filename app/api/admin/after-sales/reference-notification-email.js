@@ -64,7 +64,7 @@ function credentialSection(order, en) {
     const details = [
       detailRow(accountLabel, item.account),
       detailRow(L("密码", "Password"), item.password),
-      detailRow(L("订阅链接", "Subscription link"), readRocketSubscriptionUrl(item.subscriptionLinks), { link: true }),
+      detailRow(L("浏览器打开下方链接以使用服务", "Open this link in a browser to use the service"), readRocketSubscriptionUrl(item.subscriptionLinks), { link: true }),
     ].filter(Boolean).join("");
     if (!details) return "";
     return `<div style="padding:10px 0;border-bottom:1px solid #edf2f7;">
@@ -162,7 +162,7 @@ export function buildReferenceNotificationEmail({ orders, subject, message, bran
       if (item.account) text.push(`${item.service === "rocket" ? L("用户名", "Username") : item.netflixSelfService ? L("Netflix 登录邮箱", "Netflix sign-in email") : L("账号", "Account")}: ${item.account}`);
       if (item.password) text.push(`${L("密码", "Password")}: ${item.password}`);
       const subscriptionUrl = readRocketSubscriptionUrl(item.subscriptionLinks);
-      if (subscriptionUrl) text.push(`${L("订阅链接", "Subscription link")}: ${subscriptionUrl}`);
+      if (subscriptionUrl) text.push(`${L("浏览器打开下方链接以使用服务", "Open this link in a browser to use the service")}: ${subscriptionUrl}`);
     }
     if (order.remark) text.push(`${L("下单备注", "Order note")}: ${order.remark}`);
     if (visibleStaffNotes) text.push(`${L("订单备注", "Service note")}: ${visibleStaffNotes}`);

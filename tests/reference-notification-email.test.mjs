@@ -144,8 +144,13 @@ test("reference notice preserves legacy no-items staff credentials and subscript
   });
   assert.match(result.html, /staff-legacy/);
   assert.match(result.html, /staff-password/);
-  assert.match(result.html, /format=clash/);
   assert.doesNotMatch(result.html, /buyer-password/);
   assert.match(result.text, /staff-legacy/);
-  assert.match(result.text, /format=clash/);
+  // The stored pair is normalized to the one plain landing address, so this
+  // notice cannot hand out a client-format link the other surfaces retired.
+  const both = `${result.html} ${result.text}`;
+  assert.ok(result.html.includes("https://example.com/sub/staff-legacy"));
+  assert.ok(result.text.includes("https://example.com/sub/staff-legacy"));
+  assert.ok(!both.includes("format=clash"), "no client-format link may be sent");
+  assert.ok(both.includes("浏览器打开下方链接以使用服务"), "the link is introduced as something to open");
 });

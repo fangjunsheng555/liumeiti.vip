@@ -1,5 +1,5 @@
 import { buildEmailBrandHeader } from "../email-brand.js";
-import { readRocketSubscriptionUrl } from "../../lib/rocket-subscription.js";
+import { customerSubscriptionUrl } from "../../lib/rocket-subscription.js";
 import { validEmail } from "../_utils.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { supportContactHtml } from "../support-links.js";
@@ -99,10 +99,10 @@ export function buildCompletionEmailHtml({ order, brandName, siteDomain, siteUrl
           <span style="font-family:ui-monospace,Menlo,Consolas,monospace;color:#0f172a;font-weight:700;background:#f8fafc;padding:1px 6px;border-radius:4px;">${escapeHtml(password)}</span>
         </div>`
       : "";
-    const subscriptionUrl = readRocketSubscriptionUrl(it.subscriptionLinks);
+    const subscriptionUrl = customerSubscriptionUrl({ status: order.status, orderId: order.orderId, stored: it.subscriptionLinks });
     const subRows = subscriptionUrl
       ? `<div style="margin-top:10px;padding:11px 13px;background:#f0fdfa;border-radius:10px;border:1px solid #a7f3d0;">
-          <div style="font-size:10px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#0f766e;margin-bottom:6px;">${L("订阅链接", "Subscription link")}</div>
+          <div style="font-size:10px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#0f766e;margin-bottom:6px;">${L("浏览器打开下方链接以使用服务", "Open this link in a browser to use the service")}</div>
           <a href="${escapeHtml(subscriptionUrl)}" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#134e4a;word-break:break-all;text-decoration:underline;">${escapeHtml(subscriptionUrl)}</a>
         </div>`
       : "";
@@ -264,8 +264,8 @@ export function buildCompletionEmailText({ order, brandName, siteDomain, siteUrl
         ? L("Netflix 登录邮箱", "Netflix sign-in email")
         : L("账号", "Account")}: ${account}`);
     if (password) lines.push(`      ${L("密码", "Password")}: ${password}`);
-    const subscriptionUrl = readRocketSubscriptionUrl(it.subscriptionLinks);
-    if (subscriptionUrl) lines.push(`      ${L("订阅链接", "Subscription link")}: ${subscriptionUrl}`);
+    const subscriptionUrl = customerSubscriptionUrl({ status: order.status, orderId: order.orderId, stored: it.subscriptionLinks });
+    if (subscriptionUrl) lines.push(`      ${L("浏览器打开下方链接以使用服务", "Open this link in a browser to use the service")}: ${subscriptionUrl}`);
   });
   if (netflixOnlineCodeEnabled) {
     lines.push(

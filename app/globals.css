@@ -18238,26 +18238,6 @@ body:has(.account-modal-mask) .floating-wrap {
   .admin-health-metrics { grid-column: 1 / -1; padding-left: 16px; }
 }
 
-/* ── Node order: plan-usage landing link under the subscription row ── */
-.sub-usage-link {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 11px;
-  border: 1px dashed #99f6e4;
-  border-radius: 9px;
-  background: #fff;
-  color: #0f766e;
-  text-decoration: none;
-  transition: background .16s, border-color .16s;
-}
-.sub-usage-link span { font-size: 11.5px; font-weight: 800; }
-.sub-usage-link small { font-size: 10px; color: #64748b; white-space: nowrap; }
-.sub-usage-link svg { flex: none; }
-.sub-usage-link:hover { background: #f0fdfa; border-style: solid; border-color: #5eead4; }
-.sub-usage-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
 /* ── Admin: node panel provisioning card ── */
 .admin-node-provision { display: grid; gap: 10px; }
 .admin-node-provision-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }

@@ -3,14 +3,19 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { rocketSubscriptionUrl, readRocketSubscriptionUrl } from "../app/lib/rocket-subscription.js";
 
-// A node order hands out exactly one subscription URL: the Clash-format list
-// addressed by the order number. Every supported client reads it, so a second
-// link only gave customers a way to import the wrong one.
+// A node order hands out exactly one subscription URL: the plain address of
+// the order number, which the panel serves as a landing page and every
+// supported client reads as a subscription. A second, client-specific link
+// only gave customers a way to import the wrong one.
+//
+// This file pins the builder that composes that fallback address and the
+// reader that normalizes whatever an order happens to carry. When the link is
+// released, and which surfaces show it, live in rocket-subscription-release.
 
 const ORDER_ID = "LM11BD1CB30341DFFD6B05";
-const EXPECTED = `https://hk.joinvip.vip:2056/sub/${ORDER_ID}?format=clash`;
+const EXPECTED = `https://hk.joinvip.vip:2056/sub/${ORDER_ID}`;
 
-test("the subscription URL is the order number in Clash format", () => {
+test("the subscription URL is the plain address of the order number", () => {
   assert.equal(rocketSubscriptionUrl(ORDER_ID), EXPECTED);
 });
 
@@ -28,12 +33,14 @@ test("stray whitespace around an order number does not reach the URL", () => {
 test("an order stored before this change still resolves to one link", () => {
   // Records written by the previous release held a { shadowrocket, clash } pair.
   const legacy = {
-    shadowrocket: `https://hk.joinvip.vip:2056/sub/${ORDER_ID}`,
-    clash: EXPECTED,
+    shadowrocket: EXPECTED,
+    clash: `${EXPECTED}?format=clash`,
   };
   assert.equal(readRocketSubscriptionUrl(legacy), EXPECTED);
-  // A pair missing its Clash half still has to produce the Clash list.
-  assert.equal(readRocketSubscriptionUrl({ shadowrocket: `https://hk.joinvip.vip:2056/sub/${ORDER_ID}` }), EXPECTED);
+  // A pair missing one half still has to produce the same one address.
+  assert.equal(readRocketSubscriptionUrl({ shadowrocket: EXPECTED }), EXPECTED);
+  // As does the single client-format URL the release after it wrote.
+  assert.equal(readRocketSubscriptionUrl(`${EXPECTED}?format=clash`), EXPECTED);
 });
 
 test("a stored value of any other shape reads as no link", () => {
@@ -44,6 +51,7 @@ test("a stored value of any other shape reads as no link", () => {
 
 test("a value already in the new shape passes through untouched", () => {
   assert.equal(readRocketSubscriptionUrl(EXPECTED), EXPECTED);
+  assert.equal(readRocketSubscriptionUrl(`  ${EXPECTED}  `), EXPECTED);
 });
 
 // ── No caller may reconstruct the URL or reach for the retired fields ──────

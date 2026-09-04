@@ -21,7 +21,7 @@ import {
 } from "../_auth-session.js";
 import { netflixOrderIdentity } from "../netflix-code/_ownership.js";
 import { canonicalOrderQuery } from "../../lib/order-query-identity.js";
-import { rocketSubscriptionUrl, readRocketSubscriptionUrl } from "../../lib/rocket-subscription.js";
+import { customerSubscriptionUrl } from "../../lib/rocket-subscription.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../lib/order-i18n.js";
 import { buildEmailBrandHeader } from "../email-brand.js";
 import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../after-sales/_store.js";
@@ -97,9 +97,7 @@ function publicOrder(order, type, locale = "zh", netflixUserSelfServiceEnabled =
         password,
       };
       if (service === "rocket") {
-        out.subscriptionLinks = rocketSubscriptionUrl(order.orderId);
-      } else if (it.subscriptionLinks) {
-        out.subscriptionLinks = readRocketSubscriptionUrl(it.subscriptionLinks);
+        out.subscriptionLinks = customerSubscriptionUrl({ status: order.status, orderId: order.orderId, stored: it.subscriptionLinks });
       }
       return out;
     });
@@ -117,7 +115,7 @@ function publicOrder(order, type, locale = "zh", netflixUserSelfServiceEnabled =
       account,
       password,
     };
-    if (it.service === "rocket") it.subscriptionLinks = rocketSubscriptionUrl(order.orderId);
+    if (it.service === "rocket") it.subscriptionLinks = customerSubscriptionUrl({ status: order.status, orderId: order.orderId, stored: order.subscriptionLinks });
     items = [it];
   }
 
@@ -173,7 +171,7 @@ function publicOrder(order, type, locale = "zh", netflixUserSelfServiceEnabled =
     netflixSelfServiceEnabled,
   };
   if (output.service === "rocket") {
-    output.subscriptionLinks = rocketSubscriptionUrl(order.orderId);
+    output.subscriptionLinks = customerSubscriptionUrl({ status: order.status, orderId: order.orderId, stored: order.subscriptionLinks });
   }
   // 服务到期摘要(仅已完成且有周期的订单)+ 一键续费预填路径
   const expiry = orderExpirySummary(order);

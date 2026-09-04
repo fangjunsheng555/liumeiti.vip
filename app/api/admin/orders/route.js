@@ -49,7 +49,9 @@ function normalizeOrder(order) {
       customerPasswordUpdatedAt: it.customerPasswordUpdatedAt || "",
       customerPasswordUpdatedAtBeijing: it.customerPasswordUpdatedAtBeijing || "",
       customerPasswordUpdateCount: Number(it.customerPasswordUpdateCount || 0),
-      subscriptionLinks: it.service === "rocket" ? rocketSubscriptionUrl(order.orderId) : readRocketSubscriptionUrl(it.subscriptionLinks) || null,
+      subscriptionLinks: it.service === "rocket"
+        ? readRocketSubscriptionUrl(it.subscriptionLinks) || rocketSubscriptionUrl(order.orderId)
+        : readRocketSubscriptionUrl(it.subscriptionLinks) || null,
     }));
   } else {
     items = [{
@@ -65,7 +67,9 @@ function normalizeOrder(order) {
       password: order.password || "",
       staffAccount: order.staffAccount || "",
       staffPassword: order.staffPassword || "",
-      subscriptionLinks: order.service === "rocket" ? rocketSubscriptionUrl(order.orderId) : null,
+      subscriptionLinks: order.service === "rocket"
+        ? readRocketSubscriptionUrl(order.subscriptionLinks) || rocketSubscriptionUrl(order.orderId)
+        : null,
     }];
   }
   const abnormal = abnormalInfo(order, status);

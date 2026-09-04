@@ -4,9 +4,9 @@ import { NODE_PANEL_PLAN_IDS, SETTINGS_DEFAULTS } from "../lib/settings-defaults
 
 // Client for the node panel's external API (m-ui, web/public_api.go). A node
 // order that staff mark completed becomes a panel user named after the order
-// number with the matching plan applied, so the subscription URL the site has
-// already handed the customer starts serving traffic without anyone opening
-// the panel.
+// number with the matching plan applied, and the subscription URL the panel
+// issues for that user is what the customer is then shown — nobody opens the
+// panel for a routine sale.
 //
 // Configuration lives in the site settings (站点设置 → 机场节点面板), not in
 // the environment: the token is rotated from the panel now and then, and staff

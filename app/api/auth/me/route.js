@@ -10,7 +10,7 @@ import {
   signAfterSalesToken,
   userAuthErrorResponse,
 } from "../../_auth-session.js";
-import { rocketSubscriptionUrl, readRocketSubscriptionUrl } from "../../../lib/rocket-subscription.js";
+import { customerSubscriptionUrl } from "../../../lib/rocket-subscription.js";
 import { localizeOrderItemLabel, localizeCycle } from "../../../lib/order-i18n.js";
 import { getActiveAfterSalesTickets, publicAfterSalesSummary } from "../../after-sales/_store.js";
 import { orderExpirySummary, renewalCheckoutPath } from "../../../lib/order-expiry.js";
@@ -52,9 +52,7 @@ function publicOrder(order, locale = "zh", netflixUserSelfServiceEnabled = true)
           : it.staffPassword || it.password || legacyPassword,
       };
       if (service === "rocket") {
-        out.subscriptionLinks = rocketSubscriptionUrl(order.orderId);
-      } else if (it.subscriptionLinks) {
-        out.subscriptionLinks = readRocketSubscriptionUrl(it.subscriptionLinks);
+        out.subscriptionLinks = customerSubscriptionUrl({ status: order.status, orderId: order.orderId, stored: it.subscriptionLinks });
       }
       return out;
     });
@@ -71,7 +69,9 @@ function publicOrder(order, locale = "zh", netflixUserSelfServiceEnabled = true)
       amount: Number(order.finalAmount || 0),
       account,
       password,
-      subscriptionLinks: service === "rocket" ? rocketSubscriptionUrl(order.orderId) : null,
+      subscriptionLinks: service === "rocket"
+        ? customerSubscriptionUrl({ status: order.status, orderId: order.orderId, stored: order.subscriptionLinks }) || null
+        : null,
     }];
   }
   const netflixAccounts = items

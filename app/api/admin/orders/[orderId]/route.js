@@ -104,7 +104,9 @@ function legacyOrderItem(order) {
     password: order?.password || "",
     staffAccount,
     staffPassword: order?.staffPassword || "",
-    subscriptionLinks: order?.service === "rocket" ? rocketSubscriptionUrl(order?.orderId) : null,
+    subscriptionLinks: order?.service === "rocket"
+      ? readRocketSubscriptionUrl(order?.subscriptionLinks) || rocketSubscriptionUrl(order?.orderId)
+      : null,
   };
 }
 
@@ -119,7 +121,7 @@ function orderItemsForAdmin(order) {
   return source.map(({ passwordCorrectionTokenHash, ...item }) => ({
     ...item,
     subscriptionLinks: item.service === "rocket"
-      ? rocketSubscriptionUrl(order?.orderId)
+      ? readRocketSubscriptionUrl(item.subscriptionLinks) || rocketSubscriptionUrl(order?.orderId)
       : readRocketSubscriptionUrl(item.subscriptionLinks) || null,
   }));
 }
@@ -333,7 +335,15 @@ async function runNodeProvision(order, { actor, operationId, trigger }) {
     attempts: Number(order.nodeProvision?.attempts || 0) + 1,
     by: actor?.staffUsername || "system",
     trigger,
+    subLink: result.ok ? clean(result.subLink, 300) : clean(order.nodeProvision?.subLink, 300),
   };
+  // Record the panel's own subscription URL on the item, so every customer
+  // surface serves the address the panel actually issued rather than one the
+  // site guessed. The builder stays as the fallback for orders whose
+  // provisioning has not succeeded.
+  if (result.ok && result.subLink) {
+    for (const item of nodeItemsOf(order)) item.subscriptionLinks = clean(result.subLink, 300);
+  }
   const summary = describeNodeProvision(result);
   const timelineOk = await appendOrderTimelineOnce(order.orderId, `${operationId}:node-provision-timeline`, {
     type: result.ok ? "node_provisioned" : "node_provision_failed",
@@ -1108,7 +1118,11 @@ async function updateOrderHandler(request, { params }) {
           it.staffPassword = "";
         }
         // Refresh subscription links if rocket
-        if (service === "rocket") it.subscriptionLinks = rocketSubscriptionUrl(order.orderId);
+        // Provisioning writes the panel's own URL here; never overwrite it
+        // with a guess when staff edit an item.
+        if (service === "rocket" && !readRocketSubscriptionUrl(it.subscriptionLinks)) {
+          it.subscriptionLinks = rocketSubscriptionUrl(order.orderId);
+        }
       }
     });
   }
@@ -1339,6 +1353,24 @@ async function updateOrderHandler(request, { params }) {
     return Response.json({ ok: false, error: "operation_effect_journal_unavailable" }, { status: 503 });
   }
 
+  // Provision the node panel user when a node order first becomes completed.
+  // A completion replayed later does not re-run this: the record on the order
+  // (and the panel's own existence check) make it idempotent, and staff can
+  // retry from the order detail if it failed.
+  //
+  // This runs before the completion email so the email carries the address
+  // the panel issued, and so the panel user exists by the time the customer
+  // opens it. The outcome is saved after the email: a stale-revision conflict
+  // on that save must not cost the customer their email.
+  let nodeProvisionResult = null;
+  let nodeProvisionTimelineOk = true;
+  if (newStatus === "completed" && !wasCompleted && nodeItemsOf(order).length && order.nodeProvision?.status !== "done") {
+    const { result, timelineOk } = await runNodeProvision(order, {
+      actor, operationId: operation.operationId, trigger: "completion",
+    });
+    nodeProvisionResult = result;
+    nodeProvisionTimelineOk = timelineOk;
+  }
   // Send status emails only on a real transition, not on repeated saves.
   // Telegram is NOT pinged for staff changes (only initial new orders).
   let emailResult = null;
@@ -1348,17 +1380,8 @@ async function updateOrderHandler(request, { params }) {
       () => sendCompletionEmail(order),
     );
   }
-  // Provision the node panel user when a node order first becomes completed.
-  // A completion replayed later does not re-run this: the record on the order
-  // (and the panel's own existence check) make it idempotent, and staff can
-  // retry from the order detail if it failed.
-  let nodeProvisionResult = null;
-  if (newStatus === "completed" && !wasCompleted && nodeItemsOf(order).length && order.nodeProvision?.status !== "done") {
-    const { result, timelineOk } = await runNodeProvision(order, {
-      actor, operationId: operation.operationId, trigger: "completion",
-    });
-    nodeProvisionResult = result;
-    if (!timelineOk) console.error("[node-provision] timeline entry not journaled for", order.orderId);
+  if (nodeProvisionResult) {
+    if (!nodeProvisionTimelineOk) console.error("[node-provision] timeline entry not journaled for", order.orderId);
     const provisionExpectedRevision = Number(order.revision);
     const provisionSaved = await setOrderAt(index, order, { expectedRevision: provisionExpectedRevision });
     if (!provisionSaved) {

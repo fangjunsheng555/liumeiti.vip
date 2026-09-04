@@ -7,7 +7,7 @@ import {
   panelPlanForItem,
   provisionNodeOrder,
 } from "../app/api/_node-panel.js";
-import { rocketUsagePageUrl } from "../app/lib/rocket-subscription.js";
+import { rocketSubscriptionUrl } from "../app/lib/rocket-subscription.js";
 import {
   SETTINGS_DEFAULTS,
   mergeSettings,
@@ -221,11 +221,31 @@ test("the token never appears in what is recorded or shown", async () => {
   assert.equal(serialized.includes(TOKEN), false);
 });
 
-test("the usage page is the bare subscription path", () => {
-  assert.equal(rocketUsagePageUrl(ORDER_ID), `https://hk.joinvip.vip:2056/sub/${ORDER_ID}`);
-  assert.equal(rocketUsagePageUrl(" LM 1 "), "https://hk.joinvip.vip:2056/sub/LM1");
-  assert.equal(rocketUsagePageUrl(""), "");
-  assert.equal(rocketUsagePageUrl(null), "");
+test("the panel's own address is what provisioning records", async () => {
+  // The panel composes the subscription URL from its own host setting. Taking
+  // its answer rather than rebuilding one keeps the two in step if that host
+  // ever changes, and the builder stays as the fallback.
+  const ISSUED = `https://panel.example:2056/sub/${ORDER_ID}`;
+  const { fetchImpl } = scriptedFetch([
+    { status: 404, body: { error: "not found" } },
+    { status: 200, body: panelUser() },
+  ]);
+  const result = await provisionNodeOrder(nodeOrder(), { config: config(), fetchImpl });
+  assert.equal(result.ok, true);
+  assert.equal(result.subLink, ISSUED);
+  // Never the Clash variant the panel also offers: the plain address is the
+  // landing page customers are told to open.
+  assert.equal(result.subLink.includes("format="), false);
+
+  // With no address in the reply the built one stands in, so a completed order
+  // is never shown a blank link.
+  const bare = scriptedFetch([
+    { status: 404, body: { error: "not found" } },
+    { status: 200, body: panelUser({ subLink: "" }) },
+  ]);
+  const fallback = await provisionNodeOrder(nodeOrder(), { config: config(), fetchImpl: bare.fetchImpl });
+  assert.equal(fallback.subLink, rocketSubscriptionUrl(ORDER_ID));
+  assert.equal(rocketSubscriptionUrl(ORDER_ID), `https://hk.joinvip.vip:2056/sub/${ORDER_ID}`);
 });
 
 // ── Wiring: the route provisions on completion, staff can retry, customers can see usage ──
@@ -265,13 +285,15 @@ test("a failed provisioning is announced, never swallowed", () => {
   assert.match(route, /type: result\.ok \? "node_provisioned" : "node_provision_failed"/);
 });
 
-test("customers reach the plan-usage page from both order surfaces", () => {
+test("staff can jump to the panel landing page from the order", () => {
+  // Customers no longer get a separate "查看套餐用量" entry: the subscription
+  // link they are shown is that same landing page, so a second one only
+  // repeated the same URL twice.
   for (const [name, source] of [["service centre", serviceCentre], ["account", account]]) {
-    assert.match(source, /import \{ rocketUsagePageUrl \} from "\.\.\/lib\/rocket-subscription";/, name);
-    assert.match(source, /className="sub-usage-link" href=\{rocketUsagePageUrl\(/, name);
-    assert.match(source, /查看套餐用量/, name);
+    assert.doesNotMatch(source, /sub-usage-link/, name);
+    assert.doesNotMatch(source, /查看套餐用量/, name);
   }
-  assert.match(admin, /href=\{rocketUsagePageUrl\(activeOrder\.orderId\)\}/);
+  assert.match(admin, /href=\{activeOrder\.nodeProvision\?\.subLink \|\| rocketSubscriptionUrl\(activeOrder\.orderId\)\}/);
 });
 
 test("the panel token is edited in the site settings and kept out of the environment and public payload", () => {
