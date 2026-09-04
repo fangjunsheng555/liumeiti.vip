@@ -44,6 +44,7 @@ export const HEALTH_COMPONENTS = [
   "after_sales_outbox",
   "marketing_queue",
   "push",
+  "node_panel",
 ];
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -66,6 +67,8 @@ export const HEALTH_STALE_AFTER_MS = {
   order_sla: JOB_POLICIES.order_sla.missedAfterMs,
   after_sales_outbox: JOB_POLICIES.after_sales_outbox.missedAfterMs,
   marketing_queue: JOB_POLICIES.marketing_dispatch.missedAfterMs,
+  // Probed by the same scheduler as the rest of the maintenance tick.
+  node_panel: MAINTENANCE_SCHEDULER.missedAfterMs,
   push: JOB_POLICIES.push_maintenance.missedAfterMs,
 };
 

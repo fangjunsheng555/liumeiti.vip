@@ -18282,3 +18282,13 @@ body:has(.account-modal-mask) .floating-wrap {
 .admin-node-provision-status.is-failed b { color: #b91c1c; }
 .admin-node-provision-status.is-skipped { border-color: #fde68a; background: #fffbeb; }
 .admin-node-provision-status.is-skipped b { color: #92400e; }
+
+/* ── Site settings: node panel reachability probe ── */
+.admin-node-panel-test { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.admin-node-panel-test-result {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 10px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 700;
+}
+.admin-node-panel-test-result.ok { border: 1px solid #a7f3d0; background: #f0fdfa; color: #0f766e; }
+.admin-node-panel-test-result.error { border: 1px solid #fecaca; background: #fef2f2; color: #b91c1c; }

@@ -26,6 +26,7 @@ const LABELS = {
   after_sales_outbox: "售后 Outbox",
   marketing_queue: "营销派发队列",
   push: "浏览器 Push",
+  node_panel: "机场节点面板",
 };
 
 function fallback(component, status, summary, metrics = {}) {

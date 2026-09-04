@@ -75,6 +75,42 @@ async function panelRequest(config, fetchImpl, method, path, body) {
   return { ok: true, status: response.status, body: parsed };
 }
 
+// Reachability probe. `/ping` needs the token like every other route, so a
+// success proves three things at once: the panel answers, its external API is
+// switched on, and the token the settings hold is the one it accepts. Nothing
+// is created or changed, so this is safe to run on a schedule and by hand.
+export async function checkNodePanel({ config, fetchImpl = globalThis.fetch } = {}) {
+  const startedAt = Date.now();
+  if (!config?.enabled) return { ok: false, status: "disabled", error: "panel_disabled", latencyMs: 0 };
+  if (!config.configured) return { ok: false, status: "failed", error: "panel_not_configured", latencyMs: 0 };
+  const ping = await panelRequest(config, fetchImpl, "GET", "/ping");
+  const latencyMs = Date.now() - startedAt;
+  if (!ping.ok) {
+    return { ok: false, status: "failed", error: ping.error, detail: ping.detail || "", latencyMs };
+  }
+  // A reachable host that answers something other than the panel — a proxy
+  // error page, a captive portal — must not read as healthy.
+  if (ping.body?.ok !== true) {
+    return { ok: false, status: "failed", error: "panel_unexpected_response", latencyMs };
+  }
+  return {
+    ok: true,
+    status: "ok",
+    latencyMs,
+    version: clean(ping.body.version, 40),
+    role: clean(ping.body.role, 40),
+  };
+}
+
+export function describeNodePanelCheck(result) {
+  if (!result) return "";
+  if (result.ok) return `面板可达${result.version ? ` · 版本 ${result.version}` : ""} · ${result.latencyMs}ms`;
+  if (result.error === "panel_disabled") return "站点设置未开启面板自动开通";
+  if (result.error === "panel_not_configured") return "未填写面板令牌";
+  if (result.error === "panel_unexpected_response") return "该地址响应的不是节点面板";
+  return describeNodeProvision({ status: "failed", error: result.error });
+}
+
 // Provision one node order. Idempotent on the panel side by construction: the
 // user is looked up first, and an existing user — whether from an earlier
 // attempt that died before the site recorded it, or from staff creating it by

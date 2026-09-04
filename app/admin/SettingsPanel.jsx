@@ -3,7 +3,7 @@
 // 站点设置 — 仅超级管理员。读写 /api/admin/settings。
 // 改任何项,保存后前端站点(客服/服务中心/页脚/收款码/结账)与订单邮件即时同步。
 import { useEffect, useState, useCallback, useRef } from "react";
-import { LoaderCircle, Save, RotateCcw, Settings as SettingsIcon, AlertTriangle, CheckCircle2, Headphones, Coins, Layers, QrCode, Tag, FileText, Bell, Upload, DatabaseBackup, Undo2, Server } from "lucide-react";
+import { LoaderCircle, Save, RotateCcw, Settings as SettingsIcon, AlertTriangle, CheckCircle2, Headphones, Coins, Layers, QrCode, Tag, FileText, Bell, Upload, DatabaseBackup, Undo2, Server, Activity } from "lucide-react";
 import { clientFetch as fetch } from "../lib/client-fetch";
 import { beginLatestRequest, isLatestRequest } from "../lib/latest-request";
 
@@ -132,6 +132,7 @@ export default function SettingsPanel({ onDirtyChange }) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showPanelToken, setShowPanelToken] = useState(false);
+  const [panelTest, setPanelTest] = useState(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -220,10 +221,34 @@ export default function SettingsPanel({ onDirtyChange }) {
     {fieldErrors[path] && <small className="admin-settings-field-error" role="alert">{fieldErrors[path].message || fieldErrors[path]}</small>}
   </>;
 
+  // Probes the saved configuration, not the draft on screen: the token only
+  // reaches the server on save, so testing an unsaved edit would report on the
+  // previous value and read as a false pass.
+  async function testNodePanel() {
+    if (panelTest?.state === "running") return;
+    setPanelTest({ state: "running" });
+    try {
+      const r = await fetch("/api/admin/node-panel", { method: "POST", credentials: "same-origin" });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 401) {
+        setPanelTest({ state: "done", ok: false, message: "需要超级管理员权限" });
+        return;
+      }
+      setPanelTest({
+        state: "done",
+        ok: Boolean(j.ok),
+        message: j.message || (j.ok ? "面板可达" : "面板不可用"),
+      });
+    } catch {
+      setPanelTest({ state: "done", ok: false, message: "网络错误，未能完成测试" });
+    }
+  }
+
   async function save() {
     if (saving || loading || loadFailed || uploadBusyRef.current || !dirty) return;
     const submitted = normalizedSettingsDraft(s);
-    setSaving(true); setMsg(null); setFieldErrors({});
+    // A result from before this save describes the old token, so drop it.
+    setSaving(true); setMsg(null); setFieldErrors({}); setPanelTest(null);
     try {
       const r = await fetch("/api/admin/settings", {
         method: "PUT", credentials: "same-origin",
@@ -359,7 +384,19 @@ export default function SettingsPanel({ onDirtyChange }) {
           <Field label="无限套餐 → 面板套餐名">{I("nodePanel.planNames.unlimited", { autoComplete: "off" })}</Field>
           <Field label="10GB 测试 → 面板套餐名">{I("nodePanel.planNames.trial", { autoComplete: "off" })}</Field>
         </div>
-        <small style={{ display: "block", marginTop: 8, color: "var(--muted)", fontSize: 11 }}>面板按套餐名称精确匹配（区分大小写）。开通结果会显示在订单详情，失败会推送 Telegram 并可在订单里重试。</small>
+        <div className="admin-node-panel-test">
+          <button type="button" className="admin-settings-btn" onClick={testNodePanel} disabled={saving || panelTest?.state === "running"}>
+            {panelTest?.state === "running"
+              ? <><LoaderCircle size={13} className="spin-icon" />测试中</>
+              : <><Activity size={13} />测试接口可用性</>}
+          </button>
+          {panelTest?.state === "done" && (
+            <span className={`admin-node-panel-test-result ${panelTest.ok ? "ok" : "error"}`} role="status">
+              {panelTest.ok ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}{panelTest.message}
+            </span>
+          )}
+        </div>
+        <small style={{ display: "block", marginTop: 8, color: "var(--muted)", fontSize: 11 }}>面板按套餐名称精确匹配（区分大小写）。测试读取的是<b>已保存</b>的配置，改完请先保存再测。每日维护任务会自动探测一次，不通会推送 Telegram 告警并记入系统健康。</small>
       </Section>
       </fieldset>
 

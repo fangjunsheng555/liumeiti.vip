@@ -3,6 +3,8 @@ import { detectMissedJobs, runObservedJob } from "../../_job-runner.js";
 import { runMaintenanceTick } from "../../_keeper.js";
 import { readMetricSeries, summarizeMetricSeries, withApiTelemetry } from "../../_observability.js";
 import { reportOperationalFailure, reportOperationalRecovery } from "../../_incidents.js";
+import { checkNodePanel, describeNodePanelCheck, nodePanelConfigFromSettings } from "../../_node-panel.js";
+import { getSettings } from "../../_settings.js";
 import { CORE_API_AGGREGATE_GROUP } from "../../_telemetry-groups.js";
 
 export const runtime = "nodejs";
@@ -79,6 +81,59 @@ async function evaluateApiSignals({ deadlineAt = 0 } = {}) {
   return summary;
 }
 
+// The node panel is what turns a completed order into working traffic, and it
+// fails silently: the site keeps taking orders and the customer's subscription
+// simply serves nothing. Probe it on every maintenance tick and route the
+// result through the incident channel, which deduplicates the alert and sends
+// its own recovery notice once the panel answers again.
+async function evaluateNodePanel({ deadlineAt = 0 } = {}) {
+  const config = nodePanelConfigFromSettings(await getSettings());
+  const fingerprint = "node-panel:reachability";
+  if (!config.enabled) {
+    // Automation switched off is a deliberate state, not an outage. Clear any
+    // standing incident so turning it off does not leave a stale alert open.
+    requireMonitoringBudget(deadlineAt);
+    requireIncidentSync(await reportOperationalRecovery({ fingerprint, component: "node_panel", title: "机场节点面板自动开通已关闭" }));
+    const health = await recordHealthStatus("node_panel", { status: "disabled", summary: "站点设置未开启面板自动开通" });
+    if (!health) {
+      const error = new Error("node_panel_health_write_failed");
+      error.code = "node_panel_health_write_failed";
+      throw error;
+    }
+    return { enabled: false, ok: true };
+  }
+  const result = await checkNodePanel({ config });
+  const summary = describeNodePanelCheck(result);
+  if (result.ok) {
+    requireMonitoringBudget(deadlineAt);
+    requireIncidentSync(await reportOperationalRecovery({ fingerprint, component: "node_panel", title: "机场节点面板已恢复" }));
+  } else {
+    requireMonitoringBudget(deadlineAt);
+    requireIncidentSync(await reportOperationalFailure({
+      fingerprint,
+      component: "node_panel",
+      // A bad token stops every node order from being provisioned, so it is
+      // as urgent as the panel being down.
+      severity: "P1",
+      title: "机场节点面板不可用",
+      errorCode: String(result.error || "panel_check_failed"),
+      detail: { apiBase: config.base, reason: summary, latencyMs: result.latencyMs },
+    }));
+  }
+  const health = await recordHealthStatus("node_panel", {
+    status: result.ok ? "ok" : "error",
+    summary,
+    error: result.ok ? "" : String(result.error || "panel_check_failed"),
+    metrics: { latencyMs: Number(result.latencyMs || 0) },
+  });
+  if (!health) {
+    const error = new Error("node_panel_health_write_failed");
+    error.code = "node_panel_health_write_failed";
+    throw error;
+  }
+  return { enabled: true, ok: result.ok, latencyMs: result.latencyMs, error: result.ok ? "" : result.error };
+}
+
 async function handler(request) {
   const requestStartedAt = Date.now();
   const monitoringDeadlineAt = requestStartedAt + 51_000;
@@ -101,14 +156,16 @@ async function handler(request) {
   const monitoring = await Promise.allSettled([
     detectMissedJobs({ notify: process.env.OPS_MISSED_JOB_ALERTS === "1", deadlineAt: monitoringDeadlineAt }),
     evaluateApiSignals({ deadlineAt: monitoringDeadlineAt }),
+    evaluateNodePanel({ deadlineAt: monitoringDeadlineAt }),
   ]);
   const jobs = monitoring[0].status === "fulfilled" ? monitoring[0].value : [];
   const api = monitoring[1].status === "fulfilled" ? monitoring[1].value : null;
+  const nodePanel = monitoring[2].status === "fulfilled" ? monitoring[2].value : null;
   const monitoringErrors = monitoring
     .filter((entry) => entry.status === "rejected")
     .map((entry) => String(entry.reason?.code || entry.reason?.message || "monitoring_failed").slice(0, 160));
   const ok = maintenance.ok && monitoringErrors.length === 0;
-  return Response.json({ ok, maintenance, jobs, api, monitoringErrors }, {
+  return Response.json({ ok, maintenance, jobs, api, nodePanel, monitoringErrors }, {
     status: ok ? 200 : 503,
     headers: { "cache-control": "no-store" },
   });
