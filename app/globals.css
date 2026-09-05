@@ -7340,6 +7340,14 @@ body:has(.admin-page) {
 }
 .admin-delivery-readonly b { color: #b45309; font-size: 10.5px; }
 .admin-delivery-readonly.ok b { color: #0f766e; }
+/* Node order: the subscription link field with its panel-generate button */
+.admin-delivery-link > span em { margin-left: 4px; color: #b45309; font-size: 9px; font-style: normal; font-weight: 800; }
+.admin-delivery-link.is-filled > span em { color: #0f766e; }
+.admin-delivery-link-row { display: flex; align-items: center; gap: 6px; }
+.admin-delivery-link-row input { flex: 1 1 auto; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; font-weight: 600; }
+.admin-delivery-link-row .admin-delivery-generate { height: 34px; padding: 0 11px; white-space: nowrap; }
+.admin-delivery-link-row .admin-delivery-generate:disabled { opacity: .6; cursor: wait; }
+.admin-delivery-link-error { color: #b91c1c; font-size: 9.5px; font-weight: 700; }
 .admin-delivery-switch-row {
   min-width: 0;
   min-height: 34px;

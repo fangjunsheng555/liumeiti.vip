@@ -5,6 +5,8 @@ import {
   customerSubscriptionUrl,
   readRocketSubscriptionUrl,
   rocketSubscriptionUrl,
+  staffSubscriptionUrl,
+  validSubscriptionLink,
 } from "../app/lib/rocket-subscription.js";
 
 // A node order's subscription URL is released only once the order is completed
@@ -99,23 +101,31 @@ test("provisioning records the panel's own address on the order", () => {
   assert.match(provisionRoute, /if \(result\.ok && result\.subLink\) \{/);
   assert.match(provisionRoute, /for \(const item of nodeItemsOf\(order\)\) item\.subscriptionLinks = clean\(result\.subLink, 300\);/);
   assert.match(provisionRoute, /subLink: result\.ok \? clean\(result\.subLink, 300\)/);
-  // Editing an item must not overwrite what the panel issued with a guess.
-  assert.match(provisionRoute, /if \(service === "rocket" && !readRocketSubscriptionUrl\(it\.subscriptionLinks\)\) \{/);
+  // Item edits carry the link staff pasted or generated; nothing is guessed.
+  assert.ok(provisionRoute.includes('if (service === "rocket" && typeof upd.subscriptionLinks === "string") {'));
 });
 
-test("the panel is provisioned before the completion email, and saved after it", () => {
-  // The email must carry the address the panel issued, and the panel user
-  // must exist by the time the customer opens it — so provisioning runs
-  // first. Its outcome is saved after the email: a stale-revision conflict on
-  // that save must not cost the customer their email.
-  const provision = provisionRoute.indexOf('trigger: "completion"');
-  const save = provisionRoute.indexOf("const provisionSaved = await setOrderAt(");
-  assert.ok(provision > 0 && save > 0, "provisioning and its save must both be present");
-  // The first-run completion email is the one sent between the two. (The
-  // idempotent replay branch earlier in the handler re-delivers an email
-  // whose one-shot key already exists; it provisions nothing.)
-  const email = provisionRoute.indexOf(":completed-email`", provision);
-  assert.ok(email > provision && email < save, "the completion email is sent after provisioning and before its outcome is saved");
+test("completing an order does not call the panel; the link is already on the item", () => {
+  // Provisioning at completion time waited on the panel and, when it lagged,
+  // failed the completion. Staff now paste the link or generate it from the
+  // panel while delivering, and completion only sends the email.
+  assert.ok(!provisionRoute.includes('trigger: "completion"'));
+  assert.ok(provisionRoute.includes("const missingLink = missingNodeSubscriptionLink(order, itemUpdates);"));
+  assert.ok(provisionRoute.includes('error: "subscription_link_required"'));
+});
+
+test("staff see the recorded link, or the fallback only once the order is completed", () => {
+  assert.equal(staffSubscriptionUrl({ status: "received", orderId: ORDER_ID, stored: PANEL_ISSUED }), PANEL_ISSUED);
+  assert.equal(staffSubscriptionUrl({ status: "received", orderId: ORDER_ID, stored: "" }), "", "an uncompleted order with nothing recorded shows no link, so the form has to be filled");
+  assert.equal(staffSubscriptionUrl({ status: "completed", orderId: ORDER_ID, stored: "" }), PLAIN);
+  assert.equal(staffSubscriptionUrl({ status: "completed", orderId: ORDER_ID, stored: `${PLAIN}?format=clash` }), PLAIN);
+});
+
+test("only a clean https address counts as a subscription link", () => {
+  for (const ok of [PLAIN, PANEL_ISSUED, `  ${PLAIN}  `, "https://a.b/c?x=1"]) assert.equal(validSubscriptionLink(ok), true, ok);
+  for (const bad of ["", "   ", "http://hk.joinvip.vip/sub/x", "hk.joinvip.vip/sub/x", `${PLAIN} extra`, "ftp://x/y", "https://", 7, null, { clash: PLAIN }, `https://a.b/${"x".repeat(300)}`]) {
+    assert.equal(validSubscriptionLink(bad), false, JSON.stringify(bad));
+  }
 });
 
 test("the link is introduced as something to open, in both languages", () => {

@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { getCatalogProducts, getProductPlan, getProductPlanOptions, hasProductPlans, useCatalogSync, useSiteSettings, getSiteSettings } from "../lib/store";
 import { getSpotifyPasswordAttention } from "../lib/order-attention";
-import { rocketSubscriptionUrl } from "../lib/rocket-subscription";
+import { rocketSubscriptionUrl, validSubscriptionLink } from "../lib/rocket-subscription";
 import {
   clearAdminMutationJournal,
   prepareAdminMutationJournal,
@@ -1252,7 +1252,7 @@ function nodeProvisionSummary(provision) {
     panel_timeout: "连接面板超时",
     multiple_node_items: "订单含多个节点商品，需人工开通",
     plan_missing: "订单缺少套餐信息",
-    panel_not_configured: "站点设置未开启面板自动开通",
+    panel_not_configured: "站点设置未开启面板开通功能",
   };
   if (reasons[error]) return reasons[error];
   if (error.startsWith("plan_unmapped:")) return `套餐未映射到面板：${error.slice(14)}`;
@@ -4148,7 +4148,7 @@ export default function AdminPage() {
           planLabel: item.planLabel || "",
           rocketPlan: item.rocketPlan || "",
           rocketPlanLabel: item.rocketPlanLabel || "",
-          subscriptionLinks: item.subscriptionLinks || null,
+          subscriptionLinks: typeof item.subscriptionLinks === "string" ? item.subscriptionLinks : "",
           account: item.account || "",
           password: item.password || "",
           staffAccount: item.staffAccount || (orderItemService(detail, item, index) === "netflix"
@@ -4510,15 +4510,27 @@ export default function AdminPage() {
         clearTerminalAdminMutation(pending, response, data);
         const message = {
           node_item_not_found: "该订单不含机场节点商品",
-          order_not_completed: "订单尚未标记完成，完成后会自动开通",
+          order_invalid: "订单已作废，不能在面板开通",
         }[data.error] || data.error || "开通失败";
         throw new Error(message);
       }
       completeAdminMutation(pending.storageKey, pending.operation);
       setActiveOrder(data.order);
       const provision = data.nodeProvision;
+      // The panel's address goes straight into the delivery form, so staff
+      // complete the order without retyping it.
+      if (provision?.status === "done") {
+        setEditForm((current) => current ? {
+          ...current,
+          items: current.items.map((draft) => {
+            const latest = data.order?.items?.[draft.index];
+            const link = draft.service === "rocket" ? (latest?.subscriptionLinks || provision.subLink || "") : "";
+            return link ? { ...draft, subscriptionLinks: link } : draft;
+          }),
+        } : current);
+      }
       setSaveResult(provision?.status === "done"
-        ? { type: "success", message: provision.existed ? "面板已有该用户，未重复开通" : `面板已开通套餐 ${provision.plan || ""}` }
+        ? { type: "success", message: provision.existed ? "面板已有该用户，未重复开通；订阅链接已填入" : `面板已开通套餐 ${provision.plan || ""}，订阅链接已填入` }
         : { type: "error", message: "面板开通失败：" + nodeProvisionSummary(provision) });
       loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
       });
@@ -4594,6 +4606,16 @@ export default function AdminPage() {
         : `确认作废订单 ${activeOrder.orderId}？${activeOrder.paymentMethod === "redeem" ? "\n(兑换码已兑换即失效，不返还)" : ""}`;
       if (typeof window !== "undefined" && !window.confirm(msg)) return;
     }
+    // A node order needs a subscription link on every node item before it can
+    // be completed — pasted, or generated from the panel. The server refuses it
+    // too; checking here saves a round trip and points at the field.
+    if (editForm.status === "completed" && activeOrder.status !== "completed") {
+      const missing = editForm.items.find((it) => it.service === "rocket" && !validSubscriptionLink(it.subscriptionLinks));
+      if (missing) {
+        setSaveResult({ type: "error", message: `请先在交付工作台填写或用「面板生成」获取「${missing.label || `商品 ${Number(missing.index || 0) + 1}`}」的订阅链接，再标记完成` });
+        return;
+      }
+    }
     setSaving(true);
     setSaveResult(null);
     try {
@@ -4622,6 +4644,8 @@ export default function AdminPage() {
           staffAccount: it.staffAccount,
           staffPassword: it.staffPassword,
           fulfillment: it.fulfillment,
+          // Node items carry the subscription link staff pasted or generated.
+          ...(it.service === "rocket" ? { subscriptionLinks: (it.subscriptionLinks || "").trim() } : {}),
         })),
       };
       const pending = prepareAdminMutation("order", activeOrder.orderId, payload, { resumeExisting: true });
@@ -4637,15 +4661,12 @@ export default function AdminPage() {
         completeAdminMutation(pending.storageKey, pending.operation);
         const completionMessage = data.completion?.email?.ok ? " · 完成邮件已发送" : data.completion ? " · 完成邮件发送失败" : "";
         const invalidMessage = data.invalidNotice?.email?.ok ? " · 无效通知已发送" : data.invalidNotice ? " · 无效通知发送失败" : "";
-        const provisionMessage = !data.nodeProvision ? ""
-          : data.nodeProvision.status === "done" ? (data.nodeProvision.existed ? " · 面板已有用户" : ` · 面板已开通 ${data.nodeProvision.plan || ""}`)
-          : data.nodeProvision.status === "skipped" ? " · 未配置面板令牌，未自动开通"
-          : ` · 面板开通失败：${nodeProvisionSummary(data.nodeProvision)}`;
+
         setSaveResult({
           type: "success",
           message: pending.resumed && pending.payloadChanged
             ? "已安全确认上次订单操作，订单已刷新；如仍需其他修改，请核对后再次保存。"
-            : "已保存" + completionMessage + invalidMessage + provisionMessage,
+            : "已保存" + completionMessage + invalidMessage,
         });
         loadOrders(appliedSearch, tab === "abnormal" ? "abnormal" : filterStatus, { silent: true, limit: Math.min(200, Math.max(ORDER_PAGE_SIZE, orders.length)), from: dateFrom, to: dateTo });
         loadOverview({ silent: true });
@@ -4683,6 +4704,10 @@ export default function AdminPage() {
         clearTerminalAdminMutation(pending, res, data);
         const message = data.error === "completion_credentials_required"
           ? `请先完整填写「${data.itemLabel || `商品 ${Number(data.itemIndex || 0) + 1}`}」的客服账号和密码，再标记完成`
+          : data.error === "subscription_link_required"
+            ? `请先在交付工作台填写或用「面板生成」获取「${data.itemLabel || `商品 ${Number(data.itemIndex || 0) + 1}`}」的订阅链接，再标记完成`
+          : data.error === "subscription_link_invalid"
+            ? `「${data.itemLabel || `商品 ${Number(data.itemIndex || 0) + 1}`}」的订阅链接格式不正确：需以 https:// 开头且不含空格`
           : data.error === "completion_netflix_email_required"
             ? `请先填写「${data.itemLabel || `商品 ${Number(data.itemIndex || 0) + 1}`}」的 Netflix 登录邮箱，再标记完成`
           : ({
@@ -6845,7 +6870,7 @@ export default function AdminPage() {
                   <div className="admin-node-provision-head">
                     <div>
                       <h3>面板开通</h3>
-                      <p>标记完成后自动在节点面板开号（用户名 = 订单号）并套用套餐。</p>
+                      <p>在交付工作台点击「面板生成」，按订单号在面板开号并套用套餐，链接会填入订阅链接栏；标记完成前必须填写链接。</p>
                     </div>
                     <a href={activeOrder.nodeProvision?.subLink || rocketSubscriptionUrl(activeOrder.orderId)} target="_blank" rel="noopener noreferrer" className="admin-node-provision-usage">
                       <Activity size={12} />查看用量
@@ -6858,8 +6883,8 @@ export default function AdminPage() {
                         : activeOrder.nodeProvision?.status === "failed"
                           ? "开通失败"
                           : activeOrder.nodeProvision?.status === "skipped"
-                            ? "未自动开通（未配置面板令牌）"
-                            : activeOrder.status === "completed" ? "尚未开通" : "标记完成后自动开通"}
+                            ? "未开通（站点设置未配置面板令牌）"
+                            : "尚未生成"}
                     </b>
                     {activeOrder.nodeProvision?.status === "failed" && <small>{nodeProvisionSummary(activeOrder.nodeProvision)}</small>}
                     {activeOrder.nodeProvision?.atBeijing && <time>{activeOrder.nodeProvision.atBeijing}{activeOrder.nodeProvision.by ? ` · ${activeOrder.nodeProvision.by}` : ""}</time>}
@@ -6881,6 +6906,9 @@ export default function AdminPage() {
                 thirdPartyPlatformNotice={editForm.thirdPartyPlatformNotice}
                 deliveryMessageMode={editForm.deliveryMessageMode}
                 onFulfillmentChange={updateFulfillment}
+                onSubscriptionLinkChange={(index, value) => updateItem(index, "subscriptionLinks", value)}
+                onGenerateSubscriptionLink={retryNodeProvision}
+                generatingSubscriptionLink={nodeProvisionBusy}
                 onGenerate={generateDeliveryMessage}
                 onCustomerMessageChange={(value) => setEditForm((current) => ({
                   ...current,

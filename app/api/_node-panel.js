@@ -1,5 +1,5 @@
 import { clean } from "./_utils.js";
-import { rocketSubscriptionUrl } from "../lib/rocket-subscription.js";
+import { readRocketSubscriptionUrl, rocketSubscriptionUrl, validSubscriptionLink } from "../lib/rocket-subscription.js";
 import { NODE_PANEL_PLAN_IDS, SETTINGS_DEFAULTS } from "../lib/settings-defaults.js";
 
 // Client for the node panel's external API (m-ui, web/public_api.go). A node
@@ -39,6 +39,46 @@ export function panelPlanForItem(item, planNames) {
 export function nodeItemsOf(order) {
   const items = Array.isArray(order?.items) ? order.items : [];
   return items.filter((item) => item?.service === "rocket");
+}
+
+// The first node item that would have no usable subscription link once the
+// submitted item edits are applied — the link is taken from the edit when one
+// is submitted, else from what the item already holds. A completion is refused
+// while this returns anything: nothing is minted at completion any more, since
+// an address the site guessed was exactly what produced dead links.
+export function missingNodeSubscriptionLink(order, itemUpdates = []) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const updates = new Map();
+  for (const update of Array.isArray(itemUpdates) ? itemUpdates : []) {
+    const index = Number(update?.index);
+    if (Number.isInteger(index) && index >= 0) updates.set(index, update);
+  }
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (item?.service !== "rocket") continue;
+    const update = updates.get(index);
+    const link = typeof update?.subscriptionLinks === "string"
+      ? update.subscriptionLinks
+      : readRocketSubscriptionUrl(item.subscriptionLinks);
+    if (validSubscriptionLink(link)) continue;
+    return { index, label: clean(item?.label || item?.service || `#${index + 1}`, 180) };
+  }
+  return null;
+}
+
+// A submitted link that is present but not a valid https address, whatever
+// the order's status: it must never be saved, or the customer gets a dead link.
+export function invalidNodeSubscriptionLinkUpdate(order, itemUpdates = []) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  for (const update of Array.isArray(itemUpdates) ? itemUpdates : []) {
+    if (typeof update?.subscriptionLinks !== "string") continue;
+    const text = update.subscriptionLinks.trim();
+    if (!text || validSubscriptionLink(text)) continue;
+    const index = Number(update.index);
+    const item = Number.isInteger(index) ? items[index] : null;
+    return { index, label: clean(item?.label || item?.service || `#${index + 1}`, 180) };
+  }
+  return null;
 }
 
 function classifyHttpFailure(status, body) {
@@ -105,7 +145,7 @@ export async function checkNodePanel({ config, fetchImpl = globalThis.fetch } = 
 export function describeNodePanelCheck(result) {
   if (!result) return "";
   if (result.ok) return `面板可达${result.version ? ` · 版本 ${result.version}` : ""} · ${result.latencyMs}ms`;
-  if (result.error === "panel_disabled") return "站点设置未开启面板自动开通";
+  if (result.error === "panel_disabled") return "站点设置未开启面板开通功能";
   if (result.error === "panel_not_configured") return "未填写面板令牌";
   if (result.error === "panel_unexpected_response") return "该地址响应的不是节点面板";
   return describeNodeProvision({ status: "failed", error: result.error });
@@ -172,7 +212,7 @@ export async function provisionNodeOrder(order, { config, fetchImpl = globalThis
 export function describeNodeProvision(result) {
   if (!result) return "";
   if (result.status === "done") return result.existed ? "面板已有该用户，未重复开通" : `已开通套餐 ${result.plan || ""}`.trim();
-  if (result.status === "skipped") return result.error === "panel_not_configured" ? "站点设置未开启面板自动开通" : "非机场节点订单";
+  if (result.status === "skipped") return result.error === "panel_not_configured" ? "站点设置未开启面板开通功能" : "非机场节点订单";
   const reasons = {
     panel_unauthorized: "面板令牌无效或外部 API 未开启",
     panel_unreachable: "无法连接面板",

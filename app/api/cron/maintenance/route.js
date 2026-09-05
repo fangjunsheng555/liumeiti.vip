@@ -93,8 +93,8 @@ async function evaluateNodePanel({ deadlineAt = 0 } = {}) {
     // Automation switched off is a deliberate state, not an outage. Clear any
     // standing incident so turning it off does not leave a stale alert open.
     requireMonitoringBudget(deadlineAt);
-    requireIncidentSync(await reportOperationalRecovery({ fingerprint, component: "node_panel", title: "机场节点面板自动开通已关闭" }));
-    const health = await recordHealthStatus("node_panel", { status: "disabled", summary: "站点设置未开启面板自动开通" });
+    requireIncidentSync(await reportOperationalRecovery({ fingerprint, component: "node_panel", title: "机场节点面板开通功能已关闭" }));
+    const health = await recordHealthStatus("node_panel", { status: "disabled", summary: "站点设置未开启面板开通功能" });
     if (!health) {
       const error = new Error("node_panel_health_write_failed");
       error.code = "node_panel_health_write_failed";

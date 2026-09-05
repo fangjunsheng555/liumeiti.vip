@@ -365,10 +365,10 @@ export default function SettingsPanel({ onDirtyChange }) {
         </div>
       </Section>
 
-      <Section icon={<Server size={15} />} title="机场节点面板 · 自动开通" sub="订单标记完成后，按订单号在面板开号并套用套餐；令牌仅服务端使用，不会出现在前台接口" onReset={() => restoreSection("nodePanel")} disabled={saving}>
+      <Section icon={<Server size={15} />} title="机场节点面板 · 开通与订阅链接" sub="发货时在订单详情点击「面板生成」，按订单号在面板开号、套用套餐并返回订阅链接；令牌仅服务端使用，不会出现在前台接口" onReset={() => restoreSection("nodePanel")} disabled={saving}>
         <label className="admin-settings-check" style={{ marginBottom: 10 }}>
           <input type="checkbox" checked={!!s.nodePanel.enabled} onChange={(e) => set("nodePanel.enabled", e.target.checked)} />
-          标记完成时自动在面板开通
+          启用面板开通（发货时可点击「面板生成」获取订阅链接）
         </label>
         <div className="admin-settings-grid">
           <Field full label="接口前缀">{I("nodePanel.apiBase", { placeholder: "https://hk.joinvip.vip:2053/ad/api/v1", autoComplete: "off", spellCheck: false })}</Field>

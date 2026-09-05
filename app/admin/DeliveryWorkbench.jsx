@@ -2,7 +2,7 @@
 
 import { FileText, RefreshCw } from "lucide-react";
 import { itemValidityLabel } from "../lib/order-fulfillment";
-import { readRocketSubscriptionUrl } from "../lib/rocket-subscription";
+import { readRocketSubscriptionUrl, validSubscriptionLink } from "../lib/rocket-subscription";
 
 const SPOTIFY_REGIONS = [
   ["", "选择地区"],
@@ -110,17 +110,38 @@ function ProfileFields({ item, onChange }) {
   );
 }
 
-function RocketFields({ item, onChange }) {
+function RocketFields({ item, onChange, onLinkChange, onGenerateLink, generating }) {
   const fulfillment = item.fulfillment || {};
-  // One order, one Clash-format subscription URL. Older orders stored a pair,
-  // which this still reads so their status is not shown as missing.
-  const subscriptionUrl = readRocketSubscriptionUrl(item.subscriptionLinks);
+  // The link is what staff paste, or what the panel returns through the
+  // button. Older orders stored a pair, which this still reads. It has to be
+  // filled before the order can be completed; nothing is minted for it.
+  const link = typeof item.subscriptionLinks === "string" ? item.subscriptionLinks : readRocketSubscriptionUrl(item.subscriptionLinks);
+  const filled = validSubscriptionLink(link);
   return (
-    <div className="admin-delivery-fields two">
-      <div className={`admin-delivery-readonly${subscriptionUrl ? " ok" : ""}`} title={subscriptionUrl || undefined}>
-        <span>订阅链接</span>
-        <b>{subscriptionUrl ? "已生成" : "尚未生成"}</b>
-      </div>
+    <div className="admin-delivery-fields">
+      <label className={`admin-delivery-link${filled ? " is-filled" : ""}`}>
+        <span>订阅链接 <em>{filled ? "已填写" : "标记完成前必填"}</em></span>
+        <div className="admin-delivery-link-row">
+          <input
+            value={link || ""}
+            onChange={(event) => onLinkChange?.(event.target.value)}
+            placeholder="粘贴订阅链接，或点击「面板生成」由节点面板开号并返回链接"
+            spellCheck={false}
+            autoComplete="off"
+            maxLength={300}
+          />
+          <button
+            type="button"
+            className="admin-delivery-generate"
+            onClick={() => onGenerateLink?.()}
+            disabled={generating || !onGenerateLink}
+            title="按订单号在节点面板开号并套用套餐，返回订阅链接"
+          >
+            {generating ? <><RefreshCw size={12} className="spin-icon" />生成中</> : <><RefreshCw size={12} />面板生成</>}
+          </button>
+        </div>
+        {link && !filled && <small className="admin-delivery-link-error">链接需以 https:// 开头且不含空格</small>}
+      </label>
       <CompactSwitch
         checked={fulfillment.clientGuide !== false}
         onChange={(value) => onChange({ clientGuide: value })}
@@ -153,10 +174,10 @@ function AiFields({ item, onChange }) {
   );
 }
 
-function ItemFields({ item, onChange }) {
+function ItemFields({ item, onChange, onLinkChange, onGenerateLink, generating }) {
   if (item.service === "spotify") return <SpotifyFields item={item} onChange={onChange} />;
   if (["netflix", "disney", "max"].includes(item.service)) return <ProfileFields item={item} onChange={onChange} />;
-  if (item.service === "rocket") return <RocketFields item={item} onChange={onChange} />;
+  if (item.service === "rocket") return <RocketFields item={item} onChange={onChange} onLinkChange={onLinkChange} onGenerateLink={onGenerateLink} generating={generating} />;
   if (item.service === "ai") return <AiFields item={item} onChange={onChange} />;
   return <p className="admin-delivery-generic">本商品沿用客户交付说明，无需额外配置。</p>;
 }
@@ -170,6 +191,9 @@ export default function DeliveryWorkbench({
   thirdPartyPlatformNotice,
   deliveryMessageMode,
   onFulfillmentChange,
+  onSubscriptionLinkChange,
+  onGenerateSubscriptionLink,
+  generatingSubscriptionLink,
   onGenerate,
   onCustomerMessageChange,
   onInternalNotesChange,
@@ -196,7 +220,13 @@ export default function DeliveryWorkbench({
               <b>{index + 1}. {item.label}</b>
               <span>{itemValidityLabel(expiryOrder, item, order?.locale === "en" ? "en" : "zh")}</span>
             </div>
-            <ItemFields item={item} onChange={(patch) => onFulfillmentChange(index, patch)} />
+            <ItemFields
+              item={item}
+              onChange={(patch) => onFulfillmentChange(index, patch)}
+              onLinkChange={(value) => onSubscriptionLinkChange?.(index, value)}
+              onGenerateLink={onGenerateSubscriptionLink ? () => onGenerateSubscriptionLink(index) : undefined}
+              generating={Boolean(generatingSubscriptionLink)}
+            />
           </div>
         ))}
       </div>

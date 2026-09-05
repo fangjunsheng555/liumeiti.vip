@@ -6,7 +6,7 @@ import {
   listAssignableAdminStaff,
 } from "../../_utils.js";
 import { hasPendingSpotifyPasswordCorrection } from "../../../lib/order-attention.js";
-import { rocketSubscriptionUrl, readRocketSubscriptionUrl } from "../../../lib/rocket-subscription.js";
+import { readRocketSubscriptionUrl, staffSubscriptionUrl } from "../../../lib/rocket-subscription.js";
 import { getOrderSla } from "../../../lib/order-sla.js";
 import { effectiveQuoteStatus } from "../../_quote-expiry.js";
 import { withApiTelemetry } from "../../_observability.js";
@@ -50,7 +50,7 @@ function normalizeOrder(order) {
       customerPasswordUpdatedAtBeijing: it.customerPasswordUpdatedAtBeijing || "",
       customerPasswordUpdateCount: Number(it.customerPasswordUpdateCount || 0),
       subscriptionLinks: it.service === "rocket"
-        ? readRocketSubscriptionUrl(it.subscriptionLinks) || rocketSubscriptionUrl(order.orderId)
+        ? staffSubscriptionUrl({ status: order.status, orderId: order.orderId, stored: it.subscriptionLinks }) || null
         : readRocketSubscriptionUrl(it.subscriptionLinks) || null,
     }));
   } else {
@@ -68,7 +68,7 @@ function normalizeOrder(order) {
       staffAccount: order.staffAccount || "",
       staffPassword: order.staffPassword || "",
       subscriptionLinks: order.service === "rocket"
-        ? readRocketSubscriptionUrl(order.subscriptionLinks) || rocketSubscriptionUrl(order.orderId)
+        ? staffSubscriptionUrl({ status: order.status, orderId: order.orderId, stored: order.subscriptionLinks }) || null
         : null,
     }];
   }

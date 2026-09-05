@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { rocketSubscriptionUrl, readRocketSubscriptionUrl } from "../../../../lib/rocket-subscription.js";
+import { readRocketSubscriptionUrl, staffSubscriptionUrl } from "../../../../lib/rocket-subscription.js";
 import {
   getOrderById, getOrderEntryById, getOrderEntryByIdIncludingDeleted, setOrderAt, archiveOrderAt, orderArchiveEligibility,
   getCookieFromRequest, verifySession, adminActorFromRequest, adminActorLabel,
@@ -19,7 +19,7 @@ import { effectiveQuoteStatus, normalizeQuoteValidDays } from "../../../_quote-e
 import { beginOrderTransition, resumePendingOrderTransition } from "../../../_order-transition.js";
 import { getOrderSla } from "../../../../lib/order-sla.js";
 import { deliverOnce } from "../../../_delivery-once.js";
-import { describeNodeProvision, nodeItemsOf, nodePanelConfigFromSettings, provisionNodeOrder } from "../../../_node-panel.js";
+import { describeNodeProvision, invalidNodeSubscriptionLinkUpdate, missingNodeSubscriptionLink, nodeItemsOf, nodePanelConfigFromSettings, provisionNodeOrder } from "../../../_node-panel.js";
 import { idempotencyPayloadHash, requiredIdempotencyKey } from "../../../_money.js";
 import { claimDurableOperation, completeDurableOperation } from "../../../_durable-operation.js";
 import { enqueueOrderPushEvent } from "../../../_push.js";
@@ -105,7 +105,7 @@ function legacyOrderItem(order) {
     staffAccount,
     staffPassword: order?.staffPassword || "",
     subscriptionLinks: order?.service === "rocket"
-      ? readRocketSubscriptionUrl(order?.subscriptionLinks) || rocketSubscriptionUrl(order?.orderId)
+      ? staffSubscriptionUrl({ status: order?.status, orderId: order?.orderId, stored: order?.subscriptionLinks }) || null
       : null,
   };
 }
@@ -121,7 +121,7 @@ function orderItemsForAdmin(order) {
   return source.map(({ passwordCorrectionTokenHash, ...item }) => ({
     ...item,
     subscriptionLinks: item.service === "rocket"
-      ? readRocketSubscriptionUrl(item.subscriptionLinks) || rocketSubscriptionUrl(order?.orderId)
+      ? staffSubscriptionUrl({ status: order?.status, orderId: order?.orderId, stored: item.subscriptionLinks }) || null
       : readRocketSubscriptionUrl(item.subscriptionLinks) || null,
   }));
 }
@@ -691,6 +691,20 @@ async function updateOrderHandler(request, { params }) {
       return Response.json({ ok: false, error: "completion_netflix_user_self_service_paused" }, { status: 409 });
     }
   }
+  // A pasted link that is not an https address is refused whatever the status.
+  const badLink = invalidNodeSubscriptionLinkUpdate(order, itemUpdates);
+  if (badLink) {
+    return Response.json({ ok: false, error: "subscription_link_invalid", itemIndex: badLink.index, itemLabel: badLink.label }, { status: 400 });
+  }
+  // A node order is completed only with a subscription link on every node
+  // item — pasted by staff, or returned by the panel through the generate
+  // button. Nothing is minted at completion any more.
+  if (enteringCompleted) {
+    const missingLink = missingNodeSubscriptionLink(order, itemUpdates);
+    if (missingLink) {
+      return Response.json({ ok: false, error: "subscription_link_required", itemIndex: missingLink.index, itemLabel: missingLink.label }, { status: 400 });
+    }
+  }
   if (enteringCompleted || changingCompletedNetflixMode || changingCompletedCredentials || enablingCompletedOperational) {
     const missing = missingCompletionCredential(order, itemUpdates, nextNetflixDeliveryMode === "self_service");
     if (missing) {
@@ -1007,8 +1021,10 @@ async function updateOrderHandler(request, { params }) {
     if (!nodeItemsOf(order).length) {
       return Response.json({ ok: false, error: "node_item_not_found" }, { status: 404 });
     }
-    if (order.status !== "completed") {
-      return Response.json({ ok: false, error: "order_not_completed" }, { status: 409 });
+    // Staff generate the link while delivering, before the order is completed;
+    // only a voided order is refused.
+    if (order.status === "invalid") {
+      return Response.json({ ok: false, error: "order_invalid" }, { status: 409 });
     }
     const { result, timelineOk } = await runNodeProvision(order, {
       actor, operationId: operation.operationId, trigger: "manual",
@@ -1117,11 +1133,11 @@ async function updateOrderHandler(request, { params }) {
           it.staffAccount = "";
           it.staffPassword = "";
         }
-        // Refresh subscription links if rocket
-        // Provisioning writes the panel's own URL here; never overwrite it
-        // with a guess when staff edit an item.
-        if (service === "rocket" && !readRocketSubscriptionUrl(it.subscriptionLinks)) {
-          it.subscriptionLinks = rocketSubscriptionUrl(order.orderId);
+        // The subscription link is what staff pasted or what the panel returned
+        // through the generate button (validated above). Nothing is guessed
+        // here: an address minted by the site was what produced dead links.
+        if (service === "rocket" && typeof upd.subscriptionLinks === "string") {
+          it.subscriptionLinks = clean(upd.subscriptionLinks, 300);
         }
       }
     });
@@ -1353,48 +1369,17 @@ async function updateOrderHandler(request, { params }) {
     return Response.json({ ok: false, error: "operation_effect_journal_unavailable" }, { status: 503 });
   }
 
-  // Provision the node panel user when a node order first becomes completed.
-  // A completion replayed later does not re-run this: the record on the order
-  // (and the panel's own existence check) make it idempotent, and staff can
-  // retry from the order detail if it failed.
-  //
-  // This runs before the completion email so the email carries the address
-  // the panel issued, and so the panel user exists by the time the customer
-  // opens it. The outcome is saved after the email: a stale-revision conflict
-  // on that save must not cost the customer their email.
-  let nodeProvisionResult = null;
-  let nodeProvisionTimelineOk = true;
-  if (newStatus === "completed" && !wasCompleted && nodeItemsOf(order).length && order.nodeProvision?.status !== "done") {
-    const { result, timelineOk } = await runNodeProvision(order, {
-      actor, operationId: operation.operationId, trigger: "completion",
-    });
-    nodeProvisionResult = result;
-    nodeProvisionTimelineOk = timelineOk;
-  }
   // Send status emails only on a real transition, not on repeated saves.
   // Telegram is NOT pinged for staff changes (only initial new orders).
+  // The node panel is not called here: the subscription link was pasted or
+  // generated while delivering, so completing the order never waits on the
+  // panel and the email carries the link that is already on the item.
   let emailResult = null;
   if (newStatus === "completed" && !wasCompleted) {
     emailResult = await deliverEmailOnce(
       `admin-order:${order.orderId}:operation:${operation.operationId}:completed-email`,
       () => sendCompletionEmail(order),
     );
-  }
-  if (nodeProvisionResult) {
-    if (!nodeProvisionTimelineOk) console.error("[node-provision] timeline entry not journaled for", order.orderId);
-    const provisionExpectedRevision = Number(order.revision);
-    const provisionSaved = await setOrderAt(index, order, { expectedRevision: provisionExpectedRevision });
-    if (!provisionSaved) {
-      const latestEntry = await getOrderEntryById(canonicalOrderId);
-      return Response.json({
-        ok: false,
-        error: "stale_revision",
-        mutationApplied: true,
-        order: latestEntry?.order ? orderForAdminResponse(latestEntry.order) : null,
-        completion: { email: emailResult },
-        nodeProvision: order.nodeProvision,
-      }, { status: 409 });
-    }
   }
   let invalidEmailResult = null;
   if (newStatus === "invalid" && !wasInvalid) {
@@ -1456,7 +1441,6 @@ async function updateOrderHandler(request, { params }) {
   const responsePayload = {
     ok: true, order: responseOrder,
     completion: newStatus === "completed" && !wasCompleted ? { email: emailResult } : null,
-    nodeProvision: nodeProvisionResult ? order.nodeProvision : null,
     invalidNotice: newStatus === "invalid" && !wasInvalid ? { email: invalidEmailResult } : null,
     commission: commissionResult,
     refund: refundResult,

@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
   describeNodeProvision,
+  invalidNodeSubscriptionLinkUpdate,
+  missingNodeSubscriptionLink,
   nodePanelConfigFromSettings,
   panelPlanForItem,
   provisionNodeOrder,
@@ -248,7 +250,32 @@ test("the panel's own address is what provisioning records", async () => {
   assert.equal(rocketSubscriptionUrl(ORDER_ID), `https://hk.joinvip.vip:2056/sub/${ORDER_ID}`);
 });
 
-// ── Wiring: the route provisions on completion, staff can retry, customers can see usage ──
+test("a completion is refused while any node item would be left without a valid link", () => {
+  const order = { orderId: ORDER_ID, items: [{ service: "netflix", label: "Netflix" }, { service: "rocket", label: "机场节点 · 普通套餐", subscriptionLinks: "" }] };
+  assert.deepEqual(missingNodeSubscriptionLink(order, []), { index: 1, label: "机场节点 · 普通套餐" });
+  // A link submitted with the edit satisfies it; a blank submitted link does
+  // not, even if the item already held one.
+  assert.equal(missingNodeSubscriptionLink(order, [{ index: 1, subscriptionLinks: `https://hk.joinvip.vip:2056/sub/${ORDER_ID}` }]), null);
+  const stored = { ...order, items: [order.items[0], { ...order.items[1], subscriptionLinks: `https://hk.joinvip.vip:2056/sub/${ORDER_ID}?format=clash` }] };
+  assert.equal(missingNodeSubscriptionLink(stored, []), null);
+  assert.deepEqual(missingNodeSubscriptionLink(stored, [{ index: 1, subscriptionLinks: "   " }]), { index: 1, label: "机场节点 · 普通套餐" });
+  // Orders without node items have nothing to check.
+  assert.equal(missingNodeSubscriptionLink({ items: [{ service: "spotify" }] }, []), null);
+  assert.equal(missingNodeSubscriptionLink({}, []), null);
+});
+
+test("a pasted link that is not an https address is refused whatever the status", () => {
+  const order = { items: [{ service: "rocket", label: "机场节点" }] };
+  for (const bad of ["http://hk.joinvip.vip/sub/x", "hk.joinvip.vip/sub/x", "https://hk.joinvip.vip/sub/x y", "javascript:alert(1)", "https://"]) {
+    assert.deepEqual(invalidNodeSubscriptionLinkUpdate(order, [{ index: 0, subscriptionLinks: bad }]), { index: 0, label: "机场节点" }, bad);
+  }
+  for (const fine of ["", "  ", `https://hk.joinvip.vip:2056/sub/${ORDER_ID}`, " https://panel.example/sub/a "]) {
+    assert.equal(invalidNodeSubscriptionLinkUpdate(order, [{ index: 0, subscriptionLinks: fine }]), null, JSON.stringify(fine));
+  }
+  assert.equal(invalidNodeSubscriptionLinkUpdate(order, [{ index: 0, account: "x" }]), null, "no link submitted, nothing to refuse");
+});
+
+// ── Wiring: staff generate the link while delivering, completion requires it, customers can see usage ──
 
 const route = await readFile(new URL("../app/api/admin/orders/[orderId]/route.js", import.meta.url), "utf8");
 const admin = await readFile(new URL("../app/admin/page.jsx", import.meta.url), "utf8");
@@ -258,25 +285,57 @@ const serviceCentre = await readFile(new URL("../app/service-center/page.jsx", i
 const account = await readFile(new URL("../app/account/page.jsx", import.meta.url), "utf8");
 const envExample = await readFile(new URL("../.env.example", import.meta.url), "utf8");
 
-test("completing a node order provisions it once, from the live settings, and records the outcome", () => {
-  assert.match(route, /provisionNodeOrder\(order, \{ config: nodePanelConfigFromSettings\(await getSettings\(\)\) \}\)/);
-  assert.match(route, /newStatus === "completed" && !wasCompleted && nodeItemsOf\(order\)\.length && order\.nodeProvision\?\.status !== "done"/);
-  assert.match(route, /trigger: "completion"/);
-  assert.match(route, /order\.nodeProvision = \{/);
-  // The outcome is persisted with the same optimistic revision guard as every
-  // other post-write effect, so a concurrent edit cannot silently drop it.
-  assert.match(route, /const provisionSaved = await setOrderAt\(index, order, \{ expectedRevision: provisionExpectedRevision \}\)/);
-  assert.match(route, /nodeProvision: nodeProvisionResult \? order\.nodeProvision : null,/);
+test("completing a node order no longer calls the panel; the link must already be on the item", () => {
+  // Provisioning at completion time waited on the panel and, when it lagged,
+  // failed the completion. The link is now pasted or generated beforehand.
+  assert.ok(!route.includes('trigger: "completion"'), "no provisioning is triggered by completion");
+  assert.ok(!route.includes("provisionSaved"), "no completion-time provisioning save remains");
+  assert.ok(route.includes("const missingLink = missingNodeSubscriptionLink(order, itemUpdates);"));
+  assert.ok(route.includes('error: "subscription_link_required", itemIndex: missingLink.index, itemLabel: missingLink.label'));
+  assert.ok(route.includes("const badLink = invalidNodeSubscriptionLinkUpdate(order, itemUpdates);"));
+  assert.ok(route.includes('error: "subscription_link_invalid"'));
+  // The gate runs before the order is touched — before item edits are applied
+  // and before the status changes — so a refused completion leaves nothing
+  // half-applied behind.
+  const gate = route.indexOf("const missingLink = missingNodeSubscriptionLink(");
+  assert.ok(gate > 0 && gate < route.indexOf("// Apply item updates") && gate < route.indexOf("order.status = newStatus;"));
+  // Item edits carry the link; nothing is guessed on the server.
+  assert.ok(route.includes('if (service === "rocket" && typeof upd.subscriptionLinks === "string") {'));
+  assert.ok(route.includes("it.subscriptionLinks = clean(upd.subscriptionLinks, 300);"));
+  assert.ok(!route.includes("it.subscriptionLinks = rocketSubscriptionUrl("), "the server must not mint a link");
+  // The manual action still runs from the live settings and records its outcome.
+  assert.ok(route.includes("provisionNodeOrder(order, { config: nodePanelConfigFromSettings(await getSettings()) })"));
+  assert.ok(route.includes("order.nodeProvision = {"));
 });
 
-test("staff can retry provisioning from the order, and only on a completed node order", () => {
-  assert.match(route, /body\.action === "node_provision"/);
-  assert.match(route, /error: "node_item_not_found"/);
-  assert.match(route, /error: "order_not_completed"/);
-  assert.match(route, /trigger: "manual"/);
-  assert.match(admin, /action: "node_provision"/);
-  assert.match(admin, /onClick=\{retryNodeProvision\}/);
-  assert.match(admin, /admin-node-provision-status is-\$\{activeOrder\.nodeProvision\?\.status \|\| "pending"\}/);
+test("staff generate the link from the panel while delivering; only a voided order is refused", () => {
+  assert.ok(route.includes('body.action === "node_provision"'));
+  assert.ok(route.includes('error: "node_item_not_found"'));
+  assert.ok(route.includes('error: "order_invalid"'));
+  assert.ok(!route.includes('error: "order_not_completed"'), "generation must work before completion");
+  assert.ok(route.includes('trigger: "manual"'));
+  assert.ok(admin.includes('action: "node_provision"'));
+  // The button sits beside the link field in the delivery workbench, and the
+  // panel's address is written into that field on success.
+  assert.ok(admin.includes("onGenerateSubscriptionLink={retryNodeProvision}"));
+  assert.ok(admin.includes("generatingSubscriptionLink={nodeProvisionBusy}"));
+  assert.ok(admin.includes('onSubscriptionLinkChange={(index, value) => updateItem(index, "subscriptionLinks", value)}'));
+  assert.ok(admin.includes('const link = draft.service === "rocket" ? (latest?.subscriptionLinks || provision.subLink || "") : "";'));
+  assert.ok(admin.includes('admin-node-provision-status is-${activeOrder.nodeProvision?.status || "pending"}'));
+});
+
+test("the delivery workbench has a link field with a generate button, and the form refuses completion without it", async () => {
+  const workbench = await readFile(new URL("../app/admin/DeliveryWorkbench.jsx", import.meta.url), "utf8");
+  assert.ok(workbench.includes("onChange={(event) => onLinkChange?.(event.target.value)}"));
+  assert.ok(workbench.includes("面板生成"));
+  assert.ok(workbench.includes("const filled = validSubscriptionLink(link);"));
+  assert.ok(!workbench.includes("尚未生成"), "the read-only status row is replaced by the field");
+  // The payload carries the link for node items only.
+  assert.ok(admin.includes('...(it.service === "rocket" ? { subscriptionLinks: (it.subscriptionLinks || "").trim() } : {}),'));
+  // The client-side gate mirrors the server's and points at the field.
+  assert.ok(admin.includes('const missing = editForm.items.find((it) => it.service === "rocket" && !validSubscriptionLink(it.subscriptionLinks));'));
+  assert.ok(admin.includes('data.error === "subscription_link_required"'));
+  assert.ok(admin.includes('data.error === "subscription_link_invalid"'));
 });
 
 test("a failed provisioning is announced, never swallowed", () => {

@@ -111,7 +111,7 @@ test("the maintenance tick probes the panel and routes failures through the inci
   assert.match(cron, /reportOperationalRecovery\(\{ fingerprint, component: "node_panel", title: "机场节点面板已恢复" \}\)/);
   assert.match(cron, /severity: "P1"/);
   // Switching automation off must clear a standing incident, not leave it open.
-  assert.match(cron, /机场节点面板自动开通已关闭/);
+  assert.match(cron, /机场节点面板开通功能已关闭/);
   assert.match(cron, /const nodePanel = monitoring\[2\]/);
   assert.match(cron, /nodePanel, monitoringErrors/);
 });

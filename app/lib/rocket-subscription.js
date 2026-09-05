@@ -49,3 +49,28 @@ export function customerSubscriptionUrl({ status, orderId, stored } = {}) {
   if (status !== "completed") return "";
   return readRocketSubscriptionUrl(stored) || rocketSubscriptionUrl(orderId);
 }
+
+// What staff see for a node item: the link recorded on it, or — only once the
+// order is completed — the address customers fall back to, so orders completed
+// before links were recorded do not read as missing one. An uncompleted order
+// with nothing recorded shows none: the delivery form starts empty and has to
+// be filled before the order can be completed.
+export function staffSubscriptionUrl({ status, orderId, stored } = {}) {
+  return readRocketSubscriptionUrl(stored) || (status === "completed" ? rocketSubscriptionUrl(orderId) : "");
+}
+
+// A link staff paste, or the panel returns, is handed to the customer as-is,
+// so it has to be a real https address with nothing that would break when
+// pasted into a client: no whitespace, no other scheme, nothing over-long.
+export function validSubscriptionLink(value) {
+  if (typeof value !== "string") return false;
+  const text = value.trim();
+  if (!text || text.length > 300) return false;
+  for (const ch of text) if (ch.trim() === "") return false;
+  try {
+    const url = new URL(text);
+    return url.protocol === "https:" && Boolean(url.hostname);
+  } catch {
+    return false;
+  }
+}
