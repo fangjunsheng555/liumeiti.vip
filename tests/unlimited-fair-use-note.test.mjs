@@ -71,8 +71,12 @@ test("the service page and the buying guide answer it in their FAQ, in both lang
 test("the note is styled as a small aside, and its title does not inherit the plan card's price styling", () => {
   assert.ok(css.includes(".plan-fair-use-note {"));
   assert.ok(css.includes(".service-plan-note {"));
-  // .service-plan-card b makes a 22px block; the note's title must stay inline.
-  const rule = css.slice(css.indexOf(".service-plan-note b {"));
-  assert.ok(rule.slice(0, rule.indexOf("}")).includes("display: inline"));
-  assert.ok(rule.slice(0, rule.indexOf("}")).includes("font-size: inherit"));
+  // .service-plan-card b makes a 22px block and is declared later in the file,
+  // so the note's title rule must outrank it by specificity, not by position.
+  assert.ok(!css.includes("\n.service-plan-note b {"), "an unscoped note-title rule loses to the card price rule");
+  const start = css.indexOf(".service-plan-card .service-plan-note b {");
+  assert.ok(start > 0, "the note title rule must be scoped under the card");
+  const rule = css.slice(start, css.indexOf("}", start));
+  assert.ok(rule.includes("display: inline"));
+  assert.ok(rule.includes("font-size: inherit"));
 });

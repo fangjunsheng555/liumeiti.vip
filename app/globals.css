@@ -16607,7 +16607,7 @@ body:has(.account-modal-mask) .floating-wrap {
   line-height: 1.5;
   font-weight: 700;
 }
-.service-plan-note b {
+.service-plan-card .service-plan-note b {
   display: inline;
   margin: 0 4px 0 0;
   color: #0f766e;
