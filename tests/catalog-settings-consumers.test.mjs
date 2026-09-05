@@ -129,4 +129,9 @@ test("sold-out plans in the shop dialogs say so and offer no restock alert, and 
   const rule = compact.slice(0, compact.indexOf("}"));
   assert.ok(rule.includes("overflow-y: auto"), "the compact plan list must scroll");
   assert.ok(rule.includes("min-height: 0"), "the list must be allowed to shrink inside the flex dialog");
+  // The dialog is sized to show the whole catalogue at once; the scroll is only
+  // a safety net for very short screens and must not show a bar.
+  assert.ok(rule.includes("scrollbar-width: none"), "no scrollbar may show on the plan list");
+  assert.ok(css.includes(".shop-rocket-plan-picker.compact::-webkit-scrollbar {"), "WebKit scrollbar hidden too");
+  assert.ok(css.includes("max-height: min(94dvh, 700px);"), "the mobile dialog is tall enough for six plans");
 });

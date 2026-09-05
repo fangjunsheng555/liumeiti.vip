@@ -16537,14 +16537,45 @@ body:has(.account-modal-mask) .floating-wrap {
   font-size: 20px;
 }
 
+.rocket-picker-modal .modal-product-image {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+}
+
 .shop-rocket-plan-picker.compact {
   margin: 0;
-  padding: 12px 18px 4px;
-  /* The dialog clips at the viewport; the list scrolls so a long catalogue
-     never pushes its last plans or the actions out of view. */
+  padding: 10px 18px 2px;
+  gap: 6px;
+  /* Sized so the whole catalogue is on screen at once. The dialog clips at
+     the viewport, so the list keeps scrolling as a safety net for very short
+     screens — without a visible bar. */
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.shop-rocket-plan-picker.compact::-webkit-scrollbar {
+  display: none;
+}
+
+.shop-rocket-plan-picker.compact .shop-rocket-plan-option {
+  padding: 8px 12px;
+  border-radius: 12px;
+}
+
+.shop-rocket-plan-picker.compact .shop-rocket-plan-option strong {
+  font-size: 12.5px;
+}
+
+.shop-rocket-plan-picker.compact .shop-rocket-plan-option small {
+  font-size: 10.5px;
+  line-height: 1.25;
+}
+
+.shop-rocket-plan-picker.compact .shop-rocket-plan-option b {
+  font-size: 15px;
 }
 
 .rocket-picker-actions {
@@ -16597,21 +16628,25 @@ body:has(.account-modal-mask) .floating-wrap {
   }
 
   .rocket-picker-modal {
-    max-height: min(82dvh, 560px);
+    max-height: min(94dvh, 700px);
     overflow: hidden;
   }
 
   .rocket-picker-modal .modal-head {
-    padding: 16px 16px 10px;
+    padding: 14px 16px 8px;
   }
 
   .shop-rocket-plan-picker.compact {
-    padding: 10px 16px 2px;
-    gap: 7px;
+    padding: 8px 16px 2px;
+    gap: 6px;
+  }
+
+  .shop-rocket-plan-picker.compact .shop-rocket-plan-option {
+    padding: 7px 12px;
   }
 
   .rocket-picker-actions {
-    padding: 12px 16px 16px;
+    padding: 10px 16px 14px;
     grid-template-columns: 1fr;
   }
 
