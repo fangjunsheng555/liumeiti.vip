@@ -178,17 +178,18 @@ export default async function ServiceLandingPage({ params }) {
           </div>
           <div className="service-plan-grid">
             {service.plans.map(([name, price, desc, planOut], i) => {
-              const fairUse = isUnlimitedNodePlan(service.key, service.planIds?.[i]);
               return (
               <article key={name} className={`service-plan-card${planOut ? " sold-out" : ""}`}>
                 <span>{name}{planOut ? ` · ${locale === "en" ? "Sold out" : "已售罄"}` : ""}</span>
                 <b>{price}</b>
                 <p>{desc}</p>
-                {fairUse && <small className="service-plan-note"><b>{unlimitedFairUseTitle(locale)}</b>{unlimitedFairUseNote(locale)}</small>}
               </article>
               );
             })}
           </div>
+          {(service.planIds || []).some((id) => isUnlimitedNodePlan(service.key, id)) && (
+            <p className="plan-fair-use-note service-plan-fair-use-note"><b>{unlimitedFairUseTitle(locale)}</b>{unlimitedFairUseNote(locale)}</p>
+          )}
         </section>
 
         <section className="container service-process-card">

@@ -52,8 +52,12 @@ test("every surface that describes the plan renders the shared note, never its o
   // The pickers show it beneath the plan list only when the unlimited plan is offered.
   assert.ok(shop.includes("getProductPlanOptions(planPickerProduct.key).some((plan) => isUnlimitedNodePlan(planPickerProduct.key, plan.id))"));
   assert.ok(actions.includes("planOptions.some((plan) => isUnlimitedNodePlan(productKey, plan.id))"));
-  // The service page attaches it to the unlimited card by plan id, with a static order as fallback.
-  assert.ok(landing.includes("isUnlimitedNodePlan(service.key, service.planIds?.[i])"));
+  // The service page shows one line under the plan grid when the unlimited plan is
+  // offered, found by plan id, with a static order as fallback. The cards themselves
+  // keep their original look.
+  assert.ok(landing.includes("(service.planIds || []).some((id) => isUnlimitedNodePlan(service.key, id))"));
+  assert.ok(landing.includes('className="plan-fair-use-note service-plan-fair-use-note"'));
+  assert.ok(!landing.includes("service-plan-note"), "the note must not sit inside a plan card");
   assert.ok(serviceData.includes('planIds: ["basic", "pro", "luxury", "unlimited", "trial"]'));
   // Checkout shows it when the chosen plan is the unlimited one.
   assert.ok(checkout.includes("isUnlimitedNodePlan(item.key, getProductPlan(item.key, planMap[item.key])?.id)"));
@@ -68,14 +72,14 @@ test("the service page and the buying guide answer it in their FAQ, in both lang
   assert.ok(guides.includes("fair-use rules apply; see the FAQ below"));
 });
 
-test("the note is styled as a small aside, and its title does not inherit the plan card's price styling", () => {
+test("the note is styled as one small aside everywhere, outside the plan cards", () => {
   assert.ok(css.includes(".plan-fair-use-note {"));
-  assert.ok(css.includes(".service-plan-note {"));
-  // .service-plan-card b makes a 22px block and is declared later in the file,
-  // so the note's title rule must outrank it by specificity, not by position.
-  assert.ok(!css.includes("\n.service-plan-note b {"), "an unscoped note-title rule loses to the card price rule");
-  const start = css.indexOf(".service-plan-card .service-plan-note b {");
-  assert.ok(start > 0, "the note title rule must be scoped under the card");
+  assert.ok(css.includes(".service-plan-fair-use-note {"));
+  // Inside a card the title would pick up `.service-plan-card b` — the 22px price
+  // rule — so the note lives outside the cards and no card-scoped note rule remains.
+  assert.ok(!css.includes(".service-plan-note"), "no card-scoped note styling may remain");
+  const start = css.indexOf(".plan-fair-use-note b {");
+  assert.ok(start > 0);
   const rule = css.slice(start, css.indexOf("}", start));
   assert.ok(rule.includes("display: inline"));
   assert.ok(rule.includes("font-size: inherit"));

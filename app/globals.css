@@ -16599,20 +16599,9 @@ body:has(.account-modal-mask) .floating-wrap {
 .checkout-fair-use-note {
   margin-top: 10px;
 }
-.service-plan-note {
-  display: block;
-  margin-top: 8px;
-  color: #64748b;
+.service-plan-fair-use-note {
+  margin-top: 12px;
   font-size: 11px;
-  line-height: 1.5;
-  font-weight: 700;
-}
-.service-plan-card .service-plan-note b {
-  display: inline;
-  margin: 0 4px 0 0;
-  color: #0f766e;
-  font-size: inherit;
-  font-weight: 900;
 }
 
 .rocket-picker-actions {
