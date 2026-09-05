@@ -111,3 +111,22 @@ test("shop cards do not expose an interactive role around their real action butt
   assert.doesNotMatch(card, /role="button"|tabIndex=\{0\}/);
   assert.equal((card.match(/<button/g) || []).length, 2);
 });
+
+test("sold-out plans in the shop dialogs say so and offer no restock alert, and the plan list scrolls", async () => {
+  // The alert button under every sold-out plan pushed the picker past the
+  // dialog's clipped height, so the last plans and the actions were cut off,
+  // and the alert itself relied on browser notifications few customers allow.
+  const shop = await readFile(new URL("../app/shop/page.jsx", import.meta.url), "utf8");
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.ok(!shop.includes("StockAlertButton"), "the shop page must not render the restock alert");
+  assert.ok(!shop.includes("到货提醒") && !shop.includes("Restock alert") && !shop.includes("restock alert"), "no restock copy may remain in the shop");
+  // A sold-out product is disabled and labelled as such, on the card and in the detail dialog.
+  assert.ok(shop.includes("disabled={soldOut}"), "the card CTA is disabled when every plan is sold out");
+  assert.ok(shop.includes("disabled={allPlansSoldOut(selectedProduct.key)}"), "the detail dialog CTA is disabled when every plan is sold out");
+  assert.equal((shop.match(/L\("已售罄", "Sold out"\)/g) || []).length >= 3, true, "card, detail dialog and picker all say sold out");
+  // The plan list is the scrolling region of the picker dialog.
+  const compact = css.slice(css.indexOf(".shop-rocket-plan-picker.compact {"));
+  const rule = compact.slice(0, compact.indexOf("}"));
+  assert.ok(rule.includes("overflow-y: auto"), "the compact plan list must scroll");
+  assert.ok(rule.includes("min-height: 0"), "the list must be allowed to shrink inside the flex dialog");
+});

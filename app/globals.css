@@ -16540,6 +16540,11 @@ body:has(.account-modal-mask) .floating-wrap {
 .shop-rocket-plan-picker.compact {
   margin: 0;
   padding: 12px 18px 4px;
+  /* The dialog clips at the viewport; the list scrolls so a long catalogue
+     never pushes its last plans or the actions out of view. */
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .rocket-picker-actions {
