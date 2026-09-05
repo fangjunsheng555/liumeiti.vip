@@ -6,6 +6,7 @@ import Link from "next/link";
 import { BookOpen, KeyRound, ShoppingBag, X } from "lucide-react";
 import { getDefaultProductPlan, getProductPlan, getProductPlanOptions, localizePlan, useCatalogSync } from "../lib/store";
 import { useLocale } from "../components/LocaleProvider";
+import { isUnlimitedNodePlan, unlimitedFairUseNote, unlimitedFairUseTitle } from "../lib/fair-use";
 
 // 轻量事件埋点（service_view / cta_click），失败静默，无隐私提示。
 function trackEvent(name, slug, label) {
@@ -120,6 +121,9 @@ export default function ServiceOrderActions({ service, soldOut = {} }) {
             </button>
             );
           })}
+          {planOptions.some((plan) => isUnlimitedNodePlan(productKey, plan.id)) && (
+            <p className="plan-fair-use-note"><b>{unlimitedFairUseTitle(locale)}</b>{unlimitedFairUseNote(locale)}</p>
+          )}
         </div>
 
         <div className="modal-actions rocket-picker-actions">

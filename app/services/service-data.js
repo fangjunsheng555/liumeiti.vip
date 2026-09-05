@@ -1,3 +1,4 @@
+import { unlimitedFairUseNote } from "../lib/fair-use.js";
 export const SERVICE_PAGES = [
   {
     slug: "spotify",
@@ -118,6 +119,9 @@ export const SERVICE_PAGES = [
     subtitle: "真实流量套餐与多节点加速",
     price: "¥108/年起",
     image: "/products/rocket.jpg",
+    // Plan ids in row order, so the page can attach per-plan notes when no
+    // catalogue override supplies them.
+    planIds: ["basic", "pro", "luxury", "unlimited", "trial"],
     description: "提供多档真实流量节点服务，最高速率可达 5Gbps，覆盖港日台韩新美英德法等线路，适合流媒体、AI 工具与日常跨区访问",
     highlights: ["真实流量套餐", "最高 5Gbps", "全加密无日志"],
     plans: [
@@ -131,6 +135,7 @@ export const SERVICE_PAGES = [
       ["是否支持节点测试", "我们提供 5元10GB 套餐可供测试"],
       ["如何使用服务", "iPhone/iPad 下载 Nextin 或 Shadowrocket 小火箭，安卓下载 Clash Meta，Windows/mac 下载 Clash Verge，或使用其他主流客户端代理工具，导入我们的订阅链接即可开始使用"],
       ["支持哪些客户端", "支持常见订阅工具，订单完成后会提供订阅链接与使用说明"],
+      ["无限套餐有哪些使用限制？", unlimitedFairUseNote("zh")],
     ],
   },
   {
@@ -246,6 +251,7 @@ const SERVICE_EN = {
       ["Can I test a node", "Yes — the ¥5 / 10 GB plan is available for testing"],
       ["How to use the service", "On iPhone/iPad install Nextin or Shadowrocket; on Android install Clash Meta; on Windows/Mac install Clash Verge (or another mainstream proxy client), then import our subscription link to start"],
       ["Which clients are supported", "Common subscription tools are supported; the subscription link and instructions are provided once the order completes"],
+      ["Are there usage limits on the Unlimited plan?", unlimitedFairUseNote("en")],
     ],
   },
   ai: {

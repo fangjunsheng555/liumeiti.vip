@@ -48,6 +48,7 @@ import {
   isProductPlan,
   productItemAmount,
 } from "../lib/store";
+import { isUnlimitedNodePlan, unlimitedFairUseNote, unlimitedFairUseTitle } from "../lib/fair-use";
 import FloatingSupport from "../components/FloatingSupport";
 import ProxyPaymentCheckout from "../components/ProxyPaymentCheckout";
 import { useLocale } from "../components/LocaleProvider";
@@ -1632,6 +1633,9 @@ export default function CheckoutPage() {
                     );
                   })}
                 </div>
+                {cartItems.some((item) => isUnlimitedNodePlan(item.key, getProductPlan(item.key, planMap[item.key])?.id)) && (
+                  <p className="plan-fair-use-note checkout-fair-use-note"><b>{unlimitedFairUseTitle(locale)}</b>{unlimitedFairUseNote(locale)}</p>
+                )}
               </section>
 
               {/* Per-product extra fields */}

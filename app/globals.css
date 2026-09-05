@@ -16578,6 +16578,43 @@ body:has(.account-modal-mask) .floating-wrap {
   font-size: 15px;
 }
 
+/* ── Unlimited node plan: fair-use note beside the plan wherever it is described ── */
+.plan-fair-use-note {
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(241, 245, 249, 0.92);
+  color: #64748b;
+  font-size: 10.5px;
+  line-height: 1.45;
+  font-weight: 600;
+}
+.plan-fair-use-note b {
+  display: inline;
+  margin: 0 4px 0 0;
+  color: #0f766e;
+  font-size: inherit;
+  font-weight: 900;
+}
+.checkout-fair-use-note {
+  margin-top: 10px;
+}
+.service-plan-note {
+  display: block;
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.5;
+  font-weight: 700;
+}
+.service-plan-note b {
+  display: inline;
+  margin: 0 4px 0 0;
+  color: #0f766e;
+  font-size: inherit;
+  font-weight: 900;
+}
+
 .rocket-picker-actions {
   padding: 12px 18px 18px;
   display: grid;

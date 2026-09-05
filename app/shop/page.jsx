@@ -42,6 +42,7 @@ import FloatingSupport from "../components/FloatingSupport";
 import { GUIDE_SLUG_BY_KEY, SERVICE_SLUG_BY_KEY } from "../services/service-data";
 import { useLocale } from "../components/LocaleProvider";
 import { localizeCatalogDisplayPrice } from "../lib/catalog-price";
+import { isUnlimitedNodePlan, unlimitedFairUseNote, unlimitedFairUseTitle } from "../lib/fair-use";
 
 const PRODUCT_PROMOS = {
   spotify: { badge: "热销 No.1", badgeIcon: Flame, originalPrice: 298, monthlyRange: [5200, 7600] },
@@ -573,6 +574,9 @@ export default function ShopPage() {
                 </button>
                 );
               })}
+              {getProductPlanOptions(planPickerProduct.key).some((plan) => isUnlimitedNodePlan(planPickerProduct.key, plan.id)) && (
+                <p className="plan-fair-use-note"><b>{unlimitedFairUseTitle(locale)}</b>{unlimitedFairUseNote(locale)}</p>
+              )}
             </div>
             <div className="modal-actions rocket-picker-actions">
               <button

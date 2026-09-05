@@ -1,3 +1,4 @@
+import { unlimitedFairUseNote } from "../lib/fair-use.js";
 // Bilingual purchase and usage guides. Copy must follow the actual catalog,
 // checkout fields and fulfilment flow; avoid hard-coded prices that can change
 // in the admin catalog.
@@ -162,7 +163,7 @@ export const GUIDES = [
     intro: "机场节点按全年流量提供普通、高级、豪华和无限四档年付规格，另有 10GB 测试规格。订单完成后会生成订阅链接，将链接导入兼容客户端即可使用。",
     introEn: "VPN nodes are offered as annual Standard, Plus, Premium and Unlimited plans, plus a 10 GB Trial. Once the order is completed, import the supplied subscription URL into a compatible client.",
     steps: [
-      ["按全年流量选择规格", "普通为 600GB/年，高级为 1200GB/年，豪华为 2400GB/年，无限规格为一年无限流量；首次使用可先选 10GB 测试。"],
+      ["按全年流量选择规格", "普通为 600GB/年，高级为 1200GB/年，豪华为 2400GB/年，无限规格为一年无限流量（需遵守公平使用原则，见下方问答）；首次使用可先选 10GB 测试。"],
       ["提交订单", "选择规格并填写接收订单通知的邮箱，核对应付金额后按结算页提示完成付款。"],
       ["复制订阅链接", "订单开通完成后，可在订单详情或完成邮件中查看订阅链接，请完整复制，不要遗漏字符。"],
       ["导入客户端", {
@@ -178,7 +179,7 @@ export const GUIDES = [
       }],
     ],
     stepsEn: [
-      ["Choose by annual traffic", "Standard includes 600 GB/year, Plus 1200 GB/year, Premium 2400 GB/year, and Unlimited has no traffic cap for the year. New users can start with the 10 GB Trial."],
+      ["Choose by annual traffic", "Standard includes 600 GB/year, Plus 1200 GB/year, Premium 2400 GB/year, and Unlimited has no traffic cap for the year (fair-use rules apply; see the FAQ below). New users can start with the 10 GB Trial."],
       ["Place the order", "Select the plan, enter the email for order notices, review the payable amount and follow the checkout instructions."],
       ["Copy the subscription URL", "Once the order is completed, find the URL in the order details or the completion email. Copy it in full."],
       ["Import into a client", {
@@ -197,11 +198,13 @@ export const GUIDES = [
       ["首次购买建议哪种规格？", "不确定线路适配时可先选 10GB 测试；确认使用稳定后，再按全年流量选择年付规格。"],
       ["订阅链接在哪里查看？", "订单开通完成后，可在订单详情和完成邮件中查看；订单尚未开通时不会显示。"],
       ["导入后没有节点怎么办？", "先确认链接复制完整并在客户端更新订阅；仍无法加载时，凭订单号联系在线客服。"],
+      ["无限套餐有哪些使用限制？", unlimitedFairUseNote("zh")],
     ],
     faqEn: [
       ["Which plan should a first-time buyer choose?", "Start with the 10 GB Trial if compatibility is uncertain. Move to an annual plan after confirming the connection works for you."],
       ["Where is the subscription URL?", "It appears in the order details and the completion email once the order is completed, and not before."],
       ["What if no nodes appear after import?", "Check that the full URL was copied and refresh the subscription in the client. If it still fails, contact support with the order ID."],
+      ["Are there usage limits on the Unlimited plan?", unlimitedFairUseNote("en")],
     ],
   },
   {

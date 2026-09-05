@@ -11,6 +11,7 @@ import {
 } from "../service-data";
 import { applyCatalogToService, serviceCatalogLowPrice, serviceJsonLdImage } from "../catalog-service.js";
 import ServiceOrderActions from "../ServiceOrderActions";
+import { isUnlimitedNodePlan, unlimitedFairUseNote, unlimitedFairUseTitle } from "../../lib/fair-use.js";
 import { SOCIAL_DESCRIPTION, SOCIAL_IMAGE, SOCIAL_IMAGE_META } from "../../social-meta";
 import { getServerLocale } from "../../lib/i18n-server";
 import { getT } from "../../lib/i18n";
@@ -177,11 +178,13 @@ export default async function ServiceLandingPage({ params }) {
           </div>
           <div className="service-plan-grid">
             {service.plans.map(([name, price, desc, planOut], i) => {
+              const fairUse = isUnlimitedNodePlan(service.key, service.planIds?.[i]);
               return (
               <article key={name} className={`service-plan-card${planOut ? " sold-out" : ""}`}>
                 <span>{name}{planOut ? ` · ${locale === "en" ? "Sold out" : "已售罄"}` : ""}</span>
                 <b>{price}</b>
                 <p>{desc}</p>
+                {fairUse && <small className="service-plan-note"><b>{unlimitedFairUseTitle(locale)}</b>{unlimitedFairUseNote(locale)}</small>}
               </article>
               );
             })}
